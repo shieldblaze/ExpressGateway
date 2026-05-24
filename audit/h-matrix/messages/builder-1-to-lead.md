@@ -244,3 +244,61 @@ I did NOT self-declare BUILT.
 
 Pushed to origin/s9/builder-1 (tip `0a479579`). Standing by for verifier
 findings / any lead corrections.
+
+---
+
+## 2026-05-24 — F-CAP-1 DONE (both cells; owner-approved fix) — SHA `23b45d6f`
+
+Applied the approved caller-side fix IDENTICALLY in both cells; did NOT
+self-declare BUILT (verifier re-verifies both).
+
+**The fix (one combined commit):** on the `send_fut` `Ok(Err(e))` arm, do NOT
+`pump.abort()` first — await `verdict_rx` BOUNDED by `self.timeouts.body`. If
+the verdict is `Ok(Err(BodyTooLarge | BadRequest(..)))` return THAT (413/400);
+otherwise (verdict Ok, non-classified error, pump vanished, or the bounded
+await elapses) fall through to `Upstream(502)` / Timeout-on-elapse. Then abort
+pump + conn_handle. Deterministic per your reasoning: deliberate abort -> pump
+sends verdict immediately after the body Err (FIFO) -> bounded await resolves
+classified; genuine upstream failure -> ReceiverGone -> drain-and-validate ->
+Ok/non-classified verdict -> 502.
+
+- `crates/lb-l7/src/h1_proxy.rs` (H1->H1, my cell).
+- `crates/lb-l7/src/h2_proxy.rs` (H2->H1 shipped M-D cell): `git diff a2e0f6fe`
+  is EXACTLY and ONLY the caller-side arm (pasted shape: classified-verdict
+  match + unwrap_or_else fallback). Everything else byte-for-byte unchanged.
+  PRESERVED: FIFO Err-before-close, is_end_stream gating (H2) / None=clean-end
+  (H1), single-use take_stream.
+
+**No 502-leak / no spurious-413 audit (your two required checks):**
+- Over-cap and forbidden-trailer never yield 502: the pump injects
+  H1PumpAbort/PumpAbort then sends the classified verdict FIFO; the bounded
+  verdict await (10–20 s in tests, `timeouts.body` in prod) resolves with
+  BodyTooLarge/BadRequest before elapse -> 413/400. PROVEN by the
+  NEGATIVE CONTROL: reverting to the pre-fix unconditional-502 arm makes
+  `over_cap_content_length_upload_yields_413_not_502` fail `left:502 right:413`.
+- Genuine upstream failure never yields 413/400: a backend that drops the
+  conn (no HTTP) -> ReceiverGone -> drain-and-validate of a within-cap,
+  trailer-clean body -> verdict Ok(()) (non-classified) -> None -> 502.
+  PROVEN by `genuine_upstream_failure_still_yields_502` (H1) and
+  `h2_genuine_upstream_failure_still_yields_502` (H2).
+
+**413/400 evidence (CLIENT-observed status, deterministic 3x; no R2 race):**
+- H1 `over_cap_content_length_upload_yields_413_not_502` -> 413 (raw client
+  reads the status line; >64 MiB Content-Length upload, backend draining).
+- H1 `over_cap_chunked_upload_yields_413_not_502` -> 413 (chunked framing).
+- H1 `forbidden_framing_trailer_yields_400_not_502` -> 400 (chunked body +
+  `Transfer-Encoding` smuggled in the trailer section).
+- H1 `genuine_upstream_failure_still_yields_502` -> 502.
+- H2 `h2_over_cap_upload_yields_413_not_502` -> 413 (reqwest H2, >64 MiB).
+- H2 `h2_genuine_upstream_failure_still_yields_502` -> 502.
+All 6 stable across 3 repeated runs each.
+
+**Regression (all green):** h1_proxy_e2e 7; h2_proxy_e2e 5; h2h1_md_streaming_
+verify 14; h2h1_md_coverage_driver 11; bridging_h1_h1 1; bridging_h2_h1 1;
+round8_body_overread 4; round8_keepalive_count_cap 3; smuggle_matrix 13;
+smuggle_wired 3; trailer_passthrough 8; lb-l7 lib 91. `cargo fmt --all`
+clean; `cargo clippy --all-targets --all-features -D warnings` clean. Disk
+46 GB free.
+
+Pushed to origin/s9/builder-1 tip `23b45d6f`. NOT self-declaring BUILT —
+verifier re-verifies BOTH cells. Standing by.
