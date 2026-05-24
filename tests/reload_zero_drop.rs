@@ -320,10 +320,22 @@ weight = 1
         boot_timeout_override().unwrap_or(Duration::from_secs(30))
     }
 
-    /// Spawn the gateway as a child process, returning the child + the
-    /// listener address. Waits up to `boot_timeout()` for the listener
-    /// to become accept()-ready before returning.
-    pub fn spawn_gateway(bin: &Path, config: &Path, addr: SocketAddr) -> Child {
+    /// PART B (R3 gate fix) — spawn the gateway as a child process with a
+    /// TCP-accept readiness gate. Returns `Some(child)` once the listener
+    /// accepts on `addr`, or `None` if the gateway never became ready
+    /// within `boot_timeout()` (the child is reaped first).
+    ///
+    /// The listener port crosses the process boundary (the gateway only
+    /// receives an ADDRESS from config — no fd-passing), so the ephemeral
+    /// reserve→drop→child-rebind window cannot be closed by holding a
+    /// socket the way the in-process backend now does (PART A). Instead
+    /// the caller RETRIES with a FRESH `ephemeral_port()` on `None` — a
+    /// lost bind race manifests here as the child never binding, so the
+    /// readiness gate simply times out and we re-pick + re-spawn. This
+    /// returns `None` (not `panic!`) so the caller's bounded retry can
+    /// decide; the TCP-accept readiness SEMANTICS are the long-standing
+    /// ones (a successful `connect_timeout` on `addr`).
+    pub fn try_spawn_gateway(bin: &Path, config: &Path, addr: SocketAddr) -> Option<Child> {
         let mut child = Command::new(bin)
             .arg(config)
             .stdout(Stdio::piped())
@@ -336,21 +348,19 @@ weight = 1
         let deadline = Instant::now() + budget;
         while Instant::now() < deadline {
             if std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(100)).is_ok() {
-                return child;
+                return Some(child);
             }
             std::thread::sleep(Duration::from_millis(100));
         }
-        // Reap the child before bubbling up — leaving the panic to
-        // drop(child) without a wait would zombie the gateway.
+        // Not ready within budget (listener-port race lost, or boot
+        // failure) — reap the child so we never zombie it, and signal the
+        // caller to retry with a fresh port.
         let _ = child.kill();
         let _ = child.wait();
-        panic!(
-            "gateway did not start accepting on {addr} within {}s",
-            budget.as_secs()
-        );
+        None
     }
 
-    /// Like [`spawn_gateway`] but for QUIC listeners. QUIC binds a
+    /// Like [`try_spawn_gateway`] but for QUIC listeners. QUIC binds a
     /// UDP socket, so a TCP-connect probe always fails. We give the
     /// process a short fixed warm-up window so the UDP socket is
     /// bound and `/readyz` flips to Ready before the test proceeds.
@@ -401,15 +411,23 @@ weight = 1
     }
 
     /// Spawn a minimal blocking HTTP/1.1 backend that 200s every
-    /// request on the specified `addr` and exits when its
-    /// [`BackendGuard`] is dropped (the std `TcpListener` is closed
-    /// from another thread via the shutdown channel).
+    /// request and exits when its [`BackendGuard`] is dropped (the std
+    /// `TcpListener` is closed from another thread via the shutdown
+    /// channel).
     ///
     /// Used by the drain tests so the gateway has a backend to
     /// dial — without this, the H1 proxy answers 502 and the
     /// `Connection: close` graceful-drain header is hidden behind
     /// an error response shaped by `error_response`.
-    pub fn spawn_blocking_h1_backend(addr: SocketAddr) -> BackendGuard {
+    ///
+    /// BIND-AND-HOLD (R3 gate fix): binds `127.0.0.1:0` INSIDE the
+    /// spawner and keeps THAT EXACT listener for the accept loop —
+    /// there is no `ephemeral_port()` reserve-then-drop-then-rebind
+    /// window, so the `AddrInUse` TOCTOU that flaked the Phase-3 gate
+    /// (`tests/reload_zero_drop.rs:420` under concurrent test load)
+    /// cannot occur for the backend. Returns the REAL bound address so
+    /// the caller writes the config AFTER the backend is live on it.
+    pub fn spawn_blocking_h1_backend() -> (BackendGuard, SocketAddr) {
         use std::io::{Read, Write};
         use std::net::TcpListener as StdListener;
         use std::sync::Arc;
@@ -417,7 +435,8 @@ weight = 1
 
         let stop = Arc::new(AtomicBool::new(false));
         let stop_w = Arc::clone(&stop);
-        let listener = StdListener::bind(addr).expect("backend bind");
+        let listener = StdListener::bind(("127.0.0.1", 0)).expect("backend bind");
+        let addr = listener.local_addr().expect("backend local_addr");
         listener.set_nonblocking(true).expect("backend nonblocking");
         let handle = std::thread::spawn(move || {
             while !stop_w.load(Ordering::Relaxed) {
@@ -441,10 +460,13 @@ weight = 1
                 }
             }
         });
-        BackendGuard {
-            stop,
-            handle: Some(handle),
-        }
+        (
+            BackendGuard {
+                stop,
+                handle: Some(handle),
+            },
+            addr,
+        )
     }
 
     /// REL-2-02 follow-on: generate a self-signed cert + key into
@@ -514,7 +536,11 @@ weight = 1
     /// yet produced) at the instant we deliver SIGTERM, so the test
     /// exercises the real drain path rather than a request that already
     /// finished.
-    pub fn spawn_slow_h1_backend(addr: SocketAddr, hold: Duration) -> BackendGuard {
+    ///
+    /// BIND-AND-HOLD (R3 gate fix): like [`spawn_blocking_h1_backend`],
+    /// binds `127.0.0.1:0` INSIDE the spawner and returns the REAL bound
+    /// address — no reserve-then-rebind `AddrInUse` window.
+    pub fn spawn_slow_h1_backend(hold: Duration) -> (BackendGuard, SocketAddr) {
         use std::io::{Read, Write};
         use std::net::TcpListener as StdListener;
         use std::sync::Arc;
@@ -522,7 +548,8 @@ weight = 1
 
         let stop = Arc::new(AtomicBool::new(false));
         let stop_w = Arc::clone(&stop);
-        let listener = StdListener::bind(addr).expect("backend bind");
+        let listener = StdListener::bind(("127.0.0.1", 0)).expect("backend bind");
+        let addr = listener.local_addr().expect("backend local_addr");
         listener.set_nonblocking(true).expect("backend nonblocking");
         let handle = std::thread::spawn(move || {
             while !stop_w.load(Ordering::Relaxed) {
@@ -550,10 +577,13 @@ weight = 1
                 }
             }
         });
-        BackendGuard {
-            stop,
-            handle: Some(handle),
-        }
+        (
+            BackendGuard {
+                stop,
+                handle: Some(handle),
+            },
+            addr,
+        )
     }
 
     /// How the gateway closed the connection after a byte-complete
@@ -845,16 +875,32 @@ mod drain_tests {
                 // so concurrent --workspace test binaries cannot
                 // delete it mid-run (verifier-C Phase-0 race).
                 let dir = unique_temp_dir("drain-h1");
-                let backend_port = ephemeral_port();
+                // PART A (R3 gate fix): the backend BINDS-AND-HOLDS its
+                // own `:0` listener and returns the REAL address — no
+                // reserve-then-rebind `AddrInUse` window. Bind it BEFORE
+                // writing the config so the config names a live backend.
+                let (_backend, backend_addr) = spawn_slow_h1_backend(backend_hold);
+                // PART B (R3 gate fix): the gateway listener port still
+                // crosses the process boundary (no fd-passing), so the
+                // ephemeral reserve→drop→child-rebind window remains. We
+                // pick a FRESH listener port and RETRY the spawn if the
+                // child loses that race (readiness gate never satisfied →
+                // `try_spawn_gateway` returns None). This `spawn_try`
+                // loop already retries on a boot miss; PART B reuses it.
                 let listener_port = ephemeral_port();
-                let backend_addr: std::net::SocketAddr =
-                    format!("127.0.0.1:{backend_port}").parse().unwrap();
                 let listener_addr: std::net::SocketAddr =
                     format!("127.0.0.1:{listener_port}").parse().unwrap();
                 let cfg = write_config(&dir, listener_port, backend_addr, "h1");
 
-                let _backend = spawn_slow_h1_backend(backend_addr, backend_hold);
-                let mut child = spawn_gateway(&bin, &cfg, listener_addr);
+                let Some(mut child) = try_spawn_gateway(&bin, &cfg, listener_addr) else {
+                    eprintln!(
+                        "h1-drain iter {it}: spawn_try {spawn_try} gateway never became \
+                         ready on {listener_addr} (listener-port race) — retrying with a \
+                         fresh port"
+                    );
+                    let _ = std::fs::remove_dir_all(&dir);
+                    continue;
+                };
                 let attempt = drain_h1_attempt(&listener_addr, &child, pre, read_window);
                 let _ = child.wait();
                 let _ = std::fs::remove_dir_all(&dir);
@@ -969,16 +1015,12 @@ mod drain_tests {
         // F-COR-3: mirror the verified H1 fix (9e58bbf2) — unique
         // per-cycle dir instead of the fixed shared "eg-drain-h2".
         let dir = unique_temp_dir("drain-h2");
-        let backend_port = ephemeral_port();
-        let listener_port = ephemeral_port();
-        let backend_addr: std::net::SocketAddr =
-            format!("127.0.0.1:{backend_port}").parse().unwrap();
-        let listener_addr: std::net::SocketAddr =
-            format!("127.0.0.1:{listener_port}").parse().unwrap();
-        let cfg = write_h1s_config_with_self_signed(&dir, listener_port, backend_addr);
-
-        let _backend = spawn_blocking_h1_backend(backend_addr);
-        let mut child = spawn_gateway(&bin, &cfg, listener_addr);
+        // PART A (R3 gate fix): the backend BINDS-AND-HOLDS its own `:0`
+        // listener and returns the REAL address — no reserve-then-rebind
+        // `AddrInUse` window (the observed Phase-3 panic). The gateway
+        // listener port + spawn are deferred into the PART B retry loop
+        // below (the gateway port still crosses the process boundary).
+        let (_backend, backend_addr) = spawn_blocking_h1_backend();
 
         // Custom rustls config: accept the self-signed cert and ask
         // for ALPN `h2`.
@@ -1072,56 +1114,106 @@ mod drain_tests {
         // (deterministic failure) instead of a corrupt-handshake
         // flake; in practice the transient holder releases well
         // within the budget and an attempt succeeds.
-        let ready_deadline = Instant::now() + boot_timeout();
+        // PART B (R3 gate fix): the gateway listener port crosses the
+        // process boundary (no fd-passing — `spawn_gateway` only hands the
+        // child an ADDRESS in config), so the ephemeral reserve→drop→
+        // child-rebind window cannot be closed by holding a socket. Wrap
+        // (fresh `ephemeral_port()` → write config → spawn → TLS-faithful
+        // readiness) in a bounded retry: a lost bind race manifests as the
+        // child never serving TLS on the port within its per-attempt boot
+        // budget, so we kill it and re-pick a FRESH port. The TLS-faithful
+        // readiness SEMANTICS (only the real gateway can complete the
+        // self-signed-cert TLS handshake AND negotiate ALPN `h2`) are
+        // UNCHANGED — this only adds the fresh-port retry around them.
+        const SPAWN_ATTEMPTS: usize = 4;
+        let mut child: Option<std::process::Child> = None;
+        let mut ready_tls = None;
         let mut last_err: Option<String> = None;
-        let tls = loop {
-            if Instant::now() >= ready_deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = std::fs::remove_dir_all(&dir);
-                panic!(
-                    "gateway h2 TLS listener not ready on {listener_addr} within {}s \
-                     (last handshake error: {}); likely a foreign process holding the \
-                     ephemeral port for the entire boot budget — re-run; F-COR-9 gate",
-                    boot_timeout().as_secs(),
-                    last_err.as_deref().unwrap_or("none")
+        for attempt in 0..SPAWN_ATTEMPTS {
+            let listener_port = ephemeral_port();
+            let listener_addr: std::net::SocketAddr =
+                format!("127.0.0.1:{listener_port}").parse().unwrap();
+            let cfg = write_h1s_config_with_self_signed(&dir, listener_port, backend_addr);
+
+            let Some(mut c) = try_spawn_gateway(&bin, &cfg, listener_addr) else {
+                last_err = Some(format!("gateway not TCP-ready on {listener_addr}"));
+                eprintln!(
+                    "h2-drain: spawn attempt {attempt} gateway never bound \
+                     {listener_addr} (listener-port race) — retrying with fresh port"
                 );
-            }
-            let tcp = match tokio::net::TcpStream::connect(listener_addr).await {
-                Ok(s) => s,
-                Err(e) => {
-                    last_err = Some(format!("tcp connect: {e}"));
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                    continue;
-                }
+                continue;
             };
-            match connector.connect(server_name.clone(), tcp).await {
-                Ok(tls) => {
-                    // Only the real gateway can complete this exact
-                    // TLS handshake with the harness self-signed cert
-                    // *and* negotiate ALPN `h2`. Require both before
-                    // declaring the listener ready, so a foreign peer
-                    // that somehow TLS-handshakes but does not speak
-                    // `h2` cannot satisfy the gate either.
-                    let negotiated = tls.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
-                    if negotiated.as_deref() == Some(b"h2" as &[u8]) {
-                        break tls;
+
+            // Per-attempt TLS-faithful readiness probe (semantics
+            // verbatim from the prior F-COR-9 gate, just bounded by a
+            // per-attempt budget instead of panicking once).
+            let ready_deadline = Instant::now() + boot_timeout();
+            let mut tls = None;
+            while Instant::now() < ready_deadline {
+                let tcp = match tokio::net::TcpStream::connect(listener_addr).await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        last_err = Some(format!("tcp connect: {e}"));
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                        continue;
                     }
-                    last_err = Some(format!("ALPN negotiated {negotiated:?}, want h2"));
-                    drop(tls);
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                }
-                Err(e) => {
-                    // `InvalidMessage(InvalidContentType)` lands here:
-                    // we connected to something that is not the
-                    // gateway's TLS stream (foreign reused port /
-                    // stale fd). Retry until the gateway itself is
-                    // serving TLS on this port.
-                    last_err = Some(format!("tls handshake: {e}"));
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+                };
+                match connector.connect(server_name.clone(), tcp).await {
+                    Ok(t) => {
+                        // Only the real gateway can complete this exact
+                        // TLS handshake with the harness self-signed cert
+                        // *and* negotiate ALPN `h2`. Require both before
+                        // declaring the listener ready, so a foreign peer
+                        // that somehow TLS-handshakes but does not speak
+                        // `h2` cannot satisfy the gate either.
+                        let negotiated = t.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
+                        if negotiated.as_deref() == Some(b"h2" as &[u8]) {
+                            tls = Some(t);
+                            break;
+                        }
+                        last_err = Some(format!("ALPN negotiated {negotiated:?}, want h2"));
+                        drop(t);
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                    Err(e) => {
+                        // `InvalidMessage(InvalidContentType)` lands here:
+                        // we connected to something that is not the
+                        // gateway's TLS stream (foreign reused port /
+                        // stale fd). Retry until the gateway itself is
+                        // serving TLS on this port.
+                        last_err = Some(format!("tls handshake: {e}"));
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
                 }
             }
+
+            if let Some(t) = tls {
+                child = Some(c);
+                ready_tls = Some(t);
+                break;
+            }
+            // This attempt's gateway never served the faithful TLS
+            // handshake within budget (lost the port race to a foreign
+            // holder for the whole budget). Reap it and try a fresh port.
+            let _ = c.kill();
+            let _ = c.wait();
+            eprintln!(
+                "h2-drain: spawn attempt {attempt} gateway bound but never served \
+                 faithful TLS+h2 within budget (last: {}) — retrying with fresh port",
+                last_err.as_deref().unwrap_or("none")
+            );
+        }
+
+        let Some(mut child) = child else {
+            let _ = std::fs::remove_dir_all(&dir);
+            panic!(
+                "gateway h2 TLS listener not ready within {} spawn attempts \
+                 (last handshake error: {}); F-COR-9 gate",
+                SPAWN_ATTEMPTS,
+                last_err.as_deref().unwrap_or("none")
+            );
         };
+        let tls = ready_tls.expect("ready_tls set when child is Some");
         // ALPN-h2 was verified inside the readiness loop above; assert
         // it again on the established connection so the cert-harness
         // contract remains an explicit, unweakened test assertion.
