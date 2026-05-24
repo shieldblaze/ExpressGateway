@@ -422,3 +422,275 @@ async fn h1s_proxy_times_out_on_slow_body() {
         "expected 504 from gateway when upstream stalls"
     );
 }
+
+// ── F-CAP-1: pump verdict is authoritative over a send_request error ──────
+//
+// When the bounded pump deliberately aborts the upstream (over the 64 MiB
+// cap → 413, or a forbidden-framing-field trailer → 400), the upstream
+// `send_request` fails because the backend never sent a response head. The
+// caller must return the pump's CLASSIFIED verdict (413/400), NOT a 502 —
+// deterministically, with no 413-vs-502 race. A GENUINE upstream failure
+// (not pump-caused) must still map to 502.
+
+/// Backend that READS and discards the entire request body, replying
+/// `200 OK` only on a clean end-of-body. For an over-cap upload the gateway
+/// pump aborts the request before the body ends, so this backend never sends
+/// a response head — exactly the F-CAP-1 condition (the client must still see
+/// 413, from the pump verdict, not 502). Draining the body keeps the gateway's
+/// bounded channel from stalling so the pump can count past the cap.
+async fn spawn_drain_body_backend() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let local = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        loop {
+            let Ok((sock, _)) = listener.accept().await else {
+                return;
+            };
+            tokio::spawn(async move {
+                let svc = service_fn(move |req: Request<Incoming>| async move {
+                    // Drain the whole inbound body (discarding it) before
+                    // responding. If the gateway aborts the upstream request
+                    // mid-body (over-cap / forbidden trailer), `collect()`
+                    // resolves with an Err and we never send a 200 head — the
+                    // backend stays silent, which is the case under test.
+                    let mut body = req.into_body();
+                    use http_body_util::BodyExt as _;
+                    while let Some(next) = body.frame().await {
+                        if next.is_err() {
+                            // Upstream request aborted by the gateway → do not
+                            // respond; let the connection wind down.
+                            return Ok::<_, Infallible>(
+                                Response::builder()
+                                    .status(StatusCode::OK)
+                                    .body(Empty::<Bytes>::new())
+                                    .unwrap(),
+                            );
+                        }
+                    }
+                    Ok::<_, Infallible>(
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .body(Empty::<Bytes>::new())
+                            .unwrap(),
+                    )
+                });
+                let _ = srv_h1::Builder::new()
+                    .serve_connection(TokioIo::new(sock), svc)
+                    .await;
+            });
+        }
+    });
+    (local, handle)
+}
+
+/// Backend that accepts the TCP connection then immediately closes it without
+/// speaking any HTTP — a GENUINE upstream failure. `send_request` fails for a
+/// reason the pump did NOT cause; the gateway must map this to 502.
+async fn spawn_rst_backend() -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let local = listener.local_addr().unwrap();
+    let handle = tokio::spawn(async move {
+        loop {
+            let Ok((sock, _)) = listener.accept().await else {
+                return;
+            };
+            // Drop the socket immediately → the gateway's client handshake /
+            // send_request sees a closed connection (genuine upstream failure).
+            drop(sock);
+        }
+    });
+    (local, handle)
+}
+
+/// Read the HTTP status line (first line) from a raw gateway response and
+/// return the 3-digit status code. Reads until the first CRLF.
+async fn read_status_code(sock: &mut TcpStream) -> u16 {
+    use tokio::io::AsyncReadExt as _;
+    let mut buf = Vec::new();
+    let mut byte = [0u8; 1];
+    loop {
+        let n = sock.read(&mut byte).await.unwrap_or(0);
+        if n == 0 {
+            break;
+        }
+        buf.push(byte[0]);
+        if buf.ends_with(b"\r\n") {
+            break;
+        }
+        if buf.len() > 256 {
+            break;
+        }
+    }
+    let line = String::from_utf8_lossy(&buf);
+    // `HTTP/1.1 413 Payload Too Large\r\n`
+    line.split_whitespace()
+        .nth(1)
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or_else(|| panic!("could not parse status from line: {line:?}"))
+}
+
+/// Build a plain-H1 gateway over a backend, with a generous body timeout so
+/// the bounded verdict await in the F-CAP-1 path resolves on the pump verdict
+/// rather than elapsing.
+async fn spawn_gateway_over(backend_addr: SocketAddr) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    let pool = build_pool();
+    let picker = Arc::new(RoundRobinAddrs::new(vec![backend_addr]).unwrap());
+    let proxy = Arc::new(H1Proxy::new(
+        pool,
+        picker,
+        None,
+        HttpTimeouts {
+            header: Duration::from_secs(10),
+            body: Duration::from_secs(10),
+            total: Duration::from_secs(30),
+        },
+        /* is_https */ false,
+    ));
+    spawn_h1_gateway(proxy).await
+}
+
+const OVER_CAP_BYTES: usize = 64 * 1024 * 1024 + 64 * 1024; // > MAX_REQUEST_BODY_BYTES
+
+/// F-CAP-1 (Content-Length framing): a >64 MiB Content-Length upload to a
+/// backend that is still reading the body → client observes 413, not 502.
+#[tokio::test]
+async fn over_cap_content_length_upload_yields_413_not_502() {
+    use tokio::io::AsyncWriteExt as _;
+
+    let (backend_addr, _backend_h) = spawn_drain_body_backend().await;
+    let (gateway_addr, _gw_h) = spawn_gateway_over(backend_addr).await;
+
+    let mut sock = TcpStream::connect(gateway_addr).await.unwrap();
+    let head = format!(
+        "POST /upload HTTP/1.1\r\nHost: {SAN_HOST}\r\nContent-Length: {OVER_CAP_BYTES}\r\n\r\n"
+    );
+    sock.write_all(head.as_bytes()).await.unwrap();
+
+    // Stream the body in chunks. The gateway pump counts forwarded_total and
+    // trips the cap before we finish; once it aborts the upstream + writes the
+    // 413 status line, our writes may fail with a broken pipe — that is fine.
+    let chunk = vec![0xABu8; 64 * 1024];
+    let mut written = 0usize;
+    while written < OVER_CAP_BYTES {
+        let take = chunk.len().min(OVER_CAP_BYTES - written);
+        if sock.write_all(&chunk[..take]).await.is_err() {
+            break; // gateway already responded 413 and tore down the body
+        }
+        written += take;
+    }
+    let _ = sock.flush().await;
+
+    let status = tokio::time::timeout(Duration::from_secs(20), read_status_code(&mut sock))
+        .await
+        .expect("client timed out waiting for gateway status");
+    assert_eq!(
+        status, 413,
+        "over-cap Content-Length upload must yield 413 (pump verdict), not 502"
+    );
+}
+
+/// F-CAP-1 (chunked framing): a >64 MiB chunked upload to a backend that is
+/// still reading the body → client observes 413, not 502.
+#[tokio::test]
+async fn over_cap_chunked_upload_yields_413_not_502() {
+    use tokio::io::AsyncWriteExt as _;
+
+    let (backend_addr, _backend_h) = spawn_drain_body_backend().await;
+    let (gateway_addr, _gw_h) = spawn_gateway_over(backend_addr).await;
+
+    let mut sock = TcpStream::connect(gateway_addr).await.unwrap();
+    let head =
+        format!("POST /upload HTTP/1.1\r\nHost: {SAN_HOST}\r\nTransfer-Encoding: chunked\r\n\r\n");
+    sock.write_all(head.as_bytes()).await.unwrap();
+
+    // Each chunk: `<hexlen>\r\n<data>\r\n`. 64 KiB data chunks.
+    let data = vec![0xCDu8; 64 * 1024];
+    let chunk_header = format!("{:x}\r\n", data.len());
+    let mut sent = 0usize;
+    while sent < OVER_CAP_BYTES {
+        if sock.write_all(chunk_header.as_bytes()).await.is_err() {
+            break;
+        }
+        if sock.write_all(&data).await.is_err() {
+            break;
+        }
+        if sock.write_all(b"\r\n").await.is_err() {
+            break;
+        }
+        sent += data.len();
+    }
+    // (We never send the terminating `0\r\n\r\n` — the cap trips first.)
+    let _ = sock.flush().await;
+
+    let status = tokio::time::timeout(Duration::from_secs(20), read_status_code(&mut sock))
+        .await
+        .expect("client timed out waiting for gateway status");
+    assert_eq!(
+        status, 413,
+        "over-cap chunked upload must yield 413 (pump verdict), not 502"
+    );
+}
+
+/// F-CAP-1 (forbidden trailer): a chunked request whose trailer carries a
+/// forbidden framing field (`Transfer-Encoding`) to a backend still reading
+/// the body → client observes 400, not 502.
+#[tokio::test]
+async fn forbidden_framing_trailer_yields_400_not_502() {
+    use tokio::io::AsyncWriteExt as _;
+
+    let (backend_addr, _backend_h) = spawn_drain_body_backend().await;
+    let (gateway_addr, _gw_h) = spawn_gateway_over(backend_addr).await;
+
+    let mut sock = TcpStream::connect(gateway_addr).await.unwrap();
+    // Small chunked body + a trailer carrying a forbidden framing field.
+    // `TE: trailers` signals trailer-awareness; the trailer section then
+    // smuggles `Transfer-Encoding: chunked`, which the gateway must reject.
+    let req = "POST /upload HTTP/1.1\r\n\
+               Host: expressgateway.test\r\n\
+               TE: trailers\r\n\
+               Trailer: Transfer-Encoding\r\n\
+               Transfer-Encoding: chunked\r\n\r\n\
+               5\r\nhello\r\n\
+               0\r\n\
+               Transfer-Encoding: chunked\r\n\r\n";
+    sock.write_all(req.as_bytes()).await.unwrap();
+    let _ = sock.flush().await;
+
+    let status = tokio::time::timeout(Duration::from_secs(20), read_status_code(&mut sock))
+        .await
+        .expect("client timed out waiting for gateway status");
+    assert_eq!(
+        status, 400,
+        "forbidden-framing-field trailer must yield 400 (pump verdict), not 502"
+    );
+}
+
+/// F-CAP-1 (negative / no-regression): a GENUINE upstream failure (backend
+/// drops the connection without speaking HTTP) is NOT pump-caused, so it must
+/// still map to 502 — the verdict-first logic must not spuriously emit
+/// 413/400 here.
+#[tokio::test]
+async fn genuine_upstream_failure_still_yields_502() {
+    use tokio::io::AsyncWriteExt as _;
+
+    let (backend_addr, _backend_h) = spawn_rst_backend().await;
+    let (gateway_addr, _gw_h) = spawn_gateway_over(backend_addr).await;
+
+    let mut sock = TcpStream::connect(gateway_addr).await.unwrap();
+    // A small, well-formed request (within the cap, no forbidden trailer) so
+    // the only failure is the upstream dropping the connection.
+    let req = "POST /ok HTTP/1.1\r\n\
+               Host: expressgateway.test\r\n\
+               Content-Length: 5\r\n\r\n\
+               hello";
+    sock.write_all(req.as_bytes()).await.unwrap();
+    let _ = sock.flush().await;
+
+    let status = tokio::time::timeout(Duration::from_secs(20), read_status_code(&mut sock))
+        .await
+        .expect("client timed out waiting for gateway status");
+    assert_eq!(
+        status, 502,
+        "a genuine upstream failure must still map to 502 (not a spurious 413/400)"
+    );
+}
