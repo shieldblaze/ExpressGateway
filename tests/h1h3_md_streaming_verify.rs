@@ -865,3 +865,198 @@ async fn h1h3_memory_gauge_non_vacuous_and_load_bearing() {
          the bound would not catch a buffering regression"
     );
 }
+
+// ── Test 7: gRPC-shaped RESPONSE trailers — EMPIRICAL (trailer mandate) ──
+//
+// The H3 backend returns a gRPC-shaped response: HEADERS, DATA, then a post-DATA
+// TRAILERS frame carrying `grpc-status: 0`. The connector decodes it to
+// H3RespEvent::Trailers and the H1 front relays it onto the response body's
+// terminal Frame::trailers. CF-RESP-1 / CASE-ii: a STREAMED H1 response cannot
+// pre-declare a `Trailer:` header (trailer names unknown at head-time), so
+// hyper-1's H1 encoder MAY drop the trailer on the wire. This test does NOT
+// assume pass/fail — it RECORDS whether `grpc-status` reaches the H1 client, the
+// empirical evidence the lead escalates to the owner for the propagate-vs-
+// document decision. The connector-side propagation (Trailers emitted) is the
+// non-negotiable part; the H1-downstream reach is what we measure.
+
+async fn spawn_h3_grpc_backend(
+    cert_path: PathBuf,
+    key_path: PathBuf,
+) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let addr = socket.local_addr().unwrap();
+    let socket = Arc::new(socket);
+    let handle = tokio::spawn(async move {
+        let Ok(mut cfg) = quiche::Config::new(quiche::PROTOCOL_VERSION) else {
+            return;
+        };
+        let _ = cfg.set_application_protos(&[LB_QUIC_ALPN]);
+        cfg.set_max_idle_timeout(10_000);
+        cfg.set_max_recv_udp_payload_size(1_350);
+        cfg.set_max_send_udp_payload_size(1_350);
+        cfg.set_initial_max_data(4 * 1024 * 1024);
+        cfg.set_initial_max_stream_data_bidi_local(1024 * 1024);
+        cfg.set_initial_max_stream_data_bidi_remote(1024 * 1024);
+        cfg.set_initial_max_stream_data_uni(256 * 1024);
+        cfg.set_initial_max_streams_bidi(8);
+        cfg.set_initial_max_streams_uni(8);
+        cfg.set_disable_active_migration(true);
+        if cfg
+            .load_cert_chain_from_pem_file(cert_path.to_str().unwrap_or(""))
+            .is_err()
+            || cfg
+                .load_priv_key_from_pem_file(key_path.to_str().unwrap_or(""))
+                .is_err()
+        {
+            return;
+        }
+        let mut in_buf = vec![0u8; MAX_UDP];
+        let mut out_buf = vec![0u8; MAX_UDP];
+        let (n, peer) = match socket.recv_from(&mut in_buf).await {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+        let scid = random_scid_bytes();
+        let scid_ref = quiche::ConnectionId::from_ref(&scid);
+        let mut conn = match quiche::accept(&scid_ref, None, addr, peer, &mut cfg) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let _ = conn.recv(
+            in_buf.get_mut(..n).unwrap_or(&mut []),
+            quiche::RecvInfo {
+                from: peer,
+                to: addr,
+            },
+        );
+        let mut got_head = false;
+        let mut responded = false;
+        let mut resp_out: Vec<u8> = Vec::new();
+        let mut resp_sent = 0usize;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while tokio::time::Instant::now() < deadline {
+            loop {
+                match conn.send(&mut out_buf) {
+                    Ok((sent, info)) => {
+                        let _ = socket
+                            .send_to(out_buf.get(..sent).unwrap_or(&[]), info.to)
+                            .await;
+                    }
+                    Err(quiche::Error::Done) => break,
+                    Err(_) => break,
+                }
+            }
+            if conn.is_closed() {
+                break;
+            }
+            if conn.is_established() {
+                for sid in conn.readable().collect::<Vec<u64>>() {
+                    if sid != 0 {
+                        continue;
+                    }
+                    let mut chunk = [0u8; 4096];
+                    while let Ok((rn, _fin)) = conn.stream_recv(sid, &mut chunk) {
+                        if rn > 0 {
+                            got_head = true;
+                        }
+                    }
+                }
+                if got_head && !responded {
+                    let encoder = QpackEncoder::new();
+                    let head = encoder
+                        .encode(&[
+                            (":status".to_string(), "200".to_string()),
+                            ("content-type".to_string(), "application/grpc".to_string()),
+                        ])
+                        .ok()
+                        .and_then(|b| encode_frame(&H3Frame::Headers { header_block: b }).ok());
+                    let data = encode_frame(&H3Frame::Data {
+                        payload: Bytes::from_static(b"grpc-body"),
+                    })
+                    .ok();
+                    let trailers = encoder
+                        .encode(&[("grpc-status".to_string(), "0".to_string())])
+                        .ok()
+                        .and_then(|b| encode_frame(&H3Frame::Headers { header_block: b }).ok());
+                    if let (Some(h), Some(d), Some(t)) = (head, data, trailers) {
+                        resp_out.extend_from_slice(&h);
+                        resp_out.extend_from_slice(&d);
+                        resp_out.extend_from_slice(&t);
+                    }
+                    responded = true;
+                }
+                if responded && resp_sent < resp_out.len() {
+                    while resp_sent < resp_out.len() {
+                        let sl = resp_out.get(resp_sent..).unwrap_or(&[]);
+                        match conn.stream_send(0, sl, true) {
+                            Ok(ns) if ns > 0 => resp_sent += ns,
+                            _ => break,
+                        }
+                    }
+                }
+            }
+            let to = conn
+                .timeout()
+                .unwrap_or(Duration::from_millis(20))
+                .min(Duration::from_millis(20));
+            match tokio::time::timeout(to, socket.recv_from(&mut in_buf)).await {
+                Ok(Ok((rn, from))) => {
+                    let _ = conn.recv(
+                        in_buf.get_mut(..rn).unwrap_or(&mut []),
+                        quiche::RecvInfo { from, to: addr },
+                    );
+                }
+                _ => conn.on_timeout(),
+            }
+        }
+    });
+    (addr, handle)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn h1h3_grpc_response_trailers_empirical() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let certs = generate_loopback_certs();
+    let (backend, _bh) = spawn_h3_grpc_backend(certs.cert.clone(), certs.key.clone()).await;
+    let gw = spawn_gateway(backend, certs.ca.clone(), HttpTimeouts::default()).await;
+
+    // Bodyless GET; read the full raw H1 response so we can inspect whether a
+    // chunked trailer section (grpc-status) appears on the wire.
+    let mut sock = TcpStream::connect(gw).await.unwrap();
+    sock.write_all(format!("GET /grpc HTTP/1.1\r\nHost: {TEST_SNI}\r\n\r\n").as_bytes())
+        .await
+        .unwrap();
+    sock.flush().await.unwrap();
+    let mut raw = Vec::new();
+    let mut buf = vec![0u8; 8192];
+    let read_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while tokio::time::Instant::now() < read_deadline {
+        match tokio::time::timeout(Duration::from_millis(400), sock.read(&mut buf)).await {
+            Ok(Ok(0)) => break,
+            Ok(Ok(n)) => raw.extend_from_slice(&buf[..n]),
+            _ => break,
+        }
+    }
+    let text = String::from_utf8_lossy(&raw);
+    let status_200 = text.starts_with("HTTP/1.1 200");
+    let grpc_status_on_wire = text.to_ascii_lowercase().contains("grpc-status");
+    eprintln!(
+        "H1H3_GRPC_TRAILER status_200={status_200} grpc_status_reaches_h1_client={grpc_status_on_wire} \
+         raw_len={} (EMPIRICAL — CF-RESP-1/CASE-ii; evidence for the trailer-mandate owner decision)",
+        raw.len()
+    );
+    // NON-NEGOTIABLE: the response head + gRPC body must reach the client (the
+    // connector propagated the decoded response).
+    assert!(
+        status_200,
+        "gRPC-shaped response head/body did not reach the H1 client"
+    );
+    assert!(
+        text.contains("grpc-body"),
+        "gRPC response DATA payload did not reach the H1 client"
+    );
+    // The grpc-status trailer reach is EMPIRICAL — recorded above, NOT asserted
+    // either way (CF-RESP-1: hyper-1 H1 drops streamed trailers absent a head
+    // Trailer: declaration the streaming front cannot pre-emit). The lead
+    // escalates the observed outcome to the owner.
+}
