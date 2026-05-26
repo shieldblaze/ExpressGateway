@@ -525,3 +525,181 @@ async fn h1h3_binary_body_byte_identical_both_directions() {
         "backend must have seen exactly one COMPLETE (clean-FIN) request"
     );
 }
+
+// ── Test 2: request-trailer FORWARDING to the H3 backend ─────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn h1h3_request_trailers_forwarded_to_backend() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let certs = generate_loopback_certs();
+    let obs = BackendObs::new();
+    let (backend, _bh) =
+        spawn_h3_echo_backend(certs.cert.clone(), certs.key.clone(), obs.clone()).await;
+    let gw = spawn_gateway(backend, certs.ca.clone(), HttpTimeouts::default()).await;
+
+    // Raw H1 chunked request WITH a trailer field section. The streaming pump
+    // validates the trailer, emits ReqBodyEvent::End{trailers}, and the
+    // connector (forward_req_trailers=true) ships a post-DATA HEADERS frame the
+    // backend records as saw_req_trailers.
+    let mut sock = TcpStream::connect(gw).await.unwrap();
+    let req = format!(
+        "POST /echo HTTP/1.1\r\nHost: {TEST_SNI}\r\nTransfer-Encoding: chunked\r\nTrailer: x-checksum\r\n\r\n\
+         5\r\nhello\r\n0\r\nx-checksum: abc123\r\n\r\n"
+    );
+    sock.write_all(req.as_bytes()).await.unwrap();
+    sock.flush().await.unwrap();
+    // Read the response head (don't need the body) so the round-trip completes.
+    let mut buf = vec![0u8; 4096];
+    let _ = tokio::time::timeout(Duration::from_secs(20), sock.read(&mut buf)).await;
+    // Allow the backend a moment to record the trailing field section.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while obs.complete.load(Ordering::SeqCst) == 0 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    eprintln!(
+        "H1H3_REQ_TRAILERS complete={} saw_req_trailers={} req_body_bytes={}",
+        obs.complete.load(Ordering::SeqCst),
+        obs.saw_req_trailers.load(Ordering::SeqCst),
+        obs.req_body_bytes.load(Ordering::SeqCst),
+    );
+    assert_eq!(
+        obs.complete.load(Ordering::SeqCst),
+        1,
+        "backend must see one COMPLETE request"
+    );
+    assert_eq!(
+        obs.req_body_bytes.load(Ordering::SeqCst),
+        5,
+        "backend must receive the 5-byte body"
+    );
+    // THE assertion: the request trailer reached the H3 backend as a post-DATA
+    // HEADERS frame (forward_req_trailers=true; locks the connector's net-new
+    // forward arm + the pump's End{trailers} path — no live test covered this).
+    assert_eq!(
+        obs.saw_req_trailers.load(Ordering::SeqCst),
+        1,
+        "request trailer section was NOT forwarded to the H3 backend \
+         (forward_req_trailers regression)"
+    );
+}
+
+// ── F-MD-4 helpers: clean vs truncated raw chunked upload ────────────────
+
+/// Send a raw H1 chunked POST whose body is truncated mid-stream (a partial
+/// chunk then an abrupt TCP close — NO `0\r\n\r\n` terminator). Returns once
+/// the socket is dropped. This is the smuggling primitive: a truncated request
+/// must NEVER reach the H3 backend as a complete (clean-FIN) request.
+async fn truncated_chunked_upload(gw: SocketAddr) {
+    use tokio::io::AsyncWriteExt;
+    let mut sock = TcpStream::connect(gw).await.unwrap();
+    // Head + a chunk-size line promising 1000 bytes, then only 100 bytes, then
+    // DROP — no terminating 0-chunk.
+    let head =
+        format!("POST /echo HTTP/1.1\r\nHost: {TEST_SNI}\r\nTransfer-Encoding: chunked\r\n\r\n");
+    sock.write_all(head.as_bytes()).await.unwrap();
+    sock.write_all(b"3e8\r\n").await.unwrap(); // 0x3e8 = 1000 bytes promised
+    sock.write_all(&vec![0x5Au8; 100]).await.unwrap(); // only 100 sent
+    sock.flush().await.unwrap();
+    // Abrupt close mid-body (drop) — the gateway's inbound body surfaces
+    // Some(Err)(IncompleteBody) → Reset → RESET-without-FIN upstream.
+    drop(sock);
+}
+
+/// Send a clean raw H1 chunked POST (proper 0-terminator) — the positive arm of
+/// the F-MD-4 negative control: this SHOULD reach the backend as complete.
+async fn clean_chunked_upload(gw: SocketAddr) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut sock = TcpStream::connect(gw).await.unwrap();
+    let req = format!(
+        "POST /echo HTTP/1.1\r\nHost: {TEST_SNI}\r\nTransfer-Encoding: chunked\r\n\r\n\
+         64\r\n{}\r\n0\r\n\r\n",
+        "Z".repeat(100)
+    );
+    sock.write_all(req.as_bytes()).await.unwrap();
+    sock.flush().await.unwrap();
+    let mut buf = vec![0u8; 4096];
+    let _ = tokio::time::timeout(Duration::from_secs(20), sock.read(&mut buf)).await;
+}
+
+// ── Test 3: F-MD-4 RESET-without-FIN (R13 a + load-bearing negative control)
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn h1h3_fmd4_truncated_upload_never_complete() {
+    let certs = generate_loopback_certs();
+    let obs = BackendObs::new();
+    let (backend, _bh) =
+        spawn_h3_echo_backend(certs.cert.clone(), certs.key.clone(), obs.clone()).await;
+    let gw = spawn_gateway(backend, certs.ca.clone(), HttpTimeouts::default()).await;
+
+    // POSITIVE arm (load-bearing negative control part 1): a CLEAN upload DOES
+    // reach the backend as complete. If this did not hold, the complete==0
+    // assertion below would be vacuous.
+    clean_chunked_upload(gw).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while obs.complete.load(Ordering::SeqCst) == 0 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        obs.complete.load(Ordering::SeqCst) >= 1,
+        "LOAD-BEARING control: a CLEAN upload must reach the backend complete \
+         (else the truncation assertion is vacuous)"
+    );
+
+    // NEGATIVE arm: a TRUNCATED upload must NEVER reach the backend complete.
+    let before = obs.complete.load(Ordering::SeqCst);
+    truncated_chunked_upload(gw).await;
+    // Give the gateway+backend time to (not) complete it.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let after = obs.complete.load(Ordering::SeqCst);
+    eprintln!("H1H3_FMD4 complete_before={before} complete_after={after}");
+    assert_eq!(
+        after, before,
+        "SMUGGLING: a truncated upload reached the H3 backend as a COMPLETE \
+         request (complete moved {before}→{after}) — F-MD-4 RESET-without-FIN broken"
+    );
+}
+
+// ── Test 3b: F-MD-4 R13 (b) isolation-burst ≥50× on current_thread ───────
+//
+// R13 (b): a high-repetition burst on a SINGLE-THREADED runtime — the
+// scheduling configuration that exposes timing-dependent smuggling races
+// (the flavor that caught past defects; see memory parallel-gate-masks-smuggle).
+// ≥50 iterations (NOT the sub-magnitude 24 of the h1h2 gap, task #12). Each
+// truncated upload must leave `complete` unchanged; a clean upload between
+// bursts re-confirms the backend still counts completes (control stays live).
+
+#[tokio::test(flavor = "current_thread")]
+async fn h1h3_fmd4_truncation_burst_current_thread() {
+    const ITERS: usize = 60; // ≥50 per R13 (b)
+    let certs = generate_loopback_certs();
+    let obs = BackendObs::new();
+    let (backend, _bh) =
+        spawn_h3_echo_backend(certs.cert.clone(), certs.key.clone(), obs.clone()).await;
+    let gw = spawn_gateway(backend, certs.ca.clone(), HttpTimeouts::default()).await;
+
+    // Establish the live control: a clean upload increments complete.
+    clean_chunked_upload(gw).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while obs.complete.load(Ordering::SeqCst) == 0 && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let baseline = obs.complete.load(Ordering::SeqCst);
+    assert!(
+        baseline >= 1,
+        "LOAD-BEARING control: clean upload must count complete before the burst"
+    );
+
+    // Burst: ITERS truncated uploads. NONE may reach the backend complete.
+    for _ in 0..ITERS {
+        truncated_chunked_upload(gw).await;
+    }
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let after_burst = obs.complete.load(Ordering::SeqCst);
+    eprintln!("H1H3_FMD4_BURST iters={ITERS} baseline={baseline} after_burst={after_burst}");
+    assert_eq!(
+        after_burst, baseline,
+        "SMUGGLING under burst: {} truncated uploads moved complete {baseline}→{after_burst} \
+         — at least one truncated request was relayed as complete (F-MD-4 race)",
+        ITERS
+    );
+}
