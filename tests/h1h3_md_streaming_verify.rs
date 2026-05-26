@@ -703,3 +703,98 @@ async fn h1h3_fmd4_truncation_burst_current_thread() {
         ITERS
     );
 }
+
+// ── Test 4: F-CAP-1 over-cap → mid-body RESET (backend never sees complete) ─
+//
+// The realistic over-cap outcome for H1→H3: a >64 MiB upload trips
+// MAX_REQUEST_BODY_BYTES MID-body (after ≥1 chunk forwarded), so the pump emits
+// Reset → connector RESET-without-FIN → the H3 backend NEVER sees a complete
+// request, and the client does NOT get a clean 200. (The pre-data-413 path —
+// connector inline-413 when Reset is the FIRST event — requires a single inbound
+// frame > 64 MiB, impractical on the wire; it is connector-unit-covered by
+// s7_j2_request_send_decision. The mid-body RESET is the wire-reachable arm and
+// the security-meaningful F-CAP-1 + F-MD-4 guard.)
+//
+// CF-SATURATION-1: a 66 MiB push must complete under 8-core gate saturation, so
+// the gateway listener gets a generous (120 s) body timeout (the fe992654
+// lesson) — the H1 INGRESS sits under the wall-clock timeouts.body class.
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn h1h3_fcap1_over_cap_upload_never_complete() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let certs = generate_loopback_certs();
+    let obs = BackendObs::new();
+    let (backend, _bh) =
+        spawn_h3_echo_backend(certs.cert.clone(), certs.key.clone(), obs.clone()).await;
+    let gw = spawn_gateway(
+        backend,
+        certs.ca.clone(),
+        HttpTimeouts {
+            body: Duration::from_secs(120),
+            ..HttpTimeouts::default()
+        },
+    )
+    .await;
+
+    // Raw chunked upload of 66 MiB (> 64 MiB cap), sent in 64 KiB chunks, with
+    // NO terminating 0-chunk needed (the cap trips first). We write until the
+    // gateway resets the connection (the over-cap abort propagates downstream as
+    // a connection reset / write error).
+    let mut sock = TcpStream::connect(gw).await.unwrap();
+    let head =
+        format!("POST /echo HTTP/1.1\r\nHost: {TEST_SNI}\r\nTransfer-Encoding: chunked\r\n\r\n");
+    sock.write_all(head.as_bytes()).await.unwrap();
+    let chunk = vec![0x5Au8; 64 * 1024];
+    let chunk_hdr = format!("{:x}\r\n", chunk.len());
+    let over = 66 * 1024 * 1024usize;
+    let mut sent = 0usize;
+    let mut write_failed = false;
+    while sent < over {
+        if sock.write_all(chunk_hdr.as_bytes()).await.is_err()
+            || sock.write_all(&chunk).await.is_err()
+            || sock.write_all(b"\r\n").await.is_err()
+        {
+            write_failed = true;
+            break;
+        }
+        sent += chunk.len();
+    }
+    let _ = sock.flush().await;
+    // Read any response (likely a reset / partial / nothing).
+    let mut buf = vec![0u8; 4096];
+    let _ = tokio::time::timeout(Duration::from_secs(10), sock.read(&mut buf)).await;
+    drop(sock);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    eprintln!(
+        "H1H3_FCAP1 sent={sent} write_failed={write_failed} backend_complete={} backend_body_bytes={}",
+        obs.complete.load(Ordering::SeqCst),
+        obs.req_body_bytes.load(Ordering::SeqCst),
+    );
+    // THE F-CAP-1 + F-MD-4 assertion: an over-cap upload is NEVER relayed to the
+    // H3 backend as a complete (clean-FIN) request. The cap aborted it.
+    assert_eq!(
+        obs.complete.load(Ordering::SeqCst),
+        0,
+        "F-CAP-1: an over-cap upload reached the H3 backend as COMPLETE \
+         (complete={}) — the cap did not abort the upstream request",
+        obs.complete.load(Ordering::SeqCst)
+    );
+}
+
+// ── Test 5: pre-dial upstream-down → 502 ─────────────────────────────────
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn h1h3_upstream_down_yields_502() {
+    // Point the gateway at a dead UDP address (nothing listening) → the QUIC
+    // dial fails → the connector's inline(502) → a relayable 502 Head.
+    let certs = generate_loopback_certs();
+    let dead = "127.0.0.1:1".parse().unwrap();
+    let gw = spawn_gateway(dead, certs.ca.clone(), HttpTimeouts::default()).await;
+    let (status, _b) = h1_request_with_body(gw, vec![Bytes::from_static(b"x")]).await;
+    eprintln!("H1H3_UPSTREAM_DOWN status={status}");
+    assert_eq!(
+        status, 502,
+        "a dead H3 upstream must yield 502 (got {status})"
+    );
+}
