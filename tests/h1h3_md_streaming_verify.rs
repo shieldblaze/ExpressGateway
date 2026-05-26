@@ -798,3 +798,70 @@ async fn h1h3_upstream_down_yields_502() {
         "a dead H3 upstream must yield 502 (got {status})"
     );
 }
+
+// ── Test 6: memory gauge non-vacuous + load-bearing inverted probe ───────
+//
+// The H1→H3 request pump records the SAME instantaneous in-flight gauge
+// (`H1_REQ_MAX_RETAINED_BODY_BYTES`) the H1→H1/H1→H2 cells use. Stream a body
+// ≫ the bounded window; the retained gauge must stay ≤ a small multiple of the
+// window (H1_REQ_CHANNEL_DEPTH × H1_REQ_CHUNK_MAX = 64 KiB) and ≪ the body,
+// proving body-size-INDEPENDENCE. The gauge is process-global, so serialize.
+
+static GAUGE_SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+const WINDOW: usize = 64 * 1024; // H1_REQ_CHANNEL_DEPTH(8) × H1_REQ_CHUNK_MAX(8 KiB)
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn h1h3_memory_gauge_non_vacuous_and_load_bearing() {
+    use lb_l7::h1_proxy::{H1_REQ_MAX_RETAINED_BODY_BYTES, record_retained_h1};
+
+    let _serial = GAUGE_SERIAL.lock().await;
+    H1_REQ_MAX_RETAINED_BODY_BYTES.store(0, Ordering::Relaxed);
+
+    let certs = generate_loopback_certs();
+    let obs = BackendObs::new();
+    let (backend, _bh) =
+        spawn_h3_echo_backend(certs.cert.clone(), certs.key.clone(), obs.clone()).await;
+    let gw = spawn_gateway(backend, certs.ca.clone(), HttpTimeouts::default()).await;
+
+    // 4 MiB body ≫ 64 KiB window. The bounded in-flight channel + the upstream
+    // QUIC send window keep the pump's retained set bounded regardless of size.
+    let body_size = 4 * 1024 * 1024;
+    let payload: Vec<u8> = (0..body_size).map(|i| (i % 251) as u8).collect();
+    let payload = Bytes::from(payload);
+    let chunks: Vec<Bytes> = payload
+        .chunks(16 * 1024)
+        .map(|c| Bytes::copy_from_slice(c))
+        .collect();
+    let (status, echoed) = h1_request_with_body(gw, chunks).await;
+    assert_eq!(status, 200, "memory-gauge round-trip should succeed");
+    assert_eq!(
+        echoed.len(),
+        body_size,
+        "memory-gauge body must round-trip whole"
+    );
+
+    let in_situ = H1_REQ_MAX_RETAINED_BODY_BYTES.load(Ordering::Relaxed);
+    eprintln!("H1H3_MEMORY_GAUGE in_situ={in_situ} window={WINDOW} body={body_size}");
+    assert!(
+        in_situ > 0,
+        "gauge is 0 — the pump never recorded in-flight bytes (vacuous proof)"
+    );
+    assert!(
+        in_situ <= 4 * WINDOW,
+        "retained gauge {in_situ} exceeds 4×window ({}) — bounded-memory bar broken",
+        4 * WINDOW
+    );
+    assert!(
+        in_situ < body_size,
+        "retained gauge {in_situ} not ≪ body size {body_size} (not body-size-independent)"
+    );
+
+    // INVERTED PROBE (load-bearing): a whole-body-buffering impl would record
+    // body_size; confirm that would breach the ceiling (so the bound is real).
+    record_retained_h1(body_size);
+    assert!(
+        H1_REQ_MAX_RETAINED_BODY_BYTES.load(Ordering::Relaxed) > 4 * WINDOW,
+        "inverted probe failed: a whole-body retain did not exceed the ceiling — \
+         the bound would not catch a buffering regression"
+    );
+}
