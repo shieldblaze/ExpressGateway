@@ -87,6 +87,17 @@ static HOP_BY_HOP: [HeaderName; 8] = [
     HeaderName::from_static("upgrade"),
 ];
 
+/// S12 — the client-facing response body type the listener emits. Widened from
+/// `BoxBody<Bytes, hyper::Error>` to a boxed `std::error::Error` so a
+/// channel-built streaming response (H1→H3, S12) can inject a CONSTRUCTIBLE
+/// truncation error (`H1PumpAbort`) on a mid-response abort — `hyper::Error` has
+/// no public ctor. This is LOSSLESS: hyper's H1 server only requires
+/// `Body::Error: Into<Box<dyn Error + Send + Sync>>` (it wraps the body error via
+/// `Error::new_user_body` itself), so a boxed `hyper::Error` aborts byte-identical
+/// to the un-boxed one. Every prior `hyper::Error`-sourced body widens via
+/// `.map_err(|e| Box::new(e) as _)`; infallible bodies via `match never {}`.
+pub(crate) type ClientRespBody = BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>;
+
 /// S9 / M-D-lite (Q-H1) — depth of the bounded in-flight channel feeding the
 /// streaming H1→H1 request body. Mirrors the M-D `H2_REQ_CHANNEL_DEPTH = 8`.
 /// The fixed in-flight window = `H1_REQ_CHANNEL_DEPTH × H1_REQ_CHUNK_MAX`
@@ -767,7 +778,7 @@ struct ProxyService {
 }
 
 impl hyper::service::Service<Request<IncomingBody>> for ProxyService {
-    type Response = Response<BoxBody<Bytes, hyper::Error>>;
+    type Response = Response<ClientRespBody>;
     type Error = hyper::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
@@ -827,7 +838,7 @@ impl H1Proxy {
         req: Request<IncomingBody>,
         peer: SocketAddr,
         expected_sni: Option<&str>,
-    ) -> Response<BoxBody<Bytes, hyper::Error>> {
+    ) -> Response<ClientRespBody> {
         use tracing::Instrument;
         // H1Proxy carries no per-bind label and the constructor
         // boundary into main.rs is div-ops's house, so the span's
@@ -860,7 +871,7 @@ impl H1Proxy {
         peer: SocketAddr,
         expected_sni: Option<&str>,
         req_trace: crate::trace_ctx::RequestTrace,
-    ) -> Response<BoxBody<Bytes, hyper::Error>> {
+    ) -> Response<ClientRespBody> {
         // ROUND8-L7-09 — uniform authority validation CHOKE POINT.
         // HAProxy `BUG/MAJOR: http: forbid comma character in
         // authority value` + `BUG/MEDIUM: h1: Enforce the authority
@@ -1911,7 +1922,7 @@ impl H1Proxy {
         &self,
         backend_addr: SocketAddr,
         req: StrippedRequest<IncomingBody>,
-    ) -> Response<BoxBody<Bytes, hyper::Error>> {
+    ) -> Response<ClientRespBody> {
         let Some(h2_pool) = self.h2_upstream.as_ref() else {
             return error_response(
                 StatusCode::BAD_GATEWAY,
@@ -1951,7 +1962,7 @@ impl H1Proxy {
         &self,
         backend: &UpstreamBackend,
         req: StrippedRequest<IncomingBody>,
-    ) -> Response<BoxBody<Bytes, hyper::Error>> {
+    ) -> Response<ClientRespBody> {
         let Some(h3_pool) = self.h3_upstream.as_ref() else {
             return error_response(
                 StatusCode::BAD_GATEWAY,
@@ -2017,7 +2028,7 @@ impl H1Proxy {
         &self,
         mut req: Request<IncomingBody>,
         req_trace: crate::trace_ctx::RequestTrace,
-    ) -> Response<BoxBody<Bytes, hyper::Error>> {
+    ) -> Response<ClientRespBody> {
         let Some(ws_proxy) = self.ws.clone() else {
             return error_response(StatusCode::BAD_GATEWAY, "websocket disabled");
         };
@@ -2133,10 +2144,7 @@ impl H1Proxy {
         })
     }
 
-    fn finalize_response(
-        &self,
-        resp: Response<IncomingBody>,
-    ) -> Response<BoxBody<Bytes, hyper::Error>> {
+    fn finalize_response(&self, resp: Response<IncomingBody>) -> Response<ClientRespBody> {
         let (mut parts, body) = resp.into_parts();
         strip_hop_by_hop(&mut parts.headers);
         if let Some(alt) = self.alt_svc {
@@ -2146,7 +2154,13 @@ impl H1Proxy {
                 parts.headers.insert(hyper::header::ALT_SVC, value);
             }
         }
-        Response::from_parts(parts, body.boxed())
+        // S12 widening: lossless-box the upstream `Incoming` body's `hyper::Error`
+        // into the widened `ClientRespBody` error type.
+        Response::from_parts(
+            parts,
+            body.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+                .boxed(),
+        )
     }
 }
 
@@ -2255,7 +2269,7 @@ async fn run_h1_ws_splice_task(
     }
 }
 
-fn error_response(status: StatusCode, msg: &str) -> Response<BoxBody<Bytes, hyper::Error>> {
+fn error_response(status: StatusCode, msg: &str) -> Response<ClientRespBody> {
     let body = Full::new(Bytes::from(msg.to_owned()))
         .map_err(|never| match never {})
         .boxed();
@@ -2279,7 +2293,7 @@ fn error_response(status: StatusCode, msg: &str) -> Response<BoxBody<Bytes, hype
 ///   handled at the accept site (Wave-2c), not here — by the time the
 ///   request handler sees `OverCap`, the connection is already
 ///   established and a response is cheaper than a half-close.
-pub(crate) fn reject_to_response(rej: &SecurityReject) -> Response<BoxBody<Bytes, hyper::Error>> {
+pub(crate) fn reject_to_response(rej: &SecurityReject) -> Response<ClientRespBody> {
     match rej {
         SecurityReject::Smuggle(_) => error_response(StatusCode::BAD_REQUEST, "request smuggling"),
         SecurityReject::SlowHandshake => error_response(StatusCode::BAD_REQUEST, "slow handshake"),
@@ -2578,7 +2592,7 @@ fn build_body_with_trailers(
 fn upstream_response_to_h1(
     resp: Response<IncomingBody>,
     alt_svc: Option<AltSvcConfig>,
-) -> Response<BoxBody<Bytes, hyper::Error>> {
+) -> Response<ClientRespBody> {
     let (parts, body) = resp.into_parts();
     // H2→H1 response header transform (mirror of `H2ToH1Bridge::bridge_
     // response`): drop `:`-prefixed pseudo-headers AND the authoritative
@@ -2609,13 +2623,18 @@ fn upstream_response_to_h1(
     }
     // R8: stream the upstream `Incoming` body by construction. The terminal
     // trailers frame (if any) rides the boxed body naturally; no `collect()`,
-    // no owned buffer.
-    builder.body(body.boxed()).unwrap_or_else(|_| {
-        error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "build h1 response failed",
+    // no owned buffer. S12 widening: lossless-box the `hyper::Error`.
+    builder
+        .body(
+            body.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+                .boxed(),
         )
-    })
+        .unwrap_or_else(|_| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "build h1 response failed",
+            )
+        })
 }
 
 /// PROTO-2-19 (Wave 2c-2): assemble the final H1 wire response from
@@ -2636,7 +2655,7 @@ fn upstream_response_to_h1(
 pub fn build_h1_response_with_trailers(
     translated: crate::BridgeResponse,
     alt_svc: Option<AltSvcConfig>,
-) -> Response<BoxBody<Bytes, hyper::Error>> {
+) -> Response<ClientRespBody> {
     let status = StatusCode::from_u16(translated.status).unwrap_or(StatusCode::BAD_GATEWAY);
     let mut builder = Response::builder().status(status);
     let has_trailers = !translated.trailers.is_empty();
@@ -2689,7 +2708,9 @@ pub fn build_h1_response_with_trailers(
     // trailers present, the head-level `Transfer-Encoding: chunked`
     // + `Trailer:` declaration above ensures hyper actually writes
     // the trailer frame onto the wire.
-    let body = build_body_with_trailers(translated.body, &translated.trailers);
+    let body = build_body_with_trailers(translated.body, &translated.trailers)
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+        .boxed();
     builder.body(body).unwrap_or_else(|_| {
         error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -2785,7 +2806,7 @@ async fn collect_h1_request_to_h3_fieldlist(
 fn h3_response_to_h1(
     resp: lb_quic::H3UpstreamResponse,
     alt_svc: Option<AltSvcConfig>,
-) -> Response<BoxBody<Bytes, hyper::Error>> {
+) -> Response<ClientRespBody> {
     let bridge = crate::create_bridge(crate::Protocol::Http3, crate::Protocol::Http1);
     let body_bytes = Bytes::from(resp.body);
     let bridge_in = crate::BridgeResponse {
