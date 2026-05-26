@@ -494,10 +494,7 @@ async fn h1h3_binary_body_byte_identical_both_directions() {
         payload.extend_from_slice(&i.to_le_bytes());
     }
     let payload = Bytes::from(payload); // 160 000 bytes — crosses H3_BODY_CHUNK_MAX (8 KiB) ~20×
-    let chunks: Vec<Bytes> = payload
-        .chunks(7_000)
-        .map(|c| Bytes::copy_from_slice(c))
-        .collect();
+    let chunks: Vec<Bytes> = payload.chunks(7_000).map(Bytes::copy_from_slice).collect();
 
     let (status, echoed) = h1_request_with_body(gw, chunks).await;
     eprintln!(
@@ -598,7 +595,7 @@ async fn truncated_chunked_upload(gw: SocketAddr) {
         format!("POST /echo HTTP/1.1\r\nHost: {TEST_SNI}\r\nTransfer-Encoding: chunked\r\n\r\n");
     sock.write_all(head.as_bytes()).await.unwrap();
     sock.write_all(b"3e8\r\n").await.unwrap(); // 0x3e8 = 1000 bytes promised
-    sock.write_all(&vec![0x5Au8; 100]).await.unwrap(); // only 100 sent
+    sock.write_all(&[0x5Au8; 100]).await.unwrap(); // only 100 sent
     sock.flush().await.unwrap();
     // Abrupt close mid-body (drop) — the gateway's inbound body surfaces
     // Some(Err)(IncompleteBody) → Reset → RESET-without-FIN upstream.
@@ -830,7 +827,7 @@ async fn h1h3_memory_gauge_non_vacuous_and_load_bearing() {
     let payload = Bytes::from(payload);
     let chunks: Vec<Bytes> = payload
         .chunks(16 * 1024)
-        .map(|c| Bytes::copy_from_slice(c))
+        .map(Bytes::copy_from_slice)
         .collect();
     let (status, echoed) = h1_request_with_body(gw, chunks).await;
     assert_eq!(status, 200, "memory-gauge round-trip should succeed");
