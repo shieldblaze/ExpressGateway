@@ -92,22 +92,37 @@ fn build_pool() -> TcpPool {
 }
 
 /// Spawn the h1s listener fronting an arbitrary backend address, returning
-/// the gateway addr + trust anchor.
+/// the gateway addr + trust anchor. Uses [`HttpTimeouts::default`] — the
+/// common case. Do NOT change the default here: several tests assert on the
+/// default body/header/total budgets, so a longer timeout is opt-in via
+/// [`spawn_listener_for_with_timeouts`] instead.
 async fn spawn_listener_for(backend_addr: SocketAddr) -> (SocketAddr, CertificateDer<'static>) {
+    spawn_listener_for_with_timeouts(backend_addr, HttpTimeouts::default()).await
+}
+
+/// As [`spawn_listener_for`] but with caller-chosen gateway [`HttpTimeouts`].
+/// Used only by `fcap1_h2_over_cap_upload_yields_413`, which needs a longer
+/// body timeout so a 64 MiB push reliably crosses the cap under 8-core gate
+/// saturation (CF-SATURATION-1). `HttpTimeouts` is `Copy`, so the same value
+/// feeds both the H1 and H2 proxies.
+async fn spawn_listener_for_with_timeouts(
+    backend_addr: SocketAddr,
+    timeouts: HttpTimeouts,
+) -> (SocketAddr, CertificateDer<'static>) {
     let pool = build_pool();
     let picker = Arc::new(RoundRobinAddrs::new(vec![backend_addr]).unwrap());
     let h1_proxy = Arc::new(H1Proxy::new(
         pool.clone(),
         Arc::clone(&picker) as _,
         None,
-        HttpTimeouts::default(),
+        timeouts,
         true,
     ));
     let h2_proxy = Arc::new(H2Proxy::with_security(
         pool,
         picker as _,
         None,
-        HttpTimeouts::default(),
+        timeouts,
         true,
         H2SecurityThresholds::default(),
     ));
@@ -1751,7 +1766,34 @@ async fn fcap1_h2_over_cap_upload_yields_413() {
     // gateway stream the body upstream at full speed so the forwarded total
     // crosses MAX_REQUEST_BODY_BYTES (64 MiB) and the cap fires.
     let (backend, body_bytes) = spawn_body_counting_backend().await;
-    let (gw, anchor) = spawn_listener_for(backend).await;
+    // CF-SATURATION-1 — give THIS gateway listener a 120 s body timeout
+    // (vs the 30 s HttpTimeouts::default). S11 hardened the BACKEND read
+    // timeout (3 s→30 s, line ~740) but left the gateway's OWN wall-clock
+    // body timeout (h2_proxy.rs:1837 — `tokio::time::timeout(self.timeouts
+    // .body, send_fut)`, wrapping the WHOLE send_request future, NOT an
+    // idle/no-progress timeout) at the 30 s default. Under the full
+    // `--workspace --all-features` gate at 8-core saturation the H2 client
+    // pushed only ~2 MiB of the 66 MiB before that 30 s fired →
+    // ProxyErr::Timeout (h2_proxy.rs:1867-1871) → 504, beating the cap-trip
+    // → 413 (run#2 evidence: status=504 written=2162688 ≪ 64 MiB cap, so
+    // the cap was genuinely never reached — 504 was correct for a stalled
+    // upload; this is a TEST-HARNESS fragility, not a product defect). Runs
+    // #1/#3 (unsaturated) completed the push <30 s and passed, so 120 s is
+    // ~4× the observed normal-completion budget — enough starvation margin
+    // yet BOUNDED so a genuinely-dead gateway still terminates the test (the
+    // client response-wait below is raised to 130 s, just above this, so the
+    // gateway's bounded arm — not the client wait — fires on a true wedge).
+    // The cap-trip → 413 assertion is UNCHANGED. (Mirror of the S11
+    // reload_zero_drop / backend-read hardening, closing the gateway-side
+    // gap S11 left.)
+    let (gw, anchor) = spawn_listener_for_with_timeouts(
+        backend,
+        HttpTimeouts {
+            body: Duration::from_secs(120),
+            ..HttpTimeouts::default()
+        },
+    )
+    .await;
     let tls = connect_tls(gw, anchor).await;
 
     let mut builder = h2::client::Builder::new();
@@ -1776,7 +1818,7 @@ async fn fcap1_h2_over_cap_upload_yields_413() {
         let mut off = 0;
         while off < over {
             send_body.reserve_capacity(chunk.len());
-            // Wait (unbounded within the test's outer 60 s budget) for the H2
+            // Wait (unbounded within the test's outer 130 s budget) for the H2
             // flow-control capacity the gateway grants — backpressure parks us
             // but does not abandon the upload.
             match futures_util::future::poll_fn(|cx| send_body.poll_capacity(cx)).await {
@@ -1795,7 +1837,11 @@ async fn fcap1_h2_over_cap_upload_yields_413() {
         off
     });
 
-    let status = match tokio::time::timeout(Duration::from_secs(60), resp_fut).await {
+    // 130 s: just above the gateway's hardened 120 s body timeout (see the
+    // CF-SATURATION-1 comment above) so the gateway's own BOUNDED timeout
+    // arm — not this client wait — is what fires on a genuine wedge, and a
+    // truly-dead gateway still terminates the test.
+    let status = match tokio::time::timeout(Duration::from_secs(130), resp_fut).await {
         Ok(Ok(resp)) => Some(resp.status().as_u16()),
         Ok(Err(e)) => {
             eprintln!("FCAP1_H2 response errored: {e:?}");

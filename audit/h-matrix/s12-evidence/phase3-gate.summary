@@ -1,0 +1,20 @@
+===== PHASE3 RUN1 START 22:00:14 =====
+PHASE3_RUN1_EXIT=0  failed_suites=0  ok_suites=211
+  fcap1=[fcap1_h2_over_cap_upload_yields_413 ... ok]
+  h1h3_bursts=[h1h3_fmd4_truncation_burst_current_thread ... ok h1h3_fmd4_response_truncation_chunked_burst_current_thread ... ok ]
+  h3_conv=[cf_h3_head_h3_to_h1_full_response_headers_round_trip ... ok cf_h3_head_h3_to_h2_full_response_headers_round_trip ... ok ]
+===== PHASE3 RUN2 START 22:07:49 =====
+PHASE3_RUN2_EXIT=0  failed_suites=0  ok_suites=211
+  fcap1=[fcap1_h2_over_cap_upload_yields_413 ... ok]
+  h1h3_bursts=[h1h3_fmd4_truncation_burst_current_thread ... ok h1h3_fmd4_response_truncation_chunked_burst_current_thread ... ok ]
+  h3_conv=[cf_h3_head_h3_to_h1_full_response_headers_round_trip ... ok cf_h3_head_h3_to_h2_full_response_headers_round_trip ... ok ]
+===== PHASE3 RUN3 START 22:13:05 =====
+PHASE3_RUN3_EXIT=0  failed_suites=0  ok_suites=211
+  fcap1=[fcap1_h2_over_cap_upload_yields_413 ... ok]
+  h1h3_bursts=[h1h3_fmd4_truncation_burst_current_thread ... ok h1h3_fmd4_response_truncation_chunked_burst_current_thread ... ok ]
+  h3_conv=[cf_h3_head_h3_to_h1_full_response_headers_round_trip ... ok cf_h3_head_h3_to_h2_full_response_headers_round_trip ... ok ]
+===== CLIPPY START 22:18:28 =====
+CLIPPY_EXIT=0
+===== FMT START 22:18:39 =====
+FMT_EXIT=0
+===== PHASE3 DONE 22:18:40 =====

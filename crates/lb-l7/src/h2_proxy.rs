@@ -44,8 +44,8 @@ use lb_io::quic_pool::QuicUpstreamPool;
 
 use crate::grpc_proxy::{self, GrpcProxy};
 use crate::h1_proxy::{
-    AltSvcConfig, BackendPicker, HttpTimeouts, append_via, append_xff, set_xfh, set_xfp,
-    strip_hop_by_hop,
+    AltSvcConfig, BackendPicker, ClientRespBody, HttpTimeouts, append_via, append_xff, set_xfh,
+    set_xfp, strip_hop_by_hop,
 };
 use lb_security::{
     ConnId, GlitchKind, GlitchOutcome, GlitchesCounter, SmuggleDetector, SmuggleMode, Watchdog,
@@ -881,7 +881,7 @@ struct ProxyService {
 }
 
 impl hyper::service::Service<Request<IncomingBody>> for ProxyService {
-    type Response = Response<BoxBody<Bytes, hyper::Error>>;
+    type Response = Response<ClientRespBody>;
     type Error = hyper::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
@@ -911,7 +911,7 @@ impl H2Proxy {
         peer: SocketAddr,
         expected_sni: Option<&str>,
         glitch: Option<&GlitchConnState>,
-    ) -> Response<BoxBody<Bytes, hyper::Error>> {
+    ) -> Response<ClientRespBody> {
         use tracing::Instrument;
         let listener_label = if self.is_https { "h2" } else { "h2c" };
         let req_trace = crate::trace_ctx::RequestTrace::open(
@@ -943,7 +943,7 @@ impl H2Proxy {
         peer: SocketAddr,
         expected_sni: Option<&str>,
         glitch: Option<&GlitchConnState>,
-    ) -> Response<BoxBody<Bytes, hyper::Error>> {
+    ) -> Response<ClientRespBody> {
         // ROUND8-L7-09 — uniform authority validation CHOKE POINT.
         // HAProxy `BUG/MAJOR: http: forbid comma in authority` +
         // `BUG/MEDIUM: h1: Enforce the authority validation`. The SAME
@@ -1000,7 +1000,15 @@ impl H2Proxy {
                     "gRPC proxy does not support H3 backends",
                 );
             }
-            return Arc::clone(gp).handle(req, backend.addr).await;
+            // S12 widening: the gRPC proxy returns a `hyper::Error`-bodied
+            // response; lossless-box it into the widened `ClientRespBody`.
+            let (gp_parts, gp_body) = Arc::clone(gp).handle(req, backend.addr).await.into_parts();
+            return Response::from_parts(
+                gp_parts,
+                gp_body
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+                    .boxed(),
+            );
         }
         let (mut parts, body) = req.into_parts();
 
@@ -1259,7 +1267,7 @@ impl H2Proxy {
     fn handle_ws_extended_connect(
         &self,
         mut req: Request<IncomingBody>,
-    ) -> Response<BoxBody<Bytes, hyper::Error>> {
+    ) -> Response<ClientRespBody> {
         let Some(ws_proxy) = self.ws.clone() else {
             return error_response(StatusCode::BAD_GATEWAY, "websocket disabled");
         };
@@ -1895,10 +1903,7 @@ impl H2Proxy {
         }
     }
 
-    fn finalize_response(
-        &self,
-        resp: Response<IncomingBody>,
-    ) -> Response<BoxBody<Bytes, hyper::Error>> {
+    fn finalize_response(&self, resp: Response<IncomingBody>) -> Response<ClientRespBody> {
         let (mut parts, body) = resp.into_parts();
         strip_hop_by_hop(&mut parts.headers);
         if let Some(alt) = self.alt_svc {
@@ -1906,7 +1911,12 @@ impl H2Proxy {
                 parts.headers.insert(hyper::header::ALT_SVC, value);
             }
         }
-        Response::from_parts(parts, body.boxed())
+        // S12 widening: lossless-box the upstream `Incoming` body's `hyper::Error`.
+        Response::from_parts(
+            parts,
+            body.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+                .boxed(),
+        )
     }
 
     /// Forward an H2 inbound request to an H2 backend (PROTO-001).
@@ -1929,7 +1939,7 @@ impl H2Proxy {
         &self,
         backend_addr: SocketAddr,
         req: StrippedRequest<IncomingBody>,
-    ) -> Response<BoxBody<Bytes, hyper::Error>> {
+    ) -> Response<ClientRespBody> {
         let Some(h2_pool) = self.h2_upstream.as_ref() else {
             return error_response(
                 StatusCode::BAD_GATEWAY,
@@ -2299,7 +2309,7 @@ impl H2Proxy {
         &self,
         backend: &UpstreamBackend,
         req: StrippedRequest<IncomingBody>,
-    ) -> Response<BoxBody<Bytes, hyper::Error>> {
+    ) -> Response<ClientRespBody> {
         let Some(h3_pool) = self.h3_upstream.as_ref() else {
             return error_response(
                 StatusCode::BAD_GATEWAY,
@@ -2539,7 +2549,7 @@ fn build_h2_body_with_trailers(
 fn upstream_h2_response_to_h2(
     resp: Response<IncomingBody>,
     alt_svc: Option<AltSvcConfig>,
-) -> Response<BoxBody<Bytes, hyper::Error>> {
+) -> Response<ClientRespBody> {
     let (parts, body) = resp.into_parts();
     // H2→H2 response header normalization (mirror of
     // `H2ToH2Bridge::bridge_response`): lowercase regular headers, drop
@@ -2561,13 +2571,19 @@ fn upstream_h2_response_to_h2(
         }
     }
     // R8: stream the upstream `Incoming` body by construction. Trailers
-    // ride its terminal frame; no `collect()`, no owned buffer.
-    builder.body(body.boxed()).unwrap_or_else(|_| {
-        error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "build h2 response failed",
+    // ride its terminal frame; no `collect()`, no owned buffer. S12 widening:
+    // lossless-box the `hyper::Error`.
+    builder
+        .body(
+            body.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+                .boxed(),
         )
-    })
+        .unwrap_or_else(|_| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "build h2 response failed",
+            )
+        })
 }
 
 /// F-MD-4 (S10 DEFECT FIX) — shared graceful-drop egress driver for an H2
@@ -2815,7 +2831,7 @@ async fn collect_h2_request_to_h3_fieldlist(
 fn h3_response_to_h2(
     resp: lb_quic::H3UpstreamResponse,
     alt_svc: Option<AltSvcConfig>,
-) -> Response<BoxBody<Bytes, hyper::Error>> {
+) -> Response<ClientRespBody> {
     let bridge = crate::create_bridge(crate::Protocol::Http3, crate::Protocol::Http2);
     let body_bytes = Bytes::from(resp.body);
     let bridge_in = crate::BridgeResponse {
@@ -2852,7 +2868,10 @@ fn h3_response_to_h2(
     }
     // PROTO-2-12 (H3 leg landed): emit body + the H3 upstream's
     // trailing field section via StreamBody as an H2 `Frame::trailers`.
-    let body = build_h2_body_with_trailers(translated.body, &translated.trailers);
+    // S12 widening: lossless-box the `hyper::Error`.
+    let body = build_h2_body_with_trailers(translated.body, &translated.trailers)
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+        .boxed();
     builder.body(body).unwrap_or_else(|_| {
         error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -2882,7 +2901,7 @@ pub(crate) enum ProxyErr {
     BadRequest(String),
 }
 
-fn error_response(status: StatusCode, msg: &str) -> Response<BoxBody<Bytes, hyper::Error>> {
+fn error_response(status: StatusCode, msg: &str) -> Response<ClientRespBody> {
     let body = Full::new(Bytes::from(msg.to_owned()))
         .map_err(|never| match never {})
         .boxed();

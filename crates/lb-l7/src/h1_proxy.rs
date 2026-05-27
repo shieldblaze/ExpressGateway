@@ -87,6 +87,17 @@ static HOP_BY_HOP: [HeaderName; 8] = [
     HeaderName::from_static("upgrade"),
 ];
 
+/// S12 — the client-facing response body type the listener emits. Widened from
+/// `BoxBody<Bytes, hyper::Error>` to a boxed `std::error::Error` so a
+/// channel-built streaming response (H1→H3, S12) can inject a CONSTRUCTIBLE
+/// truncation error (`H1PumpAbort`) on a mid-response abort — `hyper::Error` has
+/// no public ctor. This is LOSSLESS: hyper's H1 server only requires
+/// `Body::Error: Into<Box<dyn Error + Send + Sync>>` (it wraps the body error via
+/// `Error::new_user_body` itself), so a boxed `hyper::Error` aborts byte-identical
+/// to the un-boxed one. Every prior `hyper::Error`-sourced body widens via
+/// `.map_err(|e| Box::new(e) as _)`; infallible bodies via `match never {}`.
+pub(crate) type ClientRespBody = BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>;
+
 /// S9 / M-D-lite (Q-H1) — depth of the bounded in-flight channel feeding the
 /// streaming H1→H1 request body. Mirrors the M-D `H2_REQ_CHANNEL_DEPTH = 8`.
 /// The fixed in-flight window = `H1_REQ_CHANNEL_DEPTH × H1_REQ_CHUNK_MAX`
@@ -767,7 +778,7 @@ struct ProxyService {
 }
 
 impl hyper::service::Service<Request<IncomingBody>> for ProxyService {
-    type Response = Response<BoxBody<Bytes, hyper::Error>>;
+    type Response = Response<ClientRespBody>;
     type Error = hyper::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>> + Send>>;
 
@@ -827,7 +838,7 @@ impl H1Proxy {
         req: Request<IncomingBody>,
         peer: SocketAddr,
         expected_sni: Option<&str>,
-    ) -> Response<BoxBody<Bytes, hyper::Error>> {
+    ) -> Response<ClientRespBody> {
         use tracing::Instrument;
         // H1Proxy carries no per-bind label and the constructor
         // boundary into main.rs is div-ops's house, so the span's
@@ -860,7 +871,7 @@ impl H1Proxy {
         peer: SocketAddr,
         expected_sni: Option<&str>,
         req_trace: crate::trace_ctx::RequestTrace,
-    ) -> Response<BoxBody<Bytes, hyper::Error>> {
+    ) -> Response<ClientRespBody> {
         // ROUND8-L7-09 — uniform authority validation CHOKE POINT.
         // HAProxy `BUG/MAJOR: http: forbid comma character in
         // authority value` + `BUG/MEDIUM: h1: Enforce the authority
@@ -1911,7 +1922,7 @@ impl H1Proxy {
         &self,
         backend_addr: SocketAddr,
         req: StrippedRequest<IncomingBody>,
-    ) -> Response<BoxBody<Bytes, hyper::Error>> {
+    ) -> Response<ClientRespBody> {
         let Some(h2_pool) = self.h2_upstream.as_ref() else {
             return error_response(
                 StatusCode::BAD_GATEWAY,
@@ -1942,39 +1953,309 @@ impl H1Proxy {
         }
     }
 
-    /// Forward an H1 inbound request to an H3 backend (PROTO-001).
+    /// Forward an H1 inbound request to an H3 backend (PROTO-001) — S12 R8
+    /// FULLY STREAMING both legs (replaces the buffering
+    /// `collect_h1_request_to_h3_fieldlist` → `request_h3_upstream` →
+    /// `h3_response_to_h1` round-trip).
     ///
-    /// Bridges via [`crate::create_bridge`]`(Http1, Http3)` and
-    /// dispatches via [`lb_io::quic_pool::QuicUpstreamPool`] +
-    /// `lb_quic::request_h3_upstream`.
+    /// Request leg: an H1 M-D-lite ingress pump (MIRROR of [`Self::proxy_request`]
+    /// 1179-1560) feeds [`lb_quic::h3_bridge::ReqBodyEvent`]s
+    /// (`Chunk`/`End{trailers}`/`Reset`) into the shared streaming connector
+    /// [`lb_quic::stream_request_to_h3_upstream`] (CF-DEDUP-2, commit 369c5e53).
+    /// `frame()==None` is the POSITIVELY-confirmed clean end → `End`; a
+    /// `Some(Err)` truncation / forbidden-trailer / over-cap → `Reset` → the
+    /// connector RESETs the upstream QUIC stream WITHOUT a clean FIN
+    /// (`H3_REQUEST_CANCELLED`) — the F-MD-4 H3 mirror-image (a truncated inbound
+    /// is NEVER presented as a complete request). `forward_req_trailers=true`:
+    /// validated request trailers ride `End{trailers}` → a post-DATA HEADERS
+    /// frame upstream (the buffering path forwarded them; we do NOT regress).
+    ///
+    /// Response leg: drains the connector's DECODED
+    /// [`lb_quic::H3RespEvent`] channel (`Head`/`Body`/`Trailers`/`End`/`Reset`)
+    /// into a streaming H1 response via [`h3_decoded_resp_head_builder`] (shares
+    /// the pseudo/`RESPONSE_HOP_BY_HOP` transform with
+    /// [`upstream_response_to_h1`]) + a `StreamBody`. CF-RESP-1: a streamed H1
+    /// response cannot pre-declare a `Trailer:` header (trailer names unknown at
+    /// head-time), so a late `Trailers` event is relayed onto the body's terminal
+    /// frame but hyper-1 may drop it absent the head declaration — empirically
+    /// settled by the gRPC-shaped BUILT-bar test, NOT pre-accepted here.
+    ///
+    /// F-CAP-1 status surfacing (verified against 369c5e53): a PRE-DATA over-cap
+    /// (my pump's first event is `Reset`, before any `Chunk`) → the connector
+    /// emits a synthesized `Head{413}` I relay; a pre-dial failure → synthesized
+    /// `Head{502}`. A MID-BODY over-cap / truncation → `H3RespEvent::Reset` (NOT
+    /// a 413 — response-splitting guard) → I abort the H1 client body, never FIN.
     async fn proxy_h1_to_h3(
         &self,
         backend: &UpstreamBackend,
         req: StrippedRequest<IncomingBody>,
-    ) -> Response<BoxBody<Bytes, hyper::Error>> {
+    ) -> Response<ClientRespBody> {
+        use hyper::body::Frame;
+        use lb_quic::h3_bridge::{H3_BODY_CHUNK_MAX, ReqBodyEvent};
+
         let Some(h3_pool) = self.h3_upstream.as_ref() else {
             return error_response(
                 StatusCode::BAD_GATEWAY,
                 "H3 backend selected but no QuicUpstreamPool wired",
             );
         };
-        let sni = backend.sni.as_deref().unwrap_or("");
+        let sni = backend.sni.as_deref().unwrap_or("").to_owned();
+        let addr = backend.addr;
+
+        // Build the request field-list via the H1→H3 bridge (head-only — the
+        // body + trailers now STREAM, so no `body.collect()` here).
         let inner = req.into_inner();
-        let (headers, body, trailers) =
-            match collect_h1_request_to_h3_fieldlist(inner, sni, /* https = */ true).await {
-                Ok(p) => p,
-                Err(s) => return error_response(StatusCode::BAD_GATEWAY, &s),
-            };
-        let h3_resp = Box::pin(lb_quic::request_h3_upstream(
-            headers,
-            body,
-            trailers,
-            backend.addr,
-            sni,
-            h3_pool,
-        ))
-        .await;
-        h3_response_to_h1(h3_resp, self.alt_svc)
+        let (parts, mut body) = inner.into_parts();
+        let headers = match build_h1_to_h3_fieldlist(&parts, &sni, /* https = */ true) {
+            Ok(h) => h,
+            Err(s) => return error_response(StatusCode::BAD_GATEWAY, &s),
+        };
+
+        // Bounded request-body channel into the connector (depth
+        // H3_BODY_CHANNEL_DEPTH). Backpressure: a slow QUIC upstream → the
+        // connector stops draining → this channel fills → the pump stops
+        // polling the inbound H1 body → the client's H1 read window stalls.
+        let (body_tx, body_rx) =
+            tokio::sync::mpsc::channel::<ReqBodyEvent>(lb_quic::conn_actor::H3_BODY_CHANNEL_DEPTH);
+        // Decoded response channel out of the connector.
+        let (resp_tx, mut resp_rx) = tokio::sync::mpsc::channel::<lb_quic::H3RespEvent>(
+            lb_quic::h3_bridge::H3_RESP_CHANNEL_DEPTH,
+        );
+
+        // F-MD-3 (lb-l7 R8 gauge) — instantaneous in-flight request bytes the
+        // pump retains: incremented before each `Chunk` send, decremented when
+        // the connector pulls it (here: when `body_tx.send` resolves, the chunk
+        // has left our retained set into the bounded channel; the channel depth
+        // bounds total in-flight independent of body size).
+        let in_flight_bytes = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+
+        // ── Request-leg M-D-lite pump (mirror of `proxy_request`'s pump) ──
+        let pump_in_flight = std::sync::Arc::clone(&in_flight_bytes);
+        let pump = tokio::spawn(async move {
+            // Running cumulative forwarded request bytes — the request-body cap
+            // (`MAX_REQUEST_BODY_BYTES`) is OUR job (the connector caps the
+            // RESPONSE, not the request). The 413-vs-RESET boundary is timing-
+            // critical: an over-cap detected BEFORE any chunk forwarded →
+            // `Reset` as the FIRST event → connector inline-413; an over-cap
+            // AFTER ≥1 chunk → `Reset` → connector RESET-without-FIN (no 413,
+            // response-splitting guard).
+            let mut forwarded_total: usize = 0;
+
+            // Split a DATA payload into ≤ H3_BODY_CHUNK_MAX pieces and push each
+            // as one `ReqBodyEvent::Chunk` (pump-side split bounds the in-flight
+            // channel-item size to match the memory gauge). Returns Err(()) if
+            // the connector dropped the receiver (treat as abort).
+            macro_rules! send_chunked {
+                ($bytes:expr) => {{
+                    let mut data: Bytes = $bytes;
+                    let mut ok = true;
+                    while !data.is_empty() {
+                        let take = data.len().min(H3_BODY_CHUNK_MAX);
+                        let chunk = data.split_to(take);
+                        let clen = chunk.len();
+                        pump_in_flight.fetch_add(clen, std::sync::atomic::Ordering::Relaxed);
+                        #[cfg(any(test, feature = "test-gauges"))]
+                        record_retained_h1(
+                            pump_in_flight.load(std::sync::atomic::Ordering::Relaxed),
+                        );
+                        let send_res = body_tx.send(ReqBodyEvent::Chunk(chunk)).await;
+                        pump_in_flight.fetch_sub(clen, std::sync::atomic::Ordering::Relaxed);
+                        if send_res.is_err() {
+                            ok = false;
+                            break;
+                        }
+                    }
+                    if ok { Ok(()) } else { Err(()) }
+                }};
+            }
+
+            loop {
+                match body.frame().await {
+                    None => {
+                        // F-MD-4 (H1 mirror): `frame()==None` is the
+                        // POSITIVELY-confirmed clean end (NOT `is_end_stream()`).
+                        // Clean end → `End{trailers:[]}` → connector FIN.
+                        let _ = body_tx
+                            .send(ReqBodyEvent::End {
+                                trailers: Vec::new(),
+                            })
+                            .await;
+                        return;
+                    }
+                    Some(Ok(frame)) => {
+                        if frame.is_trailers() {
+                            // Validate request trailers BEFORE forwarding (a
+                            // framing/routing field in trailers is a desync
+                            // primitive). Forbidden → `Reset` (smuggling guard:
+                            // never a clean `End`). OK → `End{trailers}` →
+                            // connector ships a post-DATA HEADERS frame then FIN.
+                            let verdict = frame
+                                .trailers_ref()
+                                .map_or(Ok(()), validate_h1_request_trailers);
+                            match verdict {
+                                Ok(()) => {
+                                    let tvec: Vec<(String, String)> = frame
+                                        .trailers_ref()
+                                        .map(|tm| {
+                                            tm.iter()
+                                                .filter_map(|(n, v)| {
+                                                    v.to_str().ok().map(|s| {
+                                                        (n.as_str().to_owned(), s.to_owned())
+                                                    })
+                                                })
+                                                .collect()
+                                        })
+                                        .unwrap_or_default();
+                                    let _ =
+                                        body_tx.send(ReqBodyEvent::End { trailers: tvec }).await;
+                                    return;
+                                }
+                                Err(_) => {
+                                    let _ = body_tx.send(ReqBodyEvent::Reset).await;
+                                    return;
+                                }
+                            }
+                        }
+                        if let Ok(data) = frame.into_data() {
+                            // Over-cap: emit `Reset`. If this is BEFORE any chunk
+                            // was forwarded (forwarded_total==0) the connector
+                            // inline-413s; otherwise it RESET-without-FINs. Either
+                            // way we never forward an over-cap byte.
+                            if forwarded_total.saturating_add(data.len()) > MAX_REQUEST_BODY_BYTES {
+                                let _ = body_tx.send(ReqBodyEvent::Reset).await;
+                                return;
+                            }
+                            forwarded_total = forwarded_total.saturating_add(data.len());
+                            if send_chunked!(data).is_err() {
+                                // Connector dropped the receiver (aborted /
+                                // client gone) — stop pumping.
+                                return;
+                            }
+                        }
+                    }
+                    Some(Err(_e)) => {
+                        // F-MD-4 (H1): premature mid-body close / IO error
+                        // surfaces as `Some(Err)` (hyper `IncompleteBody`), NOT a
+                        // clean `None`. Emit `Reset` → connector RESET-without-FIN
+                        // → the backend NEVER sees a complete (truncated) request.
+                        let _ = body_tx.send(ReqBodyEvent::Reset).await;
+                        return;
+                    }
+                }
+            }
+        });
+
+        // ── Drive the connector concurrently with the pump ──
+        // The connector future is spawned (needs `'static`), so move OWNED
+        // copies of every borrow into the task: `sni` (already owned) and a
+        // cloned `Arc` of the H3 pool. The connector takes `&str` / `&pool`,
+        // satisfied by references to the task-local owned values.
+        let sink = lb_quic::H3RespOut::Decoded {
+            tx: resp_tx,
+            total: 0,
+            cap: lb_quic::h3_bridge::MAX_RESPONSE_BODY_BYTES,
+        };
+        let pool = std::sync::Arc::clone(h3_pool);
+        let connector_handle = tokio::spawn(async move {
+            // The connector's own Result is bookkeeping; the client-facing
+            // outcome rides the `H3RespEvent` stream (Head/Body/Trailers/End/
+            // Reset). We drop its return.
+            let _ = lb_quic::stream_request_to_h3_upstream(
+                headers, /* forward_req_trailers = */ true, addr, &sni, &pool, body_rx, sink,
+            )
+            .await;
+        });
+
+        // ── Response leg: drain resp_rx into a streaming H1 response ──
+        // The FIRST event determines the head. `Head{status,headers}` →
+        // build the streaming H1 head + spawn a body relay; `Reset`/channel-
+        // closed before any head → 502 (the connector aborted pre-Head).
+        let first = resp_rx.recv().await;
+        match first {
+            Some(lb_quic::H3RespEvent::Head { status, headers }) => {
+                let st = StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY);
+                let builder = h3_decoded_resp_head_builder(st, &headers, self.alt_svc);
+
+                // Stream the remaining Body/Trailers/End/Reset events into a
+                // StreamBody. `Reset` → inject a body error so hyper does NOT
+                // emit a clean terminator (the response is truncated, never
+                // presented as complete — response-splitting guard). `End` →
+                // drop the sender (clean EOF). A late `Trailers` rides the
+                // terminal frame (CF-RESP-1 caveat).
+                let (btx, brx) = tokio::sync::mpsc::channel::<Result<Frame<Bytes>, H1PumpAbort>>(
+                    lb_quic::h3_bridge::H3_RESP_CHANNEL_DEPTH,
+                );
+                tokio::spawn(async move {
+                    while let Some(ev) = resp_rx.recv().await {
+                        match ev {
+                            lb_quic::H3RespEvent::Body(b) => {
+                                if btx.send(Ok(Frame::data(b))).await.is_err() {
+                                    break;
+                                }
+                            }
+                            lb_quic::H3RespEvent::Trailers(t) => {
+                                let mut tm = hyper::HeaderMap::new();
+                                for (n, v) in &t {
+                                    if let (Ok(name), Ok(val)) = (
+                                        HeaderName::from_bytes(n.as_bytes()),
+                                        HeaderValue::from_str(v),
+                                    ) {
+                                        tm.append(name, val);
+                                    }
+                                }
+                                let _ = btx.send(Ok(Frame::trailers(tm))).await;
+                            }
+                            lb_quic::H3RespEvent::End => break,
+                            lb_quic::H3RespEvent::Reset => {
+                                // Truncate WITHOUT a clean terminator.
+                                let _ = btx.send(Err(H1PumpAbort)).await;
+                                break;
+                            }
+                            // A second Head is malformed (Head is once-only); treat
+                            // as an abort.
+                            lb_quic::H3RespEvent::Head { .. } => {
+                                let _ = btx.send(Err(H1PumpAbort)).await;
+                                break;
+                            }
+                        }
+                    }
+                    drop(connector_handle);
+                });
+
+                let mut brx = brx;
+                let stream_body =
+                    http_body_util::StreamBody::new(futures_util::stream::poll_fn(move |cx| {
+                        brx.poll_recv(cx)
+                    }))
+                    // F-MD-4 (response leg): the channel error is the constructible
+                    // `H1PumpAbort` (hyper::Error has no public ctor). On a connector
+                    // `Reset` the relay task SENDS `Err(H1PumpAbort)` into the channel
+                    // (NOT a clean drop), so hyper polls the body, sees an ERROR, and
+                    // aborts the chunked response WITHOUT a `0\r\n\r\n` terminator —
+                    // the H1 client sees a truncated response, never a smuggled-
+                    // complete one (response-splitting guard). Box the error to
+                    // satisfy `Body::Error: Into<Box<dyn Error+Send+Sync>>`.
+                    .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
+                let _ = &pump; // pump is detached; its task owns the request leg
+                build_h1_streaming_response(builder, stream_body.boxed())
+            }
+            None | Some(lb_quic::H3RespEvent::Reset) => {
+                // Connector aborted before any Head (pre-dial fail, or a
+                // pre-Head response abort) — 502. Abort the pump + connector.
+                pump.abort();
+                connector_handle.abort();
+                error_response(
+                    StatusCode::BAD_GATEWAY,
+                    "H3 upstream produced no response head",
+                )
+            }
+            // Body/Trailers/End before a Head is a connector contract violation.
+            Some(_) => {
+                pump.abort();
+                connector_handle.abort();
+                error_response(StatusCode::BAD_GATEWAY, "H3 upstream response head missing")
+            }
+        }
     }
 
     /// Handle an RFC 6455 handshake request.
@@ -2017,7 +2298,7 @@ impl H1Proxy {
         &self,
         mut req: Request<IncomingBody>,
         req_trace: crate::trace_ctx::RequestTrace,
-    ) -> Response<BoxBody<Bytes, hyper::Error>> {
+    ) -> Response<ClientRespBody> {
         let Some(ws_proxy) = self.ws.clone() else {
             return error_response(StatusCode::BAD_GATEWAY, "websocket disabled");
         };
@@ -2133,10 +2414,7 @@ impl H1Proxy {
         })
     }
 
-    fn finalize_response(
-        &self,
-        resp: Response<IncomingBody>,
-    ) -> Response<BoxBody<Bytes, hyper::Error>> {
+    fn finalize_response(&self, resp: Response<IncomingBody>) -> Response<ClientRespBody> {
         let (mut parts, body) = resp.into_parts();
         strip_hop_by_hop(&mut parts.headers);
         if let Some(alt) = self.alt_svc {
@@ -2146,7 +2424,13 @@ impl H1Proxy {
                 parts.headers.insert(hyper::header::ALT_SVC, value);
             }
         }
-        Response::from_parts(parts, body.boxed())
+        // S12 widening: lossless-box the upstream `Incoming` body's `hyper::Error`
+        // into the widened `ClientRespBody` error type.
+        Response::from_parts(
+            parts,
+            body.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+                .boxed(),
+        )
     }
 }
 
@@ -2255,7 +2539,7 @@ async fn run_h1_ws_splice_task(
     }
 }
 
-fn error_response(status: StatusCode, msg: &str) -> Response<BoxBody<Bytes, hyper::Error>> {
+fn error_response(status: StatusCode, msg: &str) -> Response<ClientRespBody> {
     let body = Full::new(Bytes::from(msg.to_owned()))
         .map_err(|never| match never {})
         .boxed();
@@ -2279,7 +2563,7 @@ fn error_response(status: StatusCode, msg: &str) -> Response<BoxBody<Bytes, hype
 ///   handled at the accept site (Wave-2c), not here — by the time the
 ///   request handler sees `OverCap`, the connection is already
 ///   established and a response is cheaper than a half-close.
-pub(crate) fn reject_to_response(rej: &SecurityReject) -> Response<BoxBody<Bytes, hyper::Error>> {
+pub(crate) fn reject_to_response(rej: &SecurityReject) -> Response<ClientRespBody> {
     match rej {
         SecurityReject::Smuggle(_) => error_response(StatusCode::BAD_REQUEST, "request smuggling"),
         SecurityReject::SlowHandshake => error_response(StatusCode::BAD_REQUEST, "slow handshake"),
@@ -2511,6 +2795,54 @@ fn concat_h1_chunks(chunks: &[Bytes], total: usize) -> Bytes {
 ///
 /// `trailers` is a flat `(name, value)` list — empty means no trailer
 /// frame is emitted (the body still wraps the data frame).
+/// S12 H1→H3 (R8) — build the STREAMING H1 response head from the connector's
+/// decoded [`lb_quic::H3RespEvent::Head`]. Shares the pseudo/`RESPONSE_HOP_BY_HOP`
+/// strip + lowercase transform with [`upstream_response_to_h1`] (ONE
+/// authoritative transform, not a third copy). Like the H1←H2 streaming leg, it
+/// does NOT pre-declare a `Trailer:`/chunked-TE head (the trailer names are
+/// unknown at head-time — CF-RESP-1); a late `H3RespEvent::Trailers` rides the
+/// body's terminal frame.
+fn h3_decoded_resp_head_builder(
+    status: StatusCode,
+    headers: &[(String, String)],
+    alt_svc: Option<AltSvcConfig>,
+) -> hyper::http::response::Builder {
+    let mut builder = Response::builder().status(status);
+    for (n, v) in headers {
+        if n.starts_with(':') {
+            continue;
+        }
+        let lower = n.to_lowercase();
+        if crate::h2_to_h1::RESPONSE_HOP_BY_HOP
+            .iter()
+            .any(|h| *h == lower.as_str())
+        {
+            continue;
+        }
+        builder = builder.header(lower.as_str(), v.as_str());
+    }
+    if let Some(alt) = alt_svc {
+        if let Ok(value) = HeaderValue::from_str(&alt.header_value()) {
+            builder = builder.header(hyper::header::ALT_SVC, value);
+        }
+    }
+    builder
+}
+
+/// S12 H1→H3 (R8) — finalize a streaming H1 response from a head `Builder` + a
+/// streamed body. Centralizes the build-failure fallback.
+fn build_h1_streaming_response(
+    builder: hyper::http::response::Builder,
+    body: ClientRespBody,
+) -> Response<ClientRespBody> {
+    builder.body(body).unwrap_or_else(|_| {
+        error_response(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "build h1 streaming response failed",
+        )
+    })
+}
+
 fn build_body_with_trailers(
     body_bytes: Bytes,
     trailers: &[(String, String)],
@@ -2578,12 +2910,14 @@ fn build_body_with_trailers(
 fn upstream_response_to_h1(
     resp: Response<IncomingBody>,
     alt_svc: Option<AltSvcConfig>,
-) -> Response<BoxBody<Bytes, hyper::Error>> {
+) -> Response<ClientRespBody> {
     let (parts, body) = resp.into_parts();
     // H2→H1 response header transform (mirror of `H2ToH1Bridge::bridge_
     // response`): drop `:`-prefixed pseudo-headers AND the authoritative
     // `RESPONSE_HOP_BY_HOP` set (case-insensitive), re-emit every other
-    // header lowercased. Status preserved.
+    // header lowercased. Status preserved. Shares the transform with the
+    // STREAMING H3→H1 head-builder (`h3_decoded_resp_head_builder`) so there
+    // is ONE authoritative pseudo/HOP-BY-HOP strip, not a third copy.
     let mut builder = Response::builder().status(parts.status);
     for (n, v) in &parts.headers {
         let name = n.as_str();
@@ -2609,20 +2943,29 @@ fn upstream_response_to_h1(
     }
     // R8: stream the upstream `Incoming` body by construction. The terminal
     // trailers frame (if any) rides the boxed body naturally; no `collect()`,
-    // no owned buffer.
-    builder.body(body.boxed()).unwrap_or_else(|_| {
-        error_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "build h1 response failed",
+    // no owned buffer. S12 widening: lossless-box the `hyper::Error`.
+    builder
+        .body(
+            body.map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+                .boxed(),
         )
-    })
+        .unwrap_or_else(|_| {
+            error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "build h1 response failed",
+            )
+        })
 }
 
 /// PROTO-2-19 (Wave 2c-2): assemble the final H1 wire response from
-/// a translated [`crate::BridgeResponse`]. Shared between
-/// [`upstream_response_to_h1`] (H2→H1) and [`h3_response_to_h1`]
-/// (H3→H1) so the trailer-aware head shape is identical on both
-/// bridges.
+/// a translated [`crate::BridgeResponse`] (whole-body, trailer-aware: it
+/// pre-declares `Trailer:` + chunked TE in the head). S12: the buffering
+/// `h3_response_to_h1` that used to share this was removed when H1→H3 went
+/// streaming (the streaming H3→H1 head uses [`h3_decoded_resp_head_builder`]
+/// instead, which CANNOT pre-declare trailer names — CF-RESP-1). This
+/// whole-body builder is retained as the authoritative trailer-aware H1 head
+/// shape exercised by `trailer_passthrough` (and available to any future
+/// buffered H1-response path).
 ///
 /// When `translated.trailers` is non-empty this function injects
 /// `Transfer-Encoding: chunked` + a `Trailer: <name-list>` declaration
@@ -2636,7 +2979,7 @@ fn upstream_response_to_h1(
 pub fn build_h1_response_with_trailers(
     translated: crate::BridgeResponse,
     alt_svc: Option<AltSvcConfig>,
-) -> Response<BoxBody<Bytes, hyper::Error>> {
+) -> Response<ClientRespBody> {
     let status = StatusCode::from_u16(translated.status).unwrap_or(StatusCode::BAD_GATEWAY);
     let mut builder = Response::builder().status(status);
     let has_trailers = !translated.trailers.is_empty();
@@ -2689,7 +3032,9 @@ pub fn build_h1_response_with_trailers(
     // trailers present, the head-level `Transfer-Encoding: chunked`
     // + `Trailer:` declaration above ensures hyper actually writes
     // the trailer frame onto the wire.
-    let body = build_body_with_trailers(translated.body, &translated.trailers);
+    let body = build_body_with_trailers(translated.body, &translated.trailers)
+        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+        .boxed();
     builder.body(body).unwrap_or_else(|_| {
         error_response(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -2698,39 +3043,17 @@ pub fn build_h1_response_with_trailers(
     })
 }
 
-/// Collect an inbound H1 request, run the H1→H3 codec bridge, and
-/// return a `(field_list, body, trailers)` triple for
-/// `lb_quic::request_h3_upstream`.
-///
-/// PROTO-2-12: inbound H1 request trailers are captured via
-/// `Collected::trailers()` at body-collect time, bridged through
-/// `bridge_request`, and returned so the caller can ship a post-DATA
-/// `Frame::trailers` HEADERS frame on the upstream QUIC stream.
-async fn collect_h1_request_to_h3_fieldlist(
-    req: Request<IncomingBody>,
+/// S12 H1→H3 (R8) — build the H1→H3 request FIELD-LIST from the request HEAD
+/// only (no `body.collect()` — the body + trailers now STREAM through the
+/// connector). Runs the same `create_bridge(Http1, Http3).bridge_request`
+/// codec translation + `:authority` synthesis the buffering
+/// `collect_h1_request_to_h3_fieldlist` did, minus the body/trailer capture
+/// (request trailers now ride `ReqBodyEvent::End{trailers}`).
+fn build_h1_to_h3_fieldlist(
+    parts: &hyper::http::request::Parts,
     sni: &str,
     is_https: bool,
-) -> Result<(Vec<(String, String)>, Bytes, Vec<(String, String)>), String> {
-    let (parts, body) = req.into_parts();
-    // PROTO-2-12: capture request trailers alongside the body.
-    let collected = body
-        .collect()
-        .await
-        .map_err(|e| format!("body collect: {e}"))?;
-    let trailers_map = collected.trailers().cloned();
-    let body_bytes = collected.to_bytes();
-    let trailers_vec: Vec<(String, String)> = trailers_map
-        .as_ref()
-        .map(|tm| {
-            tm.iter()
-                .filter_map(|(n, v)| {
-                    v.to_str()
-                        .ok()
-                        .map(|s| (n.as_str().to_owned(), s.to_owned()))
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+) -> Result<Vec<(String, String)>, String> {
     let host = parts
         .headers
         .get(hyper::header::HOST)
@@ -2760,12 +3083,11 @@ async fn collect_h1_request_to_h3_fieldlist(
             }
             h
         },
-        body: body_bytes.clone(),
+        // Body + trailers STREAM now: the bridge only needs the head to mint
+        // the pseudo-header set, so pass an empty body / no trailers here.
+        body: Bytes::new(),
         scheme: Some(scheme.to_owned()),
-        // PROTO-2-12: forward inbound H1 request trailers through the
-        // H1→H3 bridge; the caller ships them as a post-DATA HEADERS
-        // frame on the upstream QUIC stream.
-        trailers: trailers_vec,
+        trailers: Vec::new(),
     };
     let translated = bridge
         .bridge_request(&bridge_in)
@@ -2777,42 +3099,7 @@ async fn collect_h1_request_to_h3_fieldlist(
     {
         field_list.push((":authority".to_owned(), host));
     }
-    Ok((field_list, body_bytes, translated.trailers))
-}
-
-/// Convert an [`lb_quic::H3UpstreamResponse`] back into the H1 response
-/// shape the listener emits.
-fn h3_response_to_h1(
-    resp: lb_quic::H3UpstreamResponse,
-    alt_svc: Option<AltSvcConfig>,
-) -> Response<BoxBody<Bytes, hyper::Error>> {
-    let bridge = crate::create_bridge(crate::Protocol::Http3, crate::Protocol::Http1);
-    let body_bytes = Bytes::from(resp.body);
-    let bridge_in = crate::BridgeResponse {
-        status: resp.status,
-        headers: resp.headers,
-        body: body_bytes,
-        // PROTO-2-12: forward the H3 upstream's trailing field
-        // section (parsed from the post-DATA HEADERS frame) down the
-        // H3→H1 bridge; `build_h1_response_with_trailers` re-emits it
-        // as a chunked-trailer block on the H1 wire.
-        trailers: resp.trailers,
-    };
-    let translated = match bridge.bridge_response(&bridge_in) {
-        Ok(r) => r,
-        Err(e) => {
-            return error_response(
-                StatusCode::BAD_GATEWAY,
-                &format!("h3->h1 response bridge: {e}"),
-            );
-        }
-    };
-    // PROTO-2-19 (Wave 2c-2): share the trailer-aware H1 head shape
-    // with the H2→H1 path via `build_h1_response_with_trailers`.
-    // PROTO-2-12 (H3 leg landed): `translated.trailers` now carries
-    // the H3 upstream's trailing field section, so the trailer-
-    // injection branch emits a chunked-trailer block on the H1 wire.
-    build_h1_response_with_trailers(translated, alt_svc)
+    Ok(field_list)
 }
 
 /// S9 / M-D-lite (F-MD-3 — lb-l7 R8 gauge) — the maximum, observed at any
