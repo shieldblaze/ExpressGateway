@@ -1725,3 +1725,197 @@ async fn h2h3_backpressure_both_legs_round_trips_bounded() {
         4 * WINDOW
     );
 }
+
+// ── §(c)1 connection-header check — does a connection-specific header decoded
+// from the H3 backend ever reach the H2 client? ─────────────────────────────
+//
+// The H2→H3 response head transform (`h2_decoded_resp_head_builder`) uses H2→H2
+// semantics: drop `:`-pseudo + lowercase, NO hop-by-hop strip (the H1→H3 cell's
+// RESPONSE_HOP_BY_HOP strip is H1-framing-specific). The brief asks: with no
+// strip, could a `connection:`/`keep-alive` the H3 backend emits leak to the H2
+// client? hyper's H2 server encoder treats connection-specific headers as
+// malformed for H2 and OMITS/REJECTS them on the egress (RFC 9113 §8.2.2). This
+// test PROVES that: a regular header (`x-keep`) reaches the client (transform
+// works) while `connection` does NOT (encoder dropped it). So the missing strip
+// is NOT an R12 divergence — no targeted strip needed.
+
+async fn spawn_h3_conn_header_backend(
+    cert_path: PathBuf,
+    key_path: PathBuf,
+) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let addr = socket.local_addr().unwrap();
+    let socket = Arc::new(socket);
+    let handle = tokio::spawn(async move {
+        let Ok(mut cfg) = quiche::Config::new(quiche::PROTOCOL_VERSION) else {
+            return;
+        };
+        let _ = cfg.set_application_protos(&[LB_QUIC_ALPN]);
+        cfg.set_max_idle_timeout(10_000);
+        cfg.set_max_recv_udp_payload_size(1_350);
+        cfg.set_max_send_udp_payload_size(1_350);
+        cfg.set_initial_max_data(1024 * 1024);
+        cfg.set_initial_max_stream_data_bidi_local(256 * 1024);
+        cfg.set_initial_max_stream_data_bidi_remote(256 * 1024);
+        cfg.set_initial_max_stream_data_uni(64 * 1024);
+        cfg.set_initial_max_streams_bidi(8);
+        cfg.set_initial_max_streams_uni(8);
+        cfg.set_disable_active_migration(true);
+        if cfg
+            .load_cert_chain_from_pem_file(cert_path.to_str().unwrap_or(""))
+            .is_err()
+            || cfg
+                .load_priv_key_from_pem_file(key_path.to_str().unwrap_or(""))
+                .is_err()
+        {
+            return;
+        }
+        let mut in_buf = vec![0u8; MAX_UDP];
+        let mut out_buf = vec![0u8; MAX_UDP];
+        let (n, peer) = match socket.recv_from(&mut in_buf).await {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+        let scid = random_scid_bytes();
+        let scid_ref = quiche::ConnectionId::from_ref(&scid);
+        let mut conn = match quiche::accept(&scid_ref, None, addr, peer, &mut cfg) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let _ = conn.recv(
+            in_buf.get_mut(..n).unwrap_or(&mut []),
+            quiche::RecvInfo {
+                from: peer,
+                to: addr,
+            },
+        );
+        let mut got_head = false;
+        let mut responded = false;
+        let mut resp_out: Vec<u8> = Vec::new();
+        let mut resp_sent = 0usize;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while tokio::time::Instant::now() < deadline {
+            loop {
+                match conn.send(&mut out_buf) {
+                    Ok((sent, info)) => {
+                        let _ = socket
+                            .send_to(out_buf.get(..sent).unwrap_or(&[]), info.to)
+                            .await;
+                    }
+                    Err(quiche::Error::Done) => break,
+                    Err(_) => break,
+                }
+            }
+            if conn.is_closed() {
+                break;
+            }
+            if conn.is_established() {
+                for sid in conn.readable().collect::<Vec<u64>>() {
+                    if sid != 0 {
+                        continue;
+                    }
+                    let mut chunk = [0u8; 4096];
+                    while let Ok((rn, _fin)) = conn.stream_recv(sid, &mut chunk) {
+                        if rn > 0 {
+                            got_head = true;
+                        }
+                    }
+                }
+                if got_head && !responded {
+                    let encoder = QpackEncoder::new();
+                    let head = encoder
+                        .encode(&[
+                            (":status".to_string(), "200".to_string()),
+                            ("content-length".to_string(), "2".to_string()),
+                            ("x-keep".to_string(), "v".to_string()),
+                            // A connection-specific header the H2 egress encoder
+                            // must NOT forward to the H2 client.
+                            ("connection".to_string(), "keep-alive".to_string()),
+                        ])
+                        .ok()
+                        .and_then(|b| encode_frame(&H3Frame::Headers { header_block: b }).ok());
+                    let data = encode_frame(&H3Frame::Data {
+                        payload: Bytes::from_static(b"ok"),
+                    })
+                    .ok();
+                    if let (Some(h), Some(d)) = (head, data) {
+                        resp_out.extend_from_slice(&h);
+                        resp_out.extend_from_slice(&d);
+                    }
+                    responded = true;
+                }
+                if responded && resp_sent < resp_out.len() {
+                    while resp_sent < resp_out.len() {
+                        let sl = resp_out.get(resp_sent..).unwrap_or(&[]);
+                        match conn.stream_send(0, sl, true) {
+                            Ok(ns) if ns > 0 => resp_sent += ns,
+                            _ => break,
+                        }
+                    }
+                }
+            }
+            let to = conn
+                .timeout()
+                .unwrap_or(Duration::from_millis(20))
+                .min(Duration::from_millis(20));
+            match tokio::time::timeout(to, socket.recv_from(&mut in_buf)).await {
+                Ok(Ok((rn, from))) => {
+                    let _ = conn.recv(
+                        in_buf.get_mut(..rn).unwrap_or(&mut []),
+                        quiche::RecvInfo { from, to: addr },
+                    );
+                }
+                _ => conn.on_timeout(),
+            }
+        }
+    });
+    (addr, handle)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn h2h3_connection_header_not_forwarded_to_h2_client() {
+    use h2 as h2crate;
+    let certs = generate_loopback_certs();
+    let (backend, _bh) = spawn_h3_conn_header_backend(certs.cert.clone(), certs.key.clone()).await;
+    let gw = spawn_gateway(backend, certs.ca.clone(), HttpTimeouts::default()).await;
+
+    let stream = TcpStream::connect(gw).await.unwrap();
+    let (h2, conn) = h2crate::client::handshake(stream).await.unwrap();
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
+    let mut h2 = h2.ready().await.unwrap();
+    let req = http::Request::builder()
+        .method("GET")
+        .uri(format!("http://{TEST_SNI}/conn"))
+        .body(())
+        .unwrap();
+    let (resp_fut, _send) = h2.send_request(req, true).unwrap();
+    let resp = tokio::time::timeout(Duration::from_secs(15), resp_fut)
+        .await
+        .expect("response timed out")
+        .expect("response head failed");
+    let status = resp.status().as_u16();
+    let headers = resp.headers().clone();
+    let has_conn = headers.contains_key("connection");
+    let has_keep = headers
+        .get("x-keep")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    eprintln!("H2H3_CONN_HEADER status={status} has_connection={has_conn} x-keep={has_keep:?}");
+    assert_eq!(status, 200, "response head did not reach the H2 client");
+    // Transform works: a regular header survives.
+    assert_eq!(
+        has_keep.as_deref(),
+        Some("v"),
+        "the regular x-keep header did NOT reach the H2 client (transform regression)"
+    );
+    // §(c)1 ANSWER: the connection-specific header is NOT forwarded. hyper's H2
+    // server encoder omits it (no targeted strip needed in the head builder).
+    assert!(
+        !has_conn,
+        "DIVERGENCE: a `connection` header decoded from the H3 backend was \
+         forwarded to the H2 client — the H2 egress encoder did NOT drop it, so \
+         h2_decoded_resp_head_builder needs a targeted hop-by-hop strip (R12)"
+    );
+}
