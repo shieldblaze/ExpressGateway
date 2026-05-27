@@ -1,0 +1,7 @@
+===== POSTFIX RUN1 START 20:10:47 =====
+POSTFIX_RUN1_EXIT=0  fcap1=[test fcap1_h2_over_cap_upload_yields_413 ... ok]  failed_suites=0
+===== POSTFIX RUN2 START 20:15:48 =====
+POSTFIX_RUN2_EXIT=0  fcap1=[test fcap1_h2_over_cap_upload_yields_413 ... ok]  failed_suites=0
+===== POSTFIX RUN3 START 20:20:44 =====
+POSTFIX_RUN3_EXIT=0  fcap1=[test fcap1_h2_over_cap_upload_yields_413 ... ok]  failed_suites=0
+===== POSTFIX DONE 20:25:39 =====
