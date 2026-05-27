@@ -5139,4 +5139,80 @@ mod tests {
             RecvErrClass::BenignCollected
         );
     }
+
+    /// SESSION 12 — the connector's `Decoded` sink (the H1/H2 fronts'
+    /// per-front response handler) MUST surface an upstream response
+    /// trailing field section as `H3RespEvent::Trailers`, with the
+    /// fields intact. This is the half of the trailer mandate proven
+    /// only by code-read until now: the H1→H3 / H2→H3 cells rely on the
+    /// connector EMITTING `Trailers` so the L7 front can forward
+    /// grpc-status etc.; a future connector trailer-DROP (replacing the
+    /// `Trailers` emit with a no-op) would otherwise slip every test.
+    /// (The H3→H3 `Wire` arm's trailer forwarding is already covered by
+    /// `h3h3_e2e_response_trailers_forwarded`; THIS covers the `Decoded`
+    /// arm's emission.)
+    #[tokio::test]
+    async fn s12_decoded_sink_on_trailers_emits_h3respevent_trailers() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<H3RespEvent>(4);
+        let mut sink = H3RespOut::Decoded {
+            tx,
+            total: 0,
+            cap: MAX_RESPONSE_BODY_BYTES,
+        };
+        let trailers = vec![
+            ("grpc-status".to_string(), "0".to_string()),
+            ("x-trailer".to_string(), "v1".to_string()),
+        ];
+        let r = sink.on_trailers(trailers.clone()).await;
+        assert!(r.is_ok(), "on_trailers with a live channel returns Ok");
+        match rx.try_recv() {
+            Ok(H3RespEvent::Trailers(got)) => assert_eq!(
+                got, trailers,
+                "the Decoded sink must surface the upstream response trailers \
+                 verbatim as H3RespEvent::Trailers"
+            ),
+            other => panic!("expected H3RespEvent::Trailers, got {other:?}"),
+        }
+    }
+
+    /// SESSION 12 — companion to the trailer assertion: the `Decoded`
+    /// sink's `on_head` MUST forward the FULL non-pseudo response header
+    /// set (filtering pseudo-headers, retaining `content-length` as a
+    /// regular header) so the L7 front sees every header (CF-H3H3-HEAD
+    /// parity: the `Wire` arm now matches this via
+    /// `encode_h3_headers_frame_full`).
+    #[tokio::test]
+    async fn s12_decoded_sink_on_head_forwards_full_nonpseudo_set() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<H3RespEvent>(4);
+        let mut sink = H3RespOut::Decoded {
+            tx,
+            total: 0,
+            cap: MAX_RESPONSE_BODY_BYTES,
+        };
+        let fields = vec![
+            (":status".to_string(), "200".to_string()),
+            ("content-type".to_string(), "application/json".to_string()),
+            ("content-length".to_string(), "12".to_string()),
+            ("x-eg-resp".to_string(), "round-trip".to_string()),
+        ];
+        let r = sink.on_head(&fields).await;
+        assert!(r.is_ok(), "on_head with a live channel returns Ok");
+        match rx.try_recv() {
+            Ok(H3RespEvent::Head { status, headers }) => {
+                assert_eq!(status, 200, ":status parsed out of the field list");
+                assert_eq!(
+                    headers,
+                    vec![
+                        ("content-type".to_string(), "application/json".to_string()),
+                        ("content-length".to_string(), "12".to_string()),
+                        ("x-eg-resp".to_string(), "round-trip".to_string()),
+                    ],
+                    "the Decoded sink forwards the full non-pseudo set in order \
+                     (pseudo-headers filtered, content-length retained as a \
+                     regular header)"
+                );
+            }
+            other => panic!("expected H3RespEvent::Head, got {other:?}"),
+        }
+    }
 }
