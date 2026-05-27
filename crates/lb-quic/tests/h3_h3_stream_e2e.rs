@@ -1595,6 +1595,156 @@ async fn h3h3_e2e_client_reset_midrequest_rsts_upstream_no_truncated_request() {
     );
 }
 
+/// Case 7 R13 (b)+(c) — isolation-burst + non-vacuity for the
+/// mid-request-RESET smuggling guard. The single-shot test above is
+/// R13 (a) (in-gate); this adds (b) a ≥50-iteration burst on a
+/// SINGLE-THREADED runtime — the scheduling configuration that exposes
+/// timing-dependent request-smuggling races (memory
+/// `parallel-gate-masks-smuggle`; `h3h3-fmd4-no-r13-bc` flagged this
+/// gap) — and (c) a LOAD-BEARING non-vacuity positive: a CLEAN POST
+/// (full body + FIN) must be counted by the backend as a cleanly-ended
+/// request, so the burst's "the count never moves" assertion is not
+/// vacuously true.
+///
+/// SIGNAL: `BackendSeen::requests` is incremented ONLY when the upstream
+/// observes a cleanly-ended (FIN) request (the `if ready { .. }` block,
+/// `ready = req_fin` for `Echo`). A mid-request RESET never reaches it.
+/// So a smuggled truncated request — one relayed to the backend as
+/// cleanly-ended — would increment `requests`. The clean control moves
+/// it 0→1 (non-vacuity); the burst of truncated requests must leave it
+/// at 1 (no smuggle). `complete` (latched by the clean control) is
+/// asserted too as a secondary check.
+///
+/// NOTE FOR THE VERIFIER: the LOAD-BEARING MUTATION proof (R13 (c)
+/// proper) is yours — H3→H3 has no pre-fix bug to revert, so flip the
+/// connector's request-abort arm (the `stream_shutdown(Write,
+/// H3_REQUEST_CANCELLED)` + no-FIN + non-reusable in the request leg)
+/// to a clean FIN and confirm THIS burst then FAILS (a truncated
+/// request gets counted). This test provides the burst + non-vacuity
+/// the mutation acts on.
+#[tokio::test(flavor = "current_thread")]
+async fn h3h3_e2e_client_reset_midrequest_burst_current_thread() {
+    const ITERS: usize = 60; // ≥50 per R13 (b)
+    let certs = generate_loopback_certs();
+    let seen = BackendSeen::default();
+    let (backend, bh) = spawn_h3_upstream(&certs, UpstreamMode::Echo, seen.clone()).await;
+    let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
+
+    // Per-iteration body: much smaller than the single-shot 2 MiB so
+    // the ITERS-deep burst is tractable, but still a genuine mid-body
+    // abort (reset after 32 KiB of a 128 KiB upload — the smuggle race
+    // is about aborting before FIN, not body size).
+    let payload = binary_body(128 * 1024);
+    let chunks: Vec<Vec<u8>> = payload.chunks(16 * 1024).map(<[u8]>::to_vec).collect();
+
+    // (c) NON-VACUITY control — a CLEAN POST (full body + FIN). The
+    // backend MUST count it as a cleanly-ended request.
+    let clean = drive_h3(
+        gw,
+        &certs.ca,
+        DriveCfg {
+            method: "POST",
+            path: "/clean",
+            req_body: chunks.clone(),
+            req_trailers: vec![],
+            stall_after: None,
+            stall_for: Duration::ZERO,
+            reset_after_req_bytes: None,
+            omit_authority: false,
+            stop_reading_resp_after: None,
+        },
+        Duration::from_secs(30),
+    )
+    .await;
+    assert!(
+        clean.status == Some(200) && clean.fin,
+        "non-vacuity: a clean POST must yield 200 + FIN (status={:?} fin={})",
+        clean.status,
+        clean.fin
+    );
+    let baseline = seen.requests.load(Ordering::SeqCst);
+    assert!(
+        baseline >= 1 && seen.complete.load(Ordering::SeqCst),
+        "LOAD-BEARING control: a clean upload must be counted complete by the \
+         backend before the burst (requests={baseline}, complete={})",
+        seen.complete.load(Ordering::SeqCst)
+    );
+
+    // (b) BURST — ITERS mid-request RESETs. NONE may reach the backend
+    // as a cleanly-ended request (the `requests` count must not move),
+    // and none may yield a clean 200+FIN to the client. Fired with
+    // BOUNDED CONCURRENCY (`IN_FLIGHT`-wide) on the single-threaded
+    // runtime: concurrent in-flight aborts contending on ONE scheduler
+    // is a STRONGER smuggling-race probe than back-to-back sequential
+    // requests (the `parallel-gate-masks-smuggle` configuration), and it
+    // amortises the per-request QUIC-handshake + abort-settle cost so an
+    // ITERS-deep burst stays tractable. The window is bounded so the
+    // shared gateway/backend is not swamped into spurious failures.
+    const IN_FLIGHT: usize = 8;
+    let ca = certs.ca.clone();
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let mut set: tokio::task::JoinSet<ClientOut> = tokio::task::JoinSet::new();
+            let mut launched = 0usize;
+            let mut finished = 0usize;
+            let spawn_one = |set: &mut tokio::task::JoinSet<ClientOut>| {
+                let ca = ca.clone();
+                let chunks = chunks.clone();
+                set.spawn_local(async move {
+                    drive_h3(
+                        gw,
+                        &ca,
+                        DriveCfg {
+                            method: "POST",
+                            path: "/abort",
+                            req_body: chunks,
+                            req_trailers: vec![],
+                            stall_after: None,
+                            stall_for: Duration::ZERO,
+                            reset_after_req_bytes: Some(32 * 1024),
+                            omit_authority: false,
+                            stop_reading_resp_after: None,
+                        },
+                        Duration::from_secs(30),
+                    )
+                    .await
+                });
+            };
+            while launched < IN_FLIGHT.min(ITERS) {
+                spawn_one(&mut set);
+                launched += 1;
+            }
+            while let Some(joined) = set.join_next().await {
+                let out = joined.expect("burst task panicked");
+                finished += 1;
+                assert!(
+                    !(out.status == Some(200) && out.fin),
+                    "SMUGGLING (burst iter {finished}/{ITERS}): a mid-request-aborted \
+                     request yielded a clean 200+FIN to the client"
+                );
+                if launched < ITERS {
+                    spawn_one(&mut set);
+                    launched += 1;
+                }
+            }
+        })
+        .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let after_burst = seen.requests.load(Ordering::SeqCst);
+    let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+    sd.cancel();
+    bh.abort();
+
+    eprintln!("H3H3_CASE7_BURST iters={ITERS} baseline={baseline} after_burst={after_burst}");
+    assert_eq!(
+        after_burst, baseline,
+        "SMUGGLING under burst: {ITERS} mid-request RESETs moved the backend's \
+         cleanly-ended-request count {baseline}→{after_burst} — at least one \
+         truncated request was relayed to the upstream as complete (F-MD-4 race)"
+    );
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // §4  F-S7-8 — adversarial coverage-remediation cases (test asset
 //     only; same real wire: front quiche H3 client → QuicListener →
