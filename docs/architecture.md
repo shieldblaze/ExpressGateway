@@ -179,6 +179,11 @@ and handles unary and all three streaming modes (tests
 `test_grpc_unary_roundtrip`, `test_grpc_server_streaming`,
 `test_grpc_client_streaming`, `test_grpc_bidi_streaming`).
 
+> **gRPC requires an H2 or H3 front.** An HTTP/1.1 downstream listener cannot
+> deliver gRPC response trailers (`grpc-status`) on a streamed response — a
+> bounded HTTP/1.1 encoding constraint that matches nginx. See
+> [Known Limitations](known-limitations.md) (CF-RESP-1 / CASE-ii).
+
 `lb-quic` is, like `lb-l4-xdp`, explicitly a simulation: the doc
 comment in `crates/lb-quic/src/lib.rs` states "Since we cannot run real
 QUIC without a network stack in CI, this crate provides simulated
