@@ -1062,18 +1062,31 @@ async fn h1h3_grpc_response_trailers_empirical() {
 
 // ── Test 8: F-MD-4 RESPONSE-leg truncation (the COMMIT-A guard) ──────────
 //
-// A truncating-response H3 backend declares content-length=BIG, sends a PARTIAL
-// DATA frame, then DROPS the QUIC stream WITHOUT a clean FIN. The connector
-// surfaces RespAbort (PrematureEof/UpstreamReset) → H3RespEvent::Reset → the H1
-// front injects Err(H1PumpAbort) into the response body stream → hyper aborts
-// the H1 response WITHOUT fulfilling the declared content-length (closes the
-// conn / no clean end). The client's body-collect therefore ERRORS — it NEVER
-// receives a complete body. This is the response-splitting guard: a truncated
-// upstream response is never relayed to the client as complete.
+// A truncating-response H3 backend sends a PARTIAL DATA frame, then DROPS the
+// QUIC stream WITHOUT a clean FIN. The connector surfaces RespAbort
+// (PrematureEof/UpstreamReset) → H3RespEvent::Reset → the H1 front injects
+// Err(H1PumpAbort) into the response body stream → hyper aborts the H1 response
+// WITHOUT writing a clean terminator (no `0\r\n\r\n` for a chunked body / does
+// not satisfy a declared content-length). The client's body-collect therefore
+// ERRORS — it NEVER receives a complete body. This is the response-splitting
+// guard: a truncated upstream response is never relayed to the client as
+// complete.
 //
-// Assertion is the hyper-client collect RESULT (framing-agnostic; the response
-// is content-length-framed because the H1 front forwards the upstream
-// content-length): clean → Ok(len==content-length); truncated → Err / short.
+// TWO ARMS, by upstream framing (the backend's `declare_cl` flag):
+//  • CL-declared (declare_cl=true): the upstream sends content-length=BIG; the
+//    H1 front forwards it, so hyper's H1 CLIENT also detects the underrun on its
+//    own. This arm is a regression for the CL path but is NOT load-bearing for
+//    the guard (passes even with the guard deleted — the client's own CL-underrun
+//    masks it). Verdict: complete := Ok(len>=declared).
+//  • CHUNKED (declare_cl=false): the upstream omits content-length; the H1 front
+//    frames the response as chunked (unknown length). The ONLY way the H1 client
+//    errors is the guard injecting Err(H1PumpAbort) so hyper never writes the
+//    `0\r\n\r\n` terminator. If the guard were absent the StreamBody would just
+//    end (clean drop) → hyper writes `0\r\n\r\n` → the client gets a clean
+//    Ok(partial-bytes) — a SMUGGLED-COMPLETE leak. So here the guard is the SOLE
+//    discriminator and the predicate is strict: complete := Ok(_) (ANY clean
+//    body on an aborted stream is a leak). This is the LOAD-BEARING arm
+//    (verifier-proven: guard-deleted → FAIL Ok(leak); reverted → PASS 60/60).
 
 const TRUNC_DECLARED_LEN: usize = 1024 * 1024; // backend declares 1 MiB
 const TRUNC_PARTIAL_LEN: usize = 100 * 1024; // sends only 100 KiB then drops
@@ -1081,6 +1094,7 @@ const TRUNC_PARTIAL_LEN: usize = 100 * 1024; // sends only 100 KiB then drops
 async fn spawn_h3_truncating_response_backend(
     cert_path: PathBuf,
     key_path: PathBuf,
+    declare_cl: bool,
 ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
     let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let addr = socket.local_addr().unwrap();
@@ -1163,20 +1177,24 @@ async fn spawn_h3_truncating_response_backend(
                     }
                 }
                 if got_head && !responded {
-                    // HEADERS{200, content-length=DECLARED} + a PARTIAL DATA
-                    // frame whose declared payload length is DECLARED but we only
-                    // ever send TRUNC_PARTIAL_LEN bytes of it, then shutdown.
+                    // HEADERS{200 [, content-length=DECLARED if declare_cl]} + a
+                    // PARTIAL DATA frame. When declare_cl, the declared payload is
+                    // DECLARED but we only ever transmit TRUNC_PARTIAL_LEN bytes of
+                    // it before shutdown (premature end). When !declare_cl the
+                    // upstream is unframed → the H1 front emits chunked, and the
+                    // guard (no `0\r\n\r\n`) is the sole truncation signal.
+                    let mut head_fields = vec![(":status".to_string(), "200".to_string())];
+                    if declare_cl {
+                        head_fields
+                            .push(("content-length".to_string(), TRUNC_DECLARED_LEN.to_string()));
+                    }
                     let encoder = QpackEncoder::new();
                     let head = encoder
-                        .encode(&[
-                            (":status".to_string(), "200".to_string()),
-                            ("content-length".to_string(), TRUNC_DECLARED_LEN.to_string()),
-                        ])
+                        .encode(&head_fields)
                         .ok()
                         .and_then(|b| encode_frame(&H3Frame::Headers { header_block: b }).ok());
-                    // A DATA frame that DECLARES DECLARED bytes of payload but we
-                    // will only actually transmit TRUNC_PARTIAL_LEN of them before
-                    // shutting the stream — so the gateway sees a premature end.
+                    // A PARTIAL DATA frame: TRUNC_PARTIAL_LEN bytes, then we shut the
+                    // stream WITHOUT a clean FIN so the gateway sees a premature end.
                     let data = encode_frame(&H3Frame::Data {
                         payload: Bytes::from(vec![0x5Au8; TRUNC_PARTIAL_LEN]),
                     })
@@ -1274,17 +1292,24 @@ async fn h1h3_fmd4_response_truncation_never_false_complete() {
         );
     }
 
-    // NEGATIVE arm: the truncating backend → the H1 client's body collect ERRORS
-    // (declared content-length never fulfilled; stream aborted) → NEVER a
-    // complete body. The COMMIT-A widening + H1PumpAbort guard in action.
+    // NEGATIVE arm (CL-declared regression — NOT load-bearing for the guard):
+    // the truncating backend declares content-length; the H1 client's body
+    // collect ERRORS because the declared content-length is never fulfilled. NB:
+    // hyper's H1 client detects this CL-underrun ON ITS OWN, so this arm passes
+    // even with the H1PumpAbort guard deleted (the load-bearing proof is the
+    // CHUNKED arm below). Kept as a regression for the CL framing path.
     {
-        let (backend, _bh) =
-            spawn_h3_truncating_response_backend(certs.cert.clone(), certs.key.clone()).await;
+        let (backend, _bh) = spawn_h3_truncating_response_backend(
+            certs.cert.clone(),
+            certs.key.clone(),
+            /* declare_cl = */ true,
+        )
+        .await;
         let gw = spawn_gateway(backend, certs.ca.clone(), HttpTimeouts::default()).await;
         let (status, body_res) = h1_get_collect(gw).await;
         let complete = matches!(&body_res, Ok(b) if b.len() >= TRUNC_DECLARED_LEN);
         eprintln!(
-            "H1H3_RESP_TRUNC status={status} body_res={} declared={TRUNC_DECLARED_LEN} \
+            "H1H3_RESP_TRUNC_CL status={status} body_res={} declared={TRUNC_DECLARED_LEN} \
              partial={TRUNC_PARTIAL_LEN} false_complete={complete}",
             match &body_res {
                 Ok(b) => format!("Ok(len={})", b.len()),
@@ -1293,31 +1318,127 @@ async fn h1h3_fmd4_response_truncation_never_false_complete() {
         );
         assert!(
             !complete,
-            "RESPONSE-SPLITTING: a truncated upstream response was delivered to the \
+            "RESPONSE-SPLITTING (CL arm): a truncated upstream response was delivered to the \
              H1 client as a COMPLETE body (got a full {TRUNC_DECLARED_LEN}-byte body \
              for a response that only sent {TRUNC_PARTIAL_LEN}) — F-MD-4 response-leg guard broken"
         );
     }
 }
 
+// ── Test 8c: F-MD-4 RESPONSE-leg truncation, CHUNKED (no-CL) — LOAD-BEARING ──
+//
+// The upstream omits content-length, so the H1 front frames the response as
+// chunked. The guard (H3RespEvent::Reset → Err(H1PumpAbort) → no `0\r\n\r\n`)
+// is the SOLE truncation signal: with the guard deleted the StreamBody ends with
+// a clean drop → hyper writes the chunked terminator → the client gets a clean
+// Ok(partial-bytes), a smuggled-complete leak. Hence the strict predicate
+// complete := Ok(_) — ANY clean Ok on an aborted stream fails the guard. The
+// non-vacuity arm (a clean chunked echo → Ok) proves Ok is observable, so the
+// truncated-Err assertion is not vacuous. Verifier-proven load-bearing:
+// guard-deleted → FAIL leak Ok(88684); reverted → PASS 60/60.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn h1h3_fmd4_response_truncation_chunked_never_complete() {
+    let certs = generate_loopback_certs();
+
+    // POSITIVE / non-vacuity arm: a CLEAN echo backend → the H1 client collects a
+    // COMPLETE body (Ok). The echo backend declares content-length, but the point
+    // here is only that a complete-body Ok IS observable on this path (else the
+    // strict Ok(_)=leak predicate below would be vacuous).
+    {
+        let obs = BackendObs::new();
+        let (backend, _bh) =
+            spawn_h3_echo_backend(certs.cert.clone(), certs.key.clone(), obs.clone()).await;
+        let gw = spawn_gateway(backend, certs.ca.clone(), HttpTimeouts::default()).await;
+        let body = Bytes::from(vec![0x42u8; 4096]);
+        let (status, echoed) = h1_request_with_body(gw, vec![body.clone()]).await;
+        assert_eq!(status, 200, "clean arm: expected 200");
+        assert_eq!(
+            echoed, body,
+            "clean arm: body must round-trip complete (non-vacuity)"
+        );
+    }
+
+    // NEGATIVE arm: chunked (no-CL) truncating backend. The ONLY discriminator is
+    // the guard. complete := Ok(_) — any clean Ok is a smuggled-complete leak.
+    {
+        let (backend, _bh) = spawn_h3_truncating_response_backend(
+            certs.cert.clone(),
+            certs.key.clone(),
+            /* declare_cl = */ false,
+        )
+        .await;
+        let gw = spawn_gateway(backend, certs.ca.clone(), HttpTimeouts::default()).await;
+        let (status, body_res) = h1_get_collect(gw).await;
+        let leaked = body_res.is_ok();
+        eprintln!(
+            "H1H3_RESP_TRUNC_CHUNKED status={status} body_res={} partial={TRUNC_PARTIAL_LEN} \
+             leaked_complete={leaked}",
+            match &body_res {
+                Ok(b) => format!("Ok(len={})", b.len()),
+                Err(e) => format!("Err({e})"),
+            }
+        );
+        assert!(
+            !leaked,
+            "RESPONSE-SPLITTING (chunked arm): a truncated upstream chunked response was \
+             delivered to the H1 client as a CLEAN-terminated body (Ok) — the H1PumpAbort \
+             guard did not suppress the `0\\r\\n\\r\\n` terminator (F-MD-4 response-leg guard broken)"
+        );
+    }
+}
+
 // ── Test 8b: F-MD-4 RESPONSE-leg truncation R13 (b) burst ≥50× ───────────
+//
+// Two bursts: the CL-declared arm (regression for the CL path) and the CHUNKED
+// arm (load-bearing — the guard is the sole discriminator, strict Ok(_)=leak).
 
 #[tokio::test(flavor = "current_thread")]
 async fn h1h3_fmd4_response_truncation_burst_current_thread() {
     const ITERS: usize = 60;
     let certs = generate_loopback_certs();
     for i in 0..ITERS {
-        let (backend, bh) =
-            spawn_h3_truncating_response_backend(certs.cert.clone(), certs.key.clone()).await;
+        let (backend, bh) = spawn_h3_truncating_response_backend(
+            certs.cert.clone(),
+            certs.key.clone(),
+            /* declare_cl = */ true,
+        )
+        .await;
         let gw = spawn_gateway(backend, certs.ca.clone(), HttpTimeouts::default()).await;
         let (_status, body_res) = h1_get_collect(gw).await;
         let complete = matches!(&body_res, Ok(b) if b.len() >= TRUNC_DECLARED_LEN);
         assert!(
             !complete,
-            "RESPONSE-SPLITTING under burst (iter {i}/{ITERS}): a truncated upstream \
+            "RESPONSE-SPLITTING under CL burst (iter {i}/{ITERS}): a truncated upstream \
              response was delivered to the H1 client as COMPLETE — F-MD-4 race"
         );
         bh.abort();
     }
-    eprintln!("H1H3_RESP_TRUNC_BURST iters={ITERS} all-incomplete (no false-complete)");
+    eprintln!("H1H3_RESP_TRUNC_CL_BURST iters={ITERS} all-incomplete (no false-complete)");
+}
+
+// ── Test 8d: F-MD-4 chunked (no-CL) truncation burst ≥50× — LOAD-BEARING ──
+
+#[tokio::test(flavor = "current_thread")]
+async fn h1h3_fmd4_response_truncation_chunked_burst_current_thread() {
+    const ITERS: usize = 60;
+    let certs = generate_loopback_certs();
+    for i in 0..ITERS {
+        let (backend, bh) = spawn_h3_truncating_response_backend(
+            certs.cert.clone(),
+            certs.key.clone(),
+            /* declare_cl = */ false,
+        )
+        .await;
+        let gw = spawn_gateway(backend, certs.ca.clone(), HttpTimeouts::default()).await;
+        let (_status, body_res) = h1_get_collect(gw).await;
+        let leaked = body_res.is_ok();
+        assert!(
+            !leaked,
+            "RESPONSE-SPLITTING under chunked burst (iter {i}/{ITERS}): a truncated upstream \
+             chunked response was delivered to the H1 client as a CLEAN-terminated body (Ok) \
+             — the guard failed to suppress the `0\\r\\n\\r\\n` terminator (F-MD-4 race)"
+        );
+        bh.abort();
+    }
+    eprintln!("H1H3_RESP_TRUNC_CHUNKED_BURST iters={ITERS} all-incomplete (no leak)");
 }
