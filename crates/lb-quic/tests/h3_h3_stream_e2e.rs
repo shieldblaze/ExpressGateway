@@ -258,6 +258,14 @@ struct ClientOut {
     /// assert the specific trailer arrived and CASE 9b assert a
     /// pseudo-header trailer was NEVER forwarded.
     resp_trailer_names: Vec<String>,
+    /// CF-H3H3-HEAD — every `(name, value)` the client decoded from the
+    /// FIRST (response-head) HEADERS frame, EXCLUDING `:status` (kept in
+    /// `status`). Lets the full-header round-trip test assert regular
+    /// headers (content-type / custom x-*) survive the H3→H3 response
+    /// leg. Additive, `Default`-initialised; the existing cases never
+    /// read it (a provable pure no-op — mirrors `resp_headers_frames` /
+    /// `resp_trailer_names`).
+    resp_head_pairs: Vec<(String, String)>,
 }
 
 /// Drive ONE H3 request on stream 0 (verbatim shape from
@@ -455,6 +463,13 @@ async fn drive_h3(
                                 if is_trailer {
                                     out.resp_trailer_names.push(n.clone());
                                 }
+                                // CF-H3H3-HEAD: capture every non-status
+                                // field of the response HEAD frame so the
+                                // full-header round-trip test can assert
+                                // regular headers survived.
+                                if !is_trailer && n != ":status" {
+                                    out.resp_head_pairs.push((n.clone(), v.clone()));
+                                }
                                 if n == ":status" {
                                     out.status = v.parse().ok();
                                 } else if n == "content-length" {
@@ -615,6 +630,14 @@ enum UpstreamMode {
     /// (h3_bridge.rs :3375-3383: `else { outcome = PrematureEof }`).
     /// The client MUST NOT receive a clean complete 200+FIN.
     HeadThenTruncatedData,
+    /// CF-H3H3-HEAD — 200 + a response HEAD carrying REGULAR headers
+    /// (content-type + a custom `x-eg-resp` header) ALONGSIDE
+    /// `content-length`, then a small DATA body + clean FIN. Drives the
+    /// full-header re-encode in the `Wire` sink's `on_head`
+    /// (h3_bridge.rs `encode_h3_headers_frame_full`). The gateway MUST
+    /// forward the full non-pseudo set to the H3 client — pre-fix it
+    /// dropped everything but `:status` + `content-length`.
+    RespWithHeaders,
 }
 
 /// F-S7-8 cluster 2 — the kind of post-DATA trailing-HEADERS frame the
@@ -843,7 +866,8 @@ async fn spawn_h3_upstream(
                         | UpstreamMode::UnknownFrameThenResp
                         | UpstreamMode::OversizedBlock { .. }
                         | UpstreamMode::EmptyDataThenResp
-                        | UpstreamMode::HeadThenTruncatedData => req_fin,
+                        | UpstreamMode::HeadThenTruncatedData
+                        | UpstreamMode::RespWithHeaders => req_fin,
                     };
                     if ready {
                         *seen.body.lock().unwrap() = body.clone();
@@ -962,6 +986,24 @@ async fn spawn_h3_upstream(
                                 resp_wire.extend_from_slice(&truncated_data_frame(4096, 16));
                                 resp_fin_on_drain = true;
                             }
+                            // CF-H3H3-HEAD — 200 + a head carrying
+                            // content-type + a custom x-eg-resp header
+                            // ALONGSIDE content-length, then a small body
+                            // + FIN. The gateway must forward the FULL
+                            // non-pseudo set to the H3 client.
+                            UpstreamMode::RespWithHeaders => {
+                                let payload = b"h3-full-head-body";
+                                resp_wire = response_head_with_headers(
+                                    200,
+                                    Some(payload.len()),
+                                    &[
+                                        ("content-type", "application/json"),
+                                        ("x-eg-resp", "round-trip"),
+                                    ],
+                                );
+                                resp_wire.extend_from_slice(&data_frames(payload));
+                                resp_fin_on_drain = true;
+                            }
                         }
                         resp_built = true;
                     }
@@ -1013,6 +1055,31 @@ fn response_head(status: u16, content_length: Option<usize>) -> Vec<u8> {
     let mut headers = vec![(":status".to_string(), status.to_string())];
     if let Some(n) = content_length {
         headers.push(("content-length".to_string(), n.to_string()));
+    }
+    let block = QpackEncoder::new().encode(&headers).unwrap();
+    encode_frame(&H3Frame::Headers {
+        header_block: block,
+    })
+    .unwrap()
+    .to_vec()
+}
+
+/// CF-H3H3-HEAD — encode an H3 response HEADERS frame carrying
+/// `:status`, an optional `content-length`, and the given REGULAR
+/// (non-pseudo) headers. Lets a backend emit a full response head so
+/// the full-header round-trip test can assert the gateway forwards the
+/// whole set (not just `:status` + `content-length`).
+fn response_head_with_headers(
+    status: u16,
+    content_length: Option<usize>,
+    extra: &[(&str, &str)],
+) -> Vec<u8> {
+    let mut headers = vec![(":status".to_string(), status.to_string())];
+    if let Some(n) = content_length {
+        headers.push(("content-length".to_string(), n.to_string()));
+    }
+    for (n, v) in extra {
+        headers.push(((*n).to_string(), (*v).to_string()));
     }
     let block = QpackEncoder::new().encode(&headers).unwrap();
     encode_frame(&H3Frame::Headers {
@@ -1726,6 +1793,80 @@ async fn h3h3_e2e_upstream_stop_sending_at_request_fin_aborts_no_fin() {
         !backend_saw_complete,
         "the upstream must NEVER record a cleanly-ended request when it \
          STOP_SENDINGs the request stream at the FIN boundary"
+    );
+}
+
+/// CF-H3H3-HEAD — the upstream sends 200 with content-type +
+/// content-length + a custom `x-eg-resp` header, then a small DATA body
+/// + clean FIN. The H3→H3 streaming response leg MUST forward the FULL
+/// non-pseudo response header set to the H3 client — pre-fix it dropped
+/// everything but `:status` + `content-length`
+/// (`encode_h3_headers_frame(status, declared_len)`); post-fix the
+/// `Wire` sink re-encodes the whole set via
+/// `encode_h3_headers_frame_full`. LOAD-BEARING: this asserts
+/// content-type AND x-eg-resp arrive at the client — it FAILS on the
+/// old lossy projection (neither would be present) and PASSES with the
+/// full-header re-encode. Body byte-identity + 200 + clean FIN confirm
+/// the head change does not perturb the body/FIN framing.
+#[tokio::test]
+async fn h3h3_e2e_full_response_headers_round_trip() {
+    let certs = generate_loopback_certs();
+    let seen = BackendSeen::default();
+    let (backend, bh) = spawn_h3_upstream(&certs, UpstreamMode::RespWithHeaders, seen).await;
+    let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
+
+    let out = drive_h3(
+        gw,
+        &certs.ca,
+        DriveCfg {
+            method: "GET",
+            path: "/full-headers",
+            req_body: vec![],
+            req_trailers: vec![],
+            stall_after: None,
+            stall_for: Duration::ZERO,
+            reset_after_req_bytes: None,
+            omit_authority: false,
+            stop_reading_resp_after: None,
+        },
+        Duration::from_secs(25),
+    )
+    .await;
+
+    let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+    sd.cancel();
+    bh.abort();
+
+    assert_eq!(out.status, Some(200), "full-header response must be 200");
+    assert!(out.fin, "clean FIN expected after full-header response");
+    assert_eq!(
+        out.body, b"h3-full-head-body",
+        "response body must be byte-identical alongside the full header set"
+    );
+    // The two REGULAR headers the backend emitted must both round-trip
+    // to the H3 client — the load-bearing assertions (pre-fix the
+    // gateway dropped both; only :status + content-length survived).
+    let has = |name: &str, val: &str| {
+        out.resp_head_pairs
+            .iter()
+            .any(|(n, v)| n == name && v == val)
+    };
+    assert!(
+        has("content-type", "application/json"),
+        "content-type MUST round-trip H3→H3 (CF-H3H3-HEAD); got head pairs {:?}",
+        out.resp_head_pairs
+    );
+    assert!(
+        has("x-eg-resp", "round-trip"),
+        "a custom response header MUST round-trip H3→H3 (CF-H3H3-HEAD); got head pairs {:?}",
+        out.resp_head_pairs
+    );
+    // content-length still rides through as a regular header (it lands
+    // in both `content_length` and `resp_head_pairs`).
+    assert_eq!(
+        out.content_length,
+        Some(b"h3-full-head-body".len()),
+        "content-length must still be forwarded"
     );
 }
 

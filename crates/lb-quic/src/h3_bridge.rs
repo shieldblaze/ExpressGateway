@@ -981,6 +981,47 @@ pub fn encode_h3_headers_frame(
     encode_frame(&H3Frame::Headers { header_block }).map_err(|e| format!("h3 headers frame: {e}"))
 }
 
+/// SESSION 12 / CF-H3H3-HEAD: encode the H3 response HEADERS frame
+/// carrying the FULL non-pseudo response header set (not just
+/// `:status` + `content-length`).
+///
+/// Emits `:status` FIRST, then every `(name, value)` in `headers`
+/// VERBATIM in order. The caller is responsible for having already
+/// filtered out pseudo-headers and any hop-by-hop fields it does not
+/// want forwarded; this helper re-encodes exactly what it is given
+/// (`content-length`, when present, rides through as a regular header).
+///
+/// This is the full-fidelity sibling of [`encode_h3_headers_frame`]
+/// (which intentionally projects to `:status` + `content-length` only
+/// and is retained for the inline error responses + the byte-identical
+/// `encode_h3_response`). The H3→H3 streaming response head
+/// ([`H3RespOut::on_head`] `Wire` arm) uses THIS so it forwards the
+/// upstream's full response header set — matching the `Decoded` arm
+/// (H1/H2 fronts) and the buffering `request_h3_upstream` (R12
+/// convergence: every H3→H3 response head carries content-type /
+/// cache-control / set-cookie / custom headers, not just the minimal
+/// projection that shipped before).
+///
+/// QPACK encoding is literal-with-name-ref / literal (no dynamic
+/// table), so arbitrary header names round-trip.
+///
+/// # Errors
+///
+/// Surfaces a string-formatted error if QPACK encoding or the H3
+/// frame encoder reject the inputs.
+pub fn encode_h3_headers_frame_full(
+    status: u16,
+    headers: &[(String, String)],
+) -> Result<Bytes, String> {
+    let mut fields: Vec<(String, String)> = Vec::with_capacity(headers.len() + 1);
+    fields.push((":status".to_string(), status.to_string()));
+    fields.extend(headers.iter().cloned());
+    let header_block = QpackEncoder::new()
+        .encode(&fields)
+        .map_err(|e| format!("qpack encode: {e}"))?;
+    encode_frame(&H3Frame::Headers { header_block }).map_err(|e| format!("h3 headers frame: {e}"))
+}
+
 /// SESSION 4 / P1-A: encode one H3 response DATA frame carrying
 /// `payload`. Byte-identical to the DATA frame [`encode_h3_response`]
 /// produced before this refactor.
@@ -2739,15 +2780,16 @@ pub async fn request_h3_upstream(
 /// here.
 ///
 /// * [`Wire`](Self::Wire) — the **H3 front** (H3→H3): each relay
-///   RE-ENCODES to H3 wire frames via the SAME helpers the pre-S12
-///   inline path used (`encode_h3_headers_frame` with status +
-///   content-length ONLY — the deliberately LOSSY projection, dropping
-///   other response headers; `encode_h3_data_frame`;
-///   `encode_h3_trailers_frame`) and sends them on a
-///   `Sender<RespEvent>`. This reproduces the promoted H3→H3 cell's
-///   response wire bytes BYTE-IDENTICALLY (R3 no-behaviour-change). The
-///   lossy head projection is preserved here ON PURPOSE — CF-H3H3-HEAD
-///   tracks fixing it (full-header forwarding) in a SEPARATE commit.
+///   RE-ENCODES to H3 wire frames — the response head via
+///   [`encode_h3_headers_frame_full`] (`:status` plus the FULL
+///   non-pseudo response header set, the CF-H3H3-HEAD fix; pre-S12 this
+///   was the lossy status-and-content-length-only projection), the body
+///   via `encode_h3_data_frame`, the trailers via
+///   `encode_h3_trailers_frame` — and sends them on a
+///   `Sender<RespEvent>`. The DATA and trailer framing and the cap
+///   accounting reproduce the promoted H3→H3 cell byte-for-byte; only
+///   the head now carries the full header set (the R12-mandated
+///   convergence with the `Decoded` arm and `request_h3_upstream`).
 /// * [`Decoded`](Self::Decoded) — an **H1/H2 front** (H1→H3 / H2→H3):
 ///   each relay forwards the DECODED [`H3RespEvent`] (FULL non-pseudo
 ///   header set in `Head`) on a `Sender<H3RespEvent>`, so the L7 front
@@ -2822,28 +2864,35 @@ impl H3RespOut {
     /// Relay the response HEAD. `fields` is the FULL decoded response
     /// field list (incl. pseudo-headers).
     ///
-    /// `Wire`: reproduces the pre-S12 LOSSY projection — parse
-    /// `:status` + `content-length` ONLY, drop all other headers,
-    /// `encode_h3_headers_frame(status, declared_len)` (CF-H3H3-HEAD).
+    /// `Wire`: re-encodes `:status` + the FULL non-pseudo response
+    /// header set (content-type / cache-control / set-cookie / custom
+    /// headers, with `content-length` retained as a regular header) via
+    /// [`encode_h3_headers_frame_full`] — CF-H3H3-HEAD fix. Pre-S12 this
+    /// arm projected to `:status` + `content-length` ONLY (lossy); it
+    /// now forwards the full set, converging with the `Decoded` arm and
+    /// the buffering `request_h3_upstream`.
     /// `Decoded`: forward `Head { status, headers }` with pseudo-
     /// headers filtered out and `content-length` retained as a regular
     /// header (FULL set — correct proxy behaviour for the L7 fronts).
     async fn on_head(&mut self, fields: &[(String, String)]) -> Result<(), RespAbort> {
         match self {
             Self::Wire { tx, total, cap } => {
-                // Pre-S12 verbatim: status + content-length ONLY.
+                // CF-H3H3-HEAD: forward the FULL non-pseudo set (mirror
+                // the `Decoded` arm's filter) — `:status` parsed out,
+                // every other non-pseudo field re-encoded verbatim
+                // (`content-length` rides through as a regular header).
                 let mut status: u16 = 502;
-                let mut declared_len: Option<usize> = None;
+                let mut headers: Vec<(String, String)> = Vec::with_capacity(fields.len());
                 for (n, v) in fields {
                     if n == ":status" {
                         if let Ok(s) = v.parse::<u16>() {
                             status = s;
                         }
-                    } else if n == "content-length" {
-                        declared_len = v.trim().parse::<usize>().ok();
+                    } else if !n.starts_with(':') {
+                        headers.push((n.clone(), v.clone()));
                     }
                 }
-                let head = match encode_h3_headers_frame(status, declared_len) {
+                let head = match encode_h3_headers_frame_full(status, &headers) {
                     Ok(f) => f,
                     Err(_) => {
                         let _ = tx.send(RespEvent::Reset).await;
@@ -3145,8 +3194,10 @@ pub async fn stream_request_to_h3_upstream(
     // `End` (the fn returns immediately after that, so a reset there is
     // a dead write; the post-loop `End` is left as a bare
     // `sink.on_end()` — R-S76-2). The sink owns encode+send+cap
-    // accounting (the `Wire` arm reproduces the pre-S12 byte-identical
-    // logic + cap semantics); on its `Err(RespAbort)` (over-cap /
+    // accounting (the `Wire` arm reproduces the pre-S12 DATA/trailer
+    // framing + cap semantics byte-for-byte; only its HEAD re-encode now
+    // carries the full header set — CF-H3H3-HEAD); on its
+    // `Err(RespAbort)` (over-cap /
     // encode-fail / client-gone) the sink has already best-effort
     // `Reset`-ed, so we propagate up via `break 'evloop` at the call
     // site. `send_progress!` evaluates a sink-relay expression that
@@ -3708,10 +3759,10 @@ pub async fn stream_request_to_h3_upstream(
                         } else {
                             // First HEADERS ⇒ response head. The full
                             // decoded `fields` go to the per-front sink:
-                            // `Wire` reproduces the pre-S12 LOSSY
-                            // projection (`:status` + `content-length`
-                            // only, byte-identical — CF-H3H3-HEAD);
-                            // `Decoded` forwards the FULL non-pseudo set.
+                            // BOTH arms now forward the FULL non-pseudo
+                            // set (CF-H3H3-HEAD) — `Wire` re-encodes it
+                            // to H3 via `encode_h3_headers_frame_full`,
+                            // `Decoded` emits it as `Head { headers }`.
                             send_progress!(sink.on_head(&fields).await);
                             sent_head = true;
                         }
