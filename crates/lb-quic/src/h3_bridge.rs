@@ -1033,9 +1033,11 @@ pub fn encode_h3_headers_frame_full(
 /// Used by the three H3-FRONT response legs ([`stream_h1_response`],
 /// [`stream_h2_response`], [`H3RespOut::on_head`]'s `Wire` arm) which
 /// re-encode an upstream response head straight to H3 wire with NO L7
-/// front after them, so they must strip hop-by-hop themselves. The
-/// `Decoded` arm forwards the full set because the H1/H2 front applies
-/// this same strip at its own layer
+/// front after them, so they must strip hop-by-hop themselves. Stripping
+/// here is REQUIRED for conformance: RFC 9114 §4.2 — "An endpoint MUST
+/// NOT generate an HTTP/3 field section containing connection-specific
+/// header fields." The `Decoded` arm (H1/H2 fronts) forwards the full
+/// set because the front applies this same strip at its own layer
 /// (`lb_l7::h1_proxy::h3_decoded_resp_head_builder`).
 const RESPONSE_HOP_BY_HOP: &[&str] = &[
     "connection",
@@ -2948,10 +2950,16 @@ impl H3RespOut {
                 // `:status` parsed out, every other non-pseudo field
                 // re-encoded verbatim (`content-length` rides through as
                 // a regular header). CF-H3-HEAD: strip response-direction
-                // hop-by-hop fields (RFC 9114 mandates lowercase H3 field
-                // names; a misbehaving H3 upstream is still guarded) so
-                // this Wire leg's transform is bit-for-bit equivalent to
-                // the H3→H1 / H3→H2 wire legs on the same input (R12).
+                // hop-by-hop fields. This is REQUIRED, not just R12
+                // tidiness — RFC 9114 §4.2: "An endpoint MUST NOT
+                // generate an HTTP/3 field section containing
+                // connection-specific header fields." Forwarding the full
+                // set WITHOUT this strip (as the bcb4f09a head fix did)
+                // would relay a non-conformant H3 upstream's
+                // `connection`/`transfer-encoding` onto the H3 client — a
+                // §4.2 violation; the strip closes it. Result: this Wire
+                // leg's transform is bit-for-bit equivalent to the
+                // H3→H1 / H3→H2 wire legs on the same input (R12).
                 let mut status: u16 = 502;
                 let mut headers: Vec<(String, String)> = Vec::with_capacity(fields.len());
                 for (n, v) in fields {
