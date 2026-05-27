@@ -191,6 +191,15 @@ fn build_tcp_pool() -> TcpPool {
 enum RespBody {
     /// `Content-Length`-framed body (R1/R4: known length).
     ContentLength(Vec<u8>),
+    /// CF-H3-HEAD — a `Content-Length`-framed body whose head ALSO
+    /// carries regular response headers (content-type / cache-control /
+    /// a custom x-*) PLUS a `Connection: close` hop-by-hop header. The
+    /// proxy MUST forward the regular headers to the H3 client and MUST
+    /// strip the hop-by-hop one (load-bearing both ways).
+    ContentLengthWithHeaders {
+        body: Vec<u8>,
+        extra: Vec<(&'static str, &'static str)>,
+    },
     /// `Transfer-Encoding: chunked` body, emitted in the given chunk
     /// sizes then the zero terminator (R7: new decoder path).
     Chunked {
@@ -280,6 +289,27 @@ async fn spawn_resp_backend(
                     "HTTP/1.1 {UPSTREAM_STATUS} OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                     b.len()
                 );
+                let _ = sock.write_all(head.as_bytes()).await;
+                if let Some(n) = &stall {
+                    n.notified().await;
+                }
+                let _ = sock.write_all(&b).await;
+                let _ = sock.shutdown().await;
+            }
+            RespBody::ContentLengthWithHeaders { body: b, extra } => {
+                // CF-H3-HEAD: head carries the extra regular headers +
+                // content-length + Connection: close (hop-by-hop).
+                let mut head = format!(
+                    "HTTP/1.1 {UPSTREAM_STATUS} OK\r\nContent-Length: {}\r\nConnection: close\r\n",
+                    b.len()
+                );
+                for (n, v) in &extra {
+                    head.push_str(n);
+                    head.push_str(": ");
+                    head.push_str(v);
+                    head.push_str("\r\n");
+                }
+                head.push_str("\r\n");
                 let _ = sock.write_all(head.as_bytes()).await;
                 if let Some(n) = &stall {
                     n.notified().await;
@@ -477,6 +507,12 @@ struct ClientOutcome {
     /// HEADERS frame (RFC 9114 §4.1), empty when the response carried
     /// no trailer section. Additive — existing tests ignore it.
     trailers: Vec<(String, String)>,
+    /// CF-H3-HEAD — non-`:status` fields of the response HEAD HEADERS
+    /// frame, so the full-header round-trip test can assert regular
+    /// headers (content-type / cache-control / custom x-*) survive the
+    /// H3→H1→H3 relay and hop-by-hop (connection) is stripped. Additive;
+    /// existing tests ignore it.
+    head_fields: Vec<(String, String)>,
 }
 
 /// FIN-aware H3 response client driver.
@@ -529,6 +565,8 @@ async fn drive_h3_response_client(
     // SESSION 4 / P1-C (R8/C4): a post-DATA HEADERS frame (no `:status`)
     // is the RFC 9114 §4.1 trailing field section.
     let mut trailers: Vec<(String, String)> = Vec::new();
+    // CF-H3-HEAD: non-`:status` fields of the response HEAD frame.
+    let mut head_fields: Vec<(String, String)> = Vec::new();
 
     loop {
         if tokio::time::Instant::now() >= deadline {
@@ -550,6 +588,7 @@ async fn drive_h3_response_client(
                     fin,
                     reset_code,
                     trailers,
+                    head_fields,
                 });
             }
             return Err(format!(
@@ -611,6 +650,11 @@ async fn drive_h3_response_client(
                             for (n, v) in hdrs {
                                 if n == ":status" {
                                     status = Some(v.parse().map_err(|_| "status".to_string())?);
+                                } else {
+                                    // CF-H3-HEAD: capture every non-status
+                                    // head field for the full-header
+                                    // round-trip assertion.
+                                    head_fields.push((n, v));
                                 }
                             }
                         } else {
@@ -650,6 +694,7 @@ async fn drive_h3_response_client(
                 fin,
                 reset_code,
                 trailers,
+                head_fields,
             });
         }
 
@@ -821,6 +866,7 @@ async fn drive_h3_response_client_stalled(
                     fin,
                     reset_code,
                     trailers: Vec::new(),
+                    head_fields: Vec::new(),
                 });
             }
             return Err(format!(
@@ -929,6 +975,7 @@ async fn drive_h3_response_client_stalled(
                 fin,
                 reset_code,
                 trailers: Vec::new(),
+                head_fields: Vec::new(),
             });
         }
 
@@ -1086,6 +1133,74 @@ async fn r1_multi_data_binary_response_byte_identical() {
     assert_eq!(
         out.body, expected,
         "R1 response body must be byte-identical"
+    );
+}
+
+/// CF-H3-HEAD — the H3→H1 streaming response leg MUST forward the FULL
+/// non-hop-by-hop response header set to the H3 client (pre-S12 it
+/// dropped everything but `:status` + content-length). The backend
+/// sends content-type + cache-control + a custom `x-eg-resp` ALONGSIDE
+/// `Connection: close` (hop-by-hop). LOAD-BEARING both ways: the three
+/// regular headers MUST round-trip, and `connection` MUST be stripped
+/// (it would otherwise leak an upstream hop-by-hop header to the H3
+/// client). Temp-revert the stream_h1_response head re-encode to the
+/// `:status`+CL-only projection → this test FAILS (the regular headers
+/// vanish); restore → PASSES. Body byte-identity + clean FIN confirm
+/// the head change does not perturb body framing.
+#[tokio::test]
+async fn cf_h3_head_h3_to_h1_full_response_headers_round_trip() {
+    let certs = generate_loopback_certs();
+    let expected = b"h3h1-full-head-body".to_vec();
+    let (backend, backend_h) = spawn_resp_backend(
+        RespBody::ContentLengthWithHeaders {
+            body: expected.clone(),
+            extra: vec![
+                ("content-type", "application/json"),
+                ("cache-control", "no-store"),
+                ("x-eg-resp", "round-trip"),
+            ],
+        },
+        None,
+    )
+    .await;
+    let (listener, server, _sd) = start_listener(&certs, backend).await;
+    let (conn, sock) = client_conn(server, &certs.ca);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let out = drive_h3_response_client(conn, &sock, vec![], None, deadline).await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+    backend_h.abort();
+    let out = out.expect("CF-H3-HEAD H3→H1 e2e failed");
+
+    assert_eq!(
+        out.status,
+        Some(UPSTREAM_STATUS),
+        "must be the upstream status"
+    );
+    assert!(out.fin, "clean FIN expected after the full-header response");
+    assert_eq!(out.body, expected, "body must be byte-identical");
+    let has = |name: &str, val: &str| out.head_fields.iter().any(|(n, v)| n == name && v == val);
+    assert!(
+        has("content-type", "application/json"),
+        "content-type MUST round-trip H3→H1 (CF-H3-HEAD); got head fields {:?}",
+        out.head_fields
+    );
+    assert!(
+        has("cache-control", "no-store"),
+        "cache-control MUST round-trip H3→H1 (CF-H3-HEAD); got head fields {:?}",
+        out.head_fields
+    );
+    assert!(
+        has("x-eg-resp", "round-trip"),
+        "a custom response header MUST round-trip H3→H1 (CF-H3-HEAD); got head fields {:?}",
+        out.head_fields
+    );
+    // Hop-by-hop MUST be stripped — `connection` must NOT reach the H3
+    // client (load-bearing the other way).
+    assert!(
+        !out.head_fields.iter().any(|(n, _)| n == "connection"),
+        "the hop-by-hop `connection` header MUST NOT be forwarded to the H3 \
+         client (got head fields {:?})",
+        out.head_fields
     );
 }
 

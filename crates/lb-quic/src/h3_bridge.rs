@@ -1022,6 +1022,38 @@ pub fn encode_h3_headers_frame_full(
     encode_frame(&H3Frame::Headers { header_block }).map_err(|e| format!("h3 headers frame: {e}"))
 }
 
+/// SESSION 12 / CF-H3-HEAD: response-direction hop-by-hop header names
+/// that a proxy MUST NOT forward to the downstream peer (the RFC 9110
+/// connection-management headers). This MIRRORS
+/// `lb_l7::h2_to_h1::RESPONSE_HOP_BY_HOP`. `lb-quic` is BELOW `lb-l7` in
+/// the dependency graph and cannot depend on it (reverse layering), so
+/// the set is duplicated here, like the other deliberate cross-crate
+/// duplications in this file. Keep the two in sync.
+///
+/// Used by the three H3-FRONT response legs ([`stream_h1_response`],
+/// [`stream_h2_response`], [`H3RespOut::on_head`]'s `Wire` arm) which
+/// re-encode an upstream response head straight to H3 wire with NO L7
+/// front after them, so they must strip hop-by-hop themselves. The
+/// `Decoded` arm forwards the full set because the H1/H2 front applies
+/// this same strip at its own layer
+/// (`lb_l7::h1_proxy::h3_decoded_resp_head_builder`).
+const RESPONSE_HOP_BY_HOP: &[&str] = &[
+    "connection",
+    "keep-alive",
+    "transfer-encoding",
+    "upgrade",
+    "proxy-connection",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+];
+
+/// `true` iff `name_lower` (an ALREADY-lowercased header name) is a
+/// response-direction hop-by-hop header (see [`RESPONSE_HOP_BY_HOP`]).
+fn is_response_hop_by_hop(name_lower: &str) -> bool {
+    RESPONSE_HOP_BY_HOP.iter().any(|h| *h == name_lower)
+}
+
 /// SESSION 4 / P1-A: encode one H3 response DATA frame carrying
 /// `payload`. Byte-identical to the DATA frame [`encode_h3_response`]
 /// produced before this refactor.
@@ -1396,6 +1428,14 @@ pub async fn stream_h1_response(
     };
     let mut content_length: Option<usize> = None;
     let mut chunked = false;
+    // CF-H3-HEAD: collect the FULL non-hop-by-hop response header set to
+    // re-encode for the H3 client (pre-S12 this parsed only
+    // content-length + transfer-encoding and dropped everything else).
+    // `content-length` is handled via `framing` (re-added below from the
+    // ONE declared-length source), and `transfer-encoding` is
+    // hop-by-hop (de-chunked here; the H3 leg is FIN-delimited), so both
+    // are excluded from `fwd_headers`.
+    let mut fwd_headers: Vec<(String, String)> = Vec::new();
     for line in lines {
         let Some((k, v)) = line.split_once(':') else {
             continue;
@@ -1411,6 +1451,8 @@ pub async fn stream_h1_response(
             }
         } else if k == "transfer-encoding" && v.to_ascii_lowercase().contains("chunked") {
             chunked = true;
+        } else if !is_response_hop_by_hop(&k) {
+            fwd_headers.push((k, v.trim().to_string()));
         }
     }
     // Transfer-Encoding takes precedence over Content-Length (RFC 9112
@@ -1428,11 +1470,14 @@ pub async fn stream_h1_response(
     };
 
     // --- 2. emit HEADERS immediately (before any body byte) ---
-    let hdr_len = match &framing {
-        RespFraming::ContentLength(n) => Some(*n),
-        RespFraming::Chunked | RespFraming::Eof => None,
-    };
-    let headers_frame = match encode_h3_headers_frame(status, hdr_len) {
+    // Forward `:status` + the full non-hop-by-hop set; re-add
+    // `content-length` (as a regular header) ONLY for the ContentLength
+    // framing so the H3 client gets the same declared length, and never
+    // for chunked/EOF (FIN-delimited on the H3 leg — CF-H3-HEAD).
+    if let RespFraming::ContentLength(n) = &framing {
+        fwd_headers.push(("content-length".to_string(), n.to_string()));
+    }
+    let headers_frame = match encode_h3_headers_frame_full(status, &fwd_headers) {
         Ok(f) => f,
         Err(_) => {
             let _ = tx.send(RespEvent::Reset).await;
@@ -1659,7 +1704,29 @@ pub async fn stream_h2_response(
         .get(hyper::header::CONTENT_LENGTH)
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.trim().parse::<usize>().ok());
-    let headers_frame = match encode_h3_headers_frame(parts.status.as_u16(), declared_len) {
+    // CF-H3-HEAD: forward the FULL non-hop-by-hop response header set to
+    // the H3 client (pre-S12 this emitted only `:status` +
+    // content-length). `HeaderMap` carries no pseudo-headers (the H2
+    // status rides `parts.status`), so only the hop-by-hop strip is
+    // needed; `content-length` is excluded here and re-added from the
+    // single `declared_len` source so the H3 framing decision is
+    // unchanged. `iter()` yields repeated names (e.g. set-cookie)
+    // individually — all forwarded. A non-UTF-8 value is skipped (it
+    // could not have been a valid forwarded header anyway).
+    let mut fwd_headers: Vec<(String, String)> = Vec::with_capacity(parts.headers.len());
+    for (name, value) in &parts.headers {
+        let n = name.as_str();
+        if n == "content-length" || is_response_hop_by_hop(n) {
+            continue;
+        }
+        if let Ok(v) = value.to_str() {
+            fwd_headers.push((n.to_string(), v.to_string()));
+        }
+    }
+    if let Some(n) = declared_len {
+        fwd_headers.push(("content-length".to_string(), n.to_string()));
+    }
+    let headers_frame = match encode_h3_headers_frame_full(parts.status.as_u16(), &fwd_headers) {
         Ok(f) => f,
         Err(_) => {
             let _ = tx.send(RespEvent::Reset).await;
@@ -2877,10 +2944,14 @@ impl H3RespOut {
     async fn on_head(&mut self, fields: &[(String, String)]) -> Result<(), RespAbort> {
         match self {
             Self::Wire { tx, total, cap } => {
-                // CF-H3H3-HEAD: forward the FULL non-pseudo set (mirror
-                // the `Decoded` arm's filter) — `:status` parsed out,
-                // every other non-pseudo field re-encoded verbatim
-                // (`content-length` rides through as a regular header).
+                // CF-H3H3-HEAD: forward the FULL non-pseudo set —
+                // `:status` parsed out, every other non-pseudo field
+                // re-encoded verbatim (`content-length` rides through as
+                // a regular header). CF-H3-HEAD: strip response-direction
+                // hop-by-hop fields (RFC 9114 mandates lowercase H3 field
+                // names; a misbehaving H3 upstream is still guarded) so
+                // this Wire leg's transform is bit-for-bit equivalent to
+                // the H3→H1 / H3→H2 wire legs on the same input (R12).
                 let mut status: u16 = 502;
                 let mut headers: Vec<(String, String)> = Vec::with_capacity(fields.len());
                 for (n, v) in fields {
@@ -2888,7 +2959,7 @@ impl H3RespOut {
                         if let Ok(s) = v.parse::<u16>() {
                             status = s;
                         }
-                    } else if !n.starts_with(':') {
+                    } else if !n.starts_with(':') && !is_response_hop_by_hop(n) {
                         headers.push((n.clone(), v.clone()));
                     }
                 }

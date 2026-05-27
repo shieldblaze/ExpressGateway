@@ -270,6 +270,15 @@ struct ClientOut {
     content_length: Option<usize>,
     fin: bool,
     reset: bool,
+    /// CF-H3-HEAD — non-`:status` fields decoded from the FIRST
+    /// (response-head) HEADERS frame, so the full-header round-trip test
+    /// can assert regular headers survive the H3→H2→H3 relay and
+    /// hop-by-hop (connection) is stripped. Additive/`Default`; existing
+    /// tests ignore it.
+    head_pairs: Vec<(String, String)>,
+    /// CF-H3-HEAD — count of decoded HEADERS frames; the first is the
+    /// response head (populates `head_pairs`), later ones are trailers.
+    headers_frames: usize,
 }
 
 /// Drive ONE H3 request on stream 0.
@@ -443,12 +452,19 @@ async fn drive_h3(
                 match decode_frame(&rx_tail, 1 << 20) {
                     Ok((H3Frame::Headers { header_block }, c)) => {
                         rx_tail.drain(..c);
+                        out.headers_frames += 1;
+                        let is_head = out.headers_frames == 1;
                         if let Ok(h) = QpackDecoder::new().decode(&header_block) {
                             for (n, v) in h {
                                 if n == ":status" {
                                     out.status = v.parse().ok();
                                 } else if n == "content-length" {
                                     out.content_length = v.parse().ok();
+                                }
+                                // CF-H3-HEAD: capture the response-head
+                                // non-status fields (first HEADERS frame).
+                                if is_head && n != ":status" {
+                                    out.head_pairs.push((n.clone(), v.clone()));
                                 }
                             }
                         }
@@ -626,6 +642,48 @@ async fn spawn_h2_large_resp(body: Vec<u8>) -> (SocketAddr, tokio::task::JoinHan
     (local, h)
 }
 
+/// CF-H3-HEAD — an H2 backend that replies 200 with REGULAR response
+/// headers (content-type + cache-control + a custom `x-eg-resp`) plus a
+/// small body, so the H3→H2 leg's full-header forwarding can be
+/// asserted end-to-end. (NOTE: a hyper H2 server forbids
+/// connection-specific hop-by-hop headers per RFC 9113 §8.2.2, so the
+/// hop-by-hop STRIP cannot be exercised through a hyper backend here —
+/// the shared `is_response_hop_by_hop` strip is proven load-bearing in
+/// the H3→H1 raw-socket test, which can inject `Connection: close`.)
+async fn spawn_h2_resp_with_headers(body: Vec<u8>) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let local = listener.local_addr().unwrap();
+    let body = Arc::new(body);
+    let h = tokio::spawn(async move {
+        loop {
+            let Ok((sock, _)) = listener.accept().await else {
+                return;
+            };
+            let body = Arc::clone(&body);
+            tokio::spawn(async move {
+                let svc = service_fn(move |_req: Request<Incoming>| {
+                    let body = Arc::clone(&body);
+                    async move {
+                        Ok::<_, std::convert::Infallible>(
+                            Response::builder()
+                                .status(StatusCode::OK)
+                                .header("content-type", "application/json")
+                                .header("cache-control", "no-store")
+                                .header("x-eg-resp", "round-trip")
+                                .body(Full::new(Bytes::from((*body).clone())))
+                                .unwrap(),
+                        )
+                    }
+                });
+                let _ = hyper::server::conn::http2::Builder::new(TokioExec)
+                    .serve_connection(HyperIo(sock), svc)
+                    .await;
+            });
+        }
+    });
+    (local, h)
+}
+
 // ─────────────────────────────────────────────────────────────────────
 // §3  Cases.
 // ─────────────────────────────────────────────────────────────────────
@@ -663,6 +721,69 @@ async fn h2_e2e_get_response_byte_identical() {
     assert_eq!(
         out.body, b"h2-empty",
         "bodyless GET ⇒ backend echo sentinel"
+    );
+}
+
+/// CF-H3-HEAD — the H3→H2 streaming response leg MUST forward the FULL
+/// non-hop-by-hop response header set to the H3 client (pre-S12 it
+/// dropped everything but `:status` + content-length). The H2 backend
+/// replies with content-type + cache-control + a custom `x-eg-resp`;
+/// all three MUST round-trip to the H3 client. LOAD-BEARING: temp-revert
+/// stream_h2_response's head re-encode to the `:status`+CL-only
+/// projection → this test FAILS (the regular headers vanish); restore →
+/// PASSES. Body byte-identity + clean FIN confirm the head change does
+/// not perturb body framing. (The hop-by-hop STRIP shares the same
+/// `is_response_hop_by_hop` helper proven load-bearing in the H3→H1
+/// raw-socket test — a hyper H2 backend cannot emit a connection-class
+/// header to exercise it here, per RFC 9113 §8.2.2.)
+#[tokio::test]
+async fn cf_h3_head_h3_to_h2_full_response_headers_round_trip() {
+    let certs = generate_loopback_certs();
+    let expected = b"h3h2-full-head-body".to_vec();
+    let (backend, bh) = spawn_h2_resp_with_headers(expected.clone()).await;
+    let (listener, gw, sd) = start_h3_listener_h2(&certs, backend).await;
+
+    let out = drive_h3(
+        gw,
+        &certs.ca,
+        DriveCfg {
+            method: "GET",
+            path: "/full-headers",
+            req_body: vec![],
+            stall_after: None,
+            stall_for: Duration::ZERO,
+            reset_after_req_bytes: None,
+        },
+        Duration::from_secs(20),
+    )
+    .await;
+
+    let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+    sd.cancel();
+    bh.abort();
+
+    assert_eq!(
+        out.status,
+        Some(200),
+        "H3→H2 full-header response must be 200"
+    );
+    assert!(out.fin, "clean FIN expected after the full-header response");
+    assert_eq!(out.body, expected, "body must be byte-identical");
+    let has = |name: &str, val: &str| out.head_pairs.iter().any(|(n, v)| n == name && v == val);
+    assert!(
+        has("content-type", "application/json"),
+        "content-type MUST round-trip H3→H2 (CF-H3-HEAD); got head pairs {:?}",
+        out.head_pairs
+    );
+    assert!(
+        has("cache-control", "no-store"),
+        "cache-control MUST round-trip H3→H2 (CF-H3-HEAD); got head pairs {:?}",
+        out.head_pairs
+    );
+    assert!(
+        has("x-eg-resp", "round-trip"),
+        "a custom response header MUST round-trip H3→H2 (CF-H3-HEAD); got head pairs {:?}",
+        out.head_pairs
     );
 }
 
