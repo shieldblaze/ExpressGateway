@@ -21,12 +21,15 @@ Status: **IN PROGRESS** — Phase 0 + §3 connector-contract resolution complete
 - **CARGO_TARGET_DIR:** unset in env; repo `.cargo/config.toml` does not set it.
   All cargo invocations explicitly export `CARGO_TARGET_DIR=/home/ubuntu/Code/eg-target` (R9).
 
-### R1 baseline (×3, `cargo test --workspace --all-features`)
-- Run 1: <in progress — 76 test binaries `test result: ok` so far, all green, no failures>
-- Run 2: pending
-- Run 3: pending
-- clippy `--all-targets --all-features -D warnings`: pending
-- fmt `--check`: pending
+### R1 baseline (×3, `cargo test --workspace --all-features`) — **GREEN**
+- Run 1: 211 binaries, **1259 passed, 0 failed, 16 ignored** (CF-IGN-1). ✓
+- Run 2: 211 binaries, **1259 passed, 0 failed, 16 ignored**. ✓ (≈5m21s)
+- Run 3: 211 binaries, **1259 passed, 0 failed, 16 ignored**. ✓ (≈5m21s) — DETERMINISTIC (identical counts ×3).
+- clippy `--all-targets --all-features -- -D warnings`: **0 warnings**, exit 0. ✓
+- fmt `--check`: clean, exit 0. ✓
+
+**Phase 0 verdict: GREEN.** No regression to fix; cleared to Phase 1. Disk re-cleaned
+to 25 GB after the gate (incremental regenerated during ×3+clippy).
 
 ---
 
