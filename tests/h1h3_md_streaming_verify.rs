@@ -487,13 +487,15 @@ async fn h1h3_binary_body_byte_identical_both_directions() {
         spawn_h3_echo_backend(certs.cert.clone(), certs.key.clone(), obs.clone()).await;
     let gw = spawn_gateway(backend, certs.ca.clone(), HttpTimeouts::default()).await;
 
-    // A body that crosses H3_BODY_CHUNK_MAX (8 KiB) several times, sent as
-    // multiple H1 chunks so the streaming pump (not a single frame) runs.
-    let mut payload = Vec::new();
-    for i in 0..40_000u32 {
+    // A ~5 MiB body (parity with h1h2's 5/8 MiB byte-identity bar) that crosses
+    // H3_BODY_CHUNK_MAX (8 KiB) ~640× — sent as multiple H1 chunks so the
+    // streaming pump (not a single frame) runs, and full byte-equality both
+    // directions is a non-trivial streaming proof.
+    let mut payload = Vec::with_capacity(5 * 1024 * 1024);
+    for i in 0..(5u32 * 1024 * 1024 / 4) {
         payload.extend_from_slice(&i.to_le_bytes());
     }
-    let payload = Bytes::from(payload); // 160 000 bytes — crosses H3_BODY_CHUNK_MAX (8 KiB) ~20×
+    let payload = Bytes::from(payload); // 5 242 880 bytes
     let chunks: Vec<Bytes> = payload.chunks(7_000).map(Bytes::copy_from_slice).collect();
 
     let (status, echoed) = h1_request_with_body(gw, chunks).await;
@@ -1056,4 +1058,266 @@ async fn h1h3_grpc_response_trailers_empirical() {
     // either way (CF-RESP-1: hyper-1 H1 drops streamed trailers absent a head
     // Trailer: declaration the streaming front cannot pre-emit). The lead
     // escalates the observed outcome to the owner.
+}
+
+// ── Test 8: F-MD-4 RESPONSE-leg truncation (the COMMIT-A guard) ──────────
+//
+// A truncating-response H3 backend declares content-length=BIG, sends a PARTIAL
+// DATA frame, then DROPS the QUIC stream WITHOUT a clean FIN. The connector
+// surfaces RespAbort (PrematureEof/UpstreamReset) → H3RespEvent::Reset → the H1
+// front injects Err(H1PumpAbort) into the response body stream → hyper aborts
+// the H1 response WITHOUT fulfilling the declared content-length (closes the
+// conn / no clean end). The client's body-collect therefore ERRORS — it NEVER
+// receives a complete body. This is the response-splitting guard: a truncated
+// upstream response is never relayed to the client as complete.
+//
+// Assertion is the hyper-client collect RESULT (framing-agnostic; the response
+// is content-length-framed because the H1 front forwards the upstream
+// content-length): clean → Ok(len==content-length); truncated → Err / short.
+
+const TRUNC_DECLARED_LEN: usize = 1024 * 1024; // backend declares 1 MiB
+const TRUNC_PARTIAL_LEN: usize = 100 * 1024; // sends only 100 KiB then drops
+
+async fn spawn_h3_truncating_response_backend(
+    cert_path: PathBuf,
+    key_path: PathBuf,
+) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let addr = socket.local_addr().unwrap();
+    let socket = Arc::new(socket);
+    let handle = tokio::spawn(async move {
+        let Ok(mut cfg) = quiche::Config::new(quiche::PROTOCOL_VERSION) else {
+            return;
+        };
+        let _ = cfg.set_application_protos(&[LB_QUIC_ALPN]);
+        cfg.set_max_idle_timeout(10_000);
+        cfg.set_max_recv_udp_payload_size(1_350);
+        cfg.set_max_send_udp_payload_size(1_350);
+        cfg.set_initial_max_data(4 * 1024 * 1024);
+        cfg.set_initial_max_stream_data_bidi_local(1024 * 1024);
+        cfg.set_initial_max_stream_data_bidi_remote(1024 * 1024);
+        cfg.set_initial_max_stream_data_uni(256 * 1024);
+        cfg.set_initial_max_streams_bidi(8);
+        cfg.set_initial_max_streams_uni(8);
+        cfg.set_disable_active_migration(true);
+        if cfg
+            .load_cert_chain_from_pem_file(cert_path.to_str().unwrap_or(""))
+            .is_err()
+            || cfg
+                .load_priv_key_from_pem_file(key_path.to_str().unwrap_or(""))
+                .is_err()
+        {
+            return;
+        }
+        let mut in_buf = vec![0u8; MAX_UDP];
+        let mut out_buf = vec![0u8; MAX_UDP];
+        let (n, peer) = match socket.recv_from(&mut in_buf).await {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+        let scid = random_scid_bytes();
+        let scid_ref = quiche::ConnectionId::from_ref(&scid);
+        let mut conn = match quiche::accept(&scid_ref, None, addr, peer, &mut cfg) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let _ = conn.recv(
+            in_buf.get_mut(..n).unwrap_or(&mut []),
+            quiche::RecvInfo {
+                from: peer,
+                to: addr,
+            },
+        );
+        let mut got_head = false;
+        let mut responded = false;
+        let mut resp_out: Vec<u8> = Vec::new();
+        let mut resp_sent = 0usize;
+        // Truncate after the partial body is flushed (shutdown Write, no FIN).
+        let mut truncated = false;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+        while tokio::time::Instant::now() < deadline {
+            loop {
+                match conn.send(&mut out_buf) {
+                    Ok((sent, info)) => {
+                        let _ = socket
+                            .send_to(out_buf.get(..sent).unwrap_or(&[]), info.to)
+                            .await;
+                    }
+                    Err(quiche::Error::Done) => break,
+                    Err(_) => break,
+                }
+            }
+            if conn.is_closed() {
+                break;
+            }
+            if conn.is_established() {
+                for sid in conn.readable().collect::<Vec<u64>>() {
+                    if sid != 0 {
+                        continue;
+                    }
+                    let mut chunk = [0u8; 4096];
+                    while let Ok((rn, _fin)) = conn.stream_recv(sid, &mut chunk) {
+                        if rn > 0 {
+                            got_head = true;
+                        }
+                    }
+                }
+                if got_head && !responded {
+                    // HEADERS{200, content-length=DECLARED} + a PARTIAL DATA
+                    // frame whose declared payload length is DECLARED but we only
+                    // ever send TRUNC_PARTIAL_LEN bytes of it, then shutdown.
+                    let encoder = QpackEncoder::new();
+                    let head = encoder
+                        .encode(&[
+                            (":status".to_string(), "200".to_string()),
+                            ("content-length".to_string(), TRUNC_DECLARED_LEN.to_string()),
+                        ])
+                        .ok()
+                        .and_then(|b| encode_frame(&H3Frame::Headers { header_block: b }).ok());
+                    // A DATA frame that DECLARES DECLARED bytes of payload but we
+                    // will only actually transmit TRUNC_PARTIAL_LEN of them before
+                    // shutting the stream — so the gateway sees a premature end.
+                    let data = encode_frame(&H3Frame::Data {
+                        payload: Bytes::from(vec![0x5Au8; TRUNC_PARTIAL_LEN]),
+                    })
+                    .ok();
+                    if let (Some(h), Some(d)) = (head, data) {
+                        resp_out.extend_from_slice(&h);
+                        resp_out.extend_from_slice(&d);
+                    }
+                    responded = true;
+                }
+                if responded && resp_sent < resp_out.len() {
+                    while resp_sent < resp_out.len() {
+                        let sl = resp_out.get(resp_sent..).unwrap_or(&[]);
+                        // NO fin — we will shutdown(Write) abruptly after flushing.
+                        match conn.stream_send(0, sl, false) {
+                            Ok(ns) if ns > 0 => resp_sent += ns,
+                            _ => break,
+                        }
+                    }
+                }
+                // Once the partial response is fully buffered into quiche, abort
+                // the stream WITHOUT a clean FIN (the truncation primitive).
+                if responded && resp_sent >= resp_out.len() && !truncated {
+                    let _ = conn.stream_shutdown(0, quiche::Shutdown::Write, 0x010c);
+                    truncated = true;
+                }
+            }
+            let to = conn
+                .timeout()
+                .unwrap_or(Duration::from_millis(20))
+                .min(Duration::from_millis(20));
+            match tokio::time::timeout(to, socket.recv_from(&mut in_buf)).await {
+                Ok(Ok((rn, from))) => {
+                    let _ = conn.recv(
+                        in_buf.get_mut(..rn).unwrap_or(&mut []),
+                        quiche::RecvInfo { from, to: addr },
+                    );
+                }
+                _ => conn.on_timeout(),
+            }
+        }
+    });
+    (addr, handle)
+}
+
+/// Bodyless GET to the gateway; return the hyper response-body collect RESULT
+/// (Ok(bytes) on a complete body, Err on a truncated/aborted body).
+async fn h1_get_collect(gw: SocketAddr) -> (u16, Result<Bytes, String>) {
+    let stream = TcpStream::connect(gw).await.unwrap();
+    let (mut sender, conn) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
+        .await
+        .unwrap();
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
+    let req = Request::builder()
+        .method("GET")
+        .uri("/trunc")
+        .header("host", TEST_SNI)
+        .body(http_body_util::Empty::<Bytes>::new())
+        .unwrap();
+    let resp = match tokio::time::timeout(Duration::from_secs(20), sender.send_request(req)).await {
+        Ok(Ok(r)) => r,
+        _ => return (0, Err("no response head".to_string())),
+    };
+    let status = resp.status().as_u16();
+    let collected = tokio::time::timeout(Duration::from_secs(20), resp.into_body().collect()).await;
+    let body_res = match collected {
+        Ok(Ok(b)) => Ok(b.to_bytes()),
+        Ok(Err(e)) => Err(format!("body error: {e}")),
+        Err(_) => Err("body collect timeout".to_string()),
+    };
+    (status, body_res)
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn h1h3_fmd4_response_truncation_never_false_complete() {
+    let certs = generate_loopback_certs();
+
+    // POSITIVE / non-vacuity arm: a CLEAN echo backend → the H1 client collects
+    // a COMPLETE body (Ok). Proves the detector CAN observe a complete response
+    // (else the truncated-Err assertion would be vacuous).
+    {
+        let obs = BackendObs::new();
+        let (backend, _bh) =
+            spawn_h3_echo_backend(certs.cert.clone(), certs.key.clone(), obs.clone()).await;
+        let gw = spawn_gateway(backend, certs.ca.clone(), HttpTimeouts::default()).await;
+        // Echo a known body: send it as the request, the backend echoes it.
+        let body = Bytes::from(vec![0x42u8; 4096]);
+        let (status, echoed) = h1_request_with_body(gw, vec![body.clone()]).await;
+        assert_eq!(status, 200, "clean arm: expected 200");
+        assert_eq!(
+            echoed, body,
+            "clean arm: body must round-trip complete (non-vacuity)"
+        );
+    }
+
+    // NEGATIVE arm: the truncating backend → the H1 client's body collect ERRORS
+    // (declared content-length never fulfilled; stream aborted) → NEVER a
+    // complete body. The COMMIT-A widening + H1PumpAbort guard in action.
+    {
+        let (backend, _bh) =
+            spawn_h3_truncating_response_backend(certs.cert.clone(), certs.key.clone()).await;
+        let gw = spawn_gateway(backend, certs.ca.clone(), HttpTimeouts::default()).await;
+        let (status, body_res) = h1_get_collect(gw).await;
+        let complete = matches!(&body_res, Ok(b) if b.len() >= TRUNC_DECLARED_LEN);
+        eprintln!(
+            "H1H3_RESP_TRUNC status={status} body_res={} declared={TRUNC_DECLARED_LEN} \
+             partial={TRUNC_PARTIAL_LEN} false_complete={complete}",
+            match &body_res {
+                Ok(b) => format!("Ok(len={})", b.len()),
+                Err(e) => format!("Err({e})"),
+            }
+        );
+        assert!(
+            !complete,
+            "RESPONSE-SPLITTING: a truncated upstream response was delivered to the \
+             H1 client as a COMPLETE body (got a full {TRUNC_DECLARED_LEN}-byte body \
+             for a response that only sent {TRUNC_PARTIAL_LEN}) — F-MD-4 response-leg guard broken"
+        );
+    }
+}
+
+// ── Test 8b: F-MD-4 RESPONSE-leg truncation R13 (b) burst ≥50× ───────────
+
+#[tokio::test(flavor = "current_thread")]
+async fn h1h3_fmd4_response_truncation_burst_current_thread() {
+    const ITERS: usize = 60;
+    let certs = generate_loopback_certs();
+    for i in 0..ITERS {
+        let (backend, bh) =
+            spawn_h3_truncating_response_backend(certs.cert.clone(), certs.key.clone()).await;
+        let gw = spawn_gateway(backend, certs.ca.clone(), HttpTimeouts::default()).await;
+        let (_status, body_res) = h1_get_collect(gw).await;
+        let complete = matches!(&body_res, Ok(b) if b.len() >= TRUNC_DECLARED_LEN);
+        assert!(
+            !complete,
+            "RESPONSE-SPLITTING under burst (iter {i}/{ITERS}): a truncated upstream \
+             response was delivered to the H1 client as COMPLETE — F-MD-4 race"
+        );
+        bh.abort();
+    }
+    eprintln!("H1H3_RESP_TRUNC_BURST iters={ITERS} all-incomplete (no false-complete)");
 }
