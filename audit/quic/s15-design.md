@@ -791,3 +791,380 @@ branches off it.
    filter on `connect(2)` to disallow the BoringSSL handshake).
 
 These are the only Phase 1 decisions blocking Phase 2 start.
+
+(All five resolved in `audit/quic/s15-owner-rulings.md` — see §12.)
+
+## 10. SHARED-2 trait — stable seam contract
+
+Per owner ADDENDUM 1 (s15-owner-rulings.md §9 XDP/io_uring
+deferral): the SHARED-2 datapath trait contract is nailed in this
+document so v1.1 (io_uring) and v1.2 (XDP) implementations land
+without touching passthrough logic. The trait is the **stable seam**
+between QUIC routing and the kernel/userspace UDP transport.
+
+### 10.1 Design principles
+
+1. **Passthrough logic is tier-agnostic.** The Mode A router calls
+   only methods on `dyn UdpDataplane`; it never imports `tokio`,
+   `io_uring`, or `aya`. A new tier ships as a new trait
+   implementation in its own module behind a Cargo feature flag —
+   zero edits to `passthrough.rs`.
+2. **Recv is callback-driven, not stream-driven.** A pull-style
+   `recv() -> Future<Packet>` forces the implementer to allocate a
+   per-packet buffer and locks in the tokio/Future model. A push-style
+   callback `for_each_packet(F)` lets io_uring drive ring completions
+   directly and lets XDP deliver out of the kernel via an AF_XDP
+   ring without an extra hop.
+3. **Send takes a borrowed slice.** No `Vec` ownership transfer; the
+   caller (passthrough router) owns the recv buffer and writes the
+   reply on the same allocation when possible. io_uring and AF_XDP
+   both want this — `send_to(&[u8], dst)` matches the syscall shape
+   without intermediate copies.
+4. **Attach/detach is explicit and synchronous-ish.** Listener spawn
+   and shutdown bind/unbind the tier; the trait reports the bound
+   `SocketAddr` so the LB log emits a single concrete address. The
+   XDP tier additionally exposes its eBPF `map_fd` for the userspace
+   publisher (see §10.4).
+5. **Errors are tier-shaped.** A `DataplaneError` enum surfaces
+   bind/recv/send failures; the router maps them onto its own
+   metrics-and-drop discipline. The trait does NOT panic on transient
+   errors — the router decides whether `Err` is fatal.
+
+### 10.2 Rust trait signature
+
+```rust
+// crates/lb-quic/src/udp_dataplane.rs (new in Increment A2)
+
+use std::future::Future;
+use std::net::SocketAddr;
+use std::pin::Pin;
+use std::sync::Arc;
+
+use tokio_util::sync::CancellationToken;
+
+/// Maximum UDP datagram the passthrough router will accept.
+/// Mirrors `lb_quic::MAX_UDP_DATAGRAM_SIZE` (65_535).
+pub const MAX_UDP_DATAGRAM_SIZE: usize = 65_535;
+
+/// One inbound UDP datagram delivered by the dataplane to the router.
+///
+/// The dataplane owns the buffer until `Packet` is dropped; the
+/// callback may borrow `data` for the duration of its `Future` only.
+/// Implementations may pool the underlying allocation across packets.
+#[derive(Debug)]
+pub struct Packet<'a> {
+    /// Datagram payload, length-truncated to the bytes actually read.
+    pub data: &'a [u8],
+    /// Source peer address (as observed by the kernel / NIC).
+    pub from: SocketAddr,
+    /// Local bound address the datagram arrived on. Useful for
+    /// multi-VIP listeners; v1 only has one bind so this is the
+    /// listener's `local_addr` on every packet.
+    pub to: SocketAddr,
+}
+
+/// Errors surfaced by a [`UdpDataplane`] implementation.
+///
+/// The router maps these to its own drop/metric/log discipline; the
+/// dataplane does not decide policy.
+#[derive(Debug, thiserror::Error)]
+pub enum DataplaneError {
+    /// Bind failed; the listener cannot start.
+    #[error("dataplane bind failed: {0}")]
+    Bind(#[source] std::io::Error),
+    /// Recv hit a transient OS error (would-block, ENOBUFS). Router
+    /// MAY continue.
+    #[error("dataplane recv: {0}")]
+    Recv(#[source] std::io::Error),
+    /// Send hit a transient OS error. Router MAY drop the packet.
+    #[error("dataplane send: {0}")]
+    Send(#[source] std::io::Error),
+    /// Tier-specific fatal error (eBPF verifier rejected the program,
+    /// io_uring kernel doesn't support multishot recvmsg, etc.).
+    /// Router MUST fall back to the next tier on the ladder.
+    #[error("dataplane unavailable on this kernel/NIC: {0}")]
+    Unavailable(String),
+}
+
+/// The seam. Three implementations exist (v1.0..v1.2 — §10.5).
+pub trait UdpDataplane: Send + Sync + 'static {
+    /// Local socket address the dataplane is bound to. Stable for
+    /// the lifetime of the impl; the router logs it once at spawn.
+    fn local_addr(&self) -> SocketAddr;
+
+    /// Run the recv loop until `cancel` fires, dispatching each
+    /// inbound packet through `on_packet`. The callback is invoked
+    /// on the runtime's task; the impl MUST NOT hold the buffer
+    /// past the returned future's `Poll::Ready`.
+    ///
+    /// Implementations are free to recv-batch (recvmmsg, io_uring
+    /// multishot, AF_XDP ring) — the only contract is that `on_packet`
+    /// observes EACH datagram EXACTLY ONCE in arrival order WITHIN
+    /// a single 4-tuple, and that the future returned by `on_packet`
+    /// is awaited before the buffer is recycled.
+    ///
+    /// Returns `Ok(())` on clean cancellation, `Err(Recv|Unavailable)`
+    /// on fatal failure.
+    fn recv_loop<'a>(
+        &'a self,
+        cancel: CancellationToken,
+        on_packet: PacketHandler<'a>,
+    ) -> Pin<Box<dyn Future<Output = Result<(), DataplaneError>> + Send + 'a>>;
+
+    /// Send `buf` to `dst`. Returns the number of bytes accepted by
+    /// the kernel (== buf.len() on a healthy UDP socket; impls MAY
+    /// short-write on backpressure and the router will retry).
+    fn send_to<'a>(
+        &'a self,
+        buf: &'a [u8],
+        dst: SocketAddr,
+    ) -> Pin<Box<dyn Future<Output = Result<usize, DataplaneError>> + Send + 'a>>;
+
+    /// Tier identifier for metrics + logs ("tokio-udp" / "io-uring" /
+    /// "xdp-af-xdp"). Stable per impl.
+    fn tier_name(&self) -> &'static str;
+
+    /// XDP fast-path hook (v1.2 only). Returns the eBPF DCID-routing
+    /// map's file descriptor so the userspace publisher can call
+    /// `bpf_map_update_elem` on flow add/remove. Other tiers return
+    /// `None`. The router treats `None` as "no fast-path map; route
+    /// every packet in userspace" (v1.0/v1.1 behavior).
+    fn dcid_map_fd(&self) -> Option<i32> {
+        None
+    }
+}
+
+/// Callback shape for [`UdpDataplane::recv_loop`].
+///
+/// `Arc` so impls can clone it into per-task closures (io_uring
+/// completion handlers, AF_XDP frame processors).
+pub type PacketHandler<'a> = Arc<
+    dyn for<'p> Fn(Packet<'p>) -> Pin<Box<dyn Future<Output = ()> + Send + 'p>>
+    + Send + Sync + 'a,
+>;
+
+/// Factory: select the highest-capability tier the host supports.
+///
+/// `policy` lets operators force a specific tier (e.g. for testing
+/// or when an XDP attach has been observed to silently drop on this
+/// driver — see `lb_l4_xdp::nic_compat`).
+pub enum TierPolicy {
+    /// Walk the ladder XDP → io_uring → tokio-UDP, picking the first
+    /// that initializes successfully. v1.0: only `TokioUdp` exists;
+    /// `Auto` always selects it.
+    Auto,
+    /// Force tokio-UDP. Always available.
+    TokioUdp,
+    /// Force io_uring (v1.1+). Fails on kernels < 6.0 or hosts where
+    /// `lb_io::Runtime::detect() != IoUring`.
+    IoUring,
+    /// Force XDP (v1.2+). Fails on kernels < 5.5, on non-native NIC,
+    /// or against the silent-drop blocklist (`lb_l4_xdp::nic_compat`).
+    Xdp { iface: String },
+}
+
+pub fn select_dataplane(
+    bind: SocketAddr,
+    policy: TierPolicy,
+) -> Result<Arc<dyn UdpDataplane>, DataplaneError>;
+```
+
+### 10.3 What each tier MUST implement
+
+Every tier MUST satisfy the **correctness contract**:
+
+- `recv_loop` delivers EACH datagram EXACTLY ONCE in arrival order
+  within a single 4-tuple (per-flow ordering; cross-flow reordering
+  is allowed and matches kernel UDP).
+- `send_to(buf, dst)` either fully sends `buf` or returns `Err`.
+  Partial sends are not allowed (UDP is datagram-atomic).
+- `local_addr` is stable for the lifetime of the impl.
+- Cancellation via the `CancellationToken` returns from `recv_loop`
+  within one packet of cancel fire (one in-flight `on_packet` future
+  may complete first; no new packets are observed after that).
+- The impl MUST NOT panic on transient OS errors. Fatal errors
+  surface as `DataplaneError::Unavailable` so the router can fall
+  back.
+- The impl MUST NOT decrypt, inspect, or modify packet payloads —
+  the dataplane is bytes-in / bytes-out. (Reinforces the
+  no-decrypt property; the router is the only place that even
+  parses the public header.)
+
+Tier-specific additions:
+
+- **TokioUdp:** uses `tokio::net::UdpSocket::recv_from` + `send_to`.
+  Single-task recv loop. Per-packet `Vec<u8>` allocation acceptable
+  at v1.0 scale; a future PR may pool with `BytesMut`. No special
+  kernel requirements.
+- **IoUring (v1.1):** uses `IORING_OP_RECVMSG_MULTISHOT` (kernel 6.0+).
+  Recv buffer pool sized to `2 * max_quic_connections` (one packet
+  in-flight per flow). Falls back via `Unavailable` if the kernel
+  rejects multishot. Must NOT silently fall back internally — that's
+  the router/factory's decision.
+- **Xdp (v1.2):** AF_XDP socket per RX queue, eBPF DCID-routing
+  program in `lb-l4-xdp/ebpf/`. `dcid_map_fd` exposes the BPF map
+  pinned at `<bpffs>/quic_dcid_routes` so the userspace publisher
+  (running in passthrough.rs) calls `bpf_map_update_elem` on every
+  flow add/remove. Userspace tier still handles all flows not
+  resolved by the fast path (Initial, Retry, short-header miss).
+  Must NOT depend on `lb_l4_xdp::ConntrackTable` — the XDP QUIC
+  steerer is a SEPARATE eBPF program from the existing 5-tuple
+  conntracker, owned by lb-quic.
+
+### 10.4 Lifecycle
+
+```
+┌────── listener spawn ──────────────────────────────────────┐
+│ 1. select_dataplane(bind, TierPolicy::Auto)                │
+│    → returns Arc<dyn UdpDataplane>                         │
+│ 2. dataplane.local_addr() logged to operator               │
+│ 3. router.spawn(dataplane, ...) clones the Arc             │
+│ 4. router calls dataplane.recv_loop(cancel, on_packet)     │
+│    via tokio::spawn — runs until cancel                    │
+│ 5. on cancel: recv_loop returns Ok(());                    │
+│    Arc drop runs impl-specific cleanup (close UdpSocket,   │
+│    detach XDP program via XdpLoader::detach_verifying,     │
+│    close io_uring fd).                                     │
+└────────────────────────────────────────────────────────────┘
+```
+
+XDP detach uses the existing `lb_l4_xdp::loader::XdpLoader`
+discipline (netlink prog-id verify, `DetachLeftProgramAttached`
+hard error). The QUIC-DCID eBPF program is loaded/attached/detached
+through the same loader code path — single-sourced (R12) with the
+5-tuple conntrack program.
+
+### 10.5 Implementation matrix v1.0 → v1.2
+
+| Tier               | Module                                | Cargo feature        | Ship | Verify-gate test                       |
+| ------------------ | ------------------------------------- | -------------------- | ---- | -------------------------------------- |
+| TokioUdp           | `lb-quic/src/udp_tokio.rs`            | (default)            | v1.0 | A2 verify gate (i): real QUIC wire E2E |
+| IoUring            | `lb-quic/src/udp_iouring.rs`          | `quic-passthrough-iouring` | v1.1 | Differential vs TokioUdp on same harness; same A2 (i) test parametrised over tier policy |
+| Xdp (DCID steerer) | `lb-quic/src/udp_xdp.rs` + `lb-l4-xdp/ebpf/src/quic_dcid_steer.rs` | `quic-passthrough-xdp` | v1.2 | E2E E2E with XDP attach via `XdpLoader::attach_with_fallback`; fall-through check (short-header miss → userspace tier 3 picks up); R13 a/b/c on map eviction |
+
+v1.0 ships only the default feature; `select_dataplane` is a `match`
+with exactly one arm. v1.1 and v1.2 add arms; passthrough.rs is
+unchanged.
+
+### 10.6 What stays out of the trait
+
+- **Connection-ID parsing.** SHARED-1 lives in
+  `lb-quic/src/public_header.rs` and is called by the ROUTER from
+  inside `on_packet`, not by the dataplane. Dataplanes are
+  protocol-blind.
+- **Flow table state.** `Table: DashMap<Vec<u8>, Arc<FlowEntry>>`
+  lives in the router. The XDP fast-path map is a SEPARATE eBPF
+  map keyed on a DCID prefix — its key/value shape is owned by
+  the XDP tier impl and published by the router via the `dcid_map_fd`
+  hook.
+- **Retry mint/verify.** Lives in the router (calls
+  `lb_security::RetryTokenSigner`). Dataplane never sees tokens.
+
+The trait is intentionally minimal: bind, recv-loop, send-to, name,
+optional map FD. Adding methods later is a breaking change, so the
+v1 surface is exactly what every tier needs and nothing else.
+
+## 11. Operator-facing notes (for DEPLOYMENT.md addendum)
+
+This section captures the operator-facing characteristics of Mode A
+v1 so Increment A4 (promote) propagates them to `DEPLOYMENT.md` and
+`RUNBOOK.md` verbatim. Audit reviewers reading this design can verify
+the operator surface matches the build target.
+
+### 11.1 Datapath tier in v1
+
+> **Mode A passthrough v1.0 ships the tier-3 (`tokio-UDP`) datapath
+> only. The XDP and `io_uring` fast paths are later performance tiers
+> — v1.1 will add `io_uring` (Linux 6.0+); v1.2 will add an XDP DCID
+> steerer (Linux 5.5+, native-attach-capable NIC). Mode A v1.0 works
+> on any kernel that supports `tokio::net::UdpSocket` and is fully
+> correct passthrough — it routes by Connection ID, preserves
+> end-to-end TLS, and bounds state. XDP is a throughput tier, not a
+> correctness gap. No operator action is required to use the v1.0
+> tier; future tiers are opt-in behind Cargo features
+> (`quic-passthrough-iouring`, `quic-passthrough-xdp`) and a
+> `TierPolicy::Auto` or `::Xdp{iface}` knob in the listener config.**
+
+### 11.2 `strict_source_binding` — per-pool, default false
+
+> **`strict_source_binding` is a per-pool configuration knob on Mode A
+> listeners; the default is `false`. With the default, the LB
+> tolerates source-IP changes within a tracked flow (NAT rebind,
+> mobile network handover) — packets continue to route by DCID to
+> the original backend. When set to `true` for a pool, the LB drops
+> short-header packets whose source 4-tuple differs from the flow's
+> recorded peer, breaking NAT-rebind path migration in exchange for
+> faster off-path-spoof rejection at the LB (before the backend's
+> AEAD layer). Recommended posture: leave at default for mobile-
+> facing pools; flip to `true` for internal pools where clients have
+> stable addresses and adversary off-path injection is a concern.**
+
+### 11.3 Backend operational contracts
+
+> **Mode A passthrough imposes two contracts on backends:**
+>
+> **B1. Connection-ID length stability.** A backend MUST keep its
+> server-issued SCID length constant for a connection's lifetime. The
+> LB records the backend's SCID length at handshake and uses it to
+> parse subsequent short-header DCIDs. Backends rotating to a
+> different-length CID via `NEW_CONNECTION_ID` will desync the LB
+> parser and connections may drop. quiche 0.28 backends: set a fixed
+> length in `Config::set_max_idle_timeout` adjacent code paths and
+> verify with `quiche::ConnectionId::len()` audit.
+>
+> **B2. CID-rotation limit.** A backend SHOULD set
+> `active_connection_id_limit = 2` (RFC 9000 §17.2 minimum) and SHOULD
+> NOT retire the original client-known CID for the connection lifetime.
+> Server-issued CID rotation via `NEW_CONNECTION_ID` is encrypted; the
+> LB cannot track it and the client may end up with a CID the LB has
+> never seen, manifesting as connection drop. Backends with strict
+> rotation requirements should run behind Mode B (terminate-and-
+> re-originate, S16), not Mode A.**
+
+### 11.4 0-RTT replay protection
+
+> **In Mode A passthrough, 0-RTT replay protection is the BACKEND's
+> responsibility. The LB does not terminate TLS and cannot decrypt
+> 0-RTT early data. Backends that accept 0-RTT MUST implement their
+> own anti-replay window (quiche: server-side dedup on session-ticket
+> nonces). The LB's `ZeroRttReplayGuard` only catches naive on-path
+> Initial duplicates — defence-in-depth, not the primary control.**
+
+### 11.5 Bounded state — capacity planning
+
+> **Default `max_quic_connections = 100_000`. Each tracked flow
+> occupies two routing-table entries and one per-flow backend UDP
+> socket. Sized memory:
+> ~ `2 * 100_000 * (FlowEntry-size + dashmap-overhead) + 100_000
+> sockets`. The LB process MUST be granted `ulimit -n 200_000` (the
+> binary requests `setrlimit(NOFILE, 200_000)` at startup and logs
+> a warning if denied). When the cap is reached, new Initial packets
+> with no Retry token receive a Retry; new Initials with valid Retry
+> tokens are dropped with a single `audit/quic_passthrough_cap_hit`
+> log line per `audit_throttle_window_secs`. No OOM, no panic — the
+> bound is enforced.**
+
+### 11.6 Promotion note for Increment A4
+
+The §11.1–§11.5 blocks copy verbatim into a new
+`DEPLOYMENT.md#quic-passthrough-mode-a-v10` section during
+Increment A4 (promote). The S15 final report records the
+DEPLOYMENT.md diff as part of the promote-gate evidence.
+
+## 12. Phase 1 — owner rulings (RESOLVED)
+
+All five §9 open items resolved on 2026-05-28 — see
+`audit/quic/s15-owner-rulings.md` (commit 05ecea73).
+
+| §9 item                              | Ruling                                                                                                   | Phase 2 binding                                                                                                                                                                                          |
+| ------------------------------------ | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1 — Both-mode arch                   | CONFIRM. SHARED-1 + SHARED-2 correct; R12 single-sourcing correct.                                       | Proceed to Phase 2 as designed. SHARED-2 contract pinned in §10 above (owner addendum 1).                                                                                                                |
+| 1' — `strict_source_binding` default | PER-POOL knob, DEFAULT **false**. Mobile availability > unbounded AEAD CPU savings.                      | Increment A2: knob lives on per-pool config, default false. A3 verify gate (iii): NAT-rebind test runs with default false; ADDITIONAL test runs `strict_source_binding=true` on one pool to prove the knob fires (untested config option is worse than no option). |
+| 2 — Retry without quiche in v1?      | **SHIP IN v1.** Retry is the primary Initial-flood defence.                                              | Increment A2: ~80 LOC hand-rolled long-header writer + RFC 9001 §5.8 differential test against `quiche::retry`.                                                                                          |
+| 3 — `min_client_dcid_len` floor      | DEFAULT **8**.                                                                                           | Increment A2: knob lives on the listener config, default 8. Initials with shorter DCID dropped with audit log.                                                                                           |
+| 4 — `max_quic_connections` default   | DEFAULT **100_000**.                                                                                     | Increment A2: knob default 100_000; cap-entries = 2 × cap. §11.5 above documents capacity-planning surface.                                                                                              |
+| 5 — NEVER-DECRYPTED proof            | Construction over observation: linkage (cargo bloat) + state (type-level FlowEntry assertion) + kprobe cross-check. DROP seccomp. | Increment A2 verify gate (ii): three-part proof exactly as ruled. The `cfg(not(feature = "quic-passthrough-only"))` guards land in A2; `FlowEntry` MUST hold no keying material (type-level assertion + reviewer code-read in A2 verify report). |
+| XDP / io_uring deferral              | ENDORSE v1=tier-3-only; tier-2 → v1.1; tier-1 → v1.2; SHARED-2 contract documented this session.         | §10 above (this commit). §11.1 above for operator-facing note. The tier ladder is not in Phase 2 v1.0 scope beyond the trait.                                                                            |
+
+Phase 2 build cleared. Increment A1 (SHARED-1 public-header parser)
+is unblocked and is the next task on the queue.
