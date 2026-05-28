@@ -1308,6 +1308,7 @@ async fn fcap1_over_cap_upload_yields_413_not_502() {
         header: Duration::from_secs(30),
         body: Duration::from_secs(300),
         total: Duration::from_secs(300),
+        head: Duration::from_secs(300),
     };
     let gw = spawn_listener_for_full(backend, cfg, timeouts).await;
     let mut sender = connect_h2_client(gw).await;

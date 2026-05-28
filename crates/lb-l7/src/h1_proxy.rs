@@ -212,10 +212,15 @@ pub struct HttpTimeouts {
     pub header: Duration,
     /// Maximum time the upstream side spends sending its response (and
     /// the client side spends sending its request body). Applied around
-    /// the upstream `send_request` call.
+    /// the upstream `send_request` call as the Phase-A no-forward-progress
+    /// idle deadline (S14 / CF-BODY-WALLCLOCK).
     pub body: Duration,
     /// Hard upper bound on a single connection's total lifetime.
     pub total: Duration,
+    /// **S14 / CF-BODY-WALLCLOCK (R-CFBW-2)** — Phase-B fixed cap on the
+    /// post-upload head wait, separate from the Phase-A `body` idle
+    /// deadline. Defaults to 60 s.
+    pub head: Duration,
 }
 
 impl Default for HttpTimeouts {
@@ -224,6 +229,7 @@ impl Default for HttpTimeouts {
             header: Duration::from_secs(10),
             body: Duration::from_secs(30),
             total: Duration::from_secs(60),
+            head: Duration::from_secs(60),
         }
     }
 }
