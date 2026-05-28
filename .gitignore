@@ -36,3 +36,4 @@ Thumbs.db
 # Logs
 *.log
 audit/h-matrix/s7-j1-scratch.md
+audit/quic/verify-logs/*.lcov
