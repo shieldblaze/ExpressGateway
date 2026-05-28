@@ -33,7 +33,7 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use bytes::BytesMut;
@@ -44,41 +44,31 @@ use tokio::net::UdpSocket;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
+use lb_balancer::{Backend, KeyedLoadBalancer, maglev::Maglev};
 use lb_security::RetryTokenSigner;
 
 use crate::public_header::{LongType, MAX_CID_LEN, PublicHeader, parse_public_header};
-use crate::udp_dataplane::{Packet, PacketHandler, TierPolicy, select_dataplane};
+use crate::udp_dataplane::{
+    MAX_UDP_DATAGRAM_SIZE, Packet, PacketHandler, TierPolicy, UdpDataplane, select_dataplane,
+};
 
 // ============================================================
 // Constants
 // ============================================================
 
-// dead_code allows on the helper consts/fns below: this is the A2
-// foundation commit; the recv-loop state machine that consumes them
-// lands in a follow-up edit. Tests below already exercise them.
-
-/// Maximum UDP datagram a passthrough flow accepts. Mirrors
-/// `lb_quic::udp_dataplane::MAX_UDP_DATAGRAM_SIZE` (65_535).
-#[allow(dead_code)]
-const MAX_UDP: usize = 65_535;
-
 /// Length of LB-chosen SCIDs (in Retry packets). RFC 9000 §17.2.5
 /// requires `len > 0`; 16 bytes matches quiche / termination router.
-#[allow(dead_code)]
 const LB_SCID_LEN: usize = 16;
 
 /// AEAD-AES-128-GCM tag length (RFC 9001 §5.8 fixed value).
-#[allow(dead_code)]
 const RETRY_INTEGRITY_TAG_LEN: usize = 16;
 
 /// RFC 9001 §5.8 — fixed Retry Integrity Tag key for QUIC v1.
-#[allow(dead_code)]
 const RETRY_KEY_V1: [u8; 16] = [
     0xbe, 0x0c, 0x69, 0x0b, 0x9f, 0x66, 0x57, 0x5a, 0x1d, 0x76, 0x6b, 0x54, 0xe3, 0x68, 0xc8, 0x4e,
 ];
 
 /// RFC 9001 §5.8 — fixed Retry Integrity Tag nonce for QUIC v1.
-#[allow(dead_code)]
 const RETRY_NONCE_V1: [u8; 12] = [
     0x46, 0x15, 0x99, 0xd3, 0x5d, 0x63, 0x2b, 0xf2, 0x23, 0x98, 0x25, 0xbb,
 ];
@@ -198,6 +188,21 @@ pub(crate) struct FlowEntry {
     /// Bounded mpsc queue feeding the per-flow forward task. Full →
     /// drop-newest (design §5.1).
     pub(crate) backlog_tx: mpsc::Sender<Vec<u8>>,
+    /// LRU-eviction observed-flag (R13(b) gauge). Set by [`Drop`] when
+    /// the entry's `Arc` reference count drops to zero (i.e. evicted
+    /// from the dispatch table AND the per-flow forward task has
+    /// exited). Tests poll this via [`PassthroughListener::dropped`].
+    /// Behind `test-gauges` so production builds don't carry the
+    /// atomic.
+    #[cfg(any(test, feature = "test-gauges"))]
+    pub(crate) dropped: Arc<AtomicBool>,
+}
+
+#[cfg(any(test, feature = "test-gauges"))]
+impl Drop for FlowEntry {
+    fn drop(&mut self) {
+        self.dropped.store(true, Ordering::Release);
+    }
 }
 
 #[allow(dead_code)]
@@ -239,6 +244,8 @@ fn _flow_entry_field_audit(e: &FlowEntry) {
         peer,
         backend_sock,
         backlog_tx,
+        #[cfg(any(test, feature = "test-gauges"))]
+        dropped,
     } = e;
     // Type-witnesses: each field's static type is enumerated here.
     // ANY change to FlowEntry → compile error here.
@@ -248,6 +255,8 @@ fn _flow_entry_field_audit(e: &FlowEntry) {
     let _: &PlMutex<SocketAddr> = peer;
     let _: &Arc<UdpSocket> = backend_sock;
     let _: &mpsc::Sender<Vec<u8>> = backlog_tx;
+    #[cfg(any(test, feature = "test-gauges"))]
+    let _: &Arc<AtomicBool> = dropped;
     // None of the above types are key material (AEAD::Key,
     // ring::aead::*Key, boring::Aead, quiche::Connection, ...).
 }
@@ -255,6 +264,27 @@ fn _flow_entry_field_audit(e: &FlowEntry) {
 // ============================================================
 // Hand-rolled Retry packet writer (CF-S15-RETRY-NO-QUICHE)
 // ============================================================
+
+/// CF-S15-DCID-HASH: SipHash-style multiply-shift over the client DCID
+/// to feed `Maglev::pick_with_key`. We don't need a cryptographic hash
+/// (Maglev's permutation is the consistency layer); a fast non-zero
+/// mixing function is enough. Deterministic across runs of the same
+/// binary (same seed).
+fn hash_dcid_for_maglev(dcid: &[u8]) -> u64 {
+    // FxHash-shaped multiply-add. Same finalizer as
+    // lb_balancer::maglev::hash_str so the distribution behaves
+    // identically to the L7-affinity path.
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325; // FNV offset basis
+    for &b in dcid {
+        h = h.wrapping_mul(0x517c_c1b7_2722_0a95).wrapping_add(u64::from(b));
+    }
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xc4ce_b9fe_1a85_ec53);
+    h ^= h >> 33;
+    h
+}
 
 /// Build a QUIC v1 Retry packet per RFC 9000 §17.2.5 and compute its
 /// 16-byte AEAD-AES-128-GCM Retry Integrity Tag per RFC 9001 §5.8.
@@ -286,7 +316,7 @@ fn _flow_entry_field_audit(e: &FlowEntry) {
 /// Returns `Err` if `ring::aead` rejects the inputs (sealing an
 /// empty plaintext under AES-128-GCM is infallible in practice; this
 /// covers ring's API surface).
-#[allow(clippy::too_many_arguments, dead_code)]
+#[allow(clippy::too_many_arguments)]
 fn build_retry_packet(
     odcid: &[u8],
     client_scid: &[u8],
@@ -363,6 +393,402 @@ fn build_retry_packet(
 }
 
 // ============================================================
+// Shared router context — held inside an Arc by spawn() and cloned
+// into the per-packet callback closures and per-flow forward/reverse
+// tasks.
+// ============================================================
+
+/// Routing-table entries: one per known DCID. A flow has up to 2 keys
+/// (client-chosen DCID at Initial-time; LB-chosen SCID after Retry).
+type FlowTable = DashMap<Vec<u8>, Arc<FlowEntry>>;
+
+struct RouterCtx {
+    params: PassthroughParams,
+    /// Resolved Maglev table over the backend set. Held in an Arc so
+    /// future backend-set reloads can hot-swap; v1 is static post-spawn.
+    maglev: Maglev,
+    /// `Backend` view of `params.backends` matching the index order in
+    /// the Maglev table. Built once at spawn.
+    backends: Vec<Backend>,
+    retry_signer: Arc<RetryTokenSigner>,
+    table: Arc<FlowTable>,
+    /// Listener-side UDP socket (write half of the recv loop), used to
+    /// send Retry packets back to clients and reverse-direction
+    /// backend→client traffic.
+    listener_sock: Arc<dyn UdpDataplane>,
+    /// Process-relative monotonic epoch for `last_seen_ms` (kept small
+    /// vs absolute timestamps).
+    epoch: Instant,
+}
+
+/// Hash a DCID into a Maglev pick.
+fn pick_backend(ctx: &RouterCtx, dcid: &[u8]) -> Option<SocketAddr> {
+    let key = hash_dcid_for_maglev(dcid);
+    let idx = ctx.maglev.pick_with_key(&ctx.backends, key).ok()?;
+    ctx.params.backends.get(idx).copied()
+}
+
+/// LRU eviction at cap. Walks the flow table and drops the entry with
+/// the oldest `last_seen_ms`. v1 is single-evict per cap-hit; bulk
+/// eviction lives in A3. Returns the number of dispatch-table entries
+/// removed (typically 1 or 2 — flow may have two keys).
+fn evict_oldest(ctx: &RouterCtx) -> usize {
+    let mut oldest: Option<(Vec<u8>, u64)> = None;
+    let mut victim_flow: Option<Arc<FlowEntry>> = None;
+    for entry in ctx.table.iter() {
+        let last = entry.value().last_seen_ms.load(Ordering::Relaxed);
+        if oldest.as_ref().is_none_or(|(_, prev)| last < *prev) {
+            oldest = Some((entry.key().clone(), last));
+            victim_flow = Some(Arc::clone(entry.value()));
+        }
+    }
+    let Some(victim) = victim_flow else {
+        return 0;
+    };
+    // Remove every key in the dispatch table that points to this
+    // FlowEntry (Arc identity match). Borrow-and-collect to avoid
+    // iterator/remove deadlock in DashMap.
+    let keys: Vec<Vec<u8>> = ctx
+        .table
+        .iter()
+        .filter(|kv| Arc::ptr_eq(kv.value(), &victim))
+        .map(|kv| kv.key().clone())
+        .collect();
+    let mut removed = 0;
+    for k in keys {
+        if ctx.table.remove(&k).is_some() {
+            removed += 1;
+        }
+    }
+    // Dropping `victim` here decrements the Arc strong count; once the
+    // forward task exits (channel close on backlog_tx drop) the entry's
+    // own `Drop` fires and sets `dropped` (test-gauges).
+    drop(victim);
+    removed
+}
+
+/// Handle one inbound datagram from the client.
+async fn handle_inbound(ctx: Arc<RouterCtx>, data: Vec<u8>, from: SocketAddr) {
+    let parsed = match parse_public_header(&data, default_short_dcid_len(&ctx)) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::trace!(error = %e, peer = %from, "header parse error");
+            return;
+        }
+    };
+
+    match parsed {
+        PublicHeader::Long {
+            ty,
+            version,
+            dcid,
+            scid,
+            token,
+            ..
+        } => match ty {
+            LongType::Initial => {
+                handle_initial(ctx, data.clone(), from, version, dcid, scid, token).await;
+            }
+            LongType::ZeroRtt | LongType::Handshake => {
+                // Either retransmit of an Initial whose handshake is
+                // mid-flight, or genuine post-handshake long packet.
+                // Either way: look up by DCID; if present, forward; if
+                // not, drop (no token, can't mint Retry off this).
+                forward_long_existing(&ctx, &data, dcid).await;
+            }
+            LongType::Retry | LongType::VersionNegotiation => {
+                // Client-origin Retry / VN are not legal on the LB-
+                // facing leg. Drop.
+                tracing::trace!(peer = %from, ?ty, "dropped client-origin Retry/VN");
+            }
+        },
+        PublicHeader::Short { dcid } => {
+            // The parser returned a Short with the default-length DCID;
+            // try multi-length fallback if the default missed.
+            forward_short(&ctx, &data, dcid, from).await;
+        }
+    }
+}
+
+/// Pick the default short-header DCID length. v1 uses
+/// `params.max_dcid_len_routed` as the single-len fast-path.
+fn default_short_dcid_len(ctx: &RouterCtx) -> usize {
+    ctx.params.max_dcid_len_routed
+}
+
+/// Initial-packet handler. §3.2a in the design.
+async fn handle_initial(
+    ctx: Arc<RouterCtx>,
+    pkt: Vec<u8>,
+    from: SocketAddr,
+    version: u32,
+    dcid: &[u8],
+    scid: &[u8],
+    token: Option<&[u8]>,
+) {
+    // Cap-violation defence: drop initials with DCIDs shorter than the
+    // floor (§6.8).
+    if dcid.len() < ctx.params.min_client_dcid_len {
+        tracing::debug!(
+            peer = %from,
+            dcid_len = dcid.len(),
+            floor = ctx.params.min_client_dcid_len,
+            "drop: dcid below floor"
+        );
+        return;
+    }
+
+    // Retransmit? Look up Table[dcid].
+    if let Some(entry) = ctx.table.get(dcid) {
+        let flow = Arc::clone(entry.value());
+        drop(entry);
+        flow.touch(Instant::now(), ctx.epoch);
+        flow.set_peer(from);
+        let _ = flow.backlog_tx.try_send(pkt);
+        return;
+    }
+
+    // New connection.
+    let tok = token.unwrap_or(&[]);
+    if tok.is_empty() {
+        // Mint Retry (no state allocation; just send and forget).
+        let new_scid = sample_lb_scid();
+        let retry_token = ctx.retry_signer.mint(from, dcid);
+        let mut out = Vec::with_capacity(128);
+        if let Err(e) = build_retry_packet(dcid, scid, &new_scid, version, &retry_token, &mut out) {
+            tracing::debug!(error = %e, peer = %from, "build_retry_packet");
+            return;
+        }
+        if let Err(e) = ctx.listener_sock.send_to(&out, from).await {
+            tracing::debug!(error = %e, peer = %from, "send Retry");
+        }
+        return;
+    }
+
+    // Token present → verify.
+    let now = Instant::now();
+    let _odcid = match ctx.retry_signer.verify(tok, from, now) {
+        Ok(o) => o,
+        Err(e) => {
+            tracing::trace!(error = %e, peer = %from, "retry token verify failed");
+            return;
+        }
+    };
+
+    // Cap-check; evict oldest on hit (§5 LRU). Cap is on UNIQUE flows;
+    // dispatch table has up to 2 keys per flow, so the table-size
+    // bound is 2× cap.
+    let cap = ctx.params.max_quic_connections;
+    while ctx.table.len() >= cap.saturating_mul(2) {
+        if evict_oldest(&ctx) == 0 {
+            break; // no entries to evict (table is empty); avoid spin.
+        }
+    }
+
+    // Maglev pick.
+    let Some(backend) = pick_backend(&ctx, dcid) else {
+        tracing::debug!(peer = %from, "no backend available");
+        return;
+    };
+
+    // Open per-flow backend UDP socket.
+    let bind_any: SocketAddr = match backend {
+        SocketAddr::V4(_) => "0.0.0.0:0".parse().unwrap_or(backend),
+        SocketAddr::V6(_) => "[::]:0".parse().unwrap_or(backend),
+    };
+    let backend_sock = match UdpSocket::bind(bind_any).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::debug!(error = %e, "bind backend socket");
+            return;
+        }
+    };
+    if let Err(e) = backend_sock.connect(backend).await {
+        tracing::debug!(error = %e, %backend, "connect backend socket");
+        return;
+    }
+    let backend_sock = Arc::new(backend_sock);
+
+    let (backlog_tx, backlog_rx) = mpsc::channel::<Vec<u8>>(ctx.params.per_flow_backlog);
+
+    #[cfg(any(test, feature = "test-gauges"))]
+    let dropped = Arc::new(AtomicBool::new(false));
+
+    let flow = Arc::new(FlowEntry {
+        backend,
+        short_dcid_len: AtomicUsize::new(0),
+        last_seen_ms: AtomicU64::new(elapsed_ms(now, ctx.epoch)),
+        peer: PlMutex::new(from),
+        backend_sock: Arc::clone(&backend_sock),
+        backlog_tx: backlog_tx.clone(),
+        #[cfg(any(test, feature = "test-gauges"))]
+        dropped: Arc::clone(&dropped),
+    });
+
+    // Register routing key for the client-chosen DCID. The LB-chosen
+    // new_scid is NOT in the wire packet on this branch (this branch
+    // is the second Initial, where the client has already received our
+    // Retry and is now sending DCID = our new_scid). Per §3.6 the
+    // routing DCID *is* our LB-chosen SCID, but it's already present
+    // as the wire DCID — so the existing key insertion does the right
+    // thing.
+    ctx.table.insert(dcid.to_vec(), Arc::clone(&flow));
+
+    // Forward the inbound packet first.
+    let _ = backlog_tx.try_send(pkt);
+
+    // Spawn per-flow forward pump (client→backend).
+    let backend_sock_fwd = Arc::clone(&backend_sock);
+    tokio::spawn(async move {
+        let mut rx = backlog_rx;
+        while let Some(buf) = rx.recv().await {
+            if let Err(e) = backend_sock_fwd.send(&buf).await {
+                tracing::trace!(error = %e, "forward send failed");
+                break;
+            }
+        }
+    });
+
+    // Spawn per-flow reverse pump (backend→client).
+    let ctx_rev = Arc::clone(&ctx);
+    let flow_rev = Arc::clone(&flow);
+    tokio::spawn(async move { reverse_pump(ctx_rev, flow_rev).await });
+}
+
+/// Reverse-direction pump for one flow.
+async fn reverse_pump(ctx: Arc<RouterCtx>, flow: Arc<FlowEntry>) {
+    let mut buf = vec![0u8; MAX_UDP_DATAGRAM_SIZE];
+    loop {
+        let n = match flow.backend_sock.recv(&mut buf).await {
+            Ok(n) => n,
+            Err(e) => {
+                tracing::trace!(error = %e, "backend recv");
+                break;
+            }
+        };
+        let slice = buf.get(..n).unwrap_or(&[]);
+
+        // Peek the long-header server-side SCID to discover the flow's
+        // routing DCID (the server's SCID becomes the client's next
+        // DCID; we register it so subsequent client packets routed by
+        // that DCID land on this flow). Short-header reverse packets
+        // have no CIDs the LB can see — pass through.
+        if let Ok(PublicHeader::Long { scid, .. }) = parse_public_header(slice, 0) {
+            if !scid.is_empty() {
+                let key = scid.to_vec();
+                // Avoid clobbering an existing entry (e.g. a different
+                // flow already keyed by this SCID, which would be a
+                // backend collision; in practice we trust the backend's
+                // SCID is unique).
+                ctx.table.entry(key).or_insert_with(|| Arc::clone(&flow));
+                flow.short_dcid_len.store(scid.len(), Ordering::Relaxed);
+            }
+        }
+
+        let peer = flow.get_peer();
+        if let Err(e) = ctx.listener_sock.send_to(slice, peer).await {
+            tracing::trace!(error = %e, "reverse send failed");
+            // Don't break on transient send errors — UDP is best-
+            // effort and the next packet may go through.
+        }
+    }
+}
+
+/// Forward an existing flow's long-header (non-Initial) packet by DCID.
+async fn forward_long_existing(ctx: &RouterCtx, pkt: &[u8], dcid: &[u8]) {
+    if let Some(entry) = ctx.table.get(dcid) {
+        let flow = Arc::clone(entry.value());
+        drop(entry);
+        flow.touch(Instant::now(), ctx.epoch);
+        let _ = flow.backlog_tx.try_send(pkt.to_vec());
+    }
+}
+
+/// Short-header inbound: try single-len fast path, then walk the set of
+/// known short-DCID lengths.
+async fn forward_short(ctx: &RouterCtx, pkt: &[u8], default_dcid: &[u8], from: SocketAddr) {
+    // Fast path: default-length DCID (already parsed for us).
+    if let Some(entry) = ctx.table.get(default_dcid) {
+        let flow = Arc::clone(entry.value());
+        drop(entry);
+        if !forward_short_via(ctx, &flow, pkt, from) {
+            return; // strict-source-binding drop
+        }
+        flow.touch(Instant::now(), ctx.epoch);
+        flow.set_peer(from);
+        let _ = flow.backlog_tx.try_send(pkt.to_vec());
+        return;
+    }
+
+    // Multi-length fallback: collect distinct known short_dcid_lens.
+    let mut lens: Vec<usize> = ctx
+        .table
+        .iter()
+        .map(|kv| kv.value().short_dcid_len.load(Ordering::Relaxed))
+        .filter(|&l| l > 0 && l <= MAX_CID_LEN && l != default_dcid.len())
+        .collect();
+    lens.sort_unstable();
+    lens.dedup();
+    for len in lens {
+        let end = 1usize.saturating_add(len);
+        let Some(dcid) = pkt.get(1..end) else { continue };
+        if let Some(entry) = ctx.table.get(dcid) {
+            let flow = Arc::clone(entry.value());
+            drop(entry);
+            if !forward_short_via(ctx, &flow, pkt, from) {
+                return;
+            }
+            flow.touch(Instant::now(), ctx.epoch);
+            flow.set_peer(from);
+            let _ = flow.backlog_tx.try_send(pkt.to_vec());
+            return;
+        }
+    }
+    // Miss → drop. §3.3 documents this as expected; client retransmit
+    // will hit when a long header refreshes the dispatch.
+}
+
+/// Strict source-binding gate (§6.3, owner ruling §9.1'). Returns
+/// `true` if the packet should be forwarded; `false` to drop.
+fn forward_short_via(
+    ctx: &RouterCtx,
+    flow: &FlowEntry,
+    _pkt: &[u8],
+    from: SocketAddr,
+) -> bool {
+    if !ctx.params.strict_source_binding {
+        return true;
+    }
+    let recorded = flow.get_peer();
+    if recorded != from {
+        tracing::trace!(
+            recorded = %recorded,
+            observed = %from,
+            "strict_source_binding drop"
+        );
+        return false;
+    }
+    true
+}
+
+fn sample_lb_scid() -> [u8; LB_SCID_LEN] {
+    let mut scid = [0u8; LB_SCID_LEN];
+    if ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut scid).is_err() {
+        // RNG failure on a supported platform is effectively impossible;
+        // fall back to a process-unique counter rather than panicking.
+        use std::sync::atomic::AtomicU64;
+        static FALLBACK: AtomicU64 = AtomicU64::new(0);
+        let n = FALLBACK.fetch_add(1, Ordering::Relaxed);
+        scid[..8].copy_from_slice(&n.to_be_bytes());
+    }
+    scid
+}
+
+fn elapsed_ms(now: Instant, epoch: Instant) -> u64 {
+    u64::try_from(now.saturating_duration_since(epoch).as_millis()).unwrap_or(u64::MAX)
+}
+
+// ============================================================
 // PassthroughListener
 // ============================================================
 
@@ -375,47 +801,82 @@ pub struct PassthroughListener {
     _retry_signer: Arc<RetryTokenSigner>,
     /// Test-only handle to the flow table for verify gates.
     #[cfg(any(test, feature = "test-gauges"))]
-    table: Arc<DashMap<Vec<u8>, Arc<FlowEntry>>>,
+    table: Arc<FlowTable>,
 }
 
 impl PassthroughListener {
-    /// Bind a UDP socket, load (or generate) the retry secret, and
-    /// spawn the recv loop.
-    ///
-    /// Stub-shape for the gate-1 build. Full state-machine wiring
-    /// lands in a subsequent edit to this file.
+    /// Bind a UDP socket, load (or generate) the retry secret, build
+    /// the Maglev table over the backend set, and spawn the recv loop.
     ///
     /// # Errors
     ///
-    /// Returns the OS bind error.
+    /// Returns the OS bind error or a backend-set rejection
+    /// (empty-backends → `InvalidInput`).
     pub async fn spawn(
         params: PassthroughParams,
         shutdown: CancellationToken,
     ) -> std::io::Result<Self> {
+        if params.backends.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "passthrough requires at least one backend",
+            ));
+        }
+
         let dataplane = select_dataplane(params.bind_addr, TierPolicy::Auto)
             .await
             .map_err(|e| std::io::Error::other(format!("dataplane bind: {e}")))?;
         let local_addr = dataplane.local_addr();
         let retry_signer = Arc::new(load_or_generate_retry_secret(&params.retry_secret_path)?);
-        let table: Arc<DashMap<Vec<u8>, Arc<FlowEntry>>> = Arc::new(DashMap::new());
-        let table_for_loop = Arc::clone(&table);
-        let shutdown_for_loop = shutdown.clone();
+        let table: Arc<FlowTable> = Arc::new(DashMap::new());
+
+        // Build the Backend view for Maglev.
+        let backends: Vec<Backend> = params
+            .backends
+            .iter()
+            .enumerate()
+            .map(|(i, sa)| Backend {
+                id: format!("backend-{i}-{sa}"),
+                weight: 1,
+                active_connections: 0,
+                active_requests: 0,
+                latency_ewma_ns: 0,
+                state: None,
+            })
+            .collect();
+        let maglev = Maglev::new(&backends)
+            .map_err(|e| std::io::Error::other(format!("maglev: {e}")))?;
+
+        let ctx = Arc::new(RouterCtx {
+            params,
+            maglev,
+            backends,
+            retry_signer: Arc::clone(&retry_signer),
+            table: Arc::clone(&table),
+            listener_sock: Arc::clone(&dataplane),
+            epoch: Instant::now(),
+        });
 
         tracing::info!(
             address = %local_addr,
             protocol = "quic-passthrough",
-            backends = params.backends.len(),
+            backends = ctx.params.backends.len(),
             "QUIC passthrough listener bound"
         );
 
+        let shutdown_for_loop = shutdown.clone();
+        let dataplane_for_loop = Arc::clone(&dataplane);
         let handle = tokio::spawn(async move {
-            let on_packet: PacketHandler<'_> = Arc::new(move |_pkt: Packet<'_>| {
-                let _table = Arc::clone(&table_for_loop);
+            let ctx_cb = Arc::clone(&ctx);
+            let on_packet: PacketHandler<'_> = Arc::new(move |pkt: Packet<'_>| {
+                let ctx_inner = Arc::clone(&ctx_cb);
+                let data = pkt.data.to_vec();
+                let from = pkt.from;
                 Box::pin(async move {
-                    // Stub: full routing state machine in next edit.
+                    handle_inbound(ctx_inner, data, from).await;
                 })
             });
-            if let Err(e) = dataplane.recv_loop(shutdown_for_loop, on_packet).await {
+            if let Err(e) = dataplane_for_loop.recv_loop(shutdown_for_loop, on_packet).await {
                 tracing::warn!(error = %e, "passthrough recv_loop");
             }
         });
@@ -436,13 +897,12 @@ impl PassthroughListener {
         self.local_addr
     }
 
-    /// Number of live flows (test gauge). Counts UNIQUE flows, not
-    /// dispatch-table entries (each flow has up to 2 table keys).
+    /// Number of dispatch-table entries (test gauge). Each flow may
+    /// hold up to 2 entries (client-DCID + LB-chosen SCID). The
+    /// verify-gate (iv) bound is `2 * max_quic_connections`.
     #[cfg(any(test, feature = "test-gauges"))]
     #[must_use]
     pub fn flows_len(&self) -> usize {
-        // Approximate: dispatch-table size is roughly 2× flows.
-        // Verify-gate (iv) tolerates the factor-of-2.
         self.table.len()
     }
 
@@ -515,26 +975,6 @@ fn write_secret_file(path: &std::path::Path, secret: &[u8]) -> std::io::Result<(
     std::fs::write(path, secret)
 }
 
-// ============================================================
-// PublicHeader bridge stubs — used by the upcoming state-machine
-// edit. Re-import so unused-warning doesn't fire in the stub state.
-// ============================================================
-
-#[doc(hidden)]
-#[allow(dead_code, clippy::needless_pass_by_value)]
-fn _public_header_used(pkt: Vec<u8>) -> Result<(), String> {
-    match parse_public_header(&pkt, 0).map_err(|e| e.to_string())? {
-        PublicHeader::Long { ty, .. } => match ty {
-            LongType::Initial
-            | LongType::ZeroRtt
-            | LongType::Handshake
-            | LongType::Retry
-            | LongType::VersionNegotiation => Ok(()),
-        },
-        PublicHeader::Short { .. } => Ok(()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -569,6 +1009,8 @@ mod tests {
             )),
             backend_sock: Arc::new(sock),
             backlog_tx: tx,
+            #[cfg(any(test, feature = "test-gauges"))]
+            dropped: Arc::new(AtomicBool::new(false)),
         };
         _flow_entry_field_audit(&fe);
         // Sanity touch+set+get.
