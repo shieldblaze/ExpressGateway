@@ -211,8 +211,10 @@ pub fn parse_public_header(pkt: &[u8], short_dcid_len: usize)
 Parser is `#[no_panic]`-shaped: all indexing through `get`, all
 arithmetic checked, no `unwrap`/`expect`/`panic` (mirrors the
 crate-wide `clippy::indexing_slicing` deny in `lb-quic`). Unit tests:
-hand-built fixtures from RFC 9001 §A.4 (Initial), §A.5 (Handshake);
-property tests via `quiche::Header::from_slice` differential
+hand-built fixtures from RFC 9001 §A.2 (Client Initial) and a
+hand-built Handshake against RFC 9000 §17.2.4 (RFC 9001 has no
+Handshake worked example); property tests via
+`quiche::Header::from_slice` differential
 (quiche-built packets parsed identically by both parsers).
 
 ## 3. Mode A passthrough — datapath
@@ -671,8 +673,9 @@ branches off it.
 - Surface: `parse_public_header`, `PublicHeader`, `HeaderError`,
   `LongType`, `MAX_CID_LEN`.
 - Verify gates:
-  - Unit tests against RFC 9001 §A.4/§A.5 fixtures (Initial,
-    Handshake).
+  - Unit tests against the RFC 9001 §A.2 Client Initial fixture +
+    a hand-built Handshake per RFC 9000 §17.2.4 (RFC 9001 has no
+    Handshake worked example).
   - Differential property test (proptest, 1000 cases): every
     quiche-produced long-header packet's `quiche::Header::from_slice`
     output matches ours bit-for-bit on `(type, version, dcid, scid,
