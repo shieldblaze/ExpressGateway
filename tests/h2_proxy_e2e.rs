@@ -425,6 +425,7 @@ async fn h2_over_cap_upload_yields_413_not_502() {
         header: Duration::from_secs(20),
         body: Duration::from_secs(20),
         total: Duration::from_secs(60),
+        head: Duration::from_secs(60),
     };
     let h1_proxy = Arc::new(H1Proxy::new(
         pool.clone(),
@@ -489,6 +490,7 @@ async fn h2_genuine_upstream_failure_still_yields_502() {
         header: Duration::from_secs(20),
         body: Duration::from_secs(20),
         total: Duration::from_secs(60),
+        head: Duration::from_secs(60),
     };
     let h1_proxy = Arc::new(H1Proxy::new(
         pool.clone(),

@@ -54,6 +54,7 @@ async fn spawn_proxy(backend_addr: SocketAddr, header_timeout: Duration) -> Sock
                 header: header_timeout,
                 body: Duration::from_secs(5),
                 total: Duration::from_secs(10),
+                head: Duration::from_secs(10),
             },
             /* is_https */ false,
         )

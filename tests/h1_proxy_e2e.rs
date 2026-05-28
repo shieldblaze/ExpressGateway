@@ -380,6 +380,7 @@ async fn h1s_proxy_times_out_on_slow_body() {
             header: Duration::from_millis(200),
             body: Duration::from_millis(200),
             total: Duration::from_secs(5),
+            head: Duration::from_secs(5),
         },
         /* is_https */ true,
     ));
@@ -543,6 +544,7 @@ async fn spawn_gateway_over(backend_addr: SocketAddr) -> (SocketAddr, tokio::tas
             header: Duration::from_secs(10),
             body: Duration::from_secs(10),
             total: Duration::from_secs(30),
+            head: Duration::from_secs(30),
         },
         /* is_https */ false,
     ));

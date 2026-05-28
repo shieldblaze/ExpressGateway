@@ -116,6 +116,7 @@ async fn spawn_proxy(backend_addr: SocketAddr) -> SocketAddr {
             header: Duration::from_secs(2),
             body: Duration::from_secs(2),
             total: Duration::from_secs(5),
+            head: Duration::from_secs(5),
         },
         false,
     ));
