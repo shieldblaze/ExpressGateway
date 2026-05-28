@@ -43,6 +43,7 @@ use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64};
 use std::time::Duration;
 
 use http_body_util::BodyExt;
@@ -53,7 +54,9 @@ use hyper::{Request, Response};
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use parking_lot::Mutex;
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 
+use crate::idle_send::{IdleSendError, idle_bounded_send};
 use crate::pool::TcpPool;
 
 /// S6 / H3→H2 R8 (I0.5, lead-approved Option A): the request-body type
@@ -247,6 +250,95 @@ impl Http2Pool {
         }
     }
 
+    /// **S14 / CF-BODY-WALLCLOCK Phase 1** — idle-aware H2 send.
+    ///
+    /// Functionally equivalent to [`Self::send_request`] EXCEPT the
+    /// fixed [`Http2PoolConfig::send_timeout`] wall-clock is replaced
+    /// by [`crate::idle_send::idle_bounded_send`]'s two-phase
+    /// idle/head deadline:
+    /// * Phase A — `idle` no-forward-progress watchdog, reset by the
+    ///   caller's request-egress pump on every successful chunk
+    ///   hand-off into the H2 body channel.
+    /// * Phase B — once the pump sets `upload_complete = true`, a
+    ///   fixed `head_timeout` cap on the remaining HEAD wait.
+    ///
+    /// `last_progress` / `upload_complete` are OWNED and DRIVEN by the
+    /// caller (the lb-l7 request-egress pump); the pool only consumes
+    /// them. `epoch` is the [`tokio::time::Instant`] the caller
+    /// captured at request start (the same epoch `last_progress` ms
+    /// counts from).
+    ///
+    /// The same ROUND8-L7-10 eviction policy as [`Self::send_request`]
+    /// applies on BOTH error arms (Send-class error AND timeout) to
+    /// preserve the H2-multiplex corruption guard. Phase 1 collapses
+    /// both [`IdleSendError`] variants onto [`Http2PoolError::Timeout`]
+    /// (logged at warn-level for triage) so the enum surface stays
+    /// stable for existing callers ([`h3_bridge`-style callers and
+    /// existing pool tests). Phase 2/3 may split the variant if
+    /// cell-level phase-attribution is wanted on the wire.
+    ///
+    /// # Errors
+    ///
+    /// * [`Http2PoolError::Dial`] — TCP dial failed.
+    /// * [`Http2PoolError::Handshake`] — hyper H2 handshake failed.
+    /// * [`Http2PoolError::Send`] — hyper Send-class error; cached
+    ///   entry evicted.
+    /// * [`Http2PoolError::Timeout`] — either Phase A idle OR Phase B
+    ///   head deadline fired; cached entry evicted.
+    //
+    // Eight parameters is one over clippy's default seven-arg lint, but
+    // every one is load-bearing for the two-phase deadline contract and
+    // none has a sensible per-pool default (the cells own `idle` /
+    // `head_timeout` via HttpTimeouts in Phase 2). Bundling them into a
+    // helper struct would obscure the call site without removing any
+    // argument.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn send_request_idle(
+        &self,
+        addr: SocketAddr,
+        request: Request<H2ReqBody>,
+        last_progress: Arc<AtomicU64>,
+        upload_complete: Arc<AtomicBool>,
+        epoch: Instant,
+        idle: Duration,
+        head_timeout: Duration,
+    ) -> Result<Response<Incoming>, Http2PoolError> {
+        let mut sender = self.acquire_sender(addr).await?;
+        let send_fut = sender.send_request(request);
+        match idle_bounded_send(
+            send_fut,
+            last_progress,
+            upload_complete,
+            epoch,
+            idle,
+            head_timeout,
+        )
+        .await
+        {
+            Ok(Ok(resp)) => Ok(resp),
+            Ok(Err(e)) => {
+                // ROUND8-L7-10 eviction parity with `send_request`.
+                self.evict(addr);
+                Err(Http2PoolError::Send(e.to_string()))
+            }
+            Err(idle_err) => {
+                // Phase 1 collapses IdleTimeout / HeadTimeout onto the
+                // existing Timeout variant; discriminant kept in the
+                // log line for triage.
+                let phase = match idle_err {
+                    IdleSendError::IdleTimeout(_) => "idle",
+                    IdleSendError::HeadTimeout(_) => "head",
+                };
+                tracing::warn!(
+                    phase, %addr, error = %idle_err,
+                    "h2 idle/head deadline fired",
+                );
+                self.evict(addr);
+                Err(Http2PoolError::Timeout)
+            }
+        }
+    }
+
     /// Get a sender for `addr`, dialing fresh when the cached entry is
     /// missing or dead.
     async fn acquire_sender(
@@ -407,5 +499,238 @@ mod tests {
         );
         let pool = Http2Pool::new(Http2PoolConfig::default(), tcp_pool);
         assert_eq!(pool.peer_count(), 0);
+    }
+
+    /// S14 / arm (viii) — pool dial-fail smoke for `send_request_idle`.
+    ///
+    /// Behavior coverage of the helper itself is in `idle_send::tests`;
+    /// this arm only proves the new pool method preserves the
+    /// dial-failure path exactly the way `send_request` does. A "real"
+    /// pool+backend behavior test belongs in Phase 3 alongside the cell
+    /// wiring.
+    #[tokio::test]
+    async fn send_request_idle_dial_fail_smoke() {
+        use http_body_util::Empty;
+        let tcp_pool = TcpPool::new(
+            crate::pool::PoolConfig::default(),
+            crate::sockopts::BackendSockOpts {
+                nodelay: true,
+                keepalive: true,
+                rcvbuf: None,
+                sndbuf: None,
+                quickack: false,
+                tcp_fastopen_connect: false,
+            },
+            crate::Runtime::with_backend(crate::IoBackend::Epoll),
+        );
+        let pool = Http2Pool::new(Http2PoolConfig::default(), tcp_pool);
+
+        // 127.0.0.1:1 — virtually always refused on Linux dev hosts.
+        let addr: SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let req: Request<H2ReqBody> = Request::builder()
+            .uri("/")
+            .body(
+                Empty::<Bytes>::new()
+                    .map_err(|never: std::convert::Infallible| {
+                        let e: Box<dyn std::error::Error + Send + Sync> = Box::new(never);
+                        e
+                    })
+                    .boxed(),
+            )
+            .unwrap();
+
+        let res = pool
+            .send_request_idle(
+                addr,
+                req,
+                Arc::new(AtomicU64::new(0)),
+                Arc::new(AtomicBool::new(false)),
+                Instant::now(),
+                Duration::from_millis(50),
+                Duration::from_secs(1),
+            )
+            .await;
+
+        assert!(
+            matches!(res, Err(Http2PoolError::Dial(_))),
+            "expected Dial error, got {res:?}",
+        );
+    }
+
+    /// In-process H2 backend used by the `send_request_idle` coverage
+    /// arms below. Spawns a single connection acceptor and serves
+    /// `handler` for each incoming request; returns the bound address.
+    ///
+    /// The acceptor runs until the test drops the listener (we leak it
+    /// via `Box::leak` so the test doesn't have to thread a shutdown
+    /// channel — tests are short-lived and the runtime tears down at
+    /// the end of the `#[tokio::test]` fn).
+    async fn spawn_h2_backend<F, R>(handler: F) -> SocketAddr
+    where
+        F: Fn(Request<Incoming>) -> R + Send + Sync + 'static,
+        R: std::future::Future<
+                Output = Result<Response<http_body_util::Full<Bytes>>, std::io::Error>,
+            > + Send
+            + 'static,
+    {
+        use hyper::server::conn::http2;
+        use hyper::service::service_fn;
+        use std::sync::Arc as StdArc;
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let handler = StdArc::new(handler);
+        tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let h = handler.clone();
+                tokio::spawn(async move {
+                    let _ = http2::Builder::new(TokioExecutor::new())
+                        .serve_connection(
+                            TokioIo::new(stream),
+                            service_fn(move |req| {
+                                let h = h.clone();
+                                async move { h(req).await }
+                            }),
+                        )
+                        .await;
+                });
+            }
+        });
+        addr
+    }
+
+    fn tcp_pool_for_test() -> TcpPool {
+        TcpPool::new(
+            crate::pool::PoolConfig::default(),
+            crate::sockopts::BackendSockOpts {
+                nodelay: true,
+                keepalive: true,
+                rcvbuf: None,
+                sndbuf: None,
+                quickack: false,
+                tcp_fastopen_connect: false,
+            },
+            crate::Runtime::with_backend(crate::IoBackend::Epoll),
+        )
+    }
+
+    fn empty_request() -> Request<H2ReqBody> {
+        use http_body_util::Empty;
+        Request::builder()
+            .uri("/")
+            .body(
+                Empty::<Bytes>::new()
+                    .map_err(|never: std::convert::Infallible| {
+                        let e: Box<dyn std::error::Error + Send + Sync> = Box::new(never);
+                        e
+                    })
+                    .boxed(),
+            )
+            .unwrap()
+    }
+
+    /// S14 / cov — `send_request_idle` SUCCESS arm (the `Ok(Ok(resp))`
+    /// match). Drives the full path: acquire_sender → handshake →
+    /// `idle_bounded_send` → backend 200 OK → return Ok(Response).
+    #[tokio::test]
+    async fn send_request_idle_success_arm() {
+        use http_body_util::Full;
+        let addr = spawn_h2_backend(|_req| async move {
+            Ok::<_, std::io::Error>(
+                Response::builder()
+                    .status(200)
+                    .body(Full::<Bytes>::from("ok"))
+                    .unwrap(),
+            )
+        })
+        .await;
+        let pool = Http2Pool::new(Http2PoolConfig::default(), tcp_pool_for_test());
+        let upload_complete = Arc::new(AtomicBool::new(true)); // empty body — complete immediately.
+        let res = pool
+            .send_request_idle(
+                addr,
+                empty_request(),
+                Arc::new(AtomicU64::new(0)),
+                upload_complete,
+                Instant::now(),
+                Duration::from_secs(2),
+                Duration::from_secs(5),
+            )
+            .await;
+        let resp = res.expect("send_request_idle should succeed");
+        assert_eq!(resp.status(), 200);
+        assert!(pool.peer_count() >= 1, "pool should cache the peer");
+    }
+
+    /// S14 / cov — `send_request_idle` TIMEOUT arm (the `Err(idle_err)`
+    /// match). Backend handler NEVER returns → `idle_bounded_send`
+    /// fires Phase B `HeadTimeout` (upload_complete = true,
+    /// head_timeout is short). Asserts the pool evicts on timeout
+    /// (parity with `send_request`'s ROUND8-L7-10 policy).
+    #[tokio::test]
+    async fn send_request_idle_head_timeout_arm() {
+        let addr = spawn_h2_backend(|_req| async move {
+            // Never respond — the H2 stream stays open until the
+            // pool's deadline fires and the connection is dropped.
+            std::future::pending::<Result<Response<http_body_util::Full<Bytes>>, std::io::Error>>()
+                .await
+        })
+        .await;
+        let pool = Http2Pool::new(Http2PoolConfig::default(), tcp_pool_for_test());
+        let upload_complete = Arc::new(AtomicBool::new(true));
+        let res = pool
+            .send_request_idle(
+                addr,
+                empty_request(),
+                Arc::new(AtomicU64::new(0)),
+                upload_complete,
+                Instant::now(),
+                Duration::from_secs(60),
+                Duration::from_millis(100),
+            )
+            .await;
+        assert!(
+            matches!(res, Err(Http2PoolError::Timeout)),
+            "expected Timeout, got {res:?}",
+        );
+        assert_eq!(
+            pool.peer_count(),
+            0,
+            "pool must evict on timeout (ROUND8-L7-10 parity)",
+        );
+    }
+
+    /// S14 / cov — `send_request_idle` IDLE timeout arm (Phase A
+    /// firing). upload_complete stays false; `last_progress` never
+    /// bumps; backend never responds → `idle_bounded_send` fires
+    /// `IdleTimeout`. Asserts the pool path collapses Idle → Timeout
+    /// (Phase 1 stable-enum semantics) and evicts.
+    #[tokio::test]
+    async fn send_request_idle_idle_timeout_arm() {
+        let addr = spawn_h2_backend(|_req| async move {
+            std::future::pending::<Result<Response<http_body_util::Full<Bytes>>, std::io::Error>>()
+                .await
+        })
+        .await;
+        let pool = Http2Pool::new(Http2PoolConfig::default(), tcp_pool_for_test());
+        let upload_complete = Arc::new(AtomicBool::new(false));
+        let res = pool
+            .send_request_idle(
+                addr,
+                empty_request(),
+                Arc::new(AtomicU64::new(0)),
+                upload_complete,
+                Instant::now(),
+                Duration::from_millis(100),
+                Duration::from_secs(60),
+            )
+            .await;
+        assert!(
+            matches!(res, Err(Http2PoolError::Timeout)),
+            "expected Timeout (idle collapsed), got {res:?}",
+        );
+        assert_eq!(pool.peer_count(), 0, "pool must evict on idle timeout");
     }
 }

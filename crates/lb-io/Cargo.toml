@@ -34,3 +34,7 @@ libc = { workspace = true }
 
 [dev-dependencies]
 rand = { workspace = true }
+# S14 / CF-BODY-WALLCLOCK Phase 1: idle_send.rs unit tests use
+# `#[tokio::test(start_paused = true)]` which requires tokio's
+# `test-util` feature for the paused virtual clock.
+tokio = { workspace = true, features = ["test-util"] }
