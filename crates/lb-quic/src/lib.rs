@@ -81,33 +81,11 @@
     )
 )]
 
-use std::io;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::path::PathBuf;
-use std::sync::Arc;
-use std::time::Duration;
-
-use parking_lot::Mutex as PlMutex;
-use tokio::net::UdpSocket;
-use tokio::sync::Mutex;
-
+// S15 A1/A2 shared surface (always compiled — Mode A passthrough uses
+// these alongside the termination tree, and the passthrough-only build
+// keeps them).
 pub use lb_security::{RetryTokenSigner, ZeroRttReplayGuard};
 
-/// Re-exported from `tokio-quiche`. Pillar 3b.2 wires a listener in the
-/// root binary that consumes a [`ConnectionParams`]; lifting the symbol
-/// here keeps downstream crates decoupled from `tokio-quiche` versioning.
-pub use tokio_quiche::ConnectionParams;
-
-mod cleanup_guard;
-// ROUND8-L7-16: `conn_actor` is now `pub` so the H3 authority-
-// enforcement proof (`tests/round8_h3_authority_enforced.rs`) can
-// drive the REAL `run_actor` / `ActorParams` / `InboundPacket`
-// against a real accept-counting probe backend — the same proof
-// shape the H1/H2 L7-09 tests use. `h3_bridge` is already `pub mod`
-// for the same reason.
-pub mod conn_actor;
-pub mod h3_bridge;
-mod listener;
 // SHARED-1 (S15 A1): quiche-free QUIC public-header parser. Mode A
 // passthrough routes packets by Connection ID without decrypting; the
 // router calls into this module on every inbound datagram. See
@@ -115,6 +93,69 @@ mod listener;
 // implements and §A1 for the verify-bar. Namespace-explicit by lead
 // directive — callers use `lb_quic::public_header::*`, no re-exports.
 pub mod public_header;
+
+// SHARED-2 (S15 A2): UDP datapath trait + tier-3 tokio-UDP impl. Shared
+// between Mode A (this session) and Mode B (S16); see `s15-design.md`
+// §10 for the stable seam contract.
+pub mod udp_dataplane;
+
+// S15 A2: Mode A passthrough router (the new datapath this session
+// ships). Builds on `public_header` + `udp_dataplane`; no quiche
+// dependency on the Mode A code path — see `Cargo.toml` features and
+// the `quic-passthrough-only` build for the NEVER-DECRYPTED LINKAGE
+// proof.
+pub mod passthrough;
+
+// ---- termination-only surface (gated behind `quic-terminate`) -------
+//
+// S15 A2 (a1) — CF-S15-PASSTHROUGH-FEATURE-GATING. Everything below is
+// the existing H3 termination router/actor/bridge/listener tree. It
+// requires `quiche`, `tokio-quiche`, `lb-io`, `lb-h3`, `lb-core`,
+// `hyper`, `http-body-util`. Building with
+// `--no-default-features --features quic-passthrough-only` excludes
+// all of it, so `cargo bloat --filter quiche` shows ZERO
+// quiche::Connection / BoringSSL symbols on the Mode A binary segment
+// (owner ruling §9.5 primary item 1).
+
+#[cfg(feature = "quic-terminate")]
+use std::io;
+#[cfg(feature = "quic-terminate")]
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+#[cfg(feature = "quic-terminate")]
+use std::path::PathBuf;
+#[cfg(feature = "quic-terminate")]
+use std::sync::Arc;
+#[cfg(feature = "quic-terminate")]
+use std::time::Duration;
+
+#[cfg(feature = "quic-terminate")]
+use parking_lot::Mutex as PlMutex;
+#[cfg(feature = "quic-terminate")]
+use tokio::net::UdpSocket;
+#[cfg(feature = "quic-terminate")]
+use tokio::sync::Mutex;
+
+/// Re-exported from `tokio-quiche`. Pillar 3b.2 wires a listener in the
+/// root binary that consumes a [`ConnectionParams`]; lifting the symbol
+/// here keeps downstream crates decoupled from `tokio-quiche` versioning.
+#[cfg(feature = "quic-terminate")]
+pub use tokio_quiche::ConnectionParams;
+
+#[cfg(feature = "quic-terminate")]
+mod cleanup_guard;
+// ROUND8-L7-16: `conn_actor` is now `pub` so the H3 authority-
+// enforcement proof (`tests/round8_h3_authority_enforced.rs`) can
+// drive the REAL `run_actor` / `ActorParams` / `InboundPacket`
+// against a real accept-counting probe backend — the same proof
+// shape the H1/H2 L7-09 tests use. `h3_bridge` is already `pub mod`
+// for the same reason.
+#[cfg(feature = "quic-terminate")]
+pub mod conn_actor;
+#[cfg(feature = "quic-terminate")]
+pub mod h3_bridge;
+#[cfg(feature = "quic-terminate")]
+mod listener;
+#[cfg(feature = "quic-terminate")]
 mod router;
 
 // PROTO-2-11: expose the H3 graceful-shutdown helper so the integration
@@ -122,17 +163,22 @@ mod router;
 // having to spin up a full `ConnectionActor` (which would otherwise
 // require pulling the H3 bridge, TCP pool, and backend wiring through
 // the test rig).
+#[cfg(feature = "quic-terminate")]
 pub use conn_actor::{H3_INTERNAL_ERROR, H3_NO_ERROR, graceful_h3_shutdown};
 
 // CODE-2-08: re-exported so tests/quic_router_leak.rs can call
 // `CidEntryGuard::new(...)` from the integration-test target.
+#[cfg(feature = "quic-terminate")]
 pub use cleanup_guard::CidEntryGuard;
 
+#[cfg(feature = "quic-terminate")]
 pub use h3_bridge::{
     H3Request, H3RespEvent, H3RespOut, H3UpstreamResponse, request_h3_upstream,
     stream_request_to_h3_upstream,
 };
+#[cfg(feature = "quic-terminate")]
 pub use listener::{QuicListener, QuicListenerParams};
+#[cfg(feature = "quic-terminate")]
 pub use router::{RouterHandle, RouterParams, spawn as spawn_router};
 
 /// Production ALPN tokens advertised by the H3 listener.
@@ -147,6 +193,7 @@ pub use router::{RouterHandle, RouterParams, spawn as spawn_router};
 /// quiche 0.28 passes the ALPN list straight through to BoringSSL's
 /// `SSL_CTX_set_alpn_protos`; both tokens are emitted verbatim in the
 /// TLS 1.3 ClientHello / EncryptedExtensions exchange (PROTO-2-02).
+#[cfg(feature = "quic-terminate")]
 pub const H3_ALPN_PROTOS: &[&[u8]] = &[b"h3", b"h3-29"];
 
 /// Test-only ALPN for the loopback transport-only rig that does **not**
@@ -157,7 +204,7 @@ pub const H3_ALPN_PROTOS: &[&[u8]] = &[b"h3", b"h3-29"];
 /// installed on the production server config. Round 4 moved it under
 /// `#[cfg(test)]` so the audit invariant "no production code path
 /// advertises anything other than `H3_ALPN_PROTOS`" holds.
-#[cfg(test)]
+#[cfg(all(test, feature = "quic-terminate"))]
 pub(crate) const LB_QUIC_TEST_ALPN: &[u8] = b"lb-quic";
 
 /// SNI the loopback client presents.
@@ -169,25 +216,30 @@ pub(crate) const LB_QUIC_TEST_ALPN: &[u8] = b"lb-quic";
 /// while still targeting `SocketAddr(127.0.0.1, <port>)`. Pillar
 /// 3b.3c will accept an SNI override via the endpoint builder when
 /// the real listener lands; for now this constant is the default.
+#[cfg(feature = "quic-terminate")]
 pub const LB_QUIC_TEST_SNI: &str = "expressgateway.test";
 
 /// Maximum size of one datagram we accept over the UDP socket.
+#[cfg(feature = "quic-terminate")]
 const MAX_UDP_DATAGRAM_SIZE: usize = 65_535;
 
 /// Budget for how long the loopback driver will keep spinning before
 /// treating a test as hung. Loopback handshake + one-shot roundtrip
 /// completes well under 200 ms on idle hardware.
+#[cfg(feature = "quic-terminate")]
 const LOOPBACK_DRIVER_BUDGET: Duration = Duration::from_secs(5);
 
 /// Safely take the first `n` bytes of `buf`, returning `&[]` if `n`
 /// exceeds the slice length. Avoids `clippy::indexing_slicing` panics
 /// while remaining a no-op on the hot path where `n <= buf.len()` by
 /// construction.
+#[cfg(feature = "quic-terminate")]
 fn prefix(buf: &[u8], n: usize) -> &[u8] {
     buf.get(..n).unwrap_or(&[])
 }
 
 /// Errors from the QUIC layer.
+#[cfg(feature = "quic-terminate")]
 #[derive(Debug, thiserror::Error)]
 pub enum QuicError {
     /// Datagram payload is empty.
@@ -231,6 +283,7 @@ pub enum QuicError {
 
 /// QUIC datagram — a connection-scoped, unreliable, bounded payload.
 #[derive(Debug, Clone)]
+#[cfg(feature = "quic-terminate")]
 pub struct QuicDatagram {
     /// Connection ID this datagram belongs to. quiche datagrams do not
     /// carry a per-datagram connection identifier on the wire, so this
@@ -243,6 +296,7 @@ pub struct QuicDatagram {
 
 /// QUIC stream frame — a unidirectional stream slice with a FIN marker.
 #[derive(Debug, Clone)]
+#[cfg(feature = "quic-terminate")]
 pub struct QuicStream {
     /// Stream ID within the connection.
     pub stream_id: u64,

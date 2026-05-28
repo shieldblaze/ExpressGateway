@@ -1638,6 +1638,7 @@ dependencies = [
  "dashmap 6.1.0",
  "http-body-util",
  "hyper",
+ "lb-balancer",
  "lb-core",
  "lb-h3",
  "lb-io",
