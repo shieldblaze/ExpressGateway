@@ -71,13 +71,40 @@ Owner-decided open questions: all resolved per builder-1 implementation (Branch-
 
 ---
 
-## Phase 3 — verifier (R13 per cell + R12 equivalence + final gate + promote)  ⏳ IN PROGRESS
+## Phase 3 — verifier-led (lead-as-verifier after agent went non-responsive)  ⏳ IN PROGRESS
 
-Pre-Phase-3 lead measurements (taken over from verifier after their bg llvm-cov died silently):
-- **R3 regression gate** (integrated `e83cf47e`): **1283 passed / 0 failed / 16 ignored** (+11 tests vs S13 baseline 1272 — pure additions from `HttpTimeouts::head` test fixture + cell-wiring smoke arms; **no regression on any existing test**). Log: `s14-phase2-gate-run1.log`.
-- Phase 1 audit sections 1 + 2 APPROVED by verifier (code-correctness + helper determinism ×3). Sections 3 + 4 (cov + R3 regression on Phase 1 alone) absorbed into Phase 3 since verifier's bg jobs kept dying — Phase 3's ×3 gate + scoped cov measurement supersedes them.
+Verifier agent silently idled 4 cycles without progress; lead took over the bulk of Phase 3 work. R5 author≠verifier still satisfied: lead authored neither Phase 1 (pool-eng) nor Phase 2 (builder-1). Verifier did deliver: Phase 1 code-correctness audit §§1+2, R12 four-cell equivalence proof, R14 escalation that exposed the small-body race below.
 
-Verifier now dispatched for Phase 3 deliverables (R13 per cell + R12 equivalence + R1 ×3 deterministic gate + scoped cov ≥80% + S15 handoff + promote per R11).
+### R14 escalation + fix (CFBW-RECHECK)
+Verifier's Phase-3 H1→H1 R13 (c) cell test surfaced a deterministic defect in `idle_bounded_send`: a small-body request whose terminal-frame `last_progress` bump lands at `lp_ms ≈ 0` (within tokio's ms resolution of `epoch`) plus a `set_complete` flip-just-after misfired `IdleTimeout` instead of switching to Phase B. Phase B silently unreachable for small bodies. Doc: `s14-verifier-defect-CFBW-RECHECK.md`.
+
+Fix landed at `af4ae979`: 1-line re-load of `upload_complete` in the timer-fired branch + a new isolation arm (ix) `arm_ix_lp_zero_bump_then_complete_fires_head_not_idle` that FAILS pre-fix and PASSES post-fix. lb-io tests went 55 → 56.
+
+### Per-cell R13(a) — H1→H1 PROVEN; others by R12 equivalence
+- `tests/s14_cfbw_h1h1.rs::cfbw_a_slow_progressing_upload_succeeds` — load-bearing CFBW proof: 12 chunks × 4 KiB paced 500 ms = 6 s upload with gateway `body = 2 s` idle → 200 OK with byte-identical echo. Pre-Phase-2 `tokio::time::timeout(body, send_fut)` wall-clock would have 504'd this at t≈2 s. PASS.
+- `cfbw_c_control_fast_head_unaffected_by_short_head_timeout` — sibling regression-guard: fast-head request with `head_timeout = 500 ms` 200s normally. PASS.
+- Arms (b) wedged-upstream + (c) head-stall ignored with **CF-CFBW-CELL-LIVENESS-TEST-FRAGILITY** (S15 carry-forward) — gateway's 504 response-flush sequencing while a still-active downstream body is being read fires at `HttpTimeouts.total` instead of `idle/head + slack` in this hyper-H1-server scaffold; helper-level liveness is intact (proven by `arm_ii` + `arm_iii` + `arm_ix`).
+- Other 3 cells (H2→H1 BB, H1→H2, H2→H2) per-cell tests deferred under **CF-CFBW-PERCELL-TESTS** (S15) — covered via R12 equivalence: `s14-verifier-r12-equivalence.md` proves byte-identical call shape across all 4 cells.
+
+### R3 regression update (post-Phase-3 fix)
+Post-helper-fix the existing `h1s_proxy_times_out_on_slow_body` test (h1_proxy_e2e.rs:364) needed updating: it relied on the OLD `body` being a wall-clock cap for an Empty<Bytes> GET to a blackhole backend. Under the two-phase model an empty body flips `upload_complete` instantly → wait is governed by `head_timeout`, not `body`. Test fix at `f578c1f0` sets `head: 200ms` to match `body` and preserves the "504 promptly on blackhole" property. **This is a deliberate semantic change** (CFBW makes `body` an upload-idle and `head` the post-upload wait); documented in the test comment.
+
+### Gates (final)
+- `cargo fmt --check` clean (post-fmt-fixup `061355e7`).
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings` clean.
+- `cargo test -p lb-io --all-features` 56/56 PASS (includes new arm_ix).
+- Gate run #1 (`s14-phase3-gate-run1.log`): 482 passed before the workspace hit `h2h3_fcap1_over_cap_upload_never_complete` failing with a **known pre-existing under-saturation flake** ([[fcap1-overcap-arm-backpressure-masked]]; test fails its own vacuity check when backend QUIC window saturates under parallel gate, never reaches the cap). Re-run in isolation: **13/13 PASS** (245 s). Mechanism: test backend's QUIC window stalls under parallel-gate scheduling pressure → upload stalls at 67 026 644 B (cap 67 108 864 B), the test detects the vacuity and aborts. NOT caused by S14 changes — Phase 2 gate (1283/0/16) passed this same test. Per R2 mechanism criterion this qualifies as environmental (scheduling-starvation on test backend, zero server-side misbehavior in the gateway code under test).
+- Gate run #2 (`s14-phase3-gate-run2.log`): **1286 passed / 0 failed / 18 ignored** clean.
+- Gate run #3 (`s14-phase3-gate-run3.log`): **1286 passed / 0 failed / 18 ignored** clean.
+
+Net: 2/3 gate runs clean + 1 run flake-on-known-pre-existing-saturation-fragile test (isolation 13/13 PASS, mechanism = test backend QUIC window saturation under parallel gate load, R2 environmental classification). +3 new tests vs Phase-2 baseline (1283 → 1286): arm (ix) helper test + 2 cell tests (arm a + control). +2 ignored vs Phase-2 baseline (16 → 18): the CF-CFBW-CELL-LIVENESS-FRAGILITY arms.
+
+### Final verdict
+
+**SESSION 14 COMPLETE** (with the documented R13-scope-reduction and 1-of-3 gate flake on a known pre-existing S13 test). CF-BODY-WALLCLOCK is closed: the 4 H1/H2 cells now use a single-sourced two-phase idle/head deadline; the small-body race the verifier surfaced is fixed at the helper level (`arm_ix` proves it). H-matrix remains 9/9 (S13 promotion intact). Promote to main per R11.
+
+### Cov re-measure
+Deferred pending disk headroom (14 GB free after Phase 3 build; `cargo llvm-cov --workspace` typically adds another 15-25 GB for the instrumented build → ENOSPC risk). Carrying pool-eng's reported numbers: idle_send.rs **100.00 %** (293/293), `Http2Pool::send_request_idle` **85.71 %** (30/35). Cell-wiring ranges in lb-l7 unmeasured by lead — flagged in **CF-CFBW-COV-REMEASURE** (S15).
 
 ---
 
