@@ -883,31 +883,103 @@ async fn h2h3_fcap1_over_cap_upload_never_complete() {
     let chunk = vec![0x5Au8; 64 * 1024];
     let over = 66 * 1024 * 1024usize;
     let mut sent = 0usize;
-    while sent < over {
+    let break_reason;
+    loop {
+        if sent >= over {
+            break_reason = "sent-full-66MiB";
+            break;
+        }
         send_body.reserve_capacity(chunk.len());
         let cap = tokio::time::timeout(
-            Duration::from_secs(10),
+            Duration::from_secs(30),
             futures_util::future::poll_fn(|cx| send_body.poll_capacity(cx)),
         )
         .await;
         match cap {
+            // Capacity granted → send a chunk below.
             Ok(Some(Ok(c))) if c > 0 => {}
-            _ => break, // stream reset / capacity gone → over-cap abort landed
+            // Transient zero capacity is NOT terminal (the gateway's H2 receive
+            // window momentarily closed while it drains/forwards) — re-reserve
+            // and poll again. Only an Err (RST) or None (closed) is terminal.
+            // Breaking on zero here would cut the upload short and (non-
+            // deterministically) stop it BEFORE forwarded_total reaches the cap.
+            Ok(Some(Ok(_))) => continue,
+            Ok(Some(Err(_))) => {
+                break_reason = "cap-err(RST)";
+                break;
+            }
+            Ok(None) => {
+                break_reason = "cap-none(closed)";
+                break;
+            }
+            Err(_) => {
+                break_reason = "cap-timeout";
+                break;
+            }
         }
         if send_body
             .send_data(Bytes::copy_from_slice(&chunk), false)
             .is_err()
         {
+            break_reason = "send_data-err";
             break;
         }
         sent += chunk.len();
     }
-    let _ = tokio::time::timeout(Duration::from_secs(10), resp_fut).await;
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    eprintln!("H2H3_FCAP1 send loop ended: reason={break_reason} sent={sent}");
+    // Capture the H2 client-observed outcome. The over-cap mid-body Reset (the
+    // connector RESET-without-FINs the upstream) must surface to the H2 client as
+    // an ABORT, never a clean 200-with-complete-body. The client sees one of:
+    //  - send_request errors / times out (no head, the stream was RST mid-upload),
+    //  - a response head whose BODY collect ERRORS (RST_STREAM after a partial), or
+    //  - a non-200 status.
+    // What it must NEVER see: 200 + a cleanly-terminated body (a smuggled-complete).
+    let client_clean_200 = match tokio::time::timeout(Duration::from_secs(15), resp_fut).await {
+        Ok(Ok(resp)) => {
+            let status = resp.status().as_u16();
+            // Drain the body; a clean END_STREAM yields Ok, an RST yields Err.
+            let mut body = resp.into_body();
+            let mut body_ok = true;
+            while let Some(part) = body.data().await {
+                match part {
+                    Ok(b) => {
+                        let _ = body.flow_control().release_capacity(b.len());
+                    }
+                    Err(_) => {
+                        body_ok = false;
+                        break;
+                    }
+                }
+            }
+            let trailers_ok = body.trailers().await.is_ok();
+            eprintln!(
+                "H2H3_FCAP1 client head status={status} body_ok={body_ok} trailers_ok={trailers_ok}"
+            );
+            status == 200 && body_ok && trailers_ok
+        }
+        Ok(Err(e)) => {
+            eprintln!("H2H3_FCAP1 client send_request errored (RST mid-upload): {e}");
+            false
+        }
+        Err(_) => {
+            eprintln!("H2H3_FCAP1 client got no response head (stream aborted)");
+            false
+        }
+    };
+    // Let the backend finish draining the in-flight upload tail so `live`
+    // reflects the full ~64 MiB it received before the over-cap Reset (bounded
+    // wait — CF-SATURATION-1, generous so the ×3 gate can't false-flake).
+    const CAP: usize = 64 * 1024 * 1024;
+    let drain_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    while obs.req_body_bytes_live.load(Ordering::SeqCst) < CAP - chunk.len()
+        && tokio::time::Instant::now() < drain_deadline
+    {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 
     let live = obs.req_body_bytes_live.load(Ordering::SeqCst);
     eprintln!(
-        "H2H3_FCAP1 sent={sent} backend_complete={} backend_body_live={live} backend_body_bytes={}",
+        "H2H3_FCAP1 sent={sent} backend_complete={} backend_body_live={live} backend_body_bytes={} client_clean_200={client_clean_200}",
         obs.complete.load(Ordering::SeqCst),
         obs.req_body_bytes.load(Ordering::SeqCst),
     );
@@ -918,19 +990,26 @@ async fn h2h3_fcap1_over_cap_upload_never_complete() {
          (complete={}) — the cap did not abort the upstream request",
         obs.complete.load(Ordering::SeqCst)
     );
-    // R4 non-vacuity: the upload must genuinely forward UP TO the 64 MiB cap so the
-    // pump's mid-body over-cap `Reset` arm is the branch that aborts it (NOT an
-    // upstream flow-control stall at ~16 MiB, which would never reach the cap). The
-    // pump forwards chunks until the NEXT would exceed MAX_REQUEST_BODY_BYTES, then
-    // Resets — so the backend sees exactly the cap's worth (≈64 MiB) of DATA. A
-    // stall would plateau the live counter near the old 16 MiB window. Require the
-    // forwarded total to have REACHED the cap boundary (≥ 32 MiB, well past the old
-    // 16 MiB stall point and ≤ the 64 MiB cap), proving the over-cap arm fired.
-    const CAP: usize = 64 * 1024 * 1024;
+    // Point #3 (lead): the gateway must RST_STREAM the H2 client — the client must
+    // NOT observe a clean 200-with-complete-body. This distinguishes the cap-abort
+    // from any clean completion and is the downstream half of the F-CAP-1 guard.
     assert!(
-        live >= CAP / 2,
+        !client_clean_200,
+        "F-CAP-1: the H2 client saw a CLEAN 200-with-complete-body for an over-cap \
+         upload — the cap-RST did not propagate downstream (response-splitting / \
+         smuggled-complete)"
+    );
+    // R4 non-vacuity: the over-cap mid-body Reset arm only fires once the upload
+    // genuinely forwards UP TO the 64 MiB cap. The pump forwards chunks until the
+    // NEXT would exceed MAX_REQUEST_BODY_BYTES, then Resets — so the backend sees
+    // ≈ the cap's worth (~64 MiB) of DATA. The OLD bug stalled forwarding at the
+    // backend's ~16 MiB window and never reached the cap. Require the forwarded
+    // total to have reached WITHIN one chunk of the 64 MiB cap (≈64 MiB), proving
+    // the over-cap arm — not a flow-control stall — is what aborted the upload.
+    assert!(
+        live >= CAP - chunk.len(),
         "F-CAP-1 vacuity: the over-cap arm was NOT reached — only {live} B forwarded \
-         (≪ the {CAP} B cap), so the upload stalled on flow-control before the cap \
+         (the cap is {CAP} B), so the upload stalled on flow-control before the cap \
          instead of tripping the mid-body Reset. Raise the test backend's QUIC window."
     );
 }
