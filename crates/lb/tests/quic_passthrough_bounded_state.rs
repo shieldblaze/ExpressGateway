@@ -9,21 +9,16 @@
 //!
 //! Three sub-cases, matching the design §A2 verify-bar:
 //!
-//!   * (a) burst-open many distinct DCIDs; assert `flows_len() ≤ cap`,
-//!     no panic, RSS bounded. We use cap=2048 + 4096 distinct DCIDs
-//!     here (the spec's 200_000 is a memory-shape proof; 2048 is a
-//!     fast-running tractable variant that exercises the same
-//!     LRU code path in CI without burning 8 GB). `--test-threads=1`
-//!     is set by the test attribute below (`current_thread` runtime
-//!     + serial exec via `serial_test`-style guard would be ideal;
-//!     we settle for `current_thread` only since this is the only
-//!     cap-heavy test in the file).
-//!   * (b) cap+1 opens force eviction of the oldest entry. The
-//!     `FlowEntry::dropped` test-gauge (Arc<AtomicBool> set by
-//!     `Drop`) observes the eviction. Repeat ≥50× to drive out
-//!     races.
-//!   * (c) cap-1 opens: no eviction observed (sanity / negative
-//!     control).
+//! (a) burst-open many distinct DCIDs; assert `flows_len() ≤ cap`, no
+//!     panic, RSS bounded. We use cap=2048 + 4096 distinct DCIDs here
+//!     (the spec's 200_000 is a memory-shape proof; 2048 is the same
+//!     LRU code path in CI without burning 8 GB).
+//!
+//! (b) cap+1 opens force eviction of the oldest entry. The
+//!     `FlowEntry::dropped` test-gauge (Arc<AtomicBool> set by Drop)
+//!     observes the eviction. Repeat ≥50× to drive out races.
+//!
+//! (c) cap-1 opens: no eviction observed (sanity / negative control).
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -62,7 +57,8 @@ fn varint(v: u64, out: &mut Vec<u8>) {
         let b = (v as u32) | 0b1000_0000_0000_0000_0000_0000_0000_0000;
         out.extend_from_slice(&b.to_be_bytes());
     } else {
-        let b = v | 0b1100_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000;
+        let b =
+            v | 0b1100_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000;
         out.extend_from_slice(&b.to_be_bytes());
     }
 }

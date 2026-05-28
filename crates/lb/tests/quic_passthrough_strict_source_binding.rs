@@ -93,13 +93,8 @@ async fn spawn_counting_backend() -> (SocketAddr, Arc<AtomicU64>) {
     let count_for_task = Arc::clone(&count);
     tokio::spawn(async move {
         let mut buf = vec![0u8; 65_535];
-        loop {
-            match sock.recv_from(&mut buf).await {
-                Ok((_n, _peer)) => {
-                    count_for_task.fetch_add(1, Ordering::Relaxed);
-                }
-                Err(_) => break,
-            }
+        while sock.recv_from(&mut buf).await.is_ok() {
+            count_for_task.fetch_add(1, Ordering::Relaxed);
         }
     });
     (addr, count)
@@ -204,8 +199,7 @@ async fn ssb_true_drops_spoofed_source() {
     let dcid = [0xcdu8; DCID_LEN];
     let signer = RetryTokenSigner::new_with_secret(RETRY_SECRET);
 
-    let (listener, lb_addr, _backend, backend_count, cancel) =
-        spawn_listener(true, DCID_LEN).await;
+    let (listener, lb_addr, _backend, backend_count, cancel) = spawn_listener(true, DCID_LEN).await;
 
     let client_a = UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
         .await

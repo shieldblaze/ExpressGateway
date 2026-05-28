@@ -122,8 +122,7 @@ fn make_certs() -> TestCerts {
 /// Build a quiche::Config for the backend SERVER role.
 fn build_server_config(cert_path: &std::path::Path, key_path: &std::path::Path) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).expect("quiche cfg");
-    cfg.set_application_protos(&[b"lb-quic-e2e"])
-        .expect("alpn");
+    cfg.set_application_protos(&[b"lb-quic-e2e"]).expect("alpn");
     cfg.load_cert_chain_from_pem_file(cert_path.to_str().expect("cert utf8"))
         .expect("load cert");
     cfg.load_priv_key_from_pem_file(key_path.to_str().expect("key utf8"))
@@ -149,8 +148,7 @@ fn build_server_config(cert_path: &std::path::Path, key_path: &std::path::Path) 
 /// anchor for the backend's leaf cert.
 fn build_client_config(ca_path: &std::path::Path) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).expect("quiche cfg");
-    cfg.set_application_protos(&[b"lb-quic-e2e"])
-        .expect("alpn");
+    cfg.set_application_protos(&[b"lb-quic-e2e"]).expect("alpn");
     cfg.load_verify_locations_from_file(ca_path.to_str().expect("ca utf8"))
         .expect("load ca");
     cfg.verify_peer(true);
@@ -192,8 +190,7 @@ fn extract_odcid_from_token_unsafe(token: &[u8]) -> Result<Vec<u8>, String> {
     };
     // Cursor into the token, walking forward.
     let mut cursor = 1 + 8 + 1 + addr_len + 2;
-    let odcid_len =
-        *token.get(cursor).ok_or("missing odcid_len")? as usize;
+    let odcid_len = *token.get(cursor).ok_or("missing odcid_len")? as usize;
     cursor += 1;
     let odcid = token
         .get(cursor..cursor + odcid_len)
@@ -213,7 +210,9 @@ fn random_scid() -> [u8; quiche::MAX_CONN_ID_LEN] {
 
 /// Run the passthrough LB pointed at `backend_addr`. Returns the LB's
 /// bound addr + cancel token + listener handle.
-async fn spawn_lb(backend_addr: SocketAddr) -> (PassthroughListener, SocketAddr, CancellationToken) {
+async fn spawn_lb(
+    backend_addr: SocketAddr,
+) -> (PassthroughListener, SocketAddr, CancellationToken) {
     let dir = make_dir();
     let retry_path = dir.join("retry.bin");
     std::fs::write(&retry_path, RETRY_SECRET).expect("write retry secret");
@@ -310,14 +309,38 @@ async fn spawn_quic_echo_backend(
         let _ = &signer;
         let scid = random_scid();
         let scid_conn = quiche::ConnectionId::from_ref(&scid);
-        let mut conn = quiche::accept(
-            &scid_conn,
-            Some(&odcid_cid),
-            local_addr,
-            peer,
-            &mut config,
-        )
-        .map_err(|e| format!("backend accept: {e}"))?;
+        // Use `accept_with_retry` so we can pass BOTH transport
+        // parameters explicitly:
+        //   - `original_destination_cid` = the client's pre-Retry DCID
+        //     (recovered from the LB-minted token via
+        //     `extract_odcid_from_token_unsafe`). This is what the
+        //     client checks against its first-Initial DCID.
+        //   - `retry_source_cid` = the SCID the LB CHOSE in its Retry
+        //     packet, which the client used as its second-Initial DCID.
+        //     From this side, that's `hdr.dcid`. The plain
+        //     `quiche::accept(scid, Some(odcid))` defaults
+        //     retry_source_cid to OUR `scid` — that fails client
+        //     validation because the client expects the LB's chosen
+        //     SCID. Setting BOTH explicitly closes the handshake
+        //     mismatch that caused the prior
+        //     `InvalidTransportParam` symptom.
+        // `accept_with_retry` lets us set BOTH transport parameters
+        // explicitly: `original_destination_cid` (the recovered ODCID)
+        // AND `retry_source_cid` (the LB-Retry SCID = current hdr.dcid
+        // from this side). quiche's plain `accept` defaults
+        // retry_source_cid to OUR scid, which fails client validation.
+        let retry_cids = quiche::RetryConnectionIds {
+            original_destination_cid: &odcid_cid,
+            retry_source_cid: &hdr.dcid,
+        };
+        // `accept_with_retry::<F>` is generic over BufFactory, and
+        // `DefaultBufFactory` is private. The Connection's `F` defaults
+        // to DefaultBufFactory, so type-inference on the binding
+        // (`conn: quiche::Connection`) picks up the default — this is
+        // the supported public path.
+        let mut conn: quiche::Connection =
+            quiche::accept_with_retry(&scid_conn, retry_cids, local_addr, peer, &mut config)
+                .map_err(|e| format!("backend accept_with_retry: {e}"))?;
         // Feed the first packet to the new conn.
         {
             let info = quiche::RecvInfo {
@@ -344,7 +367,9 @@ async fn spawn_quic_echo_backend(
             loop {
                 match conn.send(&mut out_buf) {
                     Ok((n, info)) => {
-                        let _ = socket.send_to(out_buf.get(..n).unwrap_or(&[]), info.to).await;
+                        let _ = socket
+                            .send_to(out_buf.get(..n).unwrap_or(&[]), info.to)
+                            .await;
                     }
                     Err(quiche::Error::Done) => break,
                     Err(e) => return Err(format!("backend send: {e}")),
@@ -353,11 +378,15 @@ async fn spawn_quic_echo_backend(
             // Process any readable bidi streams (echo back).
             if conn.is_established() {
                 let readable: Vec<u64> = conn.readable().collect();
+                if !readable.is_empty() {
+                    eprintln!("backend: readable={:?}", readable);
+                }
                 for sid in readable {
                     let mut chunk = [0u8; 8192];
                     loop {
                         match conn.stream_recv(sid, &mut chunk) {
                             Ok((n, fin)) => {
+                                eprintln!("backend: sid={sid} recv n={n} fin={fin}");
                                 let bytes = chunk.get(..n).unwrap_or(&[]);
                                 // Echo.
                                 let mut sent = 0;
@@ -436,7 +465,9 @@ async fn drive_client(
             };
             match send {
                 Ok((n, info)) => {
-                    let _ = socket.send_to(out_buf.get(..n).unwrap_or(&[]), info.to).await;
+                    let _ = socket
+                        .send_to(out_buf.get(..n).unwrap_or(&[]), info.to)
+                        .await;
                 }
                 Err(quiche::Error::Done) => break,
                 Err(e) => return Err(format!("client send: {e}")),
@@ -506,8 +537,9 @@ async fn drive_client(
                     };
                     match send {
                         Ok((n, info)) => {
-                            let _ =
-                                socket.send_to(out_buf.get(..n).unwrap_or(&[]), info.to).await;
+                            let _ = socket
+                                .send_to(out_buf.get(..n).unwrap_or(&[]), info.to)
+                                .await;
                         }
                         Err(_) => break,
                     }
@@ -569,7 +601,7 @@ async fn drive_client(
 /// Retry tokens minted with the same `RetryTokenSigner` secret and
 /// drive the same `handle_initial` / `forward_short` code paths.
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "CF-S15-PASSTHROUGH-RETRY-ODCID"]
+#[ignore = "CF-S15-PASSTHROUGH-RETRY-ODCID — see fn doc"]
 async fn passthrough_e2e_real_quiche_client_handshake_and_stream() {
     let certs = make_certs();
     let (backend_addr, backend_join) =
@@ -586,8 +618,14 @@ async fn passthrough_e2e_real_quiche_client_handshake_and_stream() {
     let mut client_cfg = build_client_config(&certs.ca_path);
     let scid = random_scid();
     let scid_conn = quiche::ConnectionId::from_ref(&scid);
-    let conn = quiche::connect(Some(TEST_SNI), &scid_conn, client_local, lb_addr, &mut client_cfg)
-        .expect("client connect");
+    let conn = quiche::connect(
+        Some(TEST_SNI),
+        &scid_conn,
+        client_local,
+        lb_addr,
+        &mut client_cfg,
+    )
+    .expect("client connect");
     let conn = Arc::new(Mutex::new(conn));
 
     // Mixed binary payload to prove byte-faithful pass-through:

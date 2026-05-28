@@ -278,7 +278,9 @@ fn hash_dcid_for_maglev(dcid: &[u8]) -> u64 {
     // identically to the L7-affinity path.
     let mut h: u64 = 0xcbf2_9ce4_8422_2325; // FNV offset basis
     for &b in dcid {
-        h = h.wrapping_mul(0x517c_c1b7_2722_0a95).wrapping_add(u64::from(b));
+        h = h
+            .wrapping_mul(0x517c_c1b7_2722_0a95)
+            .wrapping_add(u64::from(b));
     }
     h ^= h >> 33;
     h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
@@ -750,7 +752,9 @@ async fn forward_short(ctx: &RouterCtx, pkt: &[u8], default_dcid: &[u8], from: S
     lens.dedup();
     for len in lens {
         let end = 1usize.saturating_add(len);
-        let Some(dcid) = pkt.get(1..end) else { continue };
+        let Some(dcid) = pkt.get(1..end) else {
+            continue;
+        };
         if let Some(entry) = ctx.table.get(dcid) {
             let flow = Arc::clone(entry.value());
             drop(entry);
@@ -769,12 +773,7 @@ async fn forward_short(ctx: &RouterCtx, pkt: &[u8], default_dcid: &[u8], from: S
 
 /// Strict source-binding gate (§6.3, owner ruling §9.1'). Returns
 /// `true` if the packet should be forwarded; `false` to drop.
-fn forward_short_via(
-    ctx: &RouterCtx,
-    flow: &FlowEntry,
-    _pkt: &[u8],
-    from: SocketAddr,
-) -> bool {
+fn forward_short_via(ctx: &RouterCtx, flow: &FlowEntry, _pkt: &[u8], from: SocketAddr) -> bool {
     if !ctx.params.strict_source_binding {
         return true;
     }
@@ -863,8 +862,8 @@ impl PassthroughListener {
                 state: None,
             })
             .collect();
-        let maglev = Maglev::new(&backends)
-            .map_err(|e| std::io::Error::other(format!("maglev: {e}")))?;
+        let maglev =
+            Maglev::new(&backends).map_err(|e| std::io::Error::other(format!("maglev: {e}")))?;
 
         let ctx = Arc::new(RouterCtx {
             params,
@@ -895,7 +894,10 @@ impl PassthroughListener {
                     handle_inbound(ctx_inner, data, from).await;
                 })
             });
-            if let Err(e) = dataplane_for_loop.recv_loop(shutdown_for_loop, on_packet).await {
+            if let Err(e) = dataplane_for_loop
+                .recv_loop(shutdown_for_loop, on_packet)
+                .await
+            {
                 tracing::warn!(error = %e, "passthrough recv_loop");
             }
         });

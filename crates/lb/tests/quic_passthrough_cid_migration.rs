@@ -82,7 +82,8 @@ fn build_short(dcid: &[u8], n: u8) -> Vec<u8> {
 /// rebinds to ONE backend socket per flow — so the backend sees
 /// exactly ONE source 4-tuple per flow, irrespective of how many
 /// client-side ports the original sender used.
-async fn spawn_unique_peer_backend() -> (SocketAddr, Arc<Mutex<HashSet<SocketAddr>>>, Arc<AtomicU64>) {
+async fn spawn_unique_peer_backend() -> (SocketAddr, Arc<Mutex<HashSet<SocketAddr>>>, Arc<AtomicU64>)
+{
     let sock = UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
         .await
         .expect("bind backend");
@@ -93,14 +94,9 @@ async fn spawn_unique_peer_backend() -> (SocketAddr, Arc<Mutex<HashSet<SocketAdd
     let count_for_task = Arc::clone(&count);
     tokio::spawn(async move {
         let mut buf = vec![0u8; 65_535];
-        loop {
-            match sock.recv_from(&mut buf).await {
-                Ok((_n, peer)) => {
-                    peers_for_task.lock().unwrap().insert(peer);
-                    count_for_task.fetch_add(1, Ordering::Relaxed);
-                }
-                Err(_) => break,
-            }
+        while let Ok((_n, peer)) = sock.recv_from(&mut buf).await {
+            peers_for_task.lock().unwrap().insert(peer);
+            count_for_task.fetch_add(1, Ordering::Relaxed);
         }
     });
     (addr, peers, count)
@@ -167,7 +163,7 @@ async fn nat_rebind_preserves_single_flow() {
     let flows_after_a = listener.flows_len();
     let count_after_a = backend_count.load(Ordering::Relaxed);
     assert!(
-        flows_after_a >= 1 && flows_after_a <= 2,
+        (1..=2).contains(&flows_after_a),
         "post-phase-1 flows_len={flows_after_a} expected 1..=2 (single client-DCID key)"
     );
     assert!(
@@ -210,8 +206,7 @@ async fn nat_rebind_preserves_single_flow() {
     // the original sender used. This is by design §3.4 (the per-flow
     // backend socket isolates the backend from client-side NAT
     // shenanigans).
-    let peers_snapshot: Vec<SocketAddr> =
-        backend_peers.lock().unwrap().iter().copied().collect();
+    let peers_snapshot: Vec<SocketAddr> = backend_peers.lock().unwrap().iter().copied().collect();
     assert_eq!(
         peers_snapshot.len(),
         1,
