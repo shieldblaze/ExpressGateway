@@ -317,7 +317,7 @@ fn hash_dcid_for_maglev(dcid: &[u8]) -> u64 {
 /// empty plaintext under AES-128-GCM is infallible in practice; this
 /// covers ring's API surface).
 #[allow(clippy::too_many_arguments)]
-fn build_retry_packet(
+pub(crate) fn build_retry_packet(
     odcid: &[u8],
     client_scid: &[u8],
     new_scid: &[u8; LB_SCID_LEN],
@@ -390,6 +390,23 @@ fn build_retry_packet(
     out.extend_from_slice(token);
     out.extend_from_slice(tag_bytes);
     Ok(())
+}
+
+/// Test-only re-export of [`build_retry_packet`] for integration tests
+/// (verify gate A2-2: 1000-case byte-equality differential vs
+/// `quiche::retry`). Hidden behind `test-gauges` so production
+/// builds don't expose the constructor.
+#[cfg(any(test, feature = "test-gauges"))]
+#[doc(hidden)]
+pub fn _test_build_retry_packet(
+    odcid: &[u8],
+    client_scid: &[u8],
+    new_scid: &[u8; 16],
+    version: u32,
+    token: &[u8],
+    out: &mut Vec<u8>,
+) -> Result<(), String> {
+    build_retry_packet(odcid, client_scid, new_scid, version, token, out)
 }
 
 // ============================================================

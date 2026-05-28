@@ -61,6 +61,11 @@ tokio = { workspace = true, features = ["full", "test-util"] }
 # CODE-2-11: proptest harness for the long/short header parse path.
 # Sanity budget; CI bumps via PROPTEST_CASES env.
 proptest = { workspace = true }
+# S15 A2 verify gate (A2-2): byte-equality differential of
+# `passthrough::build_retry_packet` vs `quiche::retry`. dev-deps
+# only — the production passthrough binary still links zero quiche
+# symbols (verified by scripts/never_decrypted_proof.sh).
+quiche = { workspace = true }
 
 [features]
 # Default keeps existing build behaviour: termination router/actor/
