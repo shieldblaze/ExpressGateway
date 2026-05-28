@@ -1396,6 +1396,8 @@ dependencies = [
  "prometheus",
  "quiche",
  "rand 0.8.5",
+ "rcgen",
+ "ring",
  "rustls",
  "rustls-pemfile",
  "rustls-pki-types",

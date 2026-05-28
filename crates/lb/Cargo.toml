@@ -70,6 +70,11 @@ lb-quic = { path = "../lb-quic", features = ["test-gauges"] }
 lb-security = { path = "../lb-security" }
 tokio = { workspace = true, features = ["test-util"] }
 tokio-util = { workspace = true }
+# S15 A2 verify gate (i) quic_passthrough_e2e: real quiche client +
+# real quiche server backend, rcgen-issued cert. ring is pulled in
+# for SystemRandom (16-byte SCID material).
+rcgen = { version = "0.13", features = ["pem"] }
+ring = "0.17"
 
 [features]
 # S15 A2-8: feature flag mirroring `lb-quic`'s `quic-terminate` /
