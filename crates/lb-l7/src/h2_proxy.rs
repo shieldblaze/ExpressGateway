@@ -1650,8 +1650,7 @@ impl H2Proxy {
             // `in_flight_bytes` fetch_add). `set_complete` once at the
             // verdict-Ok terminal arm (clean END_STREAM / trailer-Ok).
             let bump = || {
-                let dt = tokio::time::Instant::now()
-                    .saturating_duration_since(epoch_pump);
+                let dt = tokio::time::Instant::now().saturating_duration_since(epoch_pump);
                 let ms = u64::try_from(dt.as_millis()).unwrap_or(u64::MAX);
                 last_progress_pump.store(ms, std::sync::atomic::Ordering::Relaxed);
             };
@@ -2208,8 +2207,7 @@ impl H2Proxy {
 
         let pump = tokio::spawn(async move {
             let bump = || {
-                let dt = tokio::time::Instant::now()
-                    .saturating_duration_since(epoch_pump);
+                let dt = tokio::time::Instant::now().saturating_duration_since(epoch_pump);
                 let ms = u64::try_from(dt.as_millis()).unwrap_or(u64::MAX);
                 last_progress_pump.store(ms, std::sync::atomic::Ordering::Relaxed);
             };

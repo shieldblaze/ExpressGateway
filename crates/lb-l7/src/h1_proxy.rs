@@ -1323,8 +1323,7 @@ impl H1Proxy {
             // fetch_add (the R8 forward-progress site). Relaxed ordering is
             // fine: the helper re-arms on the next tick if a bump lands late.
             let bump = || {
-                let dt = tokio::time::Instant::now()
-                    .saturating_duration_since(epoch_pump);
+                let dt = tokio::time::Instant::now().saturating_duration_since(epoch_pump);
                 let ms = u64::try_from(dt.as_millis()).unwrap_or(u64::MAX);
                 last_progress_pump.store(ms, std::sync::atomic::Ordering::Relaxed);
             };
@@ -1838,8 +1837,7 @@ impl H1Proxy {
 
         let pump = tokio::spawn(async move {
             let bump = || {
-                let dt = tokio::time::Instant::now()
-                    .saturating_duration_since(epoch_pump);
+                let dt = tokio::time::Instant::now().saturating_duration_since(epoch_pump);
                 let ms = u64::try_from(dt.as_millis()).unwrap_or(u64::MAX);
                 last_progress_pump.store(ms, std::sync::atomic::Ordering::Relaxed);
             };
