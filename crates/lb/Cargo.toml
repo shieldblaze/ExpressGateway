@@ -63,6 +63,13 @@ caps = { workspace = true }
 bytes = { workspace = true }
 http = { workspace = true }
 http-body-util = { workspace = true }
+# S15 A2 verify gates iv & vi need lb-quic's `test-gauges` feature
+# (`PassthroughListener::flows_len`, `FlowEntry::dropped`). Default
+# build leaves these out of the production binary.
+lb-quic = { path = "../lb-quic", features = ["test-gauges"] }
+lb-security = { path = "../lb-security" }
+tokio = { workspace = true, features = ["test-util"] }
+tokio-util = { workspace = true }
 
 [features]
 # S15 A2-8: feature flag mirroring `lb-quic`'s `quic-terminate` /
