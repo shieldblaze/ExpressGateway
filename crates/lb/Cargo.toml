@@ -33,7 +33,7 @@ lb-balancer = { path = "../lb-balancer" }
 lb-observability = { path = "../lb-observability" }
 lb-health = { path = "../lb-health" }
 lb-security = { path = "../lb-security" }
-lb-quic = { path = "../lb-quic" }
+lb-quic = { path = "../lb-quic", default-features = false }
 lb-l7 = { path = "../lb-l7" }
 lb-l4-xdp = { path = "../lb-l4-xdp" }
 hyper = { workspace = true }
@@ -63,3 +63,15 @@ caps = { workspace = true }
 bytes = { workspace = true }
 http = { workspace = true }
 http-body-util = { workspace = true }
+
+[features]
+# S15 A2-8: feature flag mirroring `lb-quic`'s `quic-terminate` /
+# `quic-passthrough-only` matrix. `default = ["quic-terminate"]`
+# keeps the existing binary unchanged — same QuicListener, same
+# `quiche` link. `quic-passthrough-only` flips the binary into Mode
+# A (`PassthroughListener` only, no quiche::Connection on this
+# binary segment) — the build target for
+# `scripts/never_decrypted_proof.sh` (A2-7 LINKAGE gate).
+default = ["quic-terminate"]
+quic-terminate = ["lb-quic/quic-terminate"]
+quic-passthrough-only = ["lb-quic/quic-passthrough-only"]

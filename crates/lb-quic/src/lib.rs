@@ -106,6 +106,12 @@ pub mod udp_dataplane;
 // proof.
 pub mod passthrough;
 
+// S15 A2-8: re-export the Mode A listener handle + construction params
+// so the root binary (crates/lb/src/main.rs) can wire
+// `lb_config::PassthroughConfig` → `PassthroughListener::spawn` without
+// reaching into `lb_quic::passthrough::*` directly.
+pub use passthrough::{PassthroughListener, PassthroughParams};
+
 // ---- termination-only surface (gated behind `quic-terminate`) -------
 //
 // S15 A2 (a1) — CF-S15-PASSTHROUGH-FEATURE-GATING. Everything below is

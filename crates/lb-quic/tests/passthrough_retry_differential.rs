@@ -9,15 +9,15 @@
 //!             version: u32, out: &mut [u8]) -> Result<usize>`
 //!
 //! where (per packet.rs:756):
-//!   - `scid` argument → **on-wire DCID** (`Header.dcid = scid`)
-//!   - `dcid` argument → **ODCID** (used in the Retry Pseudo-Packet
-//!                                  for the integrity tag, NOT on wire)
-//!   - `new_scid`       → **on-wire SCID**
+//!   - `scid` argument → on-wire DCID (`Header.dcid = scid`)
+//!   - `dcid` argument → ODCID (used in the Retry Pseudo-Packet for the
+//!     integrity tag, NOT on wire)
+//!   - `new_scid` → on-wire SCID
 //!
 //! Our `build_retry_packet(odcid, client_scid, new_scid, …)` maps:
-//!   - `odcid`       → quiche's `dcid` arg
+//!   - `odcid` → quiche's `dcid` arg
 //!   - `client_scid` → quiche's `scid` arg (== on-wire DCID)
-//!   - `new_scid`    → quiche's `new_scid` arg
+//!   - `new_scid` → quiche's `new_scid` arg
 //!
 //! quiche only accepts `PROTOCOL_VERSION_V1` (0x0000_0001); the
 //! proptest constrains `version` to that.

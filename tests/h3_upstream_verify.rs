@@ -54,6 +54,7 @@ fn make_listener(backend: BackendConfig) -> LbConfig {
         observability: None,
         admin: None,
         security: None,
+        passthrough: None,
     }
 }
 
