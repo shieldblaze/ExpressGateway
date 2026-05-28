@@ -11,9 +11,10 @@
 //! quiche-side state; otherwise we omit `length` from the
 //! differential and note it in the test.
 //!
-//! The proptest budget is 256 cases by default (CI bumps via
-//! `PROPTEST_CASES`). Each case spins one `quiche::connect` and
-//! drains its initial flight, yielding a real Initial packet.
+//! The proptest budget is 1000 cases by default (design §A1
+//! verify-gate 2). CI may scale further via `PROPTEST_CASES`. Each
+//! case spins one `quiche::connect` and drains its initial flight,
+//! yielding a real Initial packet.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![allow(clippy::indexing_slicing)] // test-only fixtures
@@ -124,8 +125,8 @@ fn assert_matches_quiche(pkt: &[u8]) -> Result<(), String> {
 
 proptest! {
     #![proptest_config(ProptestConfig {
-        cases: 256,
-        max_global_rejects: 1024,
+        cases: 1000,
+        max_global_rejects: 4096,
         .. ProptestConfig::default()
     })]
 
@@ -166,7 +167,7 @@ proptest! {
 
     /// No-panic regression-net per design §A1: random bytes of any
     /// length × any short_dcid_len must always return `Result`, never
-    /// panic. 200 cases is the regression budget — primary no-panic
+    /// panic. Shares the 1000-case budget set above. Primary no-panic
     /// coverage comes from `tests/proptest_header.rs` (which targets
     /// quiche's parser; this targets ours).
     #[test]
