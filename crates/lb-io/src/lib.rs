@@ -23,6 +23,7 @@
 
 pub mod dns;
 pub mod http2_pool;
+pub mod idle_send;
 pub mod pool;
 pub mod quic_pool;
 pub mod sockopts;

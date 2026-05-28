@@ -212,10 +212,15 @@ pub struct HttpTimeouts {
     pub header: Duration,
     /// Maximum time the upstream side spends sending its response (and
     /// the client side spends sending its request body). Applied around
-    /// the upstream `send_request` call.
+    /// the upstream `send_request` call as the Phase-A no-forward-progress
+    /// idle deadline (S14 / CF-BODY-WALLCLOCK).
     pub body: Duration,
     /// Hard upper bound on a single connection's total lifetime.
     pub total: Duration,
+    /// **S14 / CF-BODY-WALLCLOCK (R-CFBW-2)** — Phase-B fixed cap on the
+    /// post-upload head wait, separate from the Phase-A `body` idle
+    /// deadline. Defaults to 60 s.
+    pub head: Duration,
 }
 
 impl Default for HttpTimeouts {
@@ -224,6 +229,7 @@ impl Default for HttpTimeouts {
             header: Duration::from_secs(10),
             body: Duration::from_secs(30),
             total: Duration::from_secs(60),
+            head: Duration::from_secs(60),
         }
     }
 }
@@ -1295,7 +1301,40 @@ impl H1Proxy {
         // oneshot so the response-head relay is gated on a VALIDATED terminal
         // state (clean end-of-body, or a surfaced error mapped to 400/413).
         let (verdict_tx, verdict_rx) = tokio::sync::oneshot::channel::<Result<(), ProxyErr>>();
+
+        // S14 / CF-BODY-WALLCLOCK — forward-progress signal for
+        // [`lb_io::idle_send::idle_bounded_send`]. `last_progress` is bumped on
+        // every successful `tx.send(Ok)` (i.e. every chunk hyper accepted into
+        // the upstream pipeline — the same forward-progress event the R8
+        // in-flight gauge records); `upload_complete` is set Once at the
+        // verdict-Ok terminal arm so the helper switches from Phase-A idle
+        // (`timeouts.body`) to Phase-B head-roundtrip cap (`timeouts.head`).
+        // See `audit/h-matrix/s14-builder-1-design.md` §2.1.
+        let last_progress = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let upload_complete = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let epoch = tokio::time::Instant::now();
+        let last_progress_pump = std::sync::Arc::clone(&last_progress);
+        let upload_complete_pump = std::sync::Arc::clone(&upload_complete);
+        let epoch_pump = epoch;
+
         let pump = tokio::spawn(async move {
+            // S14 — bump helper: store millis-since-`epoch_pump` on every
+            // successful `tx.send(Ok)`. Co-located with `in_flight_bytes`
+            // fetch_add (the R8 forward-progress site). Relaxed ordering is
+            // fine: the helper re-arms on the next tick if a bump lands late.
+            let bump = || {
+                let dt = tokio::time::Instant::now().saturating_duration_since(epoch_pump);
+                let ms = u64::try_from(dt.as_millis()).unwrap_or(u64::MAX);
+                last_progress_pump.store(ms, std::sync::atomic::Ordering::Relaxed);
+            };
+            // S14 — terminal-frame helper: set ONCE at every verdict-Ok arm
+            // (clean EOF / trailer-Ok). Release ordering pairs with the
+            // helper's Acquire load so the FINAL `last_progress` bump is
+            // visible before the helper observes `upload_complete = true`.
+            let set_complete = || {
+                upload_complete_pump.store(true, std::sync::atomic::Ordering::Release);
+            };
+
             // Running cumulative total of forwarded request bytes — the Q-H4
             // total-body cap (`MAX_REQUEST_BODY_BYTES`, 64 MiB) applies in the
             // streaming regime exactly as it does on the H2→H1 path.
@@ -1340,6 +1379,8 @@ impl H1Proxy {
                             outcome = Err(SendOutcome::ReceiverGone);
                             break;
                         }
+                        // S14 — chunk accepted by hyper → forward-progress.
+                        bump();
                     }
                     outcome
                 }};
@@ -1421,6 +1462,9 @@ impl H1Proxy {
                         // Clean end → drop `tx` → the StreamBody yields `None`
                         // → hyper writes the chunked terminator → the upstream
                         // sees a COMPLETE request.
+                        // S14 — upload complete; helper now switches to
+                        // Phase-B head-roundtrip cap (`timeouts.head`).
+                        set_complete();
                         let _ = verdict_tx.send(Ok(()));
                         return;
                     }
@@ -1440,6 +1484,10 @@ impl H1Proxy {
                                     // `trailer_passthrough` green), then a clean
                                     // verdict.
                                     let _ = tx.send(Ok(frame)).await;
+                                    // S14 — trailers accepted; bump then
+                                    // mark upload complete (Phase-B).
+                                    bump();
+                                    set_complete();
                                     let _ = verdict_tx.send(Ok(()));
                                     return;
                                 }
@@ -1504,8 +1552,33 @@ impl H1Proxy {
         // Drive the upstream send concurrently with the pump (hyper must pull
         // the channel for the pump to make progress under backpressure), but do
         // NOT relay the response until the pump's terminal verdict lands.
+        //
+        // S14 / CF-BODY-WALLCLOCK — the fixed wall-clock
+        // `tokio::time::timeout(self.timeouts.body, send_fut)` was a
+        // whole-upload wall-clock for backends that withhold the response head
+        // until the body is fully consumed. Replaced by the two-phase
+        // [`lb_io::idle_send::idle_bounded_send`] mechanism:
+        // * Phase A (upload in flight): a no-forward-progress idle deadline
+        //   anchored on `last_progress + self.timeouts.body`, re-armed by the
+        //   pump's `bump()` on every accepted chunk.
+        // * Phase B (upload complete): a fixed `self.timeouts.head` cap on the
+        //   remaining head-roundtrip wait, anchored when the pump's
+        //   `set_complete()` ran.
+        // The F-CAP-1 inner `Ok(Err(hyper::Error))` arm and the :1523 verdict-
+        // rx backstop are preserved verbatim — the helper passes the hyper
+        // error through unchanged, so the verdict-vs-send classification
+        // semantics are identical.
         let send_fut = sender.send_request(req);
-        let resp = match tokio::time::timeout(self.timeouts.body, send_fut).await {
+        let resp = match lb_io::idle_send::idle_bounded_send(
+            send_fut,
+            std::sync::Arc::clone(&last_progress),
+            std::sync::Arc::clone(&upload_complete),
+            epoch,
+            self.timeouts.body,
+            self.timeouts.head,
+        )
+        .await
+        {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => {
                 // F-CAP-1 — a `send_request` error is the DOWNSTREAM EFFECT of
@@ -1535,7 +1608,10 @@ impl H1Proxy {
                     classified.unwrap_or_else(|| ProxyErr::Upstream(format!("send_request: {e}")))
                 );
             }
-            Err(_) => {
+            Err(idle_err) => {
+                // S14 — Phase-1 collapse onto ProxyErr::Timeout; phase
+                // discriminant logged for triage.
+                tracing::warn!(error = %idle_err, "h1→h1 idle/head deadline fired");
                 pump.abort();
                 conn_handle.abort();
                 return Err(ProxyErr::Timeout);
@@ -1746,7 +1822,29 @@ impl H1Proxy {
         // relay is gated on a VALIDATED terminal state.
         let (verdict_tx, verdict_rx) = tokio::sync::oneshot::channel::<Result<(), H2ProxyErr>>();
         let drained: Vec<Bytes> = std::mem::take(&mut lookahead);
+
+        // S14 / CF-BODY-WALLCLOCK — forward-progress signal for
+        // [`lb_io::http2_pool::Http2Pool::send_request_idle`] (threaded via
+        // [`drive_h2_upstream_send`]). Mirror of H1→H1 (h1_proxy.rs::proxy_request)
+        // and H2→H2 (h2_proxy.rs::proxy_h2_to_h2_request). See
+        // `audit/h-matrix/s14-builder-1-design.md` §2.4.
+        let last_progress = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let upload_complete = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let epoch = tokio::time::Instant::now();
+        let last_progress_pump = std::sync::Arc::clone(&last_progress);
+        let upload_complete_pump = std::sync::Arc::clone(&upload_complete);
+        let epoch_pump = epoch;
+
         let pump = tokio::spawn(async move {
+            let bump = || {
+                let dt = tokio::time::Instant::now().saturating_duration_since(epoch_pump);
+                let ms = u64::try_from(dt.as_millis()).unwrap_or(u64::MAX);
+                last_progress_pump.store(ms, std::sync::atomic::Ordering::Relaxed);
+            };
+            let set_complete = || {
+                upload_complete_pump.store(true, std::sync::atomic::Ordering::Release);
+            };
+
             let mut forwarded_total: usize = buffered;
             let mut lookahead_remaining: usize = buffered;
 
@@ -1776,6 +1874,8 @@ impl H1Proxy {
                             outcome = Err(SendOutcome::ReceiverGone);
                             break;
                         }
+                        // S14 — chunk accepted by hyper → forward-progress.
+                        bump();
                     }
                     outcome
                 }};
@@ -1844,6 +1944,9 @@ impl H1Proxy {
                         // `is_end_stream` logic). `None` = clean end → drop tx
                         // → hyper writes the terminator → the upstream sees a
                         // COMPLETE request. NO inject_abort on this arm.
+                        // S14 — upload complete; helper switches to Phase-B
+                        // head-roundtrip cap.
+                        set_complete();
                         let _ = verdict_tx.send(Ok(()));
                         return;
                     }
@@ -1855,6 +1958,10 @@ impl H1Proxy {
                             match verdict {
                                 Ok(()) => {
                                     let _ = tx.send(Ok(frame)).await;
+                                    // S14 — trailers accepted; bump then
+                                    // mark upload complete (Phase-B).
+                                    bump();
+                                    set_complete();
                                     let _ = verdict_tx.send(Ok(()));
                                     return;
                                 }
@@ -1904,6 +2011,11 @@ impl H1Proxy {
             upstream_req,
             verdict_rx,
             pump,
+            last_progress,
+            upload_complete,
+            epoch,
+            self.timeouts.body,
+            self.timeouts.head,
             self.timeouts.body,
         )
         .await

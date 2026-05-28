@@ -84,6 +84,7 @@ fn relaxed_timeouts() -> HttpTimeouts {
         header: Duration::from_secs(30),
         body: Duration::from_secs(120),
         total: Duration::from_secs(180),
+        head: Duration::from_secs(180),
     }
 }
 

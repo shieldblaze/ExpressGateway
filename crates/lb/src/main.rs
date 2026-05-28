@@ -824,6 +824,7 @@ fn build_h1_proxy(
         header: Duration::from_millis(h.header_timeout_ms),
         body: Duration::from_millis(h.body_timeout_ms),
         total: Duration::from_millis(h.total_timeout_ms),
+        head: Duration::from_millis(h.head_timeout_ms),
     });
     let mut proxy = H1Proxy::with_multi_proto(pool, Arc::new(picker), alt_svc, timeouts, is_https);
     // ROUND8-L7-06: nginx-parity per-keep-alive request cap.
@@ -891,6 +892,7 @@ fn build_h2_proxy(
         header: Duration::from_millis(h.header_timeout_ms),
         body: Duration::from_millis(h.body_timeout_ms),
         total: Duration::from_millis(h.total_timeout_ms),
+        head: Duration::from_millis(h.head_timeout_ms),
     });
     let security = merge_h2_security(h2_security_cfg);
     let mut proxy = H2Proxy::with_multi_proto(

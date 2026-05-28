@@ -814,6 +814,11 @@ pub struct HttpTimeoutsConfig {
     /// Hard upper bound on total request lifetime. Defaults to 60 seconds.
     #[serde(default = "default_total_timeout_ms")]
     pub total_timeout_ms: u64,
+    /// **S14 / CF-BODY-WALLCLOCK (R-CFBW-2)** — Phase-B fixed cap on the
+    /// post-upload head wait (separate from the Phase-A idle deadline
+    /// derived from `body_timeout_ms`). Defaults to 60 seconds.
+    #[serde(default = "default_head_timeout_ms")]
+    pub head_timeout_ms: u64,
 }
 
 impl Default for HttpTimeoutsConfig {
@@ -822,6 +827,7 @@ impl Default for HttpTimeoutsConfig {
             header_timeout_ms: default_header_timeout_ms(),
             body_timeout_ms: default_body_timeout_ms(),
             total_timeout_ms: default_total_timeout_ms(),
+            head_timeout_ms: default_head_timeout_ms(),
         }
     }
 }
@@ -835,6 +841,10 @@ const fn default_body_timeout_ms() -> u64 {
 }
 
 const fn default_total_timeout_ms() -> u64 {
+    60_000
+}
+
+const fn default_head_timeout_ms() -> u64 {
     60_000
 }
 
@@ -1313,6 +1323,11 @@ fn validate_http_timeouts(i: usize, listener: &ListenerConfig) -> Result<(), Con
         if http.total_timeout_ms == 0 {
             return Err(ConfigError::Validation(format!(
                 "listener {i} http.total_timeout_ms must be > 0"
+            )));
+        }
+        if http.head_timeout_ms == 0 {
+            return Err(ConfigError::Validation(format!(
+                "listener {i} http.head_timeout_ms must be > 0"
             )));
         }
     }
@@ -1864,6 +1879,7 @@ address = "127.0.0.1:3000"
         assert_eq!(http.header_timeout_ms, 5_000);
         assert_eq!(http.body_timeout_ms, 30_000);
         assert_eq!(http.total_timeout_ms, 60_000);
+        assert_eq!(http.head_timeout_ms, 60_000);
         assert!(validate_config(&config).is_ok());
     }
 
@@ -1985,6 +2001,7 @@ address = "127.0.0.1:3000"
                     header_timeout_ms: 0,
                     body_timeout_ms: 30_000,
                     total_timeout_ms: 60_000,
+                    head_timeout_ms: 60_000,
                 }),
                 h2_security: None,
                 websocket: None,

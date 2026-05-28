@@ -77,6 +77,7 @@ async fn spawn_proxy(backend: SocketAddr, cap: u32) -> (SocketAddr, Arc<H1Proxy>
                 header: Duration::from_secs(3),
                 body: Duration::from_secs(3),
                 total: Duration::from_secs(10),
+                head: Duration::from_secs(10),
             },
             false,
         )
