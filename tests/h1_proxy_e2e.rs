@@ -378,9 +378,17 @@ async fn h1s_proxy_times_out_on_slow_body() {
         None,
         HttpTimeouts {
             header: Duration::from_millis(200),
+            // S14 CF-BODY-WALLCLOCK: `body` is now Phase-A IDLE
+            // (no-forward-progress) — for an Empty<Bytes> request, the
+            // pump completes immediately so `upload_complete` flips at
+            // t≈0 and the helper enters Phase B without `body` ever
+            // firing. The wedged-backend timeout for an empty request is
+            // therefore governed by `head` (Phase B fixed cap), not
+            // `body`. Set `head` to the same short value to preserve the
+            // test's "504 promptly on blackhole" property.
             body: Duration::from_millis(200),
             total: Duration::from_secs(5),
-            head: Duration::from_secs(5),
+            head: Duration::from_millis(200),
         },
         /* is_https */ true,
     ));
