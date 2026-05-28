@@ -194,10 +194,39 @@ impl BackendObs {
 /// (bytes, clean-FIN, trailers-seen), and — once the stream FINs cleanly —
 /// echoes the body back with status 200. On a truncated upload (RESET / no
 /// FIN) it NEVER responds and NEVER increments `complete`.
+///
+/// Default QUIC flow-control (16 MiB conn / 8 MiB stream) — sufficient for the
+/// ≤5 MiB byte-identity / gauge / burst uploads. The F-CAP-1 over-cap test needs
+/// MORE than the 64 MiB request cap to flow upstream before the cap trips, so it
+/// uses [`spawn_h3_echo_backend_with_flow`] with a >64 MiB window instead.
 async fn spawn_h3_echo_backend(
     cert_path: PathBuf,
     key_path: PathBuf,
     obs: BackendObs,
+) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+    spawn_h3_echo_backend_with_flow(
+        cert_path,
+        key_path,
+        obs,
+        /* max_data = */ 16 * 1024 * 1024,
+        /* max_stream_data = */ 8 * 1024 * 1024,
+    )
+    .await
+}
+
+/// Same H3 echo backend as [`spawn_h3_echo_backend`] but with caller-chosen QUIC
+/// flow-control windows. The F-CAP-1 over-cap test (R4 fix) passes a window
+/// LARGER than `MAX_REQUEST_BODY_BYTES` (64 MiB) so a >64 MiB upload can actually
+/// FORWARD past the cap and trip the pump's mid-body over-cap `Reset` arm
+/// (h2_proxy.rs over-cap branch). With the default 16 MiB window the gateway's
+/// upstream QUIC send window closes at ~16 MiB and the pump parks long before
+/// `forwarded_total` reaches 64 MiB, so the cap arm is never exercised.
+async fn spawn_h3_echo_backend_with_flow(
+    cert_path: PathBuf,
+    key_path: PathBuf,
+    obs: BackendObs,
+    max_data: u64,
+    max_stream_data: u64,
 ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
     let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let addr = socket.local_addr().unwrap();
@@ -211,9 +240,9 @@ async fn spawn_h3_echo_backend(
         cfg.set_max_idle_timeout(10_000);
         cfg.set_max_recv_udp_payload_size(1_350);
         cfg.set_max_send_udp_payload_size(1_350);
-        cfg.set_initial_max_data(16 * 1024 * 1024);
-        cfg.set_initial_max_stream_data_bidi_local(8 * 1024 * 1024);
-        cfg.set_initial_max_stream_data_bidi_remote(8 * 1024 * 1024);
+        cfg.set_initial_max_data(max_data);
+        cfg.set_initial_max_stream_data_bidi_local(max_stream_data);
+        cfg.set_initial_max_stream_data_bidi_remote(max_stream_data);
         cfg.set_initial_max_stream_data_uni(1024 * 1024);
         cfg.set_initial_max_streams_bidi(16);
         cfg.set_initial_max_streams_uni(16);
@@ -808,8 +837,20 @@ async fn h2h3_fcap1_over_cap_upload_never_complete() {
     use h2 as h2crate;
     let certs = generate_loopback_certs();
     let obs = BackendObs::new();
-    let (backend, _bh) =
-        spawn_h3_echo_backend(certs.cert.clone(), certs.key.clone(), obs.clone()).await;
+    // R4 (verifier finding): the over-cap mid-body Reset arm only triggers once
+    // `forwarded_total` crosses the 64 MiB cap, which requires >64 MiB to FORWARD
+    // upstream first. With the default 16 MiB backend flow-control the gateway's
+    // upstream QUIC send window closes at ~16 MiB → the pump parks → the cap arm
+    // is NEVER reached. Give this backend an 80 MiB window (> the 64 MiB cap + the
+    // 66 MiB push) so the upload genuinely forwards past 64 MiB and trips the cap.
+    let (backend, _bh) = spawn_h3_echo_backend_with_flow(
+        certs.cert.clone(),
+        certs.key.clone(),
+        obs.clone(),
+        /* max_data = */ 80 * 1024 * 1024,
+        /* max_stream_data = */ 80 * 1024 * 1024,
+    )
+    .await;
     let gw = spawn_gateway(
         backend,
         certs.ca.clone(),
@@ -864,8 +905,9 @@ async fn h2h3_fcap1_over_cap_upload_never_complete() {
     let _ = tokio::time::timeout(Duration::from_secs(10), resp_fut).await;
     tokio::time::sleep(Duration::from_millis(400)).await;
 
+    let live = obs.req_body_bytes_live.load(Ordering::SeqCst);
     eprintln!(
-        "H2H3_FCAP1 sent={sent} backend_complete={} backend_body_bytes={}",
+        "H2H3_FCAP1 sent={sent} backend_complete={} backend_body_live={live} backend_body_bytes={}",
         obs.complete.load(Ordering::SeqCst),
         obs.req_body_bytes.load(Ordering::SeqCst),
     );
@@ -875,6 +917,21 @@ async fn h2h3_fcap1_over_cap_upload_never_complete() {
         "F-CAP-1: an over-cap H2 upload reached the H3 backend as COMPLETE \
          (complete={}) — the cap did not abort the upstream request",
         obs.complete.load(Ordering::SeqCst)
+    );
+    // R4 non-vacuity: the upload must genuinely forward UP TO the 64 MiB cap so the
+    // pump's mid-body over-cap `Reset` arm is the branch that aborts it (NOT an
+    // upstream flow-control stall at ~16 MiB, which would never reach the cap). The
+    // pump forwards chunks until the NEXT would exceed MAX_REQUEST_BODY_BYTES, then
+    // Resets — so the backend sees exactly the cap's worth (≈64 MiB) of DATA. A
+    // stall would plateau the live counter near the old 16 MiB window. Require the
+    // forwarded total to have REACHED the cap boundary (≥ 32 MiB, well past the old
+    // 16 MiB stall point and ≤ the 64 MiB cap), proving the over-cap arm fired.
+    const CAP: usize = 64 * 1024 * 1024;
+    assert!(
+        live >= CAP / 2,
+        "F-CAP-1 vacuity: the over-cap arm was NOT reached — only {live} B forwarded \
+         (≪ the {CAP} B cap), so the upload stalled on flow-control before the cap \
+         instead of tripping the mid-body Reset. Raise the test backend's QUIC window."
     );
 }
 
