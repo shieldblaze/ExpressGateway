@@ -1545,7 +1545,13 @@ impl H2Proxy {
             let req = Request::from_parts(parts, upstream_body);
 
             let send_fut = sender.send_request(req);
-            let resp = match tokio::time::timeout(self.timeouts.body, send_fut).await {
+            // S14 / R-CFBW-3: Branch A buffered body cannot be a slow-
+            // progressing upload (within the lookahead window). Bound the
+            // head-roundtrip with `head_timeout` for consistency with the
+            // Class A streaming sites' Phase-B cap; this is a
+            // rename-only / semantic-only change, NOT a load-bearing
+            // idle-watchdog site.
+            let resp = match tokio::time::timeout(self.timeouts.head, send_fut).await {
                 Ok(Ok(r)) => r,
                 Ok(Err(e)) => {
                     conn_handle.abort();
