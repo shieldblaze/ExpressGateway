@@ -284,7 +284,7 @@ fn set_int(
     value: libc::c_int,
 ) -> io::Result<()> {
     let len = libc::socklen_t::try_from(core::mem::size_of::<libc::c_int>())
-        .map_err(|_| io::Error::new(io::ErrorKind::Other, "c_int size exceeds socklen_t"))?;
+        .map_err(|_| io::Error::other("c_int size exceeds socklen_t"))?;
     // SAFETY: `fd` is a live socket file descriptor borrowed by the caller.
     // `&value` points to a local `c_int` on the stack; its size matches the
     // `socklen_t` we pass. `setsockopt` does not retain the pointer beyond

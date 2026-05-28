@@ -76,14 +76,10 @@ pub fn accept_one(listener_fd: RawFd) -> io::Result<(RawFd, SocketAddr)> {
     // The kernel fills these two out; start with a generous buffer that
     // holds either an `sockaddr_in` or `sockaddr_in6`.
     let mut addr_storage = MaybeUninit::<libc::sockaddr_storage>::zeroed();
-    let mut addr_len: libc::socklen_t = core::mem::size_of::<libc::sockaddr_storage>()
-        .try_into()
-        .map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            "sockaddr_storage size exceeds socklen_t",
-        )
-    })?;
+    let mut addr_len: libc::socklen_t =
+        core::mem::size_of::<libc::sockaddr_storage>()
+            .try_into()
+            .map_err(|_| io::Error::other("sockaddr_storage size exceeds socklen_t"))?;
 
     let entry = opcode::Accept::new(
         types::Fd(listener_fd),
@@ -202,22 +198,15 @@ unsafe fn push_sqe(ring: &mut IoUring, entry: &squeue::Entry) -> io::Result<()> 
     // SAFETY: forwarded from the caller of this function.
     match unsafe { sq.push(entry) } {
         Ok(()) => Ok(()),
-        Err(_) => Err(io::Error::new(
-            io::ErrorKind::Other,
-            "io_uring submission queue full",
-        )),
+        Err(_) => Err(io::Error::other("io_uring submission queue full")),
     }
 }
 
 fn reap_cqe(ring: &mut IoUring) -> io::Result<cqueue::Entry> {
     let mut cq = ring.completion();
     cq.sync();
-    cq.next().ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::Other,
-            "io_uring completion queue empty after submit_and_wait",
-        )
-    })
+    cq.next()
+        .ok_or_else(|| io::Error::other("io_uring completion queue empty after submit_and_wait"))
 }
 
 /// Decode the CQE result: negative values are errno, non-negative values

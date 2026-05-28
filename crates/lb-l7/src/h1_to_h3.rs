@@ -73,10 +73,10 @@ impl Bridge for H1ToH3Bridge {
                 }
                 continue;
             }
-            if HOP_BY_HOP_HEADERS.iter().any(|h| *h == lower.as_str()) {
+            if HOP_BY_HOP_HEADERS.contains(&lower.as_str()) {
                 continue;
             }
-            if conn_named.iter().any(|n| *n == lower) {
+            if conn_named.contains(&lower) {
                 continue;
             }
             regular_headers.push((lower, v.clone()));
@@ -106,10 +106,10 @@ impl Bridge for H1ToH3Bridge {
             .iter()
             .filter(|(k, _)| {
                 let lower = k.to_lowercase();
-                if HOP_BY_HOP_HEADERS.iter().any(|h| *h == lower.as_str()) {
+                if HOP_BY_HOP_HEADERS.contains(&lower.as_str()) {
                     return false;
                 }
-                if conn_named.iter().any(|n| *n == lower) {
+                if conn_named.contains(&lower) {
                     return false;
                 }
                 true

@@ -141,7 +141,7 @@ impl Bridge for H2ToH1Bridge {
                     return false;
                 }
                 let lower = k.to_lowercase();
-                !RESPONSE_HOP_BY_HOP.iter().any(|h| *h == lower.as_str())
+                !RESPONSE_HOP_BY_HOP.contains(&lower.as_str())
             })
             .map(|(k, v)| (k.to_lowercase(), v.clone()))
             .collect();

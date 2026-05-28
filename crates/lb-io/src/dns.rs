@@ -535,10 +535,8 @@ mod tests {
 
     #[test]
     fn io_err_mapped_to_nxdomain_for_getaddrinfo_text() {
-        let err = io::Error::new(
-            io::ErrorKind::Other,
-            "failed to lookup address information: Name or service not known",
-        );
+        let err =
+            io::Error::other("failed to lookup address information: Name or service not known");
         assert!(matches!(
             io_err_to_dns("missing.test", &err),
             DnsError::NxDomain { .. }

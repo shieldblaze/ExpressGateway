@@ -14,16 +14,16 @@
 //!
 //! Checks:
 //!  * `resp_large_5mib_byte_identical` / `resp_large_8mib_byte_identical` —
-//!     ≥5 MiB binary response is relayed byte-for-byte to the H1 client.
+//!    ≥5 MiB binary response is relayed byte-for-byte to the H1 client.
 //!  * `resp_streaming_head_before_full_body` — H2 backend sends head + an
-//!     early body chunk then STALLS mid-body; the H1 client must receive the
-//!     head + early bytes PROMPTLY (a `collect()` relay would withhold the head
-//!     until the whole body arrived). Gauge-free streaming proof by
-//!     construction, with a load-bearing negative control via a forced delay.
+//!    early body chunk then STALLS mid-body; the H1 client must receive the
+//!    head + early bytes PROMPTLY (a `collect()` relay would withhold the head
+//!    until the whole body arrived). Gauge-free streaming proof by
+//!    construction, with a load-bearing negative control via a forced delay.
 //!  * `resp_trailers_wire_behaviour` — H2 backend emits body + a terminal
-//!     trailers HEADERS frame (`x-checksum`); a RAW-TCP H1 client reads the raw
-//!     response bytes to DETERMINE empirically whether hyper's H1 encoder
-//!     flushes the trailers (case i) or drops them (case ii) — closes D3.
+//!    trailers HEADERS frame (`x-checksum`); a RAW-TCP H1 client reads the raw
+//!    response bytes to DETERMINE empirically whether hyper's H1 encoder
+//!    flushes the trailers (case i) or drops them (case ii) — closes D3.
 //!
 //! These tests DO NOT edit the source (except a restored negative control) and
 //! DO NOT touch the request-leg verifier file.

@@ -329,7 +329,7 @@ async fn grpc_unary_echo() {
     let (gw, _g) = spawn_gateway(backend, GrpcConfig::default()).await;
 
     let payload = Bytes::from_static(b"hello grpc");
-    let req_body = stream_body(vec![frame_messages(&[payload.clone()])], None);
+    let req_body = stream_body(vec![frame_messages(std::slice::from_ref(&payload))], None);
     let resp = send_grpc(gw, "/svc/Echo", req_body, &[]).await;
     assert_eq!(resp.status(), StatusCode::OK);
     let (body, trailers) = collect_grpc_body(resp).await;
