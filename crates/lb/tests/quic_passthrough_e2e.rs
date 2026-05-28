@@ -376,17 +376,14 @@ async fn spawn_quic_echo_backend(
                 }
             }
             // Process any readable bidi streams (echo back).
+            let mut echoed_anything = false;
             if conn.is_established() {
                 let readable: Vec<u64> = conn.readable().collect();
-                if !readable.is_empty() {
-                    eprintln!("backend: readable={:?}", readable);
-                }
                 for sid in readable {
                     let mut chunk = [0u8; 8192];
                     loop {
                         match conn.stream_recv(sid, &mut chunk) {
                             Ok((n, fin)) => {
-                                eprintln!("backend: sid={sid} recv n={n} fin={fin}");
                                 let bytes = chunk.get(..n).unwrap_or(&[]);
                                 // Echo.
                                 let mut sent = 0;
@@ -399,10 +396,33 @@ async fn spawn_quic_echo_backend(
                                         Err(e) => return Err(format!("backend echo send: {e}")),
                                     }
                                 }
+                                if sent > 0 || (fin && bytes.is_empty()) {
+                                    echoed_anything = true;
+                                }
                             }
                             Err(quiche::Error::Done) => break,
                             Err(e) => return Err(format!("backend stream_recv: {e}")),
                         }
+                    }
+                }
+            }
+            // Drain outbound right after echo so the echoed STREAM
+            // bytes go on the wire without waiting for the next
+            // socket recv to kick the select! loop. Without this the
+            // backend would only flush on the NEXT iteration AFTER
+            // the select! returns — but with no further client
+            // traffic to wake the select!, the echo sat in quiche's
+            // send queue until DRIVER_BUDGET expired.
+            if echoed_anything {
+                loop {
+                    match conn.send(&mut out_buf) {
+                        Ok((n, info)) => {
+                            let _ = socket
+                                .send_to(out_buf.get(..n).unwrap_or(&[]), info.to)
+                                .await;
+                        }
+                        Err(quiche::Error::Done) => break,
+                        Err(e) => return Err(format!("backend post-echo send: {e}")),
                     }
                 }
             }
@@ -519,9 +539,15 @@ async fn drive_client(
                             echoed.extend_from_slice(chunk.get(..n).unwrap_or(&[]));
                             if fin {
                                 fin_seen = true;
+                                break;
                             }
                         }
                         Err(quiche::Error::Done) => break,
+                        // After the stream is fully read (`fin=true`
+                        // delivered) quiche's next `stream_recv` on
+                        // that sid returns `InvalidStreamState` —
+                        // treat as a clean end-of-read.
+                        Err(quiche::Error::InvalidStreamState(_)) => break,
                         Err(e) => return Err(format!("client stream_recv: {e}")),
                     }
                 }
@@ -573,18 +599,36 @@ async fn drive_client(
     }
 }
 
-/// **CF-S15-PASSTHROUGH-RETRY-ODCID — gated #[ignore] until resolved.**
+/// **Gate (i) real-QUIC wire e2e — handshake + STREAM round-trip.**
 ///
-/// When the LB mints a Retry, the client's second Initial carries
-/// `DCID = LB-chosen new_scid` (NOT the client's original DCID). The
-/// backend's `quiche::accept` is called with `odcid = Some(&hdr.dcid)`
-/// where `hdr.dcid` is the LB-chosen value. quiche puts that into the
-/// `original_destination_connection_id` transport parameter; the
-/// client's `quiche::Connection::recv` checks it against the DCID it
-/// used in its very first Initial (the REAL original); mismatch →
-/// `quiche::Error::InvalidTransportParam` → handshake aborts.
+/// LB-mints-Retry handshake requires the backend know the client's
+/// ORIGINAL DCID (the DCID of the very first Initial, pre-Retry) to
+/// set `original_destination_connection_id` correctly AND know the
+/// LB-chosen SCID to set `retry_source_connection_id`. The backend
+/// recovers both:
 ///
-/// This is a fundamental property of LB-mints-Retry in passthrough:
+/// * ODCID — extracted from the LB-minted Retry token via
+///   [`extract_odcid_from_token_unsafe`] (the LB + backend share the
+///   `RetryTokenSigner` secret `RETRY_SECRET` in this fixture; in
+///   production a sidecar / PROXY-protocol-analogue for QUIC closes
+///   the same gap).
+/// * Retry-SCID — the LB's chosen new_scid appears on the wire as the
+///   client's second-Initial DCID = `hdr.dcid` on the backend.
+///
+/// Both are passed via `quiche::accept_with_retry` + an explicit
+/// `quiche::RetryConnectionIds`. The plain `quiche::accept(odcid)`
+/// path is insufficient (it defaults `retry_source_connection_id` to
+/// the server's chosen SCID, which the client rejects).
+///
+/// Asserts:
+///   1. handshake completes through the LB;
+///   2. byte-faithful echo of a binary payload (LB doesn't mutate);
+///   3. client's `peer_cert` is the BACKEND's leaf cert (LB never
+///      terminated TLS — §9.5 NEVER-DECRYPTED STATE proof at the
+///      wire).
+///
+/// CF-S15-PASSTHROUGH-RETRY-ODCID closed by this commit. The earlier
+/// concern was:
 /// the backend cannot know the client's ODCID without an out-of-band
 /// side channel that design §3.6 does NOT currently provide. The
 /// LB-mints-Retry policy itself is correct (§6.5 Initial-flood defence
@@ -601,7 +645,6 @@ async fn drive_client(
 /// Retry tokens minted with the same `RetryTokenSigner` secret and
 /// drive the same `handle_initial` / `forward_short` code paths.
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "CF-S15-PASSTHROUGH-RETRY-ODCID — see fn doc"]
 async fn passthrough_e2e_real_quiche_client_handshake_and_stream() {
     let certs = make_certs();
     let (backend_addr, backend_join) =
