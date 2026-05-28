@@ -2606,4 +2606,101 @@ address = "127.0.0.1:3000"
         let err = validate_config(&config).unwrap_err();
         assert!(matches!(err, ConfigError::Validation(_)));
     }
+
+    // S15 A2-8: PassthroughConfig validation tests.
+    fn pt_min(bind: &str, backend: &str) -> PassthroughConfig {
+        PassthroughConfig {
+            bind_addr: bind.parse().unwrap(),
+            backends: vec![backend.parse().unwrap()],
+            retry_secret_path: std::path::PathBuf::from("/tmp/eg-pt-retry.bin"),
+            max_quic_connections: default_passthrough_max_quic_connections(),
+            min_client_dcid_len: default_passthrough_min_client_dcid_len(),
+            per_flow_backlog: default_passthrough_per_flow_backlog(),
+            strict_source_binding: false,
+            audit_throttle_window_secs: default_passthrough_audit_throttle_window_secs(),
+            max_dcid_len_routed: default_passthrough_max_dcid_len_routed(),
+        }
+    }
+
+    #[test]
+    fn passthrough_only_config_is_valid() {
+        // Mode-A-only deployment: no [[listeners]] entries, just the
+        // [passthrough] block. Verifies the `validate_config`
+        // listeners-empty exemption (otherwise this would be rejected
+        // as "no listeners").
+        let cfg = LbConfig {
+            listeners: vec![],
+            runtime: None,
+            observability: None,
+            admin: None,
+            security: None,
+            passthrough: Some(pt_min("0.0.0.0:4433", "127.0.0.1:5000")),
+        };
+        assert!(validate_config(&cfg).is_ok());
+    }
+
+    #[test]
+    fn passthrough_empty_backends_rejected() {
+        let mut pt = pt_min("0.0.0.0:4433", "127.0.0.1:5000");
+        pt.backends.clear();
+        let cfg = LbConfig {
+            listeners: vec![],
+            runtime: None,
+            observability: None,
+            admin: None,
+            security: None,
+            passthrough: Some(pt),
+        };
+        assert!(validate_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn passthrough_min_client_dcid_below_floor_rejected() {
+        // Owner ruling §9.3: a config-time min_client_dcid_len below
+        // 8 re-opens the cross-flow prefix-collision surface — must
+        // fail loud, not silent.
+        let mut pt = pt_min("0.0.0.0:4433", "127.0.0.1:5000");
+        pt.min_client_dcid_len = 4;
+        let cfg = LbConfig {
+            listeners: vec![],
+            runtime: None,
+            observability: None,
+            admin: None,
+            security: None,
+            passthrough: Some(pt),
+        };
+        assert!(validate_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn passthrough_defaults_match_owner_rulings() {
+        assert_eq!(default_passthrough_max_quic_connections(), 100_000); // §9.4
+        assert_eq!(default_passthrough_min_client_dcid_len(), 8); // §9.3
+        assert_eq!(default_passthrough_per_flow_backlog(), 32); // §5.1
+        assert_eq!(default_passthrough_audit_throttle_window_secs(), 60); // §6.2
+        assert_eq!(default_passthrough_max_dcid_len_routed(), 20); // §3.3
+    }
+
+    #[test]
+    fn parse_passthrough_block_round_trip() {
+        let input = r#"
+[[listeners]]
+address = "0.0.0.0:8080"
+protocol = "tcp"
+
+[passthrough]
+bind_addr = "0.0.0.0:4433"
+backends = ["127.0.0.1:5000", "127.0.0.1:5001"]
+retry_secret_path = "/var/run/eg-pt-retry.bin"
+strict_source_binding = true
+"#;
+        let cfg = parse_config(input).expect("parse ok");
+        let pt = cfg.passthrough.as_ref().expect("passthrough present");
+        assert_eq!(pt.backends.len(), 2);
+        assert!(pt.strict_source_binding);
+        // Defaults flow through serde:
+        assert_eq!(pt.max_quic_connections, 100_000);
+        assert_eq!(pt.min_client_dcid_len, 8);
+        assert!(validate_config(&cfg).is_ok());
+    }
 }
