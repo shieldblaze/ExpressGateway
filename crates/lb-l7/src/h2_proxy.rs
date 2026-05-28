@@ -2195,7 +2195,28 @@ impl H2Proxy {
         // relay is gated on a VALIDATED terminal state.
         let (verdict_tx, verdict_rx) = tokio::sync::oneshot::channel::<Result<(), ProxyErr>>();
         let drained: Vec<Bytes> = std::mem::take(&mut lookahead);
+
+        // S14 / CF-BODY-WALLCLOCK — forward-progress signal for
+        // [`lb_io::http2_pool::Http2Pool::send_request_idle`] (threaded via
+        // [`drive_h2_upstream_send`]). See `audit/h-matrix/s14-builder-1-design.md` §2.4.
+        let last_progress = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let upload_complete = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let epoch = tokio::time::Instant::now();
+        let last_progress_pump = std::sync::Arc::clone(&last_progress);
+        let upload_complete_pump = std::sync::Arc::clone(&upload_complete);
+        let epoch_pump = epoch;
+
         let pump = tokio::spawn(async move {
+            let bump = || {
+                let dt = tokio::time::Instant::now()
+                    .saturating_duration_since(epoch_pump);
+                let ms = u64::try_from(dt.as_millis()).unwrap_or(u64::MAX);
+                last_progress_pump.store(ms, std::sync::atomic::Ordering::Relaxed);
+            };
+            let set_complete = || {
+                upload_complete_pump.store(true, std::sync::atomic::Ordering::Release);
+            };
+
             let mut forwarded_total: usize = buffered;
             let mut lookahead_remaining: usize = buffered;
 
@@ -2225,6 +2246,8 @@ impl H2Proxy {
                             outcome = Err(SendOutcome::ReceiverGone);
                             break;
                         }
+                        // S14 — chunk accepted by hyper → forward-progress.
+                        bump();
                     }
                     outcome
                 }};
@@ -2314,6 +2337,9 @@ impl H2Proxy {
                         // from a RST_STREAM must NOT be relayed as a clean
                         // EOF (request smuggling).
                         if body.is_end_stream() {
+                            // S14 — upload complete; helper switches to
+                            // Phase-B head-roundtrip cap.
+                            set_complete();
                             let _ = verdict_tx.send(Ok(()));
                         } else {
                             inject_abort!();
@@ -2330,6 +2356,10 @@ impl H2Proxy {
                             match validate_request_trailers(frame.trailers_ref()) {
                                 Ok(_) => {
                                     let _ = tx.send(Ok(frame)).await;
+                                    // S14 — trailers accepted; bump then
+                                    // mark upload complete (Phase-B).
+                                    bump();
+                                    set_complete();
                                     let _ = verdict_tx.send(Ok(()));
                                     return;
                                 }
@@ -2376,6 +2406,11 @@ impl H2Proxy {
             upstream_req,
             verdict_rx,
             pump,
+            last_progress,
+            upload_complete,
+            epoch,
+            self.timeouts.body,
+            self.timeouts.head,
             self.timeouts.body,
         )
         .await
@@ -2960,12 +2995,26 @@ fn upstream_h2_response_to_h2(
 /// F-CAP-1 caller arm classifying BodyTooLarge/BadRequest over 502,
 /// `pump.abort()`), and the final `head_rx.await`. Logic is byte-for-byte
 /// identical to the prior inlined Branch B block.
+// S14 / CF-BODY-WALLCLOCK — signature widens to thread the two-phase
+// idle/head deadline through to `Http2Pool::send_request_idle`. The pre-
+// existing `body_timeout` parameter is RETAINED but now consumed ONLY by
+// the post-error verdict-rx backstop at :3003 (F-CAP-1 wedged-pump
+// liveness consultation), NOT the send. New params: `last_progress` /
+// `upload_complete` / `epoch` (owned + bumped by the caller's pump);
+// `idle` (Phase-A no-progress deadline) + `head_timeout` (Phase-B fixed
+// cap). See `audit/h-matrix/s14-builder-1-design.md` §2.4.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn drive_h2_upstream_send(
     pool: &Http2Pool,
     backend_addr: SocketAddr,
     upstream_req: Request<lb_io::http2_pool::H2ReqBody>,
     mut verdict_rx: tokio::sync::oneshot::Receiver<Result<(), ProxyErr>>,
     pump: tokio::task::JoinHandle<()>,
+    last_progress: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    upload_complete: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    epoch: tokio::time::Instant,
+    idle: Duration,
+    head_timeout: Duration,
     body_timeout: Duration,
 ) -> Result<Response<IncomingBody>, ProxyErr> {
     use lb_io::http2_pool::Http2PoolError;
@@ -2997,7 +3046,22 @@ pub(crate) async fn drive_h2_upstream_send(
         tokio::sync::oneshot::channel::<Result<Response<IncomingBody>, ProxyErr>>();
     let pool_for_task = pool.clone();
     tokio::spawn(async move {
-        let mut send_fut = std::pin::pin!(pool_for_task.send_request(backend_addr, upstream_req));
+        // S14 / CF-BODY-WALLCLOCK — replace the fixed-wall-clock
+        // `Http2Pool::send_request` (bounded by the pool's `send_timeout`)
+        // with the two-phase idle/head deadline `send_request_idle`. The
+        // biased select against `verdict_rx` (below) is unchanged — both
+        // pool methods return the same `Result<Response<Incoming>,
+        // Http2PoolError>` shape. ROUND8-L7-10 eviction policy is
+        // preserved verbatim inside `send_request_idle`.
+        let mut send_fut = std::pin::pin!(pool_for_task.send_request_idle(
+            backend_addr,
+            upstream_req,
+            last_progress,
+            upload_complete,
+            epoch,
+            idle,
+            head_timeout,
+        ));
         // Race the upstream send against the pump's verdict (resolves
         // exactly once). `resp` is Some only when the response head won
         // the race; every other branch reports its result + returns.
