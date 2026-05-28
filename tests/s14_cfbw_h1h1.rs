@@ -188,9 +188,8 @@ async fn paced_post_request(
     });
 
     let body_len = chunk_size * chunk_count;
-    let header = format!(
-        "POST /echo HTTP/1.1\r\nhost: backend.test\r\ncontent-length: {body_len}\r\n\r\n"
-    );
+    let header =
+        format!("POST /echo HTTP/1.1\r\nhost: backend.test\r\ncontent-length: {body_len}\r\n\r\n");
     // Build a streaming body that emits a chunk every `chunk_period`.
     let chunks: Vec<Result<Frame<Bytes>, Infallible>> = (0..chunk_count)
         .map(|i| Ok(Frame::data(Bytes::from(vec![(i % 256) as u8; chunk_size]))))
@@ -276,7 +275,8 @@ async fn cfbw_a_slow_progressing_upload_succeeds() {
 // above; the wedged-upstream-still-bounded property is proven by
 // `idle_send::tests::arm_ii_immediate_wedge_idle` + the helper-level
 // race-handling proof at `arm_ix_lp_zero_bump_then_complete_fires_head_not_idle`.
-#[allow(dead_code)] #[ignore = "CF-CFBW-CELL-LIVENESS-TEST-FRAGILITY — see disabled-arm comment above"]
+#[allow(dead_code)]
+#[ignore = "CF-CFBW-CELL-LIVENESS-TEST-FRAGILITY — see disabled-arm comment above"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cfbw_b_wedged_upstream_504s_within_idle_plus_slack() {
     // Backend never drains body → gateway bounded channel fills → pump
@@ -341,7 +341,8 @@ async fn cfbw_b_wedged_upstream_504s_within_idle_plus_slack() {
 // the cell-level wiring of `HttpTimeouts::head` (a fast-head request
 // under `head_timeout = 500 ms` must NOT misfire), which is the
 // regression-guard half of the head_timeout knob.
-#[allow(dead_code)] #[ignore = "CF-CFBW-CELL-LIVENESS-TEST-FRAGILITY — see disabled-arm comment above"]
+#[allow(dead_code)]
+#[ignore = "CF-CFBW-CELL-LIVENESS-TEST-FRAGILITY — see disabled-arm comment above"]
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn cfbw_c_head_timeout_fires_when_response_head_stalls() {
     // Backend drains the body fully (so upload_complete flips), then
