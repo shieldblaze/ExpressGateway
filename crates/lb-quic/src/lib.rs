@@ -108,6 +108,13 @@ mod cleanup_guard;
 pub mod conn_actor;
 pub mod h3_bridge;
 mod listener;
+// SHARED-1 (S15 A1): quiche-free QUIC public-header parser. Mode A
+// passthrough routes packets by Connection ID without decrypting; the
+// router calls into this module on every inbound datagram. See
+// `audit/quic/s15-design.md` §2 for the wire-format spec this parser
+// implements and §A1 for the verify-bar. Namespace-explicit by lead
+// directive — callers use `lb_quic::public_header::*`, no re-exports.
+pub mod public_header;
 mod router;
 
 // PROTO-2-11: expose the H3 graceful-shutdown helper so the integration
