@@ -140,6 +140,23 @@ where
                 if complete {
                     return Err(IdleSendError::HeadTimeout(head_timeout));
                 }
+                // S14 CFBW-RECHECK fix — race-on-small-body (R14
+                // escalation, verifier-discovered): the `complete` captured
+                // at top-of-iter may be STALE; `upload_complete` may have
+                // flipped during our sleep. Re-LOAD upload_complete before
+                // deciding Idle vs Head. Without this, a small-body
+                // request whose terminal frame's `last_progress` bump
+                // lands at `lp_ms ≈ 0` (within tokio's ms resolution of
+                // `epoch`) plus a `set_complete` flip-just-after will
+                // hit the strict `(now - last_progress_instant) < idle`
+                // re-check as FALSE at exactly `diff == idle` and
+                // misfire IdleTimeout, leaving Phase B unreachable for
+                // small bodies (`head_timeout` silently never applies).
+                if upload_complete.load(Ordering::Acquire) {
+                    // Phase B has been reached; re-enter the loop, the
+                    // next iter computes `head_deadline_anchor`.
+                    continue;
+                }
                 // Re-check: a pump bump may have landed AFTER we
                 // computed `deadline` but BEFORE the timer expired
                 // (a race the watchdog tick must absorb, plan §3).
@@ -447,6 +464,68 @@ mod tests {
         assert!(
             elapsed >= Duration::from_millis(950) && elapsed < Duration::from_millis(1_500),
             "tick-race re-check fire out of band: {elapsed:?}",
+        );
+    }
+
+    // (ix) S14 CFBW-RECHECK regression — `lp_ms ≈ 0` bump + complete-just-
+    // after must fire HeadTimeout, NOT IdleTimeout.
+    //
+    // Verifier-discovered defect (`audit/h-matrix/s14-verifier-defect-
+    // CFBW-RECHECK.md`): for a small-body request whose terminal-frame
+    // bump lands at `lp_ms ≈ 0` and whose `set_complete` flips just after,
+    // the timer-fired branch's stale `if complete` PLUS the strict
+    // `(now - last_progress_instant) < idle` re-check (FALSE at exactly
+    // `diff == idle`) caused the helper to misfire IdleTimeout, leaving
+    // Phase B (`head_timeout`) silently unreachable for small bodies.
+    //
+    // The fix re-loads `upload_complete` in the timer-fired branch; this
+    // arm proves the fix is load-bearing — it FAILS pre-fix (the helper
+    // returns `Err(IdleTimeout(500ms))` at t≈500ms) and PASSES post-fix
+    // (the helper switches to Phase B and fires `HeadTimeout(5s)` at
+    // t≈500ms + 5s = 5500ms).
+    #[tokio::test(start_paused = true)]
+    async fn arm_ix_lp_zero_bump_then_complete_fires_head_not_idle() {
+        let (last_progress, upload_complete, epoch) = fresh();
+        let never = std::future::pending::<u32>();
+
+        // Bump at lp_ms = 0 (the test starts at paused-t=0; bumping
+        // immediately stores lp_ms == 0 because Instant::now() - epoch
+        // is zero), then flip upload_complete = true at t=1ms.
+        let lp = last_progress.clone();
+        let uc = upload_complete.clone();
+        let ep = epoch;
+        tokio::spawn(async move {
+            bump_to_now(&lp, ep);
+            tokio::time::sleep(Duration::from_millis(1)).await;
+            uc.store(true, Ordering::Release);
+        });
+
+        let res = idle_bounded_send(
+            never,
+            last_progress,
+            upload_complete,
+            epoch,
+            Duration::from_millis(500), // idle
+            Duration::from_secs(5),     // head
+        )
+        .await;
+
+        assert!(
+            matches!(res, Err(IdleSendError::HeadTimeout(d)) if d == Duration::from_secs(5)),
+            "lp=0 + complete-just-after must fire HeadTimeout(5s) post-fix; \
+             got {res:?} (pre-fix: IdleTimeout(500ms))",
+        );
+        let elapsed = Instant::now().saturating_duration_since(epoch);
+        // Must NOT have fired at the idle deadline (~500 ms).
+        assert!(
+            elapsed > Duration::from_secs(1),
+            "fired too early — re-load fix not load-bearing: {elapsed:?}",
+        );
+        // Fires at ~500 ms (timer expiry) + 5 s (head anchor from re-arm)
+        // = ~5500 ms. Allow ±500 ms slack for paused-clock scheduler.
+        assert!(
+            elapsed >= Duration::from_millis(5_000) && elapsed < Duration::from_millis(6_500),
+            "head-fire instant out of band: {elapsed:?}",
         );
     }
 }
