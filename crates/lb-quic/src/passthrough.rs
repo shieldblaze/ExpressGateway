@@ -398,9 +398,19 @@ pub(crate) fn build_retry_packet(
 
 /// Test-only re-export of [`build_retry_packet`] for integration tests
 /// (verify gate A2-2: 1000-case byte-equality differential vs
-/// `quiche::retry`). Hidden behind `test-gauges` so production
-/// builds don't expose the constructor.
-#[cfg(any(test, feature = "test-gauges"))]
+/// `quiche::retry`).
+///
+/// CF-S15-TESTGAUGES-EXPORT-NARROW: previously gated behind
+/// `#[cfg(any(test, feature = "test-gauges"))]`, but `cfg(test)` is
+/// false during downstream integration-test compile (only true on the
+/// crate's OWN tests), so the gate forced every consumer to enable
+/// `test-gauges` even when only this one symbol was needed. Owner
+/// ruling §9.5 "construction over observation" doctrine for verify-
+/// gate artefacts: keep `build_retry_packet` private; expose this
+/// underscore-prefixed `#[doc(hidden)]` wrapper unconditionally so
+/// the cfg shape matches its consumer pattern. Production-surface
+/// impact: zero (still doc-hidden, underscore-prefixed, doc-typed
+/// "Test-only").
 #[doc(hidden)]
 pub fn _test_build_retry_packet(
     odcid: &[u8],
