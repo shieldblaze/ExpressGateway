@@ -1634,7 +1634,31 @@ impl H2Proxy {
         // response-head relay can be gated on a VALIDATED terminal state.
         let (verdict_tx, verdict_rx) = tokio::sync::oneshot::channel::<Result<(), ProxyErr>>();
         let drained: Vec<Bytes> = std::mem::take(&mut lookahead);
+
+        // S14 / CF-BODY-WALLCLOCK — forward-progress signal for
+        // [`lb_io::idle_send::idle_bounded_send`]. Mirror of H1→H1
+        // (h1_proxy.rs::proxy_request). See `audit/h-matrix/s14-builder-1-design.md` §2.2.
+        let last_progress = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let upload_complete = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let epoch = tokio::time::Instant::now();
+        let last_progress_pump = std::sync::Arc::clone(&last_progress);
+        let upload_complete_pump = std::sync::Arc::clone(&upload_complete);
+        let epoch_pump = epoch;
+
         let pump = tokio::spawn(async move {
+            // S14 — `bump` on every `tx.send(Ok)` success (co-located with
+            // `in_flight_bytes` fetch_add). `set_complete` once at the
+            // verdict-Ok terminal arm (clean END_STREAM / trailer-Ok).
+            let bump = || {
+                let dt = tokio::time::Instant::now()
+                    .saturating_duration_since(epoch_pump);
+                let ms = u64::try_from(dt.as_millis()).unwrap_or(u64::MAX);
+                last_progress_pump.store(ms, std::sync::atomic::Ordering::Relaxed);
+            };
+            let set_complete = || {
+                upload_complete_pump.store(true, std::sync::atomic::Ordering::Release);
+            };
+
             // Running cumulative total of forwarded request bytes — the D1
             // total-body cap (`MAX_REQUEST_BODY_BYTES`, 64 MiB) still applies
             // in the streaming regime, exactly as it did under the buffered
@@ -1690,6 +1714,8 @@ impl H2Proxy {
                             outcome = Err(SendOutcome::ReceiverGone);
                             break;
                         }
+                        // S14 — chunk accepted by hyper → forward-progress.
+                        bump();
                     }
                     outcome
                 }};
@@ -1784,6 +1810,9 @@ impl H2Proxy {
                             // Positively-confirmed clean END_STREAM → drop `tx`
                             // → StreamBody yields `None` → hyper writes the
                             // terminator → upstream sees a COMPLETE request.
+                            // S14 — upload complete; helper switches to
+                            // Phase-B head-roundtrip cap.
+                            set_complete();
                             let _ = verdict_tx.send(Ok(()));
                         } else {
                             // `None` from a RST_STREAM (no END_STREAM): inject a
@@ -1807,6 +1836,10 @@ impl H2Proxy {
                             match validate_request_trailers(frame.trailers_ref()) {
                                 Ok(_) => {
                                     let _ = tx.send(Ok(frame)).await;
+                                    // S14 — trailers accepted; bump then
+                                    // mark upload complete (Phase-B).
+                                    bump();
+                                    set_complete();
                                     let _ = verdict_tx.send(Ok(()));
                                     return;
                                 }
@@ -1868,8 +1901,22 @@ impl H2Proxy {
         // Drive the upstream send concurrently with the pump (hyper must pull
         // the channel for the pump to make progress under backpressure), but
         // do NOT relay the response until the pump's terminal verdict lands.
+        //
+        // S14 / CF-BODY-WALLCLOCK — see the H1→H1 mirror at
+        // `h1_proxy.rs::proxy_request` for the two-phase rationale. The
+        // helper preserves the F-CAP-1 inner `Ok(Err(hyper::Error))` arm
+        // verbatim and the :1881 verdict-rx backstop is untouched.
         let send_fut = sender.send_request(req);
-        let resp = match tokio::time::timeout(self.timeouts.body, send_fut).await {
+        let resp = match lb_io::idle_send::idle_bounded_send(
+            send_fut,
+            std::sync::Arc::clone(&last_progress),
+            std::sync::Arc::clone(&upload_complete),
+            epoch,
+            self.timeouts.body,
+            self.timeouts.head,
+        )
+        .await
+        {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => {
                 // F-CAP-1 — a `send_request` error is the DOWNSTREAM EFFECT of
@@ -1899,7 +1946,10 @@ impl H2Proxy {
                     classified.unwrap_or_else(|| ProxyErr::Upstream(format!("send_request: {e}")))
                 );
             }
-            Err(_) => {
+            Err(idle_err) => {
+                // S14 — Phase-1 collapse onto ProxyErr::Timeout; phase
+                // discriminant logged for triage.
+                tracing::warn!(error = %idle_err, "h2→h1 idle/head deadline fired");
                 pump.abort();
                 conn_handle.abort();
                 return Err(ProxyErr::Timeout);
