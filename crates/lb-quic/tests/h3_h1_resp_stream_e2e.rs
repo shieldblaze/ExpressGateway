@@ -11,22 +11,22 @@
 //!
 //! Planned coverage (s4-phase1-plan §2 — R1..R8):
 //!   * R1 — multi-DATA binary response (≥100 KB, 0xFF/0x00/0x80 at
-//!          head/mid/tail) byte-identical at the H3 client.
+//!     head/mid/tail) byte-identical at the H3 client.
 //!   * R2 — NON-VACUOUS memory bound: 1 MiB response, stalled H3
-//!          client; `MAX_RETAINED_RESP_BYTES` ≤ the §1.5 C5 sound
-//!          bound and `≪ 1 MiB`; liveness + byte-identity after resume.
+//!     client; `MAX_RETAINED_RESP_BYTES` ≤ the §1.5 C5 sound
+//!     bound and `≪ 1 MiB`; liveness + byte-identity after resume.
 //!   * R3 — slow-client backpressure: upstream read provably pauses
-//!          (gauge stays bounded), request still completes correctly.
+//!     (gauge stays bounded), request still completes correctly.
 //!   * R4 — empty response body + zero-length DATA; byte-identical,
-//!          clean FIN.
+//!     clean FIN.
 //!   * R5 — upstream resets mid-response ⇒ client observes
-//!          RESET_STREAM with a non-`H3_NO_ERROR` code, no truncated
-//!          body presented as complete.
+//!     RESET_STREAM with a non-`H3_NO_ERROR` code, no truncated
+//!     body presented as complete.
 //!   * R6 — client cancels mid-response ⇒ proxy stops reading
-//!          upstream, per-stream state torn down, no leak.
+//!     upstream, per-stream state torn down, no leak.
 //!   * R7 — chunked upstream response, byte-identical (new decoder).
 //!   * R8 — trailers no-regression (PROTO-2-12: the existing
-//!          `h3_h1_trailers_resp_e2e.rs` pc1/pc2 stay green).
+//!     `h3_h1_trailers_resp_e2e.rs` pc1/pc2 stay green).
 //!
 //! SCAFFOLD STATUS (builder-1, parallel to P1-A verification): the
 //! harness (FIN-aware response client driver, response backend

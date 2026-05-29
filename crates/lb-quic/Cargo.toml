@@ -7,6 +7,14 @@ license.workspace = true
 publish = false
 
 [dependencies]
+# Always-on deps — used by BOTH the termination path (`quic-terminate`)
+# AND the Mode A passthrough datapath (`quic-passthrough-only`).
+# Passthrough needs: thiserror (error types), bytes (BytesMut for the
+# Retry pseudo-packet build), tokio (UdpSocket, mpsc), tokio-util
+# (CancellationToken), tracing (logs), parking_lot (FlowEntry's
+# Mutex<peer>), dashmap (the flow table), ring (Retry-token secret
+# random + AEAD-AES-128-GCM Retry Integrity Tag), lb-security
+# (RetryTokenSigner).
 thiserror = { workspace = true }
 bytes = { workspace = true }
 tokio = { workspace = true }
@@ -14,18 +22,32 @@ tokio-util = { workspace = true }
 tracing = { workspace = true }
 parking_lot = { workspace = true }
 dashmap = { workspace = true }
-quiche = { workspace = true }
-tokio-quiche = { workspace = true }
+ring = "0.17"
+lb-security = { path = "../lb-security" }
+# S15 A2: passthrough Maglev selection (Maglev::pick_with_key over the
+# resolved backend set per design §3.2).
+lb-balancer = { path = "../lb-balancer" }
+# S15 A3: quic_passthrough_* observability handles
+# (PassthroughMetrics). Acyclic — lb-observability depends on
+# lb-security + lb-l4-xdp + prometheus, none of which link
+# quiche/BoringSSL, so this edge does NOT regress the
+# `quic-passthrough-only` NEVER-DECRYPTED linkage proof
+# (CF-S15-PASSTHROUGH-FEATURE-GATING).
+lb-observability = { path = "../lb-observability" }
+
+# `quic-terminate` deps — required by the existing H3 termination
+# router/actor/bridge tree. Gating these makes
+# `cargo bloat --features quic-passthrough-only --filter quiche` show
+# ZERO `quiche::Connection` / BoringSSL symbols on the Mode A binary
+# segment (owner ruling §9.5 primary item 1 — NEVER-DECRYPTED LINKAGE
+# proof). CF-S15-PASSTHROUGH-FEATURE-GATING.
+quiche = { workspace = true, optional = true }
+tokio-quiche = { workspace = true, optional = true }
 # PROTO-001: H3 listener → H2 backend path consumes hyper's H2 client
 # via lb_io::http2_pool::Http2Pool. We construct the upstream
 # `Request<BoxBody>` here in `h3_bridge::h3_to_h2_roundtrip`.
-hyper = { workspace = true }
-http-body-util = { workspace = true }
-# `ring::rand` for retry-secret generation and SCID sampling in the
-# listener seam (Pillar 3b.3c-1). ring is already in the tree via
-# quiche/BoringSSL's build — declaring it direct is cheap.
-ring = "0.17"
-lb-security = { path = "../lb-security" }
+hyper = { workspace = true, optional = true }
+http-body-util = { workspace = true, optional = true }
 # ROUND8-L7-16: the H3/QUIC ingress dispatch must run the SAME
 # authority value predicate the H1/H2 path uses (HAProxy BUG/MAJOR
 # comma class; L7-09's H3 leg). The predicate lives in lb-core
@@ -33,13 +55,12 @@ lb-security = { path = "../lb-security" }
 # lb-* deps) so this edge introduces no cycle, and lb-l7 (which
 # depends on lb-quic) is NOT pulled in — avoiding the
 # lb-quic↔lb-l7 cycle the alternative (lb-l7 dep) would create.
-lb-core = { path = "../lb-core" }
+lb-core = { path = "../lb-core", optional = true }
 # Pillar 3b.3c-2: router needs TcpPool to forward H3 → H1 to backends.
-lb-io = { path = "../lb-io" }
+lb-io = { path = "../lb-io", optional = true }
 # Pillar 3b.3c-2: lb-h3 provides the RFC 9114 frame codec + QPACK static-
-# table encoder/decoder. We use its byte format on both sides of our e2e
-# client+server so the no-dynamic-table limitation is never exercised.
-lb-h3 = { path = "../lb-h3" }
+# table encoder/decoder.
+lb-h3 = { path = "../lb-h3", optional = true }
 
 [dev-dependencies]
 rcgen = { version = "0.13", features = ["pem"] }
@@ -47,10 +68,40 @@ tokio = { workspace = true, features = ["full", "test-util"] }
 # CODE-2-11: proptest harness for the long/short header parse path.
 # Sanity budget; CI bumps via PROPTEST_CASES env.
 proptest = { workspace = true }
+# S15 A2 verify gate (A2-2): byte-equality differential of
+# `passthrough::build_retry_packet` vs `quiche::retry`. dev-deps
+# only — the production passthrough binary still links zero quiche
+# symbols (verified by scripts/never_decrypted_proof.sh).
+quiche = { workspace = true }
 
 [features]
-default = []
+# Default keeps existing build behaviour: termination router/actor/
+# h3_bridge/listener compile and link as today.
+default = ["quic-terminate"]
 proptest = []
+# S15 A2: gate the existing H3 termination tree (router.rs,
+# conn_actor.rs, h3_bridge.rs, listener.rs) behind a feature so the
+# Mode A `quic-passthrough-only` build links ZERO termination /
+# decryption symbols. Operators building only passthrough turn this
+# OFF and turn `quic-passthrough-only` ON; default builds (no
+# override) get termination as today.
+quic-terminate = [
+    "dep:quiche",
+    "dep:tokio-quiche",
+    "dep:hyper",
+    "dep:http-body-util",
+    "dep:lb-core",
+    "dep:lb-io",
+    "dep:lb-h3",
+]
+# S15 A2: marker feature for the Mode A passthrough-only build. Used
+# by `cfg(feature = "quic-passthrough-only")` test rigs and by
+# `cargo bloat --no-default-features --features quic-passthrough-only`
+# in scripts/never_decrypted_proof.sh to prove NEVER-DECRYPTED LINKAGE.
+# The passthrough code itself is NOT gated on this feature — it
+# compiles under any non-zero feature set; the marker just lets the
+# build skip termination dependencies.
+quic-passthrough-only = []
 # SESSION 2 / P1-A: exposes `h3_bridge::MAX_INFLIGHT_BODY_BYTES`, a
 # test-only gauge integration tests assert to prove the streaming
 # bridge is memory-bounded (not whole-body buffering). Off by default

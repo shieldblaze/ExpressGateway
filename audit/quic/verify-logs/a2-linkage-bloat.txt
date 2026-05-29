@@ -1,0 +1,2 @@
+File .text Size Crate Name
+0.0%  0.0%   0B       filtered data size, the file size is 1.9MiB

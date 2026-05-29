@@ -1,0 +1,685 @@
+=== run 1 ===
+test trusted_cidrs_do_not_currently_exempt ... ok
+test test_per_ip_cap_drops_on_drop ... ok
+test trusted_cidrs_field_round_trips ... ok
+test test_listener_cap_enforced ... ok
+test concurrent_admits_observe_cap ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/hooks_impl.rs (/home/ubuntu/Code/eg-target/debug/deps/hooks_impl-624a57d9ff982a10)
+
+running 8 tests
+test admit_listener_full_rejected_with_overcap ... ok
+test admit_per_ip_full_rolls_back_listener_count ... ok
+test admit_returns_permit_and_drop_releases ... ok
+test clean_request_passes_inspect ... ok
+test smuggle_cl_te_is_rejected_as_smuggle ... ok
+test smuggle_duplicate_cl_differing_is_rejected ... ok
+test smuggle_h2_downgrade_connection_header_rejected ... ok
+test smuggle_strict_te_gzip_chunked_rejected_only_under_strict ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/slowloris_watchdog.rs (/home/ubuntu/Code/eg-target/debug/deps/slowloris_watchdog-25c290d8311ac5e6)
+
+running 6 tests
+test deregister_returns_existence ... ok
+test max_registered_caps_the_table ... ok
+test sweep_expired_evicts_stalled ... ok
+test deadline_evicts ... ok
+test test_slow_progress_fires_eviction ... ok
+test fast_progress_passes ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/smuggle_strict_te.rs (/home/ubuntu/Code/eg-target/debug/deps/smuggle_strict_te-6cf599c4b5dbf87d)
+
+running 16 tests
+test check_all_mode_h2_runs_downgrade_check ... ok
+test check_all_mode_h2_te_trailers_ok ... ok
+test check_all_mode_strict_still_catches_cl_te ... ok
+test check_all_mode_strict_rejects_gzip_chunked ... ok
+test check_all_mode_lenient_accepts_gzip_chunked ... ok
+test strict_te_chunked_alone_case_insensitive_ok ... ok
+test strict_te_chunked_alone_ok ... ok
+test strict_te_chunked_gzip_rejected ... ok
+test strict_te_deflate_rejected ... ok
+test strict_te_gzip_chunked_rejected ... ok
+test strict_te_identity_rejected ... ok
+test strict_te_internal_whitespace_normalised ... ok
+test strict_te_leading_empty_codec_rejected ... ok
+test strict_te_multiple_te_headers_each_checked ... ok
+test strict_te_no_te_header_ok ... ok
+test strict_te_trailing_empty_codec_rejected ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/timeout_accept.rs (/home/ubuntu/Code/eg-target/debug/deps/timeout_accept-de45df8274483f67)
+
+running 3 tests
+test test_slow_handshake_times_out ... ok
+test very_short_budget_still_returns_timeout ... ok
+test timeout_uses_default_budget_constant ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/tls_versions.rs (/home/ubuntu/Code/eg-target/debug/deps/tls_versions-da547acafb49326a)
+
+running 3 tests
+test default_config_lists_tls12_and_tls13 ... ok
+test tls13_only_config_builds_without_tls12 ... ok
+test test_tls13_only_rejects_tls12 ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/zero_rtt_replay_window.rs (/home/ubuntu/Code/eg-target/debug/deps/zero_rtt_replay_window-8f2e4240fa917fcf)
+
+running 9 tests
+test capacity_one_still_detects_replay_of_last_token ... ok
+test capacity_zero_coerced_to_one ... ok
+test default_window_size_constant_is_65k ... ok
+test replay_detected_within_window ... ok
+test replay_hit_promotes_to_mru ... ok
+test test_lru_evicts_oldest ... ok
+test with_default_window_sizes_correctly ... ok
+test fills_and_evicts_under_unique_token_spray ... ok
+test arena_reuses_freed_slots ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+   Doc-tests lb
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_balancer
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_config
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_controlplane
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_cp_client
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_grpc
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_h1
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_h2
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_h3
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_health
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_io
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_l4_xdp
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_l7
+
+running 2 tests
+test crates/lb-l7/src/stripped_request.rs - stripped_request::strip_for_test (line 116) - compile fail ... ok
+test crates/lb-l7/src/stripped_request.rs - stripped_request::strip_for_test (line 103) - compile fail ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+   Doc-tests lb_observability
+
+running 2 tests
+test crates/lb-observability/src/label_budget.rs - label_budget (line 8) ... ignored
+test crates/lb-observability/src/tracing_propagation.rs - tracing_propagation::span_name (line 257) ... ok
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_quic
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_security
+
+running 3 tests
+test crates/lb-security/src/admin_auth.rs - admin_auth (line 8) ... ignored
+test crates/lb-security/src/hooks.rs - hooks (line 13) ... ignored
+test crates/lb-security/src/watchdog.rs - watchdog (line 12) ... ignored
+
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: 1 target failed:
+    `-p lb-integration-tests --test h1h3_md_streaming_verify`
+EXIT=0
+=== run 2 ===
+test per_ip_full_does_not_consume_listener_slot ... ok
+test trusted_cidrs_field_round_trips ... ok
+test test_listener_cap_releases_on_drop ... ok
+test trusted_cidrs_do_not_currently_exempt ... ok
+test test_listener_cap_enforced ... ok
+test test_per_ip_cap_drops_on_drop ... ok
+test concurrent_admits_observe_cap ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/hooks_impl.rs (/home/ubuntu/Code/eg-target/debug/deps/hooks_impl-624a57d9ff982a10)
+
+running 8 tests
+test admit_per_ip_full_rolls_back_listener_count ... ok
+test admit_returns_permit_and_drop_releases ... ok
+test admit_listener_full_rejected_with_overcap ... ok
+test clean_request_passes_inspect ... ok
+test smuggle_h2_downgrade_connection_header_rejected ... ok
+test smuggle_cl_te_is_rejected_as_smuggle ... ok
+test smuggle_strict_te_gzip_chunked_rejected_only_under_strict ... ok
+test smuggle_duplicate_cl_differing_is_rejected ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/slowloris_watchdog.rs (/home/ubuntu/Code/eg-target/debug/deps/slowloris_watchdog-25c290d8311ac5e6)
+
+running 6 tests
+test deregister_returns_existence ... ok
+test max_registered_caps_the_table ... ok
+test sweep_expired_evicts_stalled ... ok
+test deadline_evicts ... ok
+test test_slow_progress_fires_eviction ... ok
+test fast_progress_passes ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/smuggle_strict_te.rs (/home/ubuntu/Code/eg-target/debug/deps/smuggle_strict_te-6cf599c4b5dbf87d)
+
+running 16 tests
+test check_all_mode_h2_te_trailers_ok ... ok
+test check_all_mode_lenient_accepts_gzip_chunked ... ok
+test check_all_mode_h2_runs_downgrade_check ... ok
+test strict_te_chunked_alone_ok ... ok
+test check_all_mode_strict_rejects_gzip_chunked ... ok
+test strict_te_chunked_alone_case_insensitive_ok ... ok
+test strict_te_chunked_gzip_rejected ... ok
+test strict_te_internal_whitespace_normalised ... ok
+test strict_te_gzip_chunked_rejected ... ok
+test strict_te_identity_rejected ... ok
+test check_all_mode_strict_still_catches_cl_te ... ok
+test strict_te_multiple_te_headers_each_checked ... ok
+test strict_te_no_te_header_ok ... ok
+test strict_te_trailing_empty_codec_rejected ... ok
+test strict_te_deflate_rejected ... ok
+test strict_te_leading_empty_codec_rejected ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/timeout_accept.rs (/home/ubuntu/Code/eg-target/debug/deps/timeout_accept-de45df8274483f67)
+
+running 3 tests
+test very_short_budget_still_returns_timeout ... ok
+test test_slow_handshake_times_out ... ok
+test timeout_uses_default_budget_constant ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/tls_versions.rs (/home/ubuntu/Code/eg-target/debug/deps/tls_versions-da547acafb49326a)
+
+running 3 tests
+test tls13_only_config_builds_without_tls12 ... ok
+test default_config_lists_tls12_and_tls13 ... ok
+test test_tls13_only_rejects_tls12 ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/zero_rtt_replay_window.rs (/home/ubuntu/Code/eg-target/debug/deps/zero_rtt_replay_window-8f2e4240fa917fcf)
+
+running 9 tests
+test capacity_one_still_detects_replay_of_last_token ... ok
+test default_window_size_constant_is_65k ... ok
+test capacity_zero_coerced_to_one ... ok
+test replay_detected_within_window ... ok
+test replay_hit_promotes_to_mru ... ok
+test test_lru_evicts_oldest ... ok
+test with_default_window_sizes_correctly ... ok
+test fills_and_evicts_under_unique_token_spray ... ok
+test arena_reuses_freed_slots ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+   Doc-tests lb
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_balancer
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_config
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_controlplane
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_cp_client
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_grpc
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_h1
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_h2
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_h3
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_health
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_io
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_l4_xdp
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_l7
+
+running 2 tests
+test crates/lb-l7/src/stripped_request.rs - stripped_request::strip_for_test (line 116) - compile fail ... ok
+test crates/lb-l7/src/stripped_request.rs - stripped_request::strip_for_test (line 103) - compile fail ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+   Doc-tests lb_observability
+
+running 2 tests
+test crates/lb-observability/src/label_budget.rs - label_budget (line 8) ... ignored
+test crates/lb-observability/src/tracing_propagation.rs - tracing_propagation::span_name (line 257) ... ok
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_quic
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_security
+
+running 3 tests
+test crates/lb-security/src/admin_auth.rs - admin_auth (line 8) ... ignored
+test crates/lb-security/src/hooks.rs - hooks (line 13) ... ignored
+test crates/lb-security/src/watchdog.rs - watchdog (line 12) ... ignored
+
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+EXIT=0
+=== run 3 ===
+test per_ip_entry_gcs_when_count_drops_to_zero ... ok
+test test_listener_cap_releases_on_drop ... ok
+test trusted_cidrs_do_not_currently_exempt ... ok
+test test_listener_cap_enforced ... ok
+test test_per_ip_cap_drops_on_drop ... ok
+test trusted_cidrs_field_round_trips ... ok
+test concurrent_admits_observe_cap ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/hooks_impl.rs (/home/ubuntu/Code/eg-target/debug/deps/hooks_impl-624a57d9ff982a10)
+
+running 8 tests
+test admit_listener_full_rejected_with_overcap ... ok
+test admit_returns_permit_and_drop_releases ... ok
+test admit_per_ip_full_rolls_back_listener_count ... ok
+test clean_request_passes_inspect ... ok
+test smuggle_cl_te_is_rejected_as_smuggle ... ok
+test smuggle_duplicate_cl_differing_is_rejected ... ok
+test smuggle_h2_downgrade_connection_header_rejected ... ok
+test smuggle_strict_te_gzip_chunked_rejected_only_under_strict ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/slowloris_watchdog.rs (/home/ubuntu/Code/eg-target/debug/deps/slowloris_watchdog-25c290d8311ac5e6)
+
+running 6 tests
+test deregister_returns_existence ... ok
+test max_registered_caps_the_table ... ok
+test sweep_expired_evicts_stalled ... ok
+test deadline_evicts ... ok
+test test_slow_progress_fires_eviction ... ok
+test fast_progress_passes ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/smuggle_strict_te.rs (/home/ubuntu/Code/eg-target/debug/deps/smuggle_strict_te-6cf599c4b5dbf87d)
+
+running 16 tests
+test check_all_mode_h2_runs_downgrade_check ... ok
+test check_all_mode_h2_te_trailers_ok ... ok
+test check_all_mode_lenient_accepts_gzip_chunked ... ok
+test strict_te_chunked_alone_case_insensitive_ok ... ok
+test check_all_mode_strict_rejects_gzip_chunked ... ok
+test strict_te_chunked_alone_ok ... ok
+test check_all_mode_strict_still_catches_cl_te ... ok
+test strict_te_identity_rejected ... ok
+test strict_te_deflate_rejected ... ok
+test strict_te_gzip_chunked_rejected ... ok
+test strict_te_multiple_te_headers_each_checked ... ok
+test strict_te_no_te_header_ok ... ok
+test strict_te_internal_whitespace_normalised ... ok
+test strict_te_trailing_empty_codec_rejected ... ok
+test strict_te_chunked_gzip_rejected ... ok
+test strict_te_leading_empty_codec_rejected ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/timeout_accept.rs (/home/ubuntu/Code/eg-target/debug/deps/timeout_accept-de45df8274483f67)
+
+running 3 tests
+test test_slow_handshake_times_out ... ok
+test very_short_budget_still_returns_timeout ... ok
+test timeout_uses_default_budget_constant ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/tls_versions.rs (/home/ubuntu/Code/eg-target/debug/deps/tls_versions-da547acafb49326a)
+
+running 3 tests
+test tls13_only_config_builds_without_tls12 ... ok
+test default_config_lists_tls12_and_tls13 ... ok
+test test_tls13_only_rejects_tls12 ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/zero_rtt_replay_window.rs (/home/ubuntu/Code/eg-target/debug/deps/zero_rtt_replay_window-8f2e4240fa917fcf)
+
+running 9 tests
+test capacity_one_still_detects_replay_of_last_token ... ok
+test capacity_zero_coerced_to_one ... ok
+test default_window_size_constant_is_65k ... ok
+test test_lru_evicts_oldest ... ok
+test replay_detected_within_window ... ok
+test replay_hit_promotes_to_mru ... ok
+test with_default_window_sizes_correctly ... ok
+test fills_and_evicts_under_unique_token_spray ... ok
+test arena_reuses_freed_slots ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+   Doc-tests lb
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_balancer
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_config
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_controlplane
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_cp_client
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_grpc
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_h1
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_h2
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_h3
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_health
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_io
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_l4_xdp
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_l7
+
+running 2 tests
+test crates/lb-l7/src/stripped_request.rs - stripped_request::strip_for_test (line 116) - compile fail ... ok
+test crates/lb-l7/src/stripped_request.rs - stripped_request::strip_for_test (line 103) - compile fail ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+   Doc-tests lb_observability
+
+running 2 tests
+test crates/lb-observability/src/label_budget.rs - label_budget (line 8) ... ignored
+test crates/lb-observability/src/tracing_propagation.rs - tracing_propagation::span_name (line 257) ... ok
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_quic
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_security
+
+running 3 tests
+test crates/lb-security/src/admin_auth.rs - admin_auth (line 8) ... ignored
+test crates/lb-security/src/hooks.rs - hooks (line 13) ... ignored
+test crates/lb-security/src/watchdog.rs - watchdog (line 12) ... ignored
+
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+EXIT=0
+=== summary ===
+=== run 1 ===
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+EXIT=0
+=== run 2 ===
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+EXIT=0
+=== run 3 ===
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+EXIT=0

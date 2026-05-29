@@ -8,26 +8,26 @@
 //!
 //! Coverage:
 //!   * PC1 — REQUEST TRAILERS NO-REGRESSION. The H3 client sends
-//!           HEADERS (no fin) → DATA frames → a POST-DATA HEADERS frame
-//!           (the RFC 9114 §4.1 trailing field section) → fin. The body
-//!           embeds 0xFF/0x00/0x80 at head, middle and tail. Asserts:
-//!             - the request body arrives BYTE-IDENTICAL at the H1
-//!               backend (the body-phase `BodyItem::Trailers` parser
-//!               path does not crash or corrupt the DATA stream);
-//!             - the H1 request is well-formed + COMPLETE (chunked
-//!               terminator present and de-chunks to exactly the body);
-//!             - the request trailer fields are *intentionally NOT*
-//!               smuggled into the H1 request head/body (documented
-//!               RFC-acceptable downgrade — see the `ReqBodyEvent::End`
-//!               arm doc-comment in `h3_bridge.rs`);
-//!             - the H3 client receives the backend's real `:status`.
+//!     HEADERS (no fin) → DATA frames → a POST-DATA HEADERS frame
+//!     (the RFC 9114 §4.1 trailing field section) → fin. The body
+//!     embeds 0xFF/0x00/0x80 at head, middle and tail. Asserts:
+//!     - the request body arrives BYTE-IDENTICAL at the H1
+//!       backend (the body-phase `BodyItem::Trailers` parser
+//!       path does not crash or corrupt the DATA stream);
+//!     - the H1 request is well-formed + COMPLETE (chunked
+//!       terminator present and de-chunks to exactly the body);
+//!     - the request trailer fields are *intentionally NOT*
+//!       smuggled into the H1 request head/body (documented
+//!       RFC-acceptable downgrade — see the `ReqBodyEvent::End`
+//!       arm doc-comment in `h3_bridge.rs`);
+//!     - the H3 client receives the backend's real `:status`.
 //!   * PC2 — LARGE BINARY RESPONSE body. The H1 backend returns a
-//!           >= 256 KiB binary body (> one comfortable DATA frame) with
-//!           a correct `Content-Length`, embedding 0xFF/0x00/0x80 at
-//!           head, middle and tail. The real H3 client must reassemble
-//!           the response body BYTE-IDENTICAL and observe the backend
-//!           `:status`. Locks in the upstream→H3-client response DATA
-//!           path for big binary bodies.
+//!     \>= 256 KiB binary body (> one comfortable DATA frame) with
+//!     a correct `Content-Length`, embedding 0xFF/0x00/0x80 at
+//!     head, middle and tail. The real H3 client must reassemble
+//!     the response body BYTE-IDENTICAL and observe the backend
+//!     `:status`. Locks in the upstream→H3-client response DATA
+//!     path for big binary bodies.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 

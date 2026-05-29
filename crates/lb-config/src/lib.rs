@@ -58,6 +58,16 @@ pub struct LbConfig {
     /// 9112 baseline, i.e. `SmuggleMode::H1`).
     #[serde(default)]
     pub security: Option<SecurityConfig>,
+    /// S15 A2-8: optional `[passthrough]` block enabling the Mode A
+    /// QUIC passthrough datapath (`lb_quic::PassthroughListener`).
+    /// When `Some`, the binary binds a UDP socket and routes QUIC
+    /// packets by Connection ID without decrypting (no TLS state,
+    /// no `quiche::Connection`, no BoringSSL handshake). When `None`,
+    /// no passthrough listener is started. Independent of
+    /// `[[listeners]]` — Mode A coexists with terminating listeners
+    /// on different ports.
+    #[serde(default)]
+    pub passthrough: Option<PassthroughConfig>,
 }
 
 /// PROTO-2-17 (Wave 2c-2): process-wide HTTP security toggles.
@@ -915,6 +925,113 @@ const fn default_quic_recv_udp_payload() -> u64 {
     1_350
 }
 
+/// S15 A2-8: Mode A QUIC passthrough listener configuration.
+///
+/// Lives at the top level (`[passthrough]`) rather than under
+/// `[[listeners]]` because Mode A is a parallel datapath, not a
+/// listener-protocol variant: it cannot share a UDP port with the
+/// `protocol = "quic"` terminating listener and the field shape
+/// (no cert/key, no per-listener drain knobs) differs structurally.
+/// The shape mirrors `lb_quic::PassthroughParams` 1:1.
+///
+/// Field defaults match the owner rulings from
+/// `audit/quic/s15-design.md` §9 — see each `default_*_passthrough`
+/// helper below for citations.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct PassthroughConfig {
+    /// Bind address for the listener UDP socket.
+    pub bind_addr: std::net::SocketAddr,
+    /// Resolved backend addresses; consumed by Maglev consistent
+    /// hashing on every Initial. Must be non-empty.
+    pub backends: Vec<std::net::SocketAddr>,
+    /// Path to the 32-byte retry-secret file. Generated with mode
+    /// 0600 if missing — same discipline as the terminating QUIC
+    /// listener.
+    pub retry_secret_path: std::path::PathBuf,
+    /// Maximum concurrent QUIC flows. Default 100_000 per owner
+    /// ruling §9.4; routing-table-entry cap is `2 * max`.
+    #[serde(default = "default_passthrough_max_quic_connections")]
+    pub max_quic_connections: usize,
+    /// Minimum client-chosen DCID length accepted. Default 8 per
+    /// owner ruling §9.3 (CVE-2022-30592-style cross-flow prefix
+    /// collision defence).
+    #[serde(default = "default_passthrough_min_client_dcid_len")]
+    pub min_client_dcid_len: usize,
+    /// Per-flow datagram backlog. Default 32; drop-newest on Full
+    /// per design §5.1.
+    #[serde(default = "default_passthrough_per_flow_backlog")]
+    pub per_flow_backlog: usize,
+    /// Strict source-IP binding: when true, short-header packets
+    /// whose 4-tuple differs from the flow's recorded peer are
+    /// dropped at the LB. Breaks NAT-rebind path-migration but
+    /// catches off-path spoofed-CID injection. Default **false**
+    /// per owner ruling §9.1' (mobile availability is load-bearing).
+    #[serde(default)]
+    pub strict_source_binding: bool,
+    /// Audit-log throttle window, in seconds. 60s default per §6.2.
+    #[serde(default = "default_passthrough_audit_throttle_window_secs")]
+    pub audit_throttle_window_secs: u64,
+    /// Short-header DCID length to try first when no per-flow length
+    /// is known. Default 20 (RFC 9000 §17.3 max) per §3.3 fallback.
+    #[serde(default = "default_passthrough_max_dcid_len_routed")]
+    pub max_dcid_len_routed: usize,
+    /// Whether the LB mints stateless Retry on no-token Initials
+    /// (§6.5 Initial-flood defence per owner ruling §9.2). Default
+    /// **true** for production deployments. When `false`, no-token
+    /// Initials are forwarded to the backend verbatim — the backend's
+    /// own `quiche::accept` then handles Initial-flood defence
+    /// (either accepts directly or initiates its own Retry, which
+    /// the LB just forwards). Documented test/trusted-network escape
+    /// for **CF-S15-PASSTHROUGH-RETRY-ODCID**: with `mint_retry =
+    /// true`, real-quiche backends reject the post-Retry
+    /// `original_destination_connection_id` transport param because
+    /// the LB-chosen new_scid hides the client's ODCID. RFC 9000
+    /// §17.2.5 anticipates a "Retry Service" pattern (token-embedded
+    /// ODCID + backend extracts on verify); deferred to S15.x / S16.
+    #[serde(default = "default_passthrough_mint_retry")]
+    pub mint_retry: bool,
+}
+
+/// S15 A2-8: owner ruling §9.4 — 100k flows is the documented
+/// default flow-cap. Routing table entries are bounded at `2 * cap`.
+const fn default_passthrough_max_quic_connections() -> usize {
+    100_000
+}
+
+/// S15 A2-8: owner ruling §9.3 — 8-byte minimum client DCID is the
+/// CVE-2022-30592-style cross-flow prefix-collision defence floor.
+const fn default_passthrough_min_client_dcid_len() -> usize {
+    8
+}
+
+/// S15 A2-8: design §5.1 — per-flow datagram backlog. 32 datagrams
+/// is the drop-newest queue depth between the recv loop and the
+/// per-flow forward task.
+const fn default_passthrough_per_flow_backlog() -> usize {
+    32
+}
+
+/// S15 A2-8: design §6.2 — audit-log throttle window. 60 s damps
+/// per-flow drop logs so a misbehaving peer cannot flood the audit
+/// stream.
+const fn default_passthrough_audit_throttle_window_secs() -> u64 {
+    60
+}
+
+/// S15 A2-8: design §3.3 — short-header DCID single-length fast
+/// path. 20 bytes is RFC 9000 §17.3's maximum routable DCID length.
+const fn default_passthrough_max_dcid_len_routed() -> usize {
+    20
+}
+
+/// S15 A2-3 / CF-S15-PASSTHROUGH-RETRY-ODCID: §6.5 Initial-flood
+/// defence is ON by default; production deployments leave this
+/// `true`. The escape (`false`) delegates flood defence to the
+/// backend; see `PassthroughConfig::mint_retry` doc.
+const fn default_passthrough_mint_retry() -> bool {
+    true
+}
+
 /// Configuration for a single upstream backend.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct BackendConfig {
@@ -986,10 +1103,17 @@ pub fn parse_config(input: &str) -> Result<LbConfig, ConfigError> {
 ///
 /// Returns `ConfigError::Validation` if the config is invalid.
 pub fn validate_config(config: &LbConfig) -> Result<(), ConfigError> {
-    if config.listeners.is_empty() {
+    // S15 A2-8: passthrough is an independent datapath — a config
+    // with only `[passthrough]` and no `[[listeners]]` is valid
+    // (Mode-A-only deployment matching the
+    // `quic-passthrough-only` feature build).
+    if config.listeners.is_empty() && config.passthrough.is_none() {
         return Err(ConfigError::Validation(
-            "at least one listener is required".into(),
+            "at least one listener or [passthrough] is required".into(),
         ));
+    }
+    if let Some(pt) = config.passthrough.as_ref() {
+        validate_passthrough(pt)?;
     }
     for (i, listener) in config.listeners.iter().enumerate() {
         validate_listener(i, listener)?;
@@ -1473,6 +1597,63 @@ fn validate_quic_listener(i: usize, listener: &ListenerConfig) -> Result<(), Con
     Ok(())
 }
 
+/// S15 A2-8: validate the optional `[passthrough]` block.
+///
+/// Mirrors the shape of `validate_quic_listener` — clamp the
+/// owner-ruling knobs so an operator typo (e.g.
+/// `min_client_dcid_len = 0`) fails loudly at startup instead of
+/// silently re-enabling the cross-flow prefix-collision attack
+/// surface.
+fn validate_passthrough(pt: &PassthroughConfig) -> Result<(), ConfigError> {
+    if pt.backends.is_empty() {
+        return Err(ConfigError::Validation(
+            "passthrough.backends must be non-empty".into(),
+        ));
+    }
+    // Owner ruling §9.4 — flow cap is meaningful only at >= 1; the
+    // upper bound matches `RuntimeConfig::max_inflight_connections`'s
+    // ceiling so the routing-table-entry cap (2 * cap) stays under
+    // 4M entries even at the worst case.
+    if !(1..=2_000_000).contains(&pt.max_quic_connections) {
+        return Err(ConfigError::Validation(format!(
+            "passthrough.max_quic_connections={} out of range 1..=2000000",
+            pt.max_quic_connections
+        )));
+    }
+    // Owner ruling §9.3 — anything below 8 re-opens the
+    // CVE-2022-30592-style prefix-collision surface; above
+    // `MAX_CID_LEN` (20, RFC 9000 §17.3) is impossible on the wire.
+    if !(8..=20).contains(&pt.min_client_dcid_len) {
+        return Err(ConfigError::Validation(format!(
+            "passthrough.min_client_dcid_len={} out of range 8..=20",
+            pt.min_client_dcid_len
+        )));
+    }
+    if !(1..=8192).contains(&pt.per_flow_backlog) {
+        return Err(ConfigError::Validation(format!(
+            "passthrough.per_flow_backlog={} out of range 1..=8192",
+            pt.per_flow_backlog
+        )));
+    }
+    if pt.audit_throttle_window_secs == 0 {
+        return Err(ConfigError::Validation(
+            "passthrough.audit_throttle_window_secs must be > 0".into(),
+        ));
+    }
+    if !(1..=20).contains(&pt.max_dcid_len_routed) {
+        return Err(ConfigError::Validation(format!(
+            "passthrough.max_dcid_len_routed={} out of range 1..=20",
+            pt.max_dcid_len_routed
+        )));
+    }
+    if pt.retry_secret_path.as_os_str().is_empty() {
+        return Err(ConfigError::Validation(
+            "passthrough.retry_secret_path is empty".into(),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1504,6 +1685,7 @@ protocol = "tcp"
             observability: None,
             admin: None,
             security: None,
+            passthrough: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1529,6 +1711,7 @@ protocol = "tcp"
             observability: None,
             admin: None,
             security: None,
+            passthrough: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1554,6 +1737,7 @@ protocol = "tcp"
             observability: None,
             admin: None,
             security: None,
+            passthrough: None,
         };
         assert!(validate_config(&config).is_ok());
     }
@@ -1586,6 +1770,7 @@ protocol = "tcp"
             observability: None,
             admin: None,
             security: None,
+            passthrough: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1652,6 +1837,7 @@ address = "127.0.0.1:3000"
             observability: None,
             admin: None,
             security: None,
+            passthrough: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1677,6 +1863,7 @@ address = "127.0.0.1:3000"
             observability: None,
             admin: None,
             security: None,
+            passthrough: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1707,6 +1894,7 @@ address = "127.0.0.1:3000"
             observability: None,
             admin: None,
             security: None,
+            passthrough: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1737,6 +1925,7 @@ address = "127.0.0.1:3000"
             observability: None,
             admin: None,
             security: None,
+            passthrough: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1787,6 +1976,7 @@ protocol = "h1"
             observability: None,
             admin: None,
             security: None,
+            passthrough: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1818,6 +2008,7 @@ protocol = "h1"
             observability: None,
             admin: None,
             security: None,
+            passthrough: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1850,6 +2041,7 @@ protocol = "h1"
             observability: None,
             admin: None,
             security: None,
+            passthrough: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1911,6 +2103,7 @@ address = "127.0.0.1:3000"
             observability: None,
             admin: None,
             security: None,
+            passthrough: None,
         };
         let err = validate_config(&config).unwrap_err();
         assert!(matches!(err, ConfigError::Validation(_)));
@@ -1944,6 +2137,7 @@ address = "127.0.0.1:3000"
             observability: None,
             admin: None,
             security: None,
+            passthrough: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -1984,6 +2178,7 @@ address = "127.0.0.1:3000"
             observability: None,
             admin: None,
             security: None,
+            passthrough: None,
         };
         validate_config(&config).unwrap();
     }
@@ -2021,6 +2216,7 @@ address = "127.0.0.1:3000"
             observability: None,
             admin: None,
             security: None,
+            passthrough: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -2083,6 +2279,7 @@ xdp_interface = "eth0"
             observability: None,
             admin: None,
             security: None,
+            passthrough: None,
         };
         let err = validate_config(&config).unwrap_err();
         assert!(matches!(err, ConfigError::Validation(_)));
@@ -2125,6 +2322,7 @@ xdp_interface = "eth0"
             observability: None,
             admin: None,
             security: None,
+            passthrough: None,
         };
         validate_config(&config).unwrap();
     }
@@ -2203,6 +2401,7 @@ address = "127.0.0.1:3000"
             observability: None,
             admin: None,
             security: None,
+            passthrough: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -2254,6 +2453,7 @@ address = "127.0.0.1:3000"
             observability: None,
             admin: None,
             security: None,
+            passthrough: None,
         };
         assert!(validate_config(&config).is_err());
     }
@@ -2348,6 +2548,7 @@ address = "127.0.0.1:3000"
             observability: None,
             admin: None,
             security: None,
+            passthrough: None,
         };
         assert!(validate_config(&cfg).is_err());
     }
@@ -2368,6 +2569,7 @@ address = "127.0.0.1:3000"
             observability: None,
             admin: None,
             security: None,
+            passthrough: None,
         };
         let err = validate_config(&cfg).unwrap_err();
         assert!(matches!(err, ConfigError::Validation(_)));
@@ -2386,6 +2588,7 @@ address = "127.0.0.1:3000"
             observability: None,
             admin: None,
             security: None,
+            passthrough: None,
         };
         assert!(validate_config(&cfg).is_err());
     }
@@ -2421,8 +2624,107 @@ address = "127.0.0.1:3000"
             }),
             admin: None,
             security: None,
+            passthrough: None,
         };
         let err = validate_config(&config).unwrap_err();
         assert!(matches!(err, ConfigError::Validation(_)));
+    }
+
+    // S15 A2-8: PassthroughConfig validation tests.
+    fn pt_min(bind: &str, backend: &str) -> PassthroughConfig {
+        PassthroughConfig {
+            bind_addr: bind.parse().unwrap(),
+            backends: vec![backend.parse().unwrap()],
+            retry_secret_path: std::path::PathBuf::from("/tmp/eg-pt-retry.bin"),
+            max_quic_connections: default_passthrough_max_quic_connections(),
+            min_client_dcid_len: default_passthrough_min_client_dcid_len(),
+            per_flow_backlog: default_passthrough_per_flow_backlog(),
+            strict_source_binding: false,
+            audit_throttle_window_secs: default_passthrough_audit_throttle_window_secs(),
+            max_dcid_len_routed: default_passthrough_max_dcid_len_routed(),
+            mint_retry: default_passthrough_mint_retry(),
+        }
+    }
+
+    #[test]
+    fn passthrough_only_config_is_valid() {
+        // Mode-A-only deployment: no [[listeners]] entries, just the
+        // [passthrough] block. Verifies the `validate_config`
+        // listeners-empty exemption (otherwise this would be rejected
+        // as "no listeners").
+        let cfg = LbConfig {
+            listeners: vec![],
+            runtime: None,
+            observability: None,
+            admin: None,
+            security: None,
+            passthrough: Some(pt_min("0.0.0.0:4433", "127.0.0.1:5000")),
+        };
+        assert!(validate_config(&cfg).is_ok());
+    }
+
+    #[test]
+    fn passthrough_empty_backends_rejected() {
+        let mut pt = pt_min("0.0.0.0:4433", "127.0.0.1:5000");
+        pt.backends.clear();
+        let cfg = LbConfig {
+            listeners: vec![],
+            runtime: None,
+            observability: None,
+            admin: None,
+            security: None,
+            passthrough: Some(pt),
+        };
+        assert!(validate_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn passthrough_min_client_dcid_below_floor_rejected() {
+        // Owner ruling §9.3: a config-time min_client_dcid_len below
+        // 8 re-opens the cross-flow prefix-collision surface — must
+        // fail loud, not silent.
+        let mut pt = pt_min("0.0.0.0:4433", "127.0.0.1:5000");
+        pt.min_client_dcid_len = 4;
+        let cfg = LbConfig {
+            listeners: vec![],
+            runtime: None,
+            observability: None,
+            admin: None,
+            security: None,
+            passthrough: Some(pt),
+        };
+        assert!(validate_config(&cfg).is_err());
+    }
+
+    #[test]
+    fn passthrough_defaults_match_owner_rulings() {
+        assert_eq!(default_passthrough_max_quic_connections(), 100_000); // §9.4
+        assert_eq!(default_passthrough_min_client_dcid_len(), 8); // §9.3
+        assert_eq!(default_passthrough_per_flow_backlog(), 32); // §5.1
+        assert_eq!(default_passthrough_audit_throttle_window_secs(), 60); // §6.2
+        assert_eq!(default_passthrough_max_dcid_len_routed(), 20); // §3.3
+    }
+
+    #[test]
+    fn parse_passthrough_block_round_trip() {
+        let input = r#"
+[[listeners]]
+address = "0.0.0.0:8080"
+protocol = "tcp"
+
+[passthrough]
+bind_addr = "0.0.0.0:4433"
+backends = ["127.0.0.1:5000", "127.0.0.1:5001"]
+retry_secret_path = "/var/run/eg-pt-retry.bin"
+strict_source_binding = true
+"#;
+        let cfg = parse_config(input).expect("parse ok");
+        let pt = cfg.passthrough.as_ref().expect("passthrough present");
+        assert_eq!(pt.backends.len(), 2);
+        assert!(pt.strict_source_binding);
+        // Defaults flow through serde:
+        assert_eq!(pt.max_quic_connections, 100_000);
+        assert_eq!(pt.min_client_dcid_len, 8);
+        assert!(validate_config(&cfg).is_ok());
     }
 }

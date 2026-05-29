@@ -65,7 +65,7 @@ use lb_l7::h2_security::H2SecurityThresholds;
 use lb_l7::upstream::{RoundRobinUpstreams, UpstreamBackend, UpstreamProto};
 use lb_l7::ws_proxy::{WsConfig, WsProxy};
 use lb_observability::{MetricsRegistry, admin_http, http_latency_buckets};
-use lb_quic::{QuicListener, QuicListenerParams};
+use lb_quic::{PassthroughListener, PassthroughParams, QuicListener, QuicListenerParams};
 use lb_security::{
     ConnGate, HooksBundle, SecurityHooks, SmuggleMode, TicketRotator, Watchdog, WatchdogConfig,
 };
@@ -1025,6 +1025,49 @@ async fn spawn_quic(
     Ok(listener)
 }
 
+/// S15 A2-8: spawn the Mode A QUIC passthrough listener. Independent
+/// of the terminating QUIC listener — Mode A binds its own UDP port,
+/// owns its own retry-secret, and never decrypts client packets
+/// (`lb_quic::passthrough::PassthroughListener` upholds the
+/// NEVER-DECRYPTED invariant via the CF-S15-PASSTHROUGH-FEATURE-GATING
+/// linkage proof; see `scripts/never_decrypted_proof.sh`).
+async fn spawn_passthrough(
+    cfg: &lb_config::PassthroughConfig,
+    metrics: &Arc<MetricsRegistry>,
+    shutdown_token: CancellationToken,
+) -> anyhow::Result<PassthroughListener> {
+    let mut params = PassthroughParams::new(
+        cfg.bind_addr,
+        cfg.backends.clone(),
+        cfg.retry_secret_path.clone(),
+    );
+    params.max_quic_connections = cfg.max_quic_connections;
+    params.min_client_dcid_len = cfg.min_client_dcid_len;
+    params.per_flow_backlog = cfg.per_flow_backlog;
+    params.strict_source_binding = cfg.strict_source_binding;
+    params.audit_throttle_window = Duration::from_secs(cfg.audit_throttle_window_secs);
+    params.max_dcid_len_routed = cfg.max_dcid_len_routed;
+    params.mint_retry = cfg.mint_retry;
+    // S15 A3: register the quic_passthrough_* metric family off the
+    // shared registry and thread the handles into the listener.
+    params.metrics = Some(
+        lb_observability::PassthroughMetrics::register(metrics)
+            .context("registering quic_passthrough_* metrics")?,
+    );
+
+    let listener = PassthroughListener::spawn(params, shutdown_token)
+        .await
+        .with_context(|| format!("passthrough listener bind failed for {}", cfg.bind_addr))?;
+    tracing::info!(
+        address = %listener.local_addr(),
+        protocol = "quic-passthrough",
+        backends = cfg.backends.len(),
+        strict_source_binding = cfg.strict_source_binding,
+        "QUIC passthrough listener started"
+    );
+    Ok(listener)
+}
+
 /// Resolve backends, build the listener state, and spawn the accept
 /// loop for a TCP/TLS/H1/H1s listener.
 #[allow(clippy::too_many_arguments)]
@@ -1728,6 +1771,10 @@ async fn async_main() -> anyhow::Result<()> {
     // ── spawn listeners ─────────────────────────────────────────────
     let mut listener_handles = Vec::new();
     let mut quic_listeners: Vec<QuicListener> = Vec::new();
+    // S15 A2-8: Mode A passthrough listeners. Today only one is
+    // supported (`[passthrough]` is a single top-level block); the Vec
+    // shape is forward-compatible with future per-pool fan-out.
+    let mut passthrough_listeners: Vec<PassthroughListener> = Vec::new();
 
     // SEC-2-10 Wave 2c: source the TLS handshake budget from
     // `[runtime].handshake_timeout_ms`. Falls back to 5 s when no
@@ -1903,7 +1950,14 @@ async fn async_main() -> anyhow::Result<()> {
         listener_handles.push(handle);
     }
 
-    if listener_handles.is_empty() && quic_listeners.is_empty() {
+    // S15 A2-8: spawn the Mode A passthrough listener, if configured.
+    if let Some(pt_cfg) = config.passthrough.as_ref() {
+        passthrough_listeners
+            .push(spawn_passthrough(pt_cfg, &metrics, shutdown.token().child_token()).await?);
+    }
+
+    if listener_handles.is_empty() && quic_listeners.is_empty() && passthrough_listeners.is_empty()
+    {
         anyhow::bail!("no listeners started — check your configuration");
     }
 
@@ -2157,6 +2211,23 @@ async fn async_main() -> anyhow::Result<()> {
             .is_err()
         {
             tracing::warn!("QUIC listener did not drain within {quic_drain_deadline:?}");
+        }
+    }
+
+    // S15 A2-8: passthrough listeners use the same self-owned token
+    // discipline as the terminating QUIC listener.
+    let mut passthrough_drain_handles = Vec::with_capacity(passthrough_listeners.len());
+    for listener in passthrough_listeners {
+        passthrough_drain_handles.push(listener.shutdown());
+    }
+    for handle in passthrough_drain_handles {
+        if tokio::time::timeout(quic_drain_deadline, handle)
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                "QUIC passthrough listener did not drain within {quic_drain_deadline:?}"
+            );
         }
     }
 

@@ -87,11 +87,10 @@ impl RapidResetDetector {
         // `prev_count` is scaled down by how far we are into the current
         // window — the further in, the less the previous window overlaps.
         let elapsed_in_current = tick.saturating_sub(self.window_start);
-        let elapsed_fraction_x1000 = if self.window_ticks > 0 {
-            (elapsed_in_current.saturating_mul(1000)) / self.window_ticks
-        } else {
-            1000
-        };
+        let elapsed_fraction_x1000 = elapsed_in_current
+            .saturating_mul(1000)
+            .checked_div(self.window_ticks)
+            .unwrap_or(1000);
         let weight_prev_x1000 = 1000u64.saturating_sub(elapsed_fraction_x1000);
         let estimated_x1000 = self
             .prev_count
@@ -191,10 +190,9 @@ impl HpackBombDetector {
     /// exceeds the configured limits.
     pub const fn check(&self, encoded_size: u64, decoded_size: u64) -> Result<(), H2Error> {
         if decoded_size > self.max_decoded_size {
-            let ratio = if encoded_size > 0 {
-                decoded_size / encoded_size
-            } else {
-                decoded_size
+            let ratio = match decoded_size.checked_div(encoded_size) {
+                Some(r) => r,
+                None => decoded_size,
             };
             return Err(H2Error::HpackBomb {
                 decoded: decoded_size,
@@ -203,8 +201,7 @@ impl HpackBombDetector {
             });
         }
 
-        if encoded_size > 0 {
-            let ratio = decoded_size / encoded_size;
+        if let Some(ratio) = decoded_size.checked_div(encoded_size) {
             if ratio > self.max_ratio {
                 return Err(H2Error::HpackBomb {
                     decoded: decoded_size,

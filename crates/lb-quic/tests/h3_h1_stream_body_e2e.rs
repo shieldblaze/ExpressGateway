@@ -9,23 +9,23 @@
 //!
 //! Coverage:
 //!   * T1 — multi-DATA-frame binary body (≥3 frames, ≥100 KB),
-//!          chunked egress, reassembled byte-identical at the backend.
+//!     chunked egress, reassembled byte-identical at the backend.
 //!   * T2 — empty body (HEADERS + FIN) ⇒ backend bytes byte-identical
-//!          to the S1 bodyless head (`Content-Length: 0`).
+//!     to the S1 bodyless head (`Content-Length: 0`).
 //!   * T3 — zero-length DATA frame then FIN ⇒ no spurious chunk.
 //!   * T4 — oversized vs a tiny `max_body` ⇒ client gets H3 413 and
-//!          the upstream is NOT left with a completed request.
+//!     the upstream is NOT left with a completed request.
 //!   * T5 — slow-upstream backpressure / REAL memory-bound proof: a
-//!          body sent as ONE LARGE DATA frame (>= 512 KiB, >= 8x the
-//!          ~64 KiB in-flight window) is driven through a STALLED
-//!          upstream. A gauge measuring the ACTUAL retained per-stream
-//!          memory (StreamRxBuf internal buffer + bytes queued in
-//!          body_pending + bounded-channel occupancy) must stay below a
-//!          tight bound (a small multiple of channel-depth*chunk-max,
-//!          and `<<` the total body) — proving the whole frame is NOT
-//!          buffered. Once the upstream resumes the full body arrives
-//!          byte-identical (liveness + correctness, incl. 0xFF/0x00/
-//!          0x80). FAILS on the pre-fix whole-frame-buffering decoder.
+//!     body sent as ONE LARGE DATA frame (>= 512 KiB, >= 8x the
+//!     ~64 KiB in-flight window) is driven through a STALLED
+//!     upstream. A gauge measuring the ACTUAL retained per-stream
+//!     memory (StreamRxBuf internal buffer + bytes queued in
+//!     body_pending + bounded-channel occupancy) must stay below a
+//!     tight bound (a small multiple of channel-depth*chunk-max,
+//!     and `<<` the total body) — proving the whole frame is NOT
+//!     buffered. Once the upstream resumes the full body arrives
+//!     byte-identical (liveness + correctness, incl. 0xFF/0x00/
+//!     0x80). FAILS on the pre-fix whole-frame-buffering decoder.
 //!
 //! Every body carries the non-UTF-8 bytes 0xFF 0x00 0x80.
 

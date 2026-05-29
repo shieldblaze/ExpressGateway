@@ -211,24 +211,21 @@ impl QuicListener {
         // Pool is required for real traffic; if the caller did not
         // supply one (3b.3c-1 smoke path), build a transient in-memory
         // pool so the router's actor can be constructed.
-        let pool = params.pool.clone().map_or_else(
-            || {
-                let runtime = lb_io::Runtime::new();
-                TcpPool::new(
-                    lb_io::pool::PoolConfig::default(),
-                    lb_io::sockopts::BackendSockOpts {
-                        nodelay: true,
-                        keepalive: true,
-                        rcvbuf: Some(262_144),
-                        sndbuf: Some(262_144),
-                        quickack: false,
-                        tcp_fastopen_connect: false,
-                    },
-                    runtime,
-                )
-            },
-            |p| p,
-        );
+        let pool = params.pool.clone().unwrap_or_else(|| {
+            let runtime = lb_io::Runtime::new();
+            TcpPool::new(
+                lb_io::pool::PoolConfig::default(),
+                lb_io::sockopts::BackendSockOpts {
+                    nodelay: true,
+                    keepalive: true,
+                    rcvbuf: Some(262_144),
+                    sndbuf: Some(262_144),
+                    quickack: false,
+                    tcp_fastopen_connect: false,
+                },
+                runtime,
+            )
+        });
 
         let router_params = RouterParams {
             socket: Arc::clone(&socket),

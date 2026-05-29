@@ -2925,10 +2925,7 @@ fn h3_decoded_resp_head_builder(
             continue;
         }
         let lower = n.to_lowercase();
-        if crate::h2_to_h1::RESPONSE_HOP_BY_HOP
-            .iter()
-            .any(|h| *h == lower.as_str())
-        {
+        if crate::h2_to_h1::RESPONSE_HOP_BY_HOP.contains(&lower.as_str()) {
             continue;
         }
         builder = builder.header(lower.as_str(), v.as_str());
@@ -3037,10 +3034,7 @@ fn upstream_response_to_h1(
             continue;
         }
         let lower = name.to_lowercase();
-        if crate::h2_to_h1::RESPONSE_HOP_BY_HOP
-            .iter()
-            .any(|h| *h == lower.as_str())
-        {
+        if crate::h2_to_h1::RESPONSE_HOP_BY_HOP.contains(&lower.as_str()) {
             continue;
         }
         // HeaderName is already stored lowercase by hyper's H2 codec;

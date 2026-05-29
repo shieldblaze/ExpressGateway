@@ -230,8 +230,9 @@ impl Watchdog {
                     let window_bytes = bytes_read.saturating_sub(entry.bytes_at_window_start);
                     let window_ms_total = window_elapsed.as_millis();
                     let window_ms = u64::try_from(window_ms_total).unwrap_or(u64::MAX);
-                    if window_ms > 0 {
-                        let observed_bps = window_bytes.saturating_mul(1000) / window_ms;
+                    if let Some(observed_bps) =
+                        window_bytes.saturating_mul(1000).checked_div(window_ms)
+                    {
                         if observed_bps < self.inner.config.min_rate_bps {
                             evict_reason = Some(WatchdogError::SlowRate {
                                 conn: id,

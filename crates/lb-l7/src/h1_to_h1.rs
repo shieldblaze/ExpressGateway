@@ -57,10 +57,10 @@ impl Bridge for H1ToH1Bridge {
                         None
                     };
                 }
-                if HOP_BY_HOP_HEADERS.iter().any(|h| *h == lower.as_str()) {
+                if HOP_BY_HOP_HEADERS.contains(&lower.as_str()) {
                     return None;
                 }
-                if conn_named.iter().any(|n| *n == lower) {
+                if conn_named.contains(&lower) {
                     return None;
                 }
                 Some((lower, v.clone()))
@@ -95,10 +95,10 @@ impl Bridge for H1ToH1Bridge {
             .iter()
             .filter_map(|(k, v)| {
                 let lower = k.to_lowercase();
-                if HOP_BY_HOP_HEADERS.iter().any(|h| *h == lower.as_str()) {
+                if HOP_BY_HOP_HEADERS.contains(&lower.as_str()) {
                     return None;
                 }
-                if conn_named.iter().any(|n| *n == lower) {
+                if conn_named.contains(&lower) {
                     return None;
                 }
                 Some((lower, v.clone()))

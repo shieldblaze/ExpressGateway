@@ -408,14 +408,13 @@ impl StreamRxBuf {
     /// and decode *as many* post-HEADERS frames as are fully buffered,
     /// returning an ordered list of [`BodyItem`]s:
     ///
-    ///   * `Data(Bytes)`     — a DATA-frame payload, split so no item
-    ///                          exceeds [`H3_BODY_CHUNK_MAX`].
-    ///   * `Trailers(..)`    — a post-DATA HEADERS frame (RFC 9114
-    ///                          §4.1 trailing field section).
-    ///   * `TooLarge`        — cumulative body exceeded `max_body`; the
-    ///                          item is emitted once and latched (all
-    ///                          subsequent calls re-report it and emit
-    ///                          no further data).
+    ///   * `Data(Bytes)` — a DATA-frame payload, split so no item
+    ///     exceeds [`H3_BODY_CHUNK_MAX`].
+    ///   * `Trailers(..)` — a post-DATA HEADERS frame (RFC 9114
+    ///     §4.1 trailing field section).
+    ///   * `TooLarge` — cumulative body exceeded `max_body`; the
+    ///     item is emitted once and latched (all subsequent calls
+    ///     re-report it and emit no further data).
     ///
     /// Returns `Ok(vec![])` when no complete frame is yet buffered.
     /// Must only be called after `feed` has returned `Ok(Some(_))`.
@@ -1053,7 +1052,7 @@ const RESPONSE_HOP_BY_HOP: &[&str] = &[
 /// `true` iff `name_lower` (an ALREADY-lowercased header name) is a
 /// response-direction hop-by-hop header (see [`RESPONSE_HOP_BY_HOP`]).
 fn is_response_hop_by_hop(name_lower: &str) -> bool {
-    RESPONSE_HOP_BY_HOP.iter().any(|h| *h == name_lower)
+    RESPONSE_HOP_BY_HOP.contains(&name_lower)
 }
 
 /// SESSION 4 / P1-A: encode one H3 response DATA frame carrying
@@ -3311,14 +3310,15 @@ pub async fn stream_request_to_h3_upstream(
             // Bodyless request, channel closed before any event:
             // HEADERS+FIN below — content-length-0 semantics.
         }
-        Some(ReqBodyEvent::End { trailers }) => {
+        Some(ReqBodyEvent::End { trailers }) if forward_req_trailers => {
             // Bodyless request (today's only wired H3→H3 case):
             // HEADERS+FIN below — content-length-0 semantics, NOT a
             // dropped body. `trailers` retained for the optional
             // forward leg (empty for H3→H3).
-            if forward_req_trailers {
-                bodyless_trailers = trailers;
-            }
+            bodyless_trailers = trailers;
+        }
+        Some(ReqBodyEvent::End { .. }) => {
+            // Bodyless + trailer-forwarding disabled: no carry-over.
         }
         Some(ReqBodyEvent::Reset) => {
             // Pre-dial abort (oversized / cancelled before any data):

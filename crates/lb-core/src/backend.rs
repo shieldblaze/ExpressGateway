@@ -44,20 +44,15 @@ impl Backend {
 }
 
 /// Health status of a backend.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum BackendHealth {
     /// Backend is healthy and accepting traffic.
     Healthy,
     /// Backend is unhealthy and should not receive traffic.
     Unhealthy,
     /// Health status is not yet determined.
+    #[default]
     Unknown,
-}
-
-impl Default for BackendHealth {
-    fn default() -> Self {
-        Self::Unknown
-    }
 }
 
 /// Runtime state tracking for a backend: connections, requests, and latency.

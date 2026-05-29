@@ -90,6 +90,14 @@ async fn spawn_echo_backend() -> (SocketAddr, tokio::task::JoinHandle<()>) {
                 };
                 let (mut tx, mut rx) = ws.split();
                 while let Some(Ok(msg)) = rx.next().await {
+                    // clippy::collapsible_match suggests moving
+                    // `tx.send(msg).await.is_err()` into a guard, which
+                    // rustc rejects: guards cannot move (E0382 — `msg`
+                    // would be moved before subsequent arms can match
+                    // on it). The if-let-inside-match shape below is
+                    // the working form. rust-1.95.0 clippy bug;
+                    // revisit on next toolchain bump.
+                    #[allow(clippy::collapsible_match)]
                     match msg {
                         Message::Text(_) | Message::Binary(_) => {
                             if tx.send(msg).await.is_err() {

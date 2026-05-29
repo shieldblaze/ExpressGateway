@@ -34,10 +34,9 @@ impl QpackBombDetector {
     /// exceeds the configured limits.
     pub const fn check(&self, encoded_size: u64, decoded_size: u64) -> Result<(), H3Error> {
         if decoded_size > self.max_decoded_size {
-            let ratio = if encoded_size > 0 {
-                decoded_size / encoded_size
-            } else {
-                decoded_size
+            let ratio = match decoded_size.checked_div(encoded_size) {
+                Some(r) => r,
+                None => decoded_size,
             };
             return Err(H3Error::QpackBomb {
                 decoded: decoded_size,
@@ -46,8 +45,7 @@ impl QpackBombDetector {
             });
         }
 
-        if encoded_size > 0 {
-            let ratio = decoded_size / encoded_size;
+        if let Some(ratio) = decoded_size.checked_div(encoded_size) {
             if ratio > self.max_ratio {
                 return Err(H3Error::QpackBomb {
                     decoded: decoded_size,

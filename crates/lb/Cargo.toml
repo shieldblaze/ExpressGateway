@@ -33,7 +33,7 @@ lb-balancer = { path = "../lb-balancer" }
 lb-observability = { path = "../lb-observability" }
 lb-health = { path = "../lb-health" }
 lb-security = { path = "../lb-security" }
-lb-quic = { path = "../lb-quic" }
+lb-quic = { path = "../lb-quic", default-features = false }
 lb-l7 = { path = "../lb-l7" }
 lb-l4-xdp = { path = "../lb-l4-xdp" }
 hyper = { workspace = true }
@@ -63,3 +63,27 @@ caps = { workspace = true }
 bytes = { workspace = true }
 http = { workspace = true }
 http-body-util = { workspace = true }
+# S15 A2 verify gates iv & vi need lb-quic's `test-gauges` feature
+# (`PassthroughListener::flows_len`, `FlowEntry::dropped`). Default
+# build leaves these out of the production binary.
+lb-quic = { path = "../lb-quic", features = ["test-gauges"] }
+lb-security = { path = "../lb-security" }
+tokio = { workspace = true, features = ["test-util"] }
+tokio-util = { workspace = true }
+# S15 A2 verify gate (i) quic_passthrough_e2e: real quiche client +
+# real quiche server backend, rcgen-issued cert. ring is pulled in
+# for SystemRandom (16-byte SCID material).
+rcgen = { version = "0.13", features = ["pem"] }
+ring = "0.17"
+
+[features]
+# S15 A2-8: feature flag mirroring `lb-quic`'s `quic-terminate` /
+# `quic-passthrough-only` matrix. `default = ["quic-terminate"]`
+# keeps the existing binary unchanged — same QuicListener, same
+# `quiche` link. `quic-passthrough-only` flips the binary into Mode
+# A (`PassthroughListener` only, no quiche::Connection on this
+# binary segment) — the build target for
+# `scripts/never_decrypted_proof.sh` (A2-7 LINKAGE gate).
+default = ["quic-terminate"]
+quic-terminate = ["lb-quic/quic-terminate"]
+quic-passthrough-only = ["lb-quic/quic-passthrough-only"]
