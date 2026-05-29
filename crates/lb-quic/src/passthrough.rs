@@ -112,6 +112,24 @@ pub struct PassthroughParams {
     /// Short-header DCID length to try first when no per-flow length
     /// is known. Default 20 (RFC 9000 §17.3 max) per §3.3 fallback.
     pub max_dcid_len_routed: usize,
+    /// Whether the LB mints stateless Retry on no-token Initials
+    /// (§6.5 Initial-flood defence per owner ruling §9.2). Default
+    /// **true** for production deployments.
+    ///
+    /// **CF-S15-PASSTHROUGH-RETRY-ODCID:** with `mint_retry = true`,
+    /// the second Initial's wire DCID is the LB-chosen new_scid and
+    /// the backend cannot recover the client's original DCID
+    /// (`original_destination_connection_id` transport param)
+    /// without a side channel — RFC 9000 §17.2.5 anticipates this
+    /// via the "Retry Service" pattern (token-embedded ODCID +
+    /// backend extracts on verify); see CF for the S15.x / S16
+    /// follow-up. When `mint_retry = false`, no-token Initials are
+    /// forwarded to the backend verbatim and the backend's own
+    /// `quiche::accept` either accepts directly or initiates its
+    /// own Retry — the §6.5 Initial-flood defence is then the
+    /// BACKEND's responsibility. Documented test/trusted-network
+    /// escape; production leaves this `true`.
+    pub mint_retry: bool,
 }
 
 impl PassthroughParams {
@@ -133,6 +151,7 @@ impl PassthroughParams {
             strict_source_binding: false,
             audit_throttle_window: Duration::from_secs(60),
             max_dcid_len_routed: MAX_CID_LEN,
+            mint_retry: true,
         }
     }
 }
@@ -580,8 +599,24 @@ async fn handle_initial(
     }
 
     // New connection.
+    //
+    // CF-S15-PASSTHROUGH-RETRY-ODCID: the §6.5 Initial-flood defence
+    // mints a Retry on no-token Initials, but the LB-chosen new_scid
+    // in that Retry then becomes the second-Initial wire DCID — the
+    // backend cannot recover the client's ORIGINAL DCID without a
+    // side channel, so a real-quiche backend rejects the resulting
+    // `original_destination_connection_id` transport param. RFC 9000
+    // §17.2.5 anticipates this via the "Retry Service" pattern
+    // (token-embedded ODCID + backend extracts on verify); deferred
+    // to S15.x / S16.
+    //
+    // The `mint_retry` knob (default `true`) is the production-vs-
+    // dev/trusted-network escape: when `false`, no-token Initials
+    // are forwarded verbatim and the BACKEND handles Initial-flood
+    // defence (either it `accept`s directly or initiates its own
+    // backend-side Retry, which the LB just forwards).
     let tok = token.unwrap_or(&[]);
-    if tok.is_empty() {
+    if tok.is_empty() && ctx.params.mint_retry {
         // Mint Retry (no state allocation; just send and forget).
         let new_scid = sample_lb_scid();
         let retry_token = ctx.retry_signer.mint(from, dcid);
@@ -596,15 +631,15 @@ async fn handle_initial(
         return;
     }
 
-    // Token present → verify.
+    // Token present → verify. When mint_retry=false AND no token,
+    // we skip verify entirely (the BACKEND is the §6.5 defender).
     let now = Instant::now();
-    let _odcid = match ctx.retry_signer.verify(tok, from, now) {
-        Ok(o) => o,
-        Err(e) => {
+    if !tok.is_empty() {
+        if let Err(e) = ctx.retry_signer.verify(tok, from, now) {
             tracing::trace!(error = %e, peer = %from, "retry token verify failed");
             return;
         }
-    };
+    }
 
     // Cap-check; evict oldest on hit (§5 LRU). Cap is on UNIQUE flows;
     // dispatch table has up to 2 keys per flow, so the table-size

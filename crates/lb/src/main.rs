@@ -1046,6 +1046,7 @@ async fn spawn_passthrough(
     params.strict_source_binding = cfg.strict_source_binding;
     params.audit_throttle_window = Duration::from_secs(cfg.audit_throttle_window_secs);
     params.max_dcid_len_routed = cfg.max_dcid_len_routed;
+    params.mint_retry = cfg.mint_retry;
 
     let listener = PassthroughListener::spawn(params, shutdown_token)
         .await

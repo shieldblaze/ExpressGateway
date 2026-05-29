@@ -45,7 +45,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use lb_quic::{PassthroughListener, PassthroughParams};
-use lb_security::{RETRY_SECRET_LEN, RetryTokenSigner};
+use lb_security::RETRY_SECRET_LEN;
 use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -165,40 +165,6 @@ fn build_client_config(ca_path: &std::path::Path) -> quiche::Config {
     cfg
 }
 
-/// Extract ODCID bytes from a `RetryTokenSigner`-minted token without
-/// verifying the MAC or the peer binding. The token's wire format is
-/// documented in `lb_security::retry`:
-///
-/// ```text
-///   version(1) | issued_at(8) | peer_kind(1) | peer_addr(4|16)
-///   | peer_port(2) | odcid_len(1) | odcid(N) | mac(32)
-/// ```
-///
-/// In production the backend would receive ODCID via a sidecar
-/// channel or share the retry secret. For this gate (i) test we
-/// trust the token's shape (we minted it ourselves via `RETRY_SECRET`).
-fn extract_odcid_from_token_unsafe(token: &[u8]) -> Result<Vec<u8>, String> {
-    // Minimum length: 1 + 8 + 1 + 4 + 2 + 1 + 0 + 32 = 49 (IPv4, 0-byte odcid).
-    if token.len() < 49 {
-        return Err(format!("token too short: {}", token.len()));
-    }
-    let peer_kind = *token.get(9).ok_or("missing peer_kind")?;
-    let addr_len = match peer_kind {
-        4 => 4usize,
-        6 => 16usize,
-        other => return Err(format!("bad peer kind {other}")),
-    };
-    // Cursor into the token, walking forward.
-    let mut cursor = 1 + 8 + 1 + addr_len + 2;
-    let odcid_len = *token.get(cursor).ok_or("missing odcid_len")? as usize;
-    cursor += 1;
-    let odcid = token
-        .get(cursor..cursor + odcid_len)
-        .ok_or("odcid OOB")?
-        .to_vec();
-    Ok(odcid)
-}
-
 fn random_scid() -> [u8; quiche::MAX_CONN_ID_LEN] {
     let mut scid = [0u8; quiche::MAX_CONN_ID_LEN];
     use ring::rand::SecureRandom;
@@ -226,6 +192,15 @@ async fn spawn_lb(
     params.min_client_dcid_len = 8;
     params.per_flow_backlog = 32;
     params.audit_throttle_window = Duration::from_secs(60);
+    // CF-S15-PASSTHROUGH-RETRY-ODCID: turn LB-minted Retry OFF for
+    // this gate (i) test. With mint_retry=true the LB-chosen new_scid
+    // hides the client's ODCID and the backend cannot set
+    // `original_destination_connection_id` correctly without a
+    // side channel (RFC 9000 §17.2.5 Retry Service pattern, deferred
+    // to S15.x/S16). Production deployments leave this true; the
+    // backend's own quiche handles §6.5 flood defence in the
+    // delegated path.
+    params.mint_retry = false;
 
     let cancel = CancellationToken::new();
     let listener = PassthroughListener::spawn(params, cancel.clone())
@@ -258,89 +233,29 @@ async fn spawn_quic_echo_backend(
         // Phase 0: receive the first inbound Initial → quiche::accept.
         // This Initial reached us via the LB, which means it carries
         // the LB-minted Retry token. To complete the handshake the
-        // backend must tell the client what the ORIGINAL DCID (ODCID)
-        // was — that goes into the `original_destination_connection_id`
-        // transport parameter and the client verifies against it. In
-        // production, this needs the backend to share the LB's retry
-        // secret OR the LB to attach an out-of-band signal. For this
-        // test the LB and backend share `RETRY_SECRET` so the backend
-        // can recover the ODCID by verifying the token via
-        // `RetryTokenSigner::verify`.
-        let signer = RetryTokenSigner::new_with_secret(RETRY_SECRET);
+        // CF-S15-PASSTHROUGH-RETRY-ODCID — owner ruling: this test
+        // uses the `mint_retry = false` escape path (the LB does NOT
+        // mint Retry; no-token Initials are forwarded verbatim). The
+        // wire DCID IS the client's ODCID; plain `quiche::accept`
+        // with `odcid = None` works because there was no Retry
+        // round-trip. The §6.5 Initial-flood defence is delegated
+        // to the backend's own quiche in this mode (it may issue
+        // its own Retry; the LB just forwards).
         let (n, peer) = socket
             .recv_from(&mut in_buf)
             .await
             .map_err(|e| format!("backend first recv: {e}"))?;
-        let hdr = quiche::Header::from_slice(
+        // Confirm the public header parses; the parse result is
+        // discarded — `quiche::accept` parses it again internally.
+        let _ = quiche::Header::from_slice(
             in_buf.get_mut(..n).unwrap_or(&mut []),
             quiche::MAX_CONN_ID_LEN,
         )
         .map_err(|e| format!("backend hdr parse: {e}"))?;
-        // Recover ODCID by verifying the retry-token. The token's
-        // `peer` field is the CLIENT's source addr (the LB minted it
-        // for the client) — NOT our `peer` (which is the LB's egress
-        // socket). The peer-verification step is therefore advisory;
-        // we extract ODCID even on peer-mismatch.
-        let token = hdr.token.as_deref().unwrap_or(&[]);
-        if token.is_empty() {
-            return Err("backend expected tokened Initial but got empty token".into());
-        }
-        // We can't know the client's exact 4-tuple from this side, so
-        // we try-verify against the actual `peer` we saw. In practice
-        // the verify will FAIL on the peer check (the LB-side peer
-        // differs from the client-side peer the token was minted
-        // for), but the token shape lets us recover the ODCID anyway
-        // — the verifier returns the ODCID on success. The honest
-        // shape for production is "verify-with-client-peer", which
-        // requires a sidecar signal; for the gate (i) test we use a
-        // narrower direct-extract helper below.
-        let odcid_bytes = extract_odcid_from_token_unsafe(token)?;
-        let odcid_cid = quiche::ConnectionId::from_ref(&odcid_bytes);
-        eprintln!(
-            "backend: token_len={}, hdr.dcid_len={}, recovered_odcid_len={}, hdr.dcid={:x?}, odcid={:x?}",
-            token.len(),
-            hdr.dcid.len(),
-            odcid_bytes.len(),
-            &*hdr.dcid,
-            &odcid_bytes,
-        );
-        // Suppress unused-var warning while keeping the signer
-        // visible for documentation.
-        let _ = &signer;
         let scid = random_scid();
         let scid_conn = quiche::ConnectionId::from_ref(&scid);
-        // Use `accept_with_retry` so we can pass BOTH transport
-        // parameters explicitly:
-        //   - `original_destination_cid` = the client's pre-Retry DCID
-        //     (recovered from the LB-minted token via
-        //     `extract_odcid_from_token_unsafe`). This is what the
-        //     client checks against its first-Initial DCID.
-        //   - `retry_source_cid` = the SCID the LB CHOSE in its Retry
-        //     packet, which the client used as its second-Initial DCID.
-        //     From this side, that's `hdr.dcid`. The plain
-        //     `quiche::accept(scid, Some(odcid))` defaults
-        //     retry_source_cid to OUR `scid` — that fails client
-        //     validation because the client expects the LB's chosen
-        //     SCID. Setting BOTH explicitly closes the handshake
-        //     mismatch that caused the prior
-        //     `InvalidTransportParam` symptom.
-        // `accept_with_retry` lets us set BOTH transport parameters
-        // explicitly: `original_destination_cid` (the recovered ODCID)
-        // AND `retry_source_cid` (the LB-Retry SCID = current hdr.dcid
-        // from this side). quiche's plain `accept` defaults
-        // retry_source_cid to OUR scid, which fails client validation.
-        let retry_cids = quiche::RetryConnectionIds {
-            original_destination_cid: &odcid_cid,
-            retry_source_cid: &hdr.dcid,
-        };
-        // `accept_with_retry::<F>` is generic over BufFactory, and
-        // `DefaultBufFactory` is private. The Connection's `F` defaults
-        // to DefaultBufFactory, so type-inference on the binding
-        // (`conn: quiche::Connection`) picks up the default — this is
-        // the supported public path.
-        let mut conn: quiche::Connection =
-            quiche::accept_with_retry(&scid_conn, retry_cids, local_addr, peer, &mut config)
-                .map_err(|e| format!("backend accept_with_retry: {e}"))?;
+        let mut conn = quiche::accept(&scid_conn, None, local_addr, peer, &mut config)
+            .map_err(|e| format!("backend accept: {e}"))?;
         // Feed the first packet to the new conn.
         {
             let info = quiche::RecvInfo {

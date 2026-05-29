@@ -975,6 +975,21 @@ pub struct PassthroughConfig {
     /// is known. Default 20 (RFC 9000 §17.3 max) per §3.3 fallback.
     #[serde(default = "default_passthrough_max_dcid_len_routed")]
     pub max_dcid_len_routed: usize,
+    /// Whether the LB mints stateless Retry on no-token Initials
+    /// (§6.5 Initial-flood defence per owner ruling §9.2). Default
+    /// **true** for production deployments. When `false`, no-token
+    /// Initials are forwarded to the backend verbatim — the backend's
+    /// own `quiche::accept` then handles Initial-flood defence
+    /// (either accepts directly or initiates its own Retry, which
+    /// the LB just forwards). Documented test/trusted-network escape
+    /// for **CF-S15-PASSTHROUGH-RETRY-ODCID**: with `mint_retry =
+    /// true`, real-quiche backends reject the post-Retry
+    /// `original_destination_connection_id` transport param because
+    /// the LB-chosen new_scid hides the client's ODCID. RFC 9000
+    /// §17.2.5 anticipates a "Retry Service" pattern (token-embedded
+    /// ODCID + backend extracts on verify); deferred to S15.x / S16.
+    #[serde(default = "default_passthrough_mint_retry")]
+    pub mint_retry: bool,
 }
 
 /// S15 A2-8: owner ruling §9.4 — 100k flows is the documented
@@ -1007,6 +1022,14 @@ const fn default_passthrough_audit_throttle_window_secs() -> u64 {
 /// path. 20 bytes is RFC 9000 §17.3's maximum routable DCID length.
 const fn default_passthrough_max_dcid_len_routed() -> usize {
     20
+}
+
+/// S15 A2-3 / CF-S15-PASSTHROUGH-RETRY-ODCID: §6.5 Initial-flood
+/// defence is ON by default; production deployments leave this
+/// `true`. The escape (`false`) delegates flood defence to the
+/// backend; see `PassthroughConfig::mint_retry` doc.
+const fn default_passthrough_mint_retry() -> bool {
+    true
 }
 
 /// Configuration for a single upstream backend.
@@ -2619,6 +2642,7 @@ address = "127.0.0.1:3000"
             strict_source_binding: false,
             audit_throttle_window_secs: default_passthrough_audit_throttle_window_secs(),
             max_dcid_len_routed: default_passthrough_max_dcid_len_routed(),
+            mint_retry: default_passthrough_mint_retry(),
         }
     }
 
