@@ -1265,4 +1265,363 @@ mod tests {
         assert_eq!(p.per_flow_backlog, 32);
         assert_eq!(p.max_dcid_len_routed, MAX_CID_LEN);
     }
+
+    // ========================================================
+    // S15 A3 — threat-defence + observability coverage tests.
+    //
+    // These drive handle_initial / forward_short / evict_oldest /
+    // load_or_generate_retry_secret / audit_allow directly through an
+    // in-crate RouterCtx so the private branches (mint_retry true/false,
+    // verify reject, DCID floor, multi-length fallback, error/eviction
+    // edges at the lcov-uncovered 599-674 / 787-848 / 994-1037 clusters)
+    // are exercised. Lifts passthrough.rs cov 75.91% -> >=80%.
+    // ========================================================
+
+    use lb_observability::{MetricsRegistry, PassthroughMetrics};
+
+    const T_SECRET: [u8; RETRY_SECRET_LEN] = [0x5au8; RETRY_SECRET_LEN];
+
+    fn loopback(port: u16) -> SocketAddr {
+        SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::LOCALHOST), port)
+    }
+
+    /// Build an in-crate [`RouterCtx`] for unit tests: a real loopback
+    /// `TokioUdp` dataplane (so `send_to` works), one bound-but-idle
+    /// backend, fresh metrics, and a deterministic retry signer. Returns
+    /// the ctx plus the backend's bound addr.
+    async fn test_ctx(
+        mut mutate: impl FnMut(&mut PassthroughParams),
+    ) -> (Arc<RouterCtx>, PassthroughMetrics, SocketAddr) {
+        // A bound backend socket so the per-flow forward task has a
+        // reachable destination (it just discards what it receives).
+        let backend = UdpSocket::bind(loopback(0)).await.expect("backend bind");
+        let backend_addr = backend.local_addr().expect("backend addr");
+
+        let dataplane = select_dataplane(loopback(0), TierPolicy::Auto)
+            .await
+            .expect("dataplane");
+
+        let registry = MetricsRegistry::new();
+        let metrics = PassthroughMetrics::register(&registry).expect("metrics");
+
+        let mut params = PassthroughParams::new(loopback(0), vec![backend_addr], PathBuf::new());
+        params.metrics = Some(metrics.clone());
+        mutate(&mut params);
+
+        let backends: Vec<Backend> = params
+            .backends
+            .iter()
+            .enumerate()
+            .map(|(i, sa)| Backend {
+                id: format!("backend-{i}-{sa}"),
+                weight: 1,
+                active_connections: 0,
+                active_requests: 0,
+                latency_ewma_ns: 0,
+                state: None,
+            })
+            .collect();
+        let maglev = Maglev::new(&backends).expect("maglev");
+
+        let ctx = Arc::new(RouterCtx {
+            params,
+            maglev,
+            backends,
+            retry_signer: Arc::new(RetryTokenSigner::new_with_secret(T_SECRET)),
+            table: Arc::new(DashMap::new()),
+            listener_sock: dataplane,
+            epoch: Instant::now(),
+            audit_last_source_binding_ms: AtomicU64::new(AUDIT_NEVER),
+            audit_last_cap_hit_ms: AtomicU64::new(AUDIT_NEVER),
+        });
+        (ctx, metrics, backend_addr)
+    }
+
+    fn rt() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("rt")
+    }
+
+    // --- (1) min_client_dcid_len floor (table-driven) ---------------
+
+    #[test]
+    fn min_client_dcid_len_floor_table() {
+        // (dcid_len, floor, expect_inserted)
+        let cases = [
+            (4usize, 8usize, false), // below floor → dropped
+            (7, 8, false),           // below floor → dropped
+            (8, 8, true),            // at floor → proceeds
+            (12, 8, true),           // above floor → proceeds
+            (8, 12, false),          // raised floor → dropped
+        ];
+        rt().block_on(async {
+            for (dcid_len, floor, expect_inserted) in cases {
+                // mint_retry=false so an at/above-floor no-token Initial
+                // builds a flow (the verbatim-forward branch) rather than
+                // returning early on the Retry-mint branch.
+                let (ctx, _m, _b) = test_ctx(|p| {
+                    p.min_client_dcid_len = floor;
+                    p.mint_retry = false;
+                })
+                .await;
+                let dcid = vec![0xABu8; dcid_len];
+                handle_initial(Arc::clone(&ctx), vec![0u8; 8], loopback(40000), 1, &dcid, &[], None)
+                    .await;
+                assert_eq!(
+                    ctx.table.contains_key(dcid.as_slice()),
+                    expect_inserted,
+                    "dcid_len={dcid_len} floor={floor}"
+                );
+            }
+        });
+    }
+
+    // --- (2) mint_retry = true → stateless Retry minted -------------
+
+    #[test]
+    fn mint_retry_true_mints_and_does_not_insert() {
+        rt().block_on(async {
+            // A sibling socket plays the "client": handle_initial sends the
+            // Retry back to `from`, which is this socket's addr.
+            let client = UdpSocket::bind(loopback(0)).await.expect("client bind");
+            let from = client.local_addr().expect("client addr");
+
+            let (ctx, m, _b) = test_ctx(|p| p.mint_retry = true).await;
+            let dcid = vec![0x11u8; 8];
+            handle_initial(Arc::clone(&ctx), vec![0u8; 8], from, 1, &dcid, &[0x22u8; 8], None).await;
+
+            // No flow allocated — Retry is stateless.
+            assert!(ctx.table.is_empty(), "Retry-mint must not insert a flow");
+            assert_eq!(m.retry_minted_total.get(), 1, "one Retry minted");
+            // The Retry packet landed on the client socket.
+            let mut buf = [0u8; 256];
+            let n = tokio::time::timeout(Duration::from_secs(2), client.recv(&mut buf))
+                .await
+                .expect("retry recv timeout")
+                .expect("retry recv");
+            assert!(n > 0, "Retry packet received");
+            assert_eq!(buf[0], 0b1111_0000, "byte0 = Retry long-header");
+        });
+    }
+
+    // --- (3) mint_retry = false → forward verbatim, flow created ----
+
+    #[test]
+    fn mint_retry_false_forwards_and_inserts() {
+        rt().block_on(async {
+            let (ctx, m, _b) = test_ctx(|p| p.mint_retry = false).await;
+            let dcid = vec![0x33u8; 8];
+            handle_initial(Arc::clone(&ctx), vec![0u8; 8], loopback(40001), 1, &dcid, &[], None)
+                .await;
+            assert!(ctx.table.contains_key(dcid.as_slice()), "flow inserted");
+            assert_eq!(m.retry_minted_total.get(), 0, "no Retry minted when mint_retry=false");
+            assert_eq!(m.flows.get(), 1, "flows gauge tracks the new flow");
+        });
+    }
+
+    // --- (4) token-present verify: reject vs accept -----------------
+
+    #[test]
+    fn token_verify_reject_then_accept() {
+        rt().block_on(async {
+            // (a) garbage token → reject + counter, no flow.
+            let (ctx, m, _b) = test_ctx(|_| {}).await;
+            let dcid = vec![0x44u8; 8];
+            handle_initial(
+                Arc::clone(&ctx),
+                vec![0u8; 8],
+                loopback(40002),
+                1,
+                &dcid,
+                &[],
+                Some(&[0xDEu8; 16]),
+            )
+            .await;
+            assert!(ctx.table.is_empty(), "rejected token must not insert");
+            assert_eq!(m.retry_rejected_total.get(), 1, "one verify rejection");
+
+            // (b) a validly-minted token → accept + flow created.
+            let (ctx2, m2, _b2) = test_ctx(|_| {}).await;
+            let from = loopback(40003);
+            let dcid2 = vec![0x55u8; 8];
+            let good = ctx2.retry_signer.mint(from, &dcid2);
+            handle_initial(Arc::clone(&ctx2), vec![0u8; 8], from, 1, &dcid2, &[], Some(&good)).await;
+            assert!(ctx2.table.contains_key(dcid2.as_slice()), "valid token accepted");
+            assert_eq!(m2.retry_rejected_total.get(), 0, "no rejection on a valid token");
+        });
+    }
+
+    // --- (5) eviction + negative control ----------------------------
+
+    #[test]
+    fn evict_oldest_at_cap_and_negative_control() {
+        rt().block_on(async {
+            // cap=1 → dispatch-table bound = 2 (2*cap). Insert 2 distinct
+            // flows via mint_retry=false (one client-DCID key each); the
+            // 3rd triggers a cap-hit eviction.
+            let (ctx, m, _b) = test_ctx(|p| {
+                p.max_quic_connections = 1;
+                p.mint_retry = false;
+            })
+            .await;
+            for i in 0u8..3 {
+                let dcid = vec![0x60 + i; 8];
+                handle_initial(Arc::clone(&ctx), vec![0u8; 8], loopback(41000 + u16::from(i)), 1, &dcid, &[], None)
+                    .await;
+            }
+            assert!(ctx.table.len() <= 2, "table bounded at 2*cap");
+            assert!(m.flows_evicted_total.get() >= 1, "at least one eviction observed");
+            assert_eq!(m.flows.get() as usize, ctx.table.len(), "gauge == table size");
+
+            // Negative control: cap=4, only 3 opens → no eviction.
+            let (ctx2, m2, _b2) = test_ctx(|p| {
+                p.max_quic_connections = 4;
+                p.mint_retry = false;
+            })
+            .await;
+            for i in 0u8..3 {
+                let dcid = vec![0x70 + i; 8];
+                handle_initial(Arc::clone(&ctx2), vec![0u8; 8], loopback(42000 + u16::from(i)), 1, &dcid, &[], None)
+                    .await;
+            }
+            assert_eq!(m2.flows_evicted_total.get(), 0, "no eviction under cap");
+            assert_eq!(ctx2.table.len(), 3, "all three flows resident");
+        });
+    }
+
+    // --- (6) forward_short multi-length fallback + strict-source -----
+
+    #[test]
+    fn forward_short_via_strict_source_table() {
+        rt().block_on(async {
+            // (strict_source_binding, peer_match, expect_forward)
+            let cases = [
+                (false, false, true), // off → always forward
+                (false, true, true),  // off → always forward
+                (true, true, true),   // on + match → forward
+                (true, false, false), // on + mismatch → DROP + audit
+            ];
+            for (strict, peer_match, expect_fwd) in cases {
+                let (ctx, _m, backend) = test_ctx(|p| p.strict_source_binding = strict).await;
+                let recorded = loopback(43000);
+                let observed = if peer_match { recorded } else { loopback(43999) };
+                let (tx, _rx) = mpsc::channel::<Vec<u8>>(8);
+                let flow = FlowEntry {
+                    backend,
+                    short_dcid_len: AtomicUsize::new(0),
+                    last_seen_ms: AtomicU64::new(0),
+                    peer: PlMutex::new(recorded),
+                    backend_sock: Arc::new(UdpSocket::bind(loopback(0)).await.expect("bind")),
+                    backlog_tx: tx,
+                    dropped: Arc::new(AtomicBool::new(false)),
+                };
+                assert_eq!(
+                    forward_short_via(&ctx, &flow, &[], observed),
+                    expect_fwd,
+                    "strict={strict} match={peer_match}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn forward_short_multi_length_fallback_hits() {
+        rt().block_on(async {
+            // Register a flow keyed by a 10-byte DCID with short_dcid_len=10,
+            // then send a short-header packet whose default-len parse misses
+            // but whose 10-byte prefix hits the multi-length fallback loop.
+            let (ctx, _m, backend) = test_ctx(|p| p.max_dcid_len_routed = 8).await;
+            let dcid10 = vec![0x80u8; 10];
+            let (tx, mut rx) = mpsc::channel::<Vec<u8>>(8);
+            let flow = Arc::new(FlowEntry {
+                backend,
+                short_dcid_len: AtomicUsize::new(10),
+                last_seen_ms: AtomicU64::new(0),
+                peer: PlMutex::new(loopback(44000)),
+                backend_sock: Arc::new(UdpSocket::bind(loopback(0)).await.expect("bind")),
+                backlog_tx: tx,
+                dropped: Arc::new(AtomicBool::new(false)),
+            });
+            ctx.table.insert(dcid10.clone(), Arc::clone(&flow));
+
+            // Short-header packet: byte0 (short) + 10-byte DCID + payload.
+            let mut pkt = vec![0b0100_0000u8];
+            pkt.extend_from_slice(&dcid10);
+            pkt.extend_from_slice(&[0xEE, 0xEE]);
+            // default_dcid is the 8-byte prefix (max_dcid_len_routed=8) which
+            // is NOT a table key → forces the multi-length fallback.
+            let default_dcid = &pkt[1..9];
+            forward_short(&ctx, &pkt, default_dcid, loopback(44001)).await;
+
+            assert!(rx.try_recv().is_ok(), "multi-length fallback forwarded the packet");
+        });
+    }
+
+    // --- (7) retry-secret loader edges (994-1037) -------------------
+
+    #[test]
+    fn retry_secret_loader_edges() {
+        let dir = std::env::temp_dir().join(format!(
+            "lb-passthrough-a3-secret-{}-{}",
+            std::process::id(),
+            Instant::now().elapsed().as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+
+        // NotFound → generates a fresh 32-byte secret + file (mode 0600).
+        let gen_path = dir.join("nested").join("retry.bin");
+        let _ = load_or_generate_retry_secret(&gen_path).expect("generate");
+        let written = std::fs::read(&gen_path).expect("read back");
+        assert_eq!(written.len(), RETRY_SECRET_LEN, "generated secret length");
+
+        // Existing correct-length file → Ok.
+        let _ = load_or_generate_retry_secret(&gen_path).expect("load existing");
+
+        // Wrong-length file → Err.
+        let bad = dir.join("bad.bin");
+        std::fs::write(&bad, [0u8; 10]).expect("write bad");
+        assert!(load_or_generate_retry_secret(&bad).is_err(), "wrong-length rejected");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- (8) pick_backend / hash determinism ------------------------
+
+    #[test]
+    fn pick_backend_is_deterministic() {
+        rt().block_on(async {
+            let (ctx, _m, _b) = test_ctx(|_| {}).await;
+            let dcid = [0x90u8; 8];
+            let a = pick_backend(&ctx, &dcid);
+            let b = pick_backend(&ctx, &dcid);
+            assert_eq!(a, b, "same DCID → same backend");
+            assert!(a.is_some(), "one backend configured → Some");
+        });
+        // hash mixing is non-trivial for non-empty input.
+        assert_ne!(hash_dcid_for_maglev(&[1, 2, 3]), 0);
+        assert_eq!(
+            hash_dcid_for_maglev(&[1, 2, 3]),
+            hash_dcid_for_maglev(&[1, 2, 3]),
+            "deterministic"
+        );
+    }
+
+    // --- (9) audit_allow throttle gate (explicit clock) -------------
+
+    #[test]
+    fn audit_allow_one_per_window() {
+        let slot = AtomicU64::new(AUDIT_NEVER);
+        let window = Duration::from_secs(60);
+        // First event always emits.
+        assert!(audit_allow(&slot, 0, window), "first event emits");
+        // Within the window: suppressed.
+        assert!(!audit_allow(&slot, 100, window), "in-window suppressed");
+        assert!(!audit_allow(&slot, 59_999, window), "just-before-window suppressed");
+        // At/after the window: emits again.
+        assert!(audit_allow(&slot, 60_000, window), "post-window emits");
+        // And re-throttles from the new mark.
+        assert!(!audit_allow(&slot, 60_001, window), "re-throttled after re-emit");
+    }
 }
