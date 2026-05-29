@@ -12,46 +12,54 @@
 //! actor's co-ownership. NOT a CID bridge. See `audit/quic/s16-plan.md`
 //! §1 (seam), §2.1 (CID-based actor-owned 1:1 identity).
 //!
-//! ## B1 scope (this file)
+//! ## B1 + B2 scope (this file)
 //!
-//! B1 ships the **skeleton**, not the application relay:
-//!
-//! 1. Drive the CLIENT-facing connection (already `accept_with_retry`'d
-//!    by the router, handed over in [`ActorParams::conn`]) to
-//!    established, using the same low-level pump shape as
-//!    [`crate::conn_actor::run_actor`] (recv inbound packets forwarded
-//!    by the router over [`ActorParams::inbound`] → `conn.recv`; drain
-//!    `conn.send` to the shared [`ActorParams::socket`]; `on_timeout`).
-//! 2. On client `is_established()`: read the negotiated ALPN via
+//! 1. (B1) Drive the CLIENT-facing connection (already
+//!    `accept_with_retry`'d by the router, handed over in
+//!    [`ActorParams::conn`]) to established, using the same low-level
+//!    pump shape as [`crate::conn_actor::run_actor`] (recv inbound
+//!    packets forwarded by the router over [`ActorParams::inbound`] →
+//!    `conn.recv`; drain `conn.send` to the shared
+//!    [`ActorParams::socket`]; `on_timeout`).
+//! 2. (B1) On client `is_established()`: read the negotiated ALPN via
 //!    `application_proto()` and dial a **dedicated** upstream connection
 //!    ([`QuicUpstreamPool::dial_dedicated`]) on its OWN UDP socket,
 //!    mirroring that ALPN.
-//! 3. Run BOTH connection pumps concurrently in one `tokio::select!`
+//! 3. (B1) Run BOTH connection pumps concurrently in one `tokio::select!`
 //!    loop (client inbound + upstream socket recv + both timeouts +
 //!    cancel) until either side closes or idle-times-out, then close the
 //!    other gracefully and return.
+//! 4. (B2) Run the **bidirectional raw-STREAM relay** ([`relay_streams`])
+//!    after every wake: copy raw QUIC STREAM bytes both directions under
+//!    an **identity stream-ID map** (plan §2.2 — no translation table)
+//!    with a **bounded per-stream pending window** ([`STREAM_RELAY_WINDOW`],
+//!    the R8 memory-safety mechanism) and genuine end-to-end
+//!    backpressure: a slow destination keeps the window full, the relay
+//!    stops reading the source, and quiche stops extending that source
+//!    stream's flow-control window (the source peer pauses). FIN is
+//!    propagated only after all buffered bytes drain. RESET_STREAM /
+//!    STOP_SENDING *propagation* is **B3** — B2 drops a reset/stopped
+//!    relay half WITHOUT synthesising a clean FIN (the F-MD-4 smuggling
+//!    guard); see the `// B3:` markers in [`pump_dir`]. Datagrams are
+//!    **B4**.
 //!
-//! There is **no** application stream/datagram relay yet — that is B2
-//! (streams), B3 (cancellation), B4 (datagrams). B1 just proves both
-//! connections establish and both pumps stay alive.
-//!
-//! ## What B2 needs from here (the seam this file fixes)
+//! ## The two connections + the relay seam
 //!
 //! * The two connections live in [`run_raw_proxy_actor`] as
 //!   `params.conn` (client) and `upstream.conn` (backend, an owned
-//!   [`lb_io::quic_pool::DedicatedQuic`]). The relay reads/writes both
-//!   inside the single select loop — every arm has `&mut` access to
-//!   both, so no mutex is needed (same rationale as the H3 actor).
-//! * The select-loop shape (see [`run_raw_proxy_actor`]) is the
-//!   extension point: B2 adds `conn.readable()` / `stream_recv` /
-//!   `stream_send` relay passes AFTER each event, exactly where the H3
-//!   actor runs `poll_h3`. The identity stream-ID map (plan §2.2) means
-//!   no translation table.
+//!   [`lb_io::quic_pool::DedicatedQuic`]). [`relay_streams`] reads/writes
+//!   both inside the single select loop — every arm + the relay has
+//!   `&mut` access to both, so no mutex is needed (same rationale as the
+//!   H3 actor keeping per-stream state inline).
+//! * The per-stream relay state ([`RawStreamState`], two [`RelayHalf`]s)
+//!   is the explicit bounded per-stream table (plan §2.2 / §3 R8). B3
+//!   extends [`RelayHalf`] with a reset code — see its docs.
 //! * [`RawProxyOutcome`] (returned via the `io::Result` chain through a
 //!   test hook) surfaces both connections' SCIDs + trace_ids so the
 //!   verifier's two-connections proof can assert distinctness by
 //!   mechanism rather than by a bridge assertion.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -59,7 +67,7 @@ use tokio::net::UdpSocket;
 
 use lb_io::quic_pool::{DedicatedQuic, QuicUpstreamPool};
 
-use crate::conn_actor::ActorParams;
+use crate::conn_actor::{ActorParams, drain_conn_send};
 
 /// Application-layer `CONNECTION_CLOSE` error code emitted on graceful
 /// shutdown of either raw-QUIC leg. `0x0000` is QUIC's transport-level
@@ -267,7 +275,8 @@ async fn run_raw_proxy_actor_inner(mut params: ActorParams) -> std::io::Result<R
         negotiated_alpn,
     };
 
-    // ---- Phase 2: run BOTH pumps concurrently (no relay yet, B2) -----
+    // ---- Phase 2: run BOTH pumps + the B2 bidirectional raw-STREAM
+    // relay concurrently until either leg closes / idle-times-out.
     run_dual_pump(&mut params, &mut upstream, &mut out_buf).await;
 
     // Either side closed / idle-timed-out: close the other gracefully.
@@ -330,24 +339,40 @@ async fn drive_client_to_established(
 }
 
 /// Phase 2 pump: drive BOTH legs concurrently in one `tokio::select!`
-/// loop. No application relay yet (B2/B4) — this just keeps both
-/// connections alive (recv inbound, drain outbound, tick timeouts) until
-/// either leg closes or idle-times-out, or the cancel token fires.
+/// loop and run the **bidirectional raw-STREAM relay** (B2) after every
+/// wake. Keeps both connections alive (recv inbound, drain outbound,
+/// tick timeouts) until either leg closes or idle-times-out, or the
+/// cancel token fires.
 ///
-/// ## The select-loop shape (B2 extension point)
+/// ## The select-loop shape
 ///
 /// Each turn: drain both legs' outbound packets, check both for
-/// `is_closed()`, then `select!` over six events:
+/// `is_closed()`, then `select!` over five events:
 /// 1. `cancel.cancelled()` (biased first) — listener shutdown.
 /// 2. client inbound packet (router-forwarded mpsc) → `client.recv`.
 /// 3. upstream socket `recv_from` → `upstream.recv`.
 /// 4. client timeout → `client.on_timeout`.
 /// 5. upstream timeout → `upstream.on_timeout`.
 ///
-/// B2 adds, immediately AFTER the `select!` (where the H3 actor runs
-/// `poll_h3`), the bidirectional raw-stream relay passes over BOTH
-/// connections — both are `&mut` in scope, so no mutex (same reasoning
-/// as the H3 actor keeping per-stream state inline).
+/// Immediately AFTER the `select!` (where the H3 actor runs `poll_h3`)
+/// the relay runs [`relay_streams`] over BOTH connections — both are
+/// `&mut` in scope, so no mutex (same reasoning as the H3 actor keeping
+/// per-stream state inline). The relay both **reads new readable data**
+/// and **flushes still-pending bytes** of a stream that was
+/// backpressured on a previous turn (so a stream that could not drain to
+/// a full destination last turn resumes the moment that destination
+/// frees window).
+///
+/// ## Wake cadence (mirrors the H3 actor's S2/S4 short-tick)
+///
+/// quiche's idle timeout can be hundreds of ms; relying on it alone
+/// would throttle a mid-transfer stream to a crawl. While the relay has
+/// any in-flight per-stream state, the select wait is capped at
+/// [`RELAY_TICK`] so a backpressured/partial transfer resumes promptly.
+/// This does NOT defeat backpressure: the bounded per-stream window
+/// ([`STREAM_RELAY_WINDOW`]) still caps in-flight bytes — we merely poll
+/// the gate more often. When idle (no relay state) the loop parks on the
+/// real quiche timeout, so there is no busy-spin.
 async fn run_dual_pump(params: &mut ActorParams, upstream: &mut DedicatedQuic, out_buf: &mut [u8]) {
     // The upstream recv needs its own inbound buffer (the client side
     // uses owned `Vec`s forwarded by the router; the upstream side
@@ -355,21 +380,31 @@ async fn run_dual_pump(params: &mut ActorParams, upstream: &mut DedicatedQuic, o
     let mut up_in_buf = vec![0u8; 65_535];
     let upstream_local = upstream.local;
 
+    // B2: the bounded per-stream relay state table (R8). Empty until the
+    // first stream carries data. An entry lives until BOTH directions
+    // are terminally done (FIN flushed, or dropped on a reset for B3).
+    let mut streams: HashMap<u64, RawStreamState> = HashMap::new();
+
     loop {
         // Drain any queued outbound on both legs first (parity with the
         // H3 actor draining before the wait).
         drain_conn_send(&params.socket, &mut params.conn, out_buf).await;
         drain_conn_send(&upstream.socket, &mut upstream.conn, out_buf).await;
 
-        // B1 termination condition: either leg done. (B2+ keeps the
-        // relay running across a half-close; B1 has no relay, so a
-        // close on either side ends the actor.)
         if params.conn.is_closed() || upstream.conn.is_closed() {
             break;
         }
 
-        let client_wait = params.conn.timeout().unwrap_or(IDLE_TICK);
-        let upstream_wait = upstream.conn.timeout().unwrap_or(IDLE_TICK);
+        let mut client_wait = params.conn.timeout().unwrap_or(IDLE_TICK);
+        let mut upstream_wait = upstream.conn.timeout().unwrap_or(IDLE_TICK);
+        // While any stream is mid-transfer, poll the relay gate often so
+        // a backpressured/partial stream resumes promptly (does NOT
+        // defeat the bounded window — see fn docs). When idle, fall
+        // through to the real quiche timeouts (no busy-spin).
+        if !streams.is_empty() {
+            client_wait = client_wait.min(RELAY_TICK);
+            upstream_wait = upstream_wait.min(RELAY_TICK);
+        }
 
         tokio::select! {
             biased;
@@ -409,35 +444,380 @@ async fn run_dual_pump(params: &mut ActorParams, upstream: &mut DedicatedQuic, o
             }
         }
 
-        // B2 extension point: bidirectional raw-stream + datagram relay
-        // passes go HERE (both `params.conn` and `upstream.conn` are
-        // `&mut` in scope). B1 ships no relay.
+        // B2 relay: copy raw STREAM data both directions over the two
+        // `&mut` connections, with identity stream-ID mapping + the
+        // bounded per-stream window. Runs every wake so both freshly
+        // readable data AND previously-backpressured pending bytes make
+        // progress. The follow-up `drain_conn_send` at the top of the
+        // next turn ships whatever this relay handed to quiche.
+        relay_streams(&mut params.conn, &mut upstream.conn, &mut streams);
     }
 }
 
-/// Repeatedly call `quiche::Connection::send` and write the resulting
-/// packets onto the UDP socket until quiche reports `Done`. Byte-for-
-/// byte the same pump as [`crate::conn_actor`]'s private `drain_conn_send`
-/// (kept local to this module rather than re-exported to avoid widening
-/// `conn_actor`'s public surface for B1).
-async fn drain_conn_send(socket: &UdpSocket, conn: &mut quiche::Connection, out_buf: &mut [u8]) {
-    loop {
-        match conn.send(out_buf) {
-            Ok((n, info)) => {
-                let slice = out_buf.get(..n).unwrap_or(&[]);
-                if let Err(e) = socket.send_to(slice, info.to).await {
-                    tracing::debug!(error = %e, "Mode B conn send_to");
+/// Bounded per-stream relay window, in bytes, **per stream per
+/// direction** (R8 — the memory-safety mechanism, NOT a body/total cap).
+///
+/// The relay reads from a source stream ONLY while that stream's pending
+/// buffer for the corresponding direction holds fewer than this many
+/// bytes. When a destination stalls (its QUIC flow-control / send buffer
+/// is full so `stream_send` returns a short write or `Done`), the unsent
+/// remainder stays pending; once pending reaches this window the relay
+/// stops calling `stream_recv` on the source, so quiche stops extending
+/// that source stream's flow-control window and the *peer* pauses —
+/// genuine end-to-end backpressure. 256 KiB is a few BDPs on a LAN/short
+/// RTT path (enough not to throttle a healthy transfer) while keeping
+/// worst-case per-stream relay memory bounded and independent of the
+/// total transfer size. Total per-connection relay memory is bounded by
+/// `max_streams_per_conn * 2 * STREAM_RELAY_WINDOW` (B5 caps the table
+/// size; the per-stream window is bounded here).
+const STREAM_RELAY_WINDOW: usize = 256 * 1024;
+
+/// Short poll interval used while ANY stream is mid-transfer, so a
+/// partial/backpressured copy resumes without waiting out quiche's idle
+/// timeout. Mirrors the H3 actor's `next_wait.min(2ms)` cadence
+/// (`conn_actor.rs` S2/S4). 2 ms keeps latency low without busy-spinning
+/// (the loop only ticks this fast while there is pending relay work).
+const RELAY_TICK: Duration = Duration::from_millis(2);
+
+/// One direction of a relayed raw stream: a BOUNDED pending byte buffer
+/// (capped at [`STREAM_RELAY_WINDOW`]) plus FIN bookkeeping. The pending
+/// buffer is the R8 bound and the backpressure point; the FIN flags
+/// ensure a clean stream end is only emitted AFTER every buffered byte
+/// has been accepted by the destination (never a FIN ahead of data).
+#[derive(Default)]
+struct RelayHalf {
+    /// Bytes read from the source but not yet accepted by the
+    /// destination's `stream_send`. Capped at [`STREAM_RELAY_WINDOW`]:
+    /// the source is not read while this is at/over the cap.
+    pending: Vec<u8>,
+    /// The source returned `fin=true`. The destination FIN is deferred
+    /// until `pending` is fully drained (see [`Self::needs_work`]).
+    src_fin_seen: bool,
+    /// A clean FIN (`stream_send(.., &[], true)`) has been delivered to
+    /// the destination — terminal for this direction.
+    fin_sent: bool,
+    /// This direction is finished (FIN sent, or dropped on a reset/stop
+    /// for B3). No more reads or sends; the entry is reclaimed once both
+    /// directions are done.
+    done: bool,
+}
+
+/// Bounded per-stream relay state (plan §2.2): identity stream-ID map, so
+/// the SAME `sid` indexes both connections. Holds the two directions'
+/// [`RelayHalf`]s. `c2u` = client→upstream, `u2c` = upstream→client.
+///
+/// ## B3 (cancellation) handoff
+///
+/// B3 will add RESET_STREAM / STOP_SENDING propagation. The shape it
+/// needs is already here: each direction is an independent [`RelayHalf`]
+/// keyed by `sid`. In B2, a `stream_recv`/`stream_send` that returns
+/// `Err(StreamReset)`/`Err(StreamStopped)` marks ONLY that half `done`
+/// and drops its pending bytes — it deliberately does **not** synthesise
+/// a clean FIN on the peer (that would deliver a truncated transfer as
+/// complete — the F-MD-4 smuggling bug). B3 replaces that drop with a
+/// `stream_shutdown(sid, Shutdown::Write|Read, code)` on the peer
+/// connection (see the `// B3:` markers in [`pump_dir`]); adding a
+/// `reset_code: Option<u64>` field to [`RelayHalf`] is the natural
+/// extension point.
+#[derive(Default)]
+struct RawStreamState {
+    /// client → upstream direction.
+    c2u: RelayHalf,
+    /// upstream → client direction.
+    u2c: RelayHalf,
+}
+
+impl RawStreamState {
+    /// Both directions terminally finished ⇒ the entry can be reclaimed.
+    const fn is_complete(&self) -> bool {
+        self.c2u.done && self.u2c.done
+    }
+}
+
+/// B2 — one bidirectional raw-STREAM relay pass over the two connections.
+///
+/// Identity stream-ID mapping (plan §2.2): a client stream `sid` relays
+/// to the upstream stream of the SAME `sid` and vice-versa — the
+/// role-quadrants line up (LB is server to the client, client to the
+/// backend), so no translation table.
+///
+/// The candidate set each turn is the union of:
+/// * `client.readable()` — client streams with new bytes to forward;
+/// * `upstream.readable()` — backend streams with new bytes to forward;
+/// * every `sid` already in the state table — so a stream that was
+///   backpressured (pending bytes the destination could not accept) or
+///   is awaiting a deferred FIN is revisited and resumes the moment the
+///   destination frees window.
+///
+/// `readable()` is a snapshot, so it is re-collected here every pass.
+fn relay_streams(
+    client: &mut quiche::Connection,
+    upstream: &mut quiche::Connection,
+    streams: &mut HashMap<u64, RawStreamState>,
+) {
+    // Union of readable streams on both legs + every sid with live relay
+    // state (pending bytes / deferred FIN). De-dup via the state map: a
+    // readable sid that is not yet tracked gets a default entry; an
+    // already-tracked sid is revisited regardless of readability.
+    for sid in client.readable() {
+        streams.entry(sid).or_default();
+    }
+    for sid in upstream.readable() {
+        streams.entry(sid).or_default();
+    }
+
+    let sids: Vec<u64> = streams.keys().copied().collect();
+    for sid in sids {
+        let Some(state) = streams.get_mut(&sid) else {
+            continue;
+        };
+        // client → upstream: read from `client`, write to `upstream`.
+        pump_dir(
+            sid,
+            client,
+            upstream,
+            &mut state.c2u,
+            Direction::ClientToUpstream,
+        );
+        // upstream → client: read from `upstream`, write to `client`.
+        pump_dir(
+            sid,
+            upstream,
+            client,
+            &mut state.u2c,
+            Direction::UpstreamToClient,
+        );
+    }
+
+    // Reclaim entries whose BOTH directions are terminally done.
+    streams.retain(|_, st| !st.is_complete());
+}
+
+/// Relay direction — only used to disambiguate log lines (the relay
+/// itself is symmetric).
+#[derive(Clone, Copy)]
+enum Direction {
+    ClientToUpstream,
+    UpstreamToClient,
+}
+
+impl Direction {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::ClientToUpstream => "c→u",
+            Self::UpstreamToClient => "u→c",
+        }
+    }
+}
+
+/// Relay ONE direction of ONE stream for this turn: gate-read from `src`
+/// into the bounded pending buffer, then drain pending into `dst`,
+/// honouring partial writes / `Done` / `StreamLimit`, and propagating a
+/// clean FIN only after all pending bytes are accepted.
+///
+/// ## Backpressure (R8 — the bounded-window mechanism)
+///
+/// * **Read gate**: `src.stream_recv` is called ONLY while
+///   `half.pending.len() < STREAM_RELAY_WINDOW`. quiche extends a
+///   stream's flow-control window (queues `MAX_STREAM_DATA`) as a side
+///   effect of `stream_recv`; by NOT reading while pending is full we
+///   stop extending the window, so the *source peer* (client or backend)
+///   blocks once its in-flight credit is spent. A slow `dst` keeps
+///   `pending` full ⇒ the relay stops reading `src` ⇒ the slow side
+///   pauses the fast side. Symmetric for both directions.
+/// * **Write**: a short write (`Ok(n) < pending.len()`) or `Ok(0)` /
+///   `Err(Done)` means `dst`'s send buffer / flow-control window is
+///   full; the unsent remainder STAYS in `pending` (drained front-first,
+///   no reorder, no drop) and the relay stops pushing this turn.
+/// * **`StreamLimit`**: opening the mirror stream is refused (peer's
+///   MAX_STREAMS not yet granted). Keep the bytes pending and retry next
+///   turn — never drop. This is stream-grant backpressure.
+///
+/// ## FIN
+///
+/// When `stream_recv` returns `fin=true` the FIN is recorded
+/// (`src_fin_seen`) but NOT forwarded until `pending` is empty; only then
+/// is `stream_send(sid, &[], true)` issued (one-shot, guarded by
+/// `fin_sent`). A FIN therefore can never overtake buffered data.
+///
+/// ## Reset / stop (B3 boundary — NO reset→clean-FIN bug)
+///
+/// `Err(StreamReset)` from `stream_recv` (peer reset its send side) or
+/// `Err(StreamStopped)` from `stream_send` (peer STOP_SENDING'd our send
+/// side) terminate THIS direction by marking it `done` and dropping its
+/// pending bytes. B2 deliberately does **not** convert that to a clean
+/// FIN on the peer — doing so would present a truncated transfer as a
+/// complete one (the F-MD-4 smuggling bug). Proper RESET_STREAM /
+/// STOP_SENDING *propagation* to the peer connection is B3 (see the
+/// `// B3:` markers below). Any other error fails safe the same way
+/// (drop, no FIN).
+fn pump_dir(
+    sid: u64,
+    src: &mut quiche::Connection,
+    dst: &mut quiche::Connection,
+    half: &mut RelayHalf,
+    dir: Direction,
+) {
+    if half.done {
+        return;
+    }
+
+    // ── Read gate: pull from src only while pending is below the window.
+    // Loop so a burst is moved into pending in one turn (still capped).
+    while half.pending.len() < STREAM_RELAY_WINDOW {
+        let room = STREAM_RELAY_WINDOW.saturating_sub(half.pending.len());
+        // Read at most `room` so pending never exceeds the window in a
+        // single recv (the cap is the R8 bound).
+        let mut buf = vec![0u8; room.min(MAX_RELAY_READ)];
+        match src.stream_recv(sid, &mut buf) {
+            Ok((n, fin)) => {
+                half.pending.extend_from_slice(buf.get(..n).unwrap_or(&[]));
+                if fin {
+                    half.src_fin_seen = true;
+                }
+                if fin || n == 0 {
+                    // FIN reached, or a spurious empty read — stop the
+                    // read loop (a `(0,true)` means drained-at-FIN).
                     break;
                 }
             }
             Err(quiche::Error::Done) => break,
+            // B3: peer RESET_STREAM on its send side. The transfer is
+            // TRUNCATED — must NOT become a clean FIN on `dst` (F-MD-4
+            // smuggling guard). B2 drops this direction; B3 will instead
+            // propagate `dst.stream_shutdown(sid, Shutdown::Write, code)`
+            // (RESET_STREAM upstream) carrying the peer's `code`.
+            Err(quiche::Error::StreamReset(code)) => {
+                tracing::debug!(
+                    stream_id = sid,
+                    code,
+                    dir = dir.as_str(),
+                    "Mode B B2: src RESET_STREAM; dropping relay half (B3 will \
+                     propagate the reset — never a clean FIN)"
+                );
+                half.pending.clear();
+                half.done = true;
+                return;
+            }
             Err(e) => {
-                tracing::debug!(error = %e, "Mode B conn.send");
+                tracing::debug!(
+                    stream_id = sid, dir = dir.as_str(), error = %e,
+                    "Mode B B2: src stream_recv error; dropping relay half"
+                );
+                half.pending.clear();
+                half.done = true;
+                return;
+            }
+        }
+    }
+
+    // ── Drain pending into dst, front-first (preserve order, no drop).
+    let mut accepted = 0usize;
+    while accepted < half.pending.len() {
+        let chunk = half.pending.get(accepted..).unwrap_or(&[]);
+        match dst.stream_send(sid, chunk, false) {
+            Ok(0) | Err(quiche::Error::Done) => break,
+            Ok(n) => {
+                accepted = accepted.saturating_add(n);
+                if n < chunk.len() {
+                    // Short write: dst flow-control / send buffer full.
+                    break;
+                }
+            }
+            // New mirror stream cannot be opened yet (peer MAX_STREAMS
+            // not granted). Keep the bytes pending and retry next turn —
+            // stream-grant backpressure, never a drop.
+            Err(quiche::Error::StreamLimit) => {
+                tracing::trace!(
+                    stream_id = sid,
+                    dir = dir.as_str(),
+                    "Mode B B2: dst StreamLimit; holding pending bytes for retry"
+                );
                 break;
+            }
+            // B3: peer STOP_SENDING on the stream we are writing. B2
+            // drops this direction (no FIN). B3 will instead propagate
+            // `src.stream_shutdown(sid, Shutdown::Read, code)`
+            // (STOP_SENDING toward the source) carrying the peer's
+            // `code`. NEVER a clean FIN (F-MD-4 smuggling guard).
+            Err(quiche::Error::StreamStopped(code)) => {
+                tracing::debug!(
+                    stream_id = sid,
+                    code,
+                    dir = dir.as_str(),
+                    "Mode B B2: dst STOP_SENDING; dropping relay half (B3 will \
+                     propagate the stop — never a clean FIN)"
+                );
+                half.pending.clear();
+                half.done = true;
+                return;
+            }
+            Err(e) => {
+                tracing::debug!(
+                    stream_id = sid, dir = dir.as_str(), error = %e,
+                    "Mode B B2: dst stream_send error; dropping relay half"
+                );
+                half.pending.clear();
+                half.done = true;
+                return;
+            }
+        }
+    }
+    // Drop the accepted prefix; the unsent tail (if any) stays pending in
+    // order for the next turn (backpressure carry-over).
+    if accepted > 0 {
+        half.pending.drain(..accepted.min(half.pending.len()));
+    }
+
+    // ── FIN: only after ALL pending bytes are accepted by dst.
+    if half.src_fin_seen && half.pending.is_empty() && !half.fin_sent {
+        match dst.stream_send(sid, &[], true) {
+            Ok(_) | Err(quiche::Error::Done) => {
+                half.fin_sent = true;
+                half.done = true;
+            }
+            // The mirror stream cannot be OPENED yet (peer MAX_STREAMS
+            // not granted) — reachable for a zero-data FIN-only stream
+            // whose first `stream_send` is this empty-FIN send. Do NOT
+            // mark `done`/`fin_sent`: leave the half live so the next
+            // relay turn retries the FIN once the peer grants stream
+            // credit (the 2ms tick stays alive while the stream is
+            // tracked). Dropping it here would silently lose the FIN and
+            // the mirror stream would never be created/finished. Mirrors
+            // the drain block's `StreamLimit` carry-over.
+            Err(quiche::Error::StreamLimit) => {
+                tracing::trace!(
+                    stream_id = sid,
+                    dir = dir.as_str(),
+                    "Mode B B2: dst StreamLimit on FIN-only stream; retrying FIN next turn"
+                );
+            }
+            // dst gone / stopped on the FIN itself — terminal anyway.
+            Err(quiche::Error::StreamStopped(code)) => {
+                tracing::debug!(
+                    stream_id = sid,
+                    code,
+                    dir = dir.as_str(),
+                    "Mode B B2: dst STOP_SENDING on FIN; closing relay half"
+                );
+                half.done = true;
+            }
+            Err(e) => {
+                tracing::debug!(
+                    stream_id = sid, dir = dir.as_str(), error = %e,
+                    "Mode B B2: dst stream_send FIN error; closing relay half"
+                );
+                half.done = true;
             }
         }
     }
 }
+
+/// Largest single `stream_recv` read in one [`pump_dir`] iteration. The
+/// read loop is still capped by [`STREAM_RELAY_WINDOW`] (the R8 bound);
+/// this just bounds the per-call scratch allocation (one UDP-payload-class
+/// buffer) rather than allocating up to a full window per read.
+const MAX_RELAY_READ: usize = 16 * 1024;
 
 /// Emit an application `CONNECTION_CLOSE` ([`RAW_NO_ERROR`]) and pump the
 /// connection until quiche reports closed or [`GRACEFUL_CLOSE_BUDGET`]
@@ -465,5 +845,389 @@ async fn graceful_close(conn: &mut quiche::Connection, socket: &UdpSocket, out_b
         let wait = quiche_timeout.min(residual);
         tokio::time::sleep(wait).await;
         conn.on_timeout();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Deterministic, socket-free unit coverage for the [`pump_dir`]
+    //! FIN-retry logic (the B2-review defect: `StreamLimit` on the
+    //! zero-data FIN-only `stream_send` must NOT drop the FIN — the half
+    //! stays live and retries once the peer grants stream credit).
+    //!
+    //! These drive a REAL pair of `quiche::Connection`s but pump packets
+    //! in-memory (no UDP), so the MAX_STREAMS limit is enforced exactly by
+    //! quiche with no timing coupling. The full open-then-grant
+    //! INTEGRATION path (a live wire transfer that exhausts then re-opens
+    //! the upstream stream credit) is the VERIFIER's bar — here we prove
+    //! the unit-level branch: refuse ⇒ retryable (not dropped); credit ⇒
+    //! delivered (peer observes the stream finished).
+
+    use super::{Direction, RelayHalf, pump_dir};
+
+    use std::net::SocketAddr;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    const TEST_SNI: &str = "expressgateway.test";
+    const ALPN: &[u8] = b"raw-b2";
+
+    static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    struct TestCerts {
+        dir: PathBuf,
+        cert: PathBuf,
+        key: PathBuf,
+        ca: PathBuf,
+    }
+
+    impl Drop for TestCerts {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn gen_certs() -> TestCerts {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let seq = DIR_SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "lb-quic-s16-b2-finretry-{}-{nanos}-{seq}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut params = rcgen::CertificateParams::new(vec![TEST_SNI.to_string()]).unwrap();
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        params
+            .extended_key_usages
+            .push(rcgen::ExtendedKeyUsagePurpose::ServerAuth);
+        let key_pair = rcgen::KeyPair::generate().unwrap();
+        let cert = params.self_signed(&key_pair).unwrap();
+        let cert_path = dir.join("cert.pem");
+        let key_path = dir.join("key.pem");
+        let ca_path = dir.join("ca.pem");
+        std::fs::write(&cert_path, cert.pem().as_bytes()).unwrap();
+        std::fs::write(&key_path, key_pair.serialize_pem().as_bytes()).unwrap();
+        std::fs::write(&ca_path, cert.pem().as_bytes()).unwrap();
+        TestCerts {
+            dir,
+            cert: cert_path,
+            key: key_path,
+            ca: ca_path,
+        }
+    }
+
+    fn random_scid() -> [u8; quiche::MAX_CONN_ID_LEN] {
+        use ring::rand::SecureRandom;
+        let mut scid = [0u8; quiche::MAX_CONN_ID_LEN];
+        ring::rand::SystemRandom::new().fill(&mut scid).unwrap();
+        scid
+    }
+
+    /// Server (= the LB's upstream PEER) config. `bidi_limit` is the
+    /// number of client-initiated bidi streams it grants the LB-as-client
+    /// — set it to 0 to force `StreamLimit` on the first
+    /// client-initiated stream open.
+    fn server_config(certs: &TestCerts, bidi_limit: u64) -> quiche::Config {
+        let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
+        cfg.set_application_protos(&[ALPN]).unwrap();
+        cfg.load_cert_chain_from_pem_file(certs.cert.to_str().unwrap())
+            .unwrap();
+        cfg.load_priv_key_from_pem_file(certs.key.to_str().unwrap())
+            .unwrap();
+        cfg.set_max_idle_timeout(5_000);
+        cfg.set_max_recv_udp_payload_size(1_350);
+        cfg.set_max_send_udp_payload_size(1_350);
+        cfg.set_initial_max_data(1024 * 1024);
+        cfg.set_initial_max_stream_data_bidi_local(64 * 1024);
+        cfg.set_initial_max_stream_data_bidi_remote(64 * 1024);
+        cfg.set_initial_max_stream_data_uni(64 * 1024);
+        cfg.set_initial_max_streams_bidi(bidi_limit);
+        cfg.set_initial_max_streams_uni(2);
+        cfg.set_disable_active_migration(true);
+        cfg
+    }
+
+    /// Client (= the LB-as-client on the upstream leg, i.e. the relay
+    /// `dst` for the client→upstream direction) config.
+    fn client_config(certs: &TestCerts) -> quiche::Config {
+        let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
+        cfg.set_application_protos(&[ALPN]).unwrap();
+        cfg.load_verify_locations_from_file(certs.ca.to_str().unwrap())
+            .unwrap();
+        cfg.verify_peer(true);
+        cfg.set_max_idle_timeout(5_000);
+        cfg.set_max_recv_udp_payload_size(1_350);
+        cfg.set_max_send_udp_payload_size(1_350);
+        cfg.set_initial_max_data(1024 * 1024);
+        cfg.set_initial_max_stream_data_bidi_local(64 * 1024);
+        cfg.set_initial_max_stream_data_bidi_remote(64 * 1024);
+        cfg.set_initial_max_stream_data_uni(64 * 1024);
+        cfg.set_initial_max_streams_bidi(8);
+        cfg.set_initial_max_streams_uni(2);
+        cfg.set_disable_active_migration(true);
+        cfg
+    }
+
+    /// Drive a `connect` ⇄ `accept` pair to established entirely
+    /// in-memory (no sockets): ferry each side's `send()` output into the
+    /// other's `recv()` until both report established. Deterministic.
+    fn handshake_pair(
+        client: &mut quiche::Connection,
+        server: &mut quiche::Connection,
+        client_addr: SocketAddr,
+        server_addr: SocketAddr,
+    ) {
+        let mut buf = vec![0u8; 65_535];
+        for _ in 0..64 {
+            if client.is_established() && server.is_established() {
+                return;
+            }
+            // client -> server
+            loop {
+                match client.send(&mut buf) {
+                    Ok((n, _info)) => {
+                        let info = quiche::RecvInfo {
+                            from: client_addr,
+                            to: server_addr,
+                        };
+                        let slice = buf.get_mut(..n).unwrap_or(&mut []);
+                        let _ = server.recv(slice, info);
+                    }
+                    Err(quiche::Error::Done) => break,
+                    Err(e) => panic!("client.send: {e:?}"),
+                }
+            }
+            // server -> client
+            loop {
+                match server.send(&mut buf) {
+                    Ok((n, _info)) => {
+                        let info = quiche::RecvInfo {
+                            from: server_addr,
+                            to: client_addr,
+                        };
+                        let slice = buf.get_mut(..n).unwrap_or(&mut []);
+                        let _ = client.recv(slice, info);
+                    }
+                    Err(quiche::Error::Done) => break,
+                    Err(e) => panic!("server.send: {e:?}"),
+                }
+            }
+        }
+        assert!(
+            client.is_established() && server.is_established(),
+            "in-memory handshake did not establish"
+        );
+    }
+
+    /// Ferry packets BOTH directions one round (no FIN/stream work),
+    /// so a control frame (e.g. MAX_STREAMS / the FIN STREAM frame) is
+    /// delivered to the peer for it to observe.
+    fn pump_once(
+        a: &mut quiche::Connection,
+        b: &mut quiche::Connection,
+        a_addr: SocketAddr,
+        b_addr: SocketAddr,
+    ) {
+        let mut buf = vec![0u8; 65_535];
+        loop {
+            match a.send(&mut buf) {
+                Ok((n, _)) => {
+                    let info = quiche::RecvInfo {
+                        from: a_addr,
+                        to: b_addr,
+                    };
+                    let _ = b.recv(buf.get_mut(..n).unwrap_or(&mut []), info);
+                }
+                Err(quiche::Error::Done) => break,
+                Err(_) => break,
+            }
+        }
+        loop {
+            match b.send(&mut buf) {
+                Ok((n, _)) => {
+                    let info = quiche::RecvInfo {
+                        from: b_addr,
+                        to: a_addr,
+                    };
+                    let _ = a.recv(buf.get_mut(..n).unwrap_or(&mut []), info);
+                }
+                Err(quiche::Error::Done) => break,
+                Err(_) => break,
+            }
+        }
+    }
+
+    fn addrs() -> (SocketAddr, SocketAddr) {
+        (
+            "127.0.0.1:4001".parse().unwrap(),
+            "127.0.0.1:4002".parse().unwrap(),
+        )
+    }
+
+    fn established_pair(
+        certs: &TestCerts,
+        server_bidi_limit: u64,
+    ) -> (
+        quiche::Connection,
+        quiche::Connection,
+        SocketAddr,
+        SocketAddr,
+    ) {
+        let (caddr, saddr) = addrs();
+        let mut ccfg = client_config(certs);
+        let mut scfg = server_config(certs, server_bidi_limit);
+        let cscid = random_scid();
+        let sscid = random_scid();
+        let mut client = quiche::connect(
+            Some(TEST_SNI),
+            &quiche::ConnectionId::from_ref(&cscid),
+            caddr,
+            saddr,
+            &mut ccfg,
+        )
+        .unwrap();
+        let mut server = quiche::accept(
+            &quiche::ConnectionId::from_ref(&sscid),
+            None,
+            saddr,
+            caddr,
+            &mut scfg,
+        )
+        .unwrap();
+        handshake_pair(&mut client, &mut server, caddr, saddr);
+        (client, server, caddr, saddr)
+    }
+
+    /// Build a realistic relay `src` for stream 0: a server conn whose
+    /// peer (a client) opened stream 0 and sent a zero-data FIN. The
+    /// returned server conn therefore has stream 0 readable-at-FIN, so
+    /// the relay's read loop reads `(0, true)` then `Done` — exactly the
+    /// FIN-only-source shape that drives `pump_dir`'s FIN-emit block.
+    /// (The peer client is returned too so it stays alive / owned.)
+    fn src_server_with_fin_only_stream0(
+        certs: &TestCerts,
+    ) -> (quiche::Connection, quiche::Connection) {
+        let caddr: SocketAddr = "127.0.0.1:5001".parse().unwrap();
+        let saddr: SocketAddr = "127.0.0.1:5002".parse().unwrap();
+        let mut ccfg = client_config(certs);
+        let mut scfg = server_config(certs, 4);
+        let cscid = random_scid();
+        let sscid = random_scid();
+        let mut peer_client = quiche::connect(
+            Some(TEST_SNI),
+            &quiche::ConnectionId::from_ref(&cscid),
+            caddr,
+            saddr,
+            &mut ccfg,
+        )
+        .unwrap();
+        let mut src = quiche::accept(
+            &quiche::ConnectionId::from_ref(&sscid),
+            None,
+            saddr,
+            caddr,
+            &mut scfg,
+        )
+        .unwrap();
+        handshake_pair(&mut peer_client, &mut src, caddr, saddr);
+        // Peer client opens stream 0 with a zero-data FIN, then ferry it
+        // to `src` so `src` sees stream 0 finished/readable-at-FIN.
+        peer_client.stream_send(0, &[], true).unwrap();
+        pump_once(&mut peer_client, &mut src, caddr, saddr);
+        assert!(
+            src.readable().any(|s| s == 0) || src.stream_finished(0),
+            "fixture: src must observe the FIN-only stream 0"
+        );
+        (src, peer_client)
+    }
+
+    /// THE DEFECT REGRESSION (refuse leg): a zero-data FIN-only stream
+    /// whose mirror open on `dst` is refused with `StreamLimit` MUST NOT
+    /// drop the FIN — `pump_dir` leaves the half live (`!done`,
+    /// `!fin_sent`, `src_fin_seen`) so a later turn retries. Pre-fix this
+    /// fell into the FIN block's catch-all `Err` arm and set `done =
+    /// true`, silently losing the FIN (and never creating the mirror
+    /// stream).
+    #[test]
+    fn fin_only_stream_limit_does_not_drop_fin() {
+        let certs = gen_certs();
+        // Realistic FIN-only source: stream 0 is at FIN on `src`.
+        let (mut src, _peer) = src_server_with_fin_only_stream0(&certs);
+        // `dst` = LB-as-client whose backend peer grants ZERO bidi
+        // streams ⇒ the empty-FIN open of stream 0 returns StreamLimit.
+        let (mut dst, _backend, _caddr, _saddr) = established_pair(&certs, 0);
+        assert_eq!(
+            dst.peer_streams_left_bidi(),
+            0,
+            "fixture: peer must grant zero bidi streams so the open is refused"
+        );
+
+        let mut half = RelayHalf::default();
+        pump_dir(
+            0,
+            &mut src,
+            &mut dst,
+            &mut half,
+            Direction::ClientToUpstream,
+        );
+
+        // The read loop saw the source FIN…
+        assert!(
+            half.src_fin_seen,
+            "the relay must have observed the source FIN (intent recorded)"
+        );
+        // …but the StreamLimit-refused FIN must NOT terminate the half.
+        assert!(
+            !half.done,
+            "StreamLimit on a FIN-only send must NOT mark the half done \
+             (the FIN must be retried, not dropped)"
+        );
+        assert!(
+            !half.fin_sent,
+            "the FIN was refused (StreamLimit) so fin_sent must stay false"
+        );
+    }
+
+    /// THE DEFECT REGRESSION (grant leg / retry succeeds): with stream
+    /// credit available the SAME FIN-only `pump_dir` delivers a clean FIN
+    /// and the destination peer observes stream 0 finished. Together with
+    /// the refuse-leg test this proves the retry is real — a half left
+    /// live by `StreamLimit` completes once credit exists.
+    #[test]
+    fn fin_only_delivered_when_stream_credit_available() {
+        let certs = gen_certs();
+        let (mut src, _peer) = src_server_with_fin_only_stream0(&certs);
+        // `dst` = LB-as-client; backend grants >=1 bidi stream.
+        let (mut dst, mut backend, caddr, saddr) = established_pair(&certs, 4);
+        assert!(
+            dst.peer_streams_left_bidi() >= 1,
+            "fixture: peer must grant bidi credit for this leg"
+        );
+
+        let mut half = RelayHalf::default();
+        pump_dir(
+            0,
+            &mut src,
+            &mut dst,
+            &mut half,
+            Direction::ClientToUpstream,
+        );
+
+        assert!(
+            half.fin_sent && half.done,
+            "with stream credit the FIN-only send must succeed (fin_sent + done)"
+        );
+
+        // Deliver the FIN STREAM frame to the backend and confirm IT
+        // observes stream 0 finished (the FIN was not lost). Here `dst`
+        // is the LB-as-client, `backend` is the server peer.
+        pump_once(&mut dst, &mut backend, caddr, saddr);
+        assert!(
+            backend.stream_finished(0),
+            "the backend must observe stream 0 finished (clean FIN delivered)"
+        );
     }
 }

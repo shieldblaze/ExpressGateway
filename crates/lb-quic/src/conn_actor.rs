@@ -698,7 +698,17 @@ pub async fn graceful_h3_shutdown(
 
 /// Repeatedly call `quiche::Connection::send` and send resulting
 /// packets onto the UDP socket until quiche reports `Done`.
-async fn drain_conn_send(socket: &UdpSocket, conn: &mut quiche::Connection, out_buf: &mut [u8]) {
+///
+/// SESSION 16 / Mode B (R12 single-source): exposed `pub(crate)` so
+/// [`crate::raw_proxy`] drives both of its legs through the SAME pump
+/// rather than carrying a byte-identical private copy. The low-level
+/// send loop has no H3/Mode-A coupling — it is purely "flush quiche's
+/// outbound packets to this socket until `Done`".
+pub(crate) async fn drain_conn_send(
+    socket: &UdpSocket,
+    conn: &mut quiche::Connection,
+    out_buf: &mut [u8],
+) {
     loop {
         match conn.send(out_buf) {
             Ok((n, info)) => {
