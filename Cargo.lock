@@ -1644,6 +1644,7 @@ dependencies = [
  "lb-core",
  "lb-h3",
  "lb-io",
+ "lb-observability",
  "lb-security",
  "parking_lot",
  "proptest",
