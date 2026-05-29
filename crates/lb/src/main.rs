@@ -1033,6 +1033,7 @@ async fn spawn_quic(
 /// linkage proof; see `scripts/never_decrypted_proof.sh`).
 async fn spawn_passthrough(
     cfg: &lb_config::PassthroughConfig,
+    metrics: &Arc<MetricsRegistry>,
     shutdown_token: CancellationToken,
 ) -> anyhow::Result<PassthroughListener> {
     let mut params = PassthroughParams::new(
@@ -1047,6 +1048,12 @@ async fn spawn_passthrough(
     params.audit_throttle_window = Duration::from_secs(cfg.audit_throttle_window_secs);
     params.max_dcid_len_routed = cfg.max_dcid_len_routed;
     params.mint_retry = cfg.mint_retry;
+    // S15 A3: register the quic_passthrough_* metric family off the
+    // shared registry and thread the handles into the listener.
+    params.metrics = Some(
+        lb_observability::PassthroughMetrics::register(metrics)
+            .context("registering quic_passthrough_* metrics")?,
+    );
 
     let listener = PassthroughListener::spawn(params, shutdown_token)
         .await
@@ -1946,7 +1953,7 @@ async fn async_main() -> anyhow::Result<()> {
     // S15 A2-8: spawn the Mode A passthrough listener, if configured.
     if let Some(pt_cfg) = config.passthrough.as_ref() {
         passthrough_listeners
-            .push(spawn_passthrough(pt_cfg, shutdown.token().child_token()).await?);
+            .push(spawn_passthrough(pt_cfg, &metrics, shutdown.token().child_token()).await?);
     }
 
     if listener_handles.is_empty() && quic_listeners.is_empty() && passthrough_listeners.is_empty()

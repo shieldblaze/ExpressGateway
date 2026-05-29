@@ -27,6 +27,13 @@ lb-security = { path = "../lb-security" }
 # S15 A2: passthrough Maglev selection (Maglev::pick_with_key over the
 # resolved backend set per design §3.2).
 lb-balancer = { path = "../lb-balancer" }
+# S15 A3: quic_passthrough_* observability handles
+# (PassthroughMetrics). Acyclic — lb-observability depends on
+# lb-security + lb-l4-xdp + prometheus, none of which link
+# quiche/BoringSSL, so this edge does NOT regress the
+# `quic-passthrough-only` NEVER-DECRYPTED linkage proof
+# (CF-S15-PASSTHROUGH-FEATURE-GATING).
+lb-observability = { path = "../lb-observability" }
 
 # `quic-terminate` deps — required by the existing H3 termination
 # router/actor/bridge tree. Gating these makes

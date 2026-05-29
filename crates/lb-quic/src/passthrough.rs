@@ -130,6 +130,12 @@ pub struct PassthroughParams {
     /// BACKEND's responsibility. Documented test/trusted-network
     /// escape; production leaves this `true`.
     pub mint_retry: bool,
+    /// `quic_passthrough_*` observability handles (S15 A3). `None` when
+    /// the listener is spawned without a metrics registry (unit tests,
+    /// or a build that doesn't wire observability) — every event-site
+    /// bump then becomes a no-op. Wired by
+    /// `lb/main.rs::spawn_passthrough` off the shared `MetricsRegistry`.
+    pub metrics: Option<lb_observability::PassthroughMetrics>,
 }
 
 impl PassthroughParams {
@@ -152,6 +158,7 @@ impl PassthroughParams {
             audit_throttle_window: Duration::from_secs(60),
             max_dcid_len_routed: MAX_CID_LEN,
             mint_retry: true,
+            metrics: None,
         }
     }
 }
@@ -469,6 +476,38 @@ struct RouterCtx {
     /// Process-relative monotonic epoch for `last_seen_ms` (kept small
     /// vs absolute timestamps).
     epoch: Instant,
+    /// Audit-log throttle state (S15 A3, design §A3). One slot per audit
+    /// category holding the epoch-relative millis at which that
+    /// category last emitted a `warn!` audit line. Initialised to
+    /// [`AUDIT_NEVER`] so the FIRST event in every category always
+    /// emits; thereafter [`audit_allow`] gates to one line per
+    /// `params.audit_throttle_window`. The verifier's saturation test
+    /// asserts ONE line per window, not one per event.
+    audit_last_source_binding_ms: AtomicU64,
+    audit_last_cap_hit_ms: AtomicU64,
+}
+
+/// Sentinel for "no audit line emitted yet" — chosen so the first event
+/// (any `now_ms`) clears the window check in [`audit_allow`]. Distinct
+/// from a real `0` epoch-millis reading.
+const AUDIT_NEVER: u64 = u64::MAX;
+
+/// Audit-throttle gate. Returns `true` (and records `now_ms`) if an
+/// audit line for the category backed by `last_emit` may be emitted now —
+/// i.e. the slot is [`AUDIT_NEVER`] (first event) or `now_ms` is at least
+/// `window` past the last emit. Returns `false` otherwise. Uses
+/// `fetch_update` so two threads racing the same window emit exactly once.
+fn audit_allow(last_emit: &AtomicU64, now_ms: u64, window: Duration) -> bool {
+    let window_ms = u64::try_from(window.as_millis()).unwrap_or(u64::MAX);
+    last_emit
+        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |prev| {
+            if prev == AUDIT_NEVER || now_ms.saturating_sub(prev) >= window_ms {
+                Some(now_ms)
+            } else {
+                None
+            }
+        })
+        .is_ok()
 }
 
 /// Hash a DCID into a Maglev pick.
@@ -476,6 +515,18 @@ fn pick_backend(ctx: &RouterCtx, dcid: &[u8]) -> Option<SocketAddr> {
     let key = hash_dcid_for_maglev(dcid);
     let idx = ctx.maglev.pick_with_key(&ctx.backends, key).ok()?;
     ctx.params.backends.get(idx).copied()
+}
+
+/// Set `quic_passthrough_flows` to the current dispatch-table size.
+/// Called after each table insert/eviction. The gauge counts
+/// dispatch-table entries (≈ flows; a migrated flow may briefly hold 2
+/// CID keys) per owner ruling Q2. Reading `table.len()` after the
+/// mutation makes the gauge self-correct: under concurrent dispatch the
+/// last writer's reading wins and converges to the live count.
+fn set_flows_gauge(ctx: &RouterCtx) {
+    if let Some(m) = &ctx.params.metrics {
+        m.flows.set(i64::try_from(ctx.table.len()).unwrap_or(i64::MAX));
+    }
 }
 
 /// LRU eviction at cap. Walks the flow table and drops the entry with
@@ -510,6 +561,15 @@ fn evict_oldest(ctx: &RouterCtx) -> usize {
             removed += 1;
         }
     }
+    if removed > 0 {
+        // One eviction event per FLOW (owner ruling Q1) — not per
+        // removed CID key, which would double-count 2-key flows.
+        if let Some(m) = &ctx.params.metrics {
+            m.flows_evicted_total.inc();
+        }
+        // Self-correcting gauge: re-read the post-removal table size.
+        set_flows_gauge(ctx);
+    }
     // Dropping `victim` here decrements the Arc strong count; once the
     // forward task exits (channel close on backlog_tx drop) the entry's
     // own `Drop` fires and sets `dropped` (test-gauges).
@@ -522,6 +582,9 @@ async fn handle_inbound(ctx: Arc<RouterCtx>, data: Vec<u8>, from: SocketAddr) {
     let parsed = match parse_public_header(&data, default_short_dcid_len(&ctx)) {
         Ok(h) => h,
         Err(e) => {
+            if let Some(m) = &ctx.params.metrics {
+                m.header_parse_errors_total.inc();
+            }
             tracing::trace!(error = %e, peer = %from, "header parse error");
             return;
         }
@@ -627,6 +690,9 @@ async fn handle_initial(
         }
         if let Err(e) = ctx.listener_sock.send_to(&out, from).await {
             tracing::debug!(error = %e, peer = %from, "send Retry");
+        } else if let Some(m) = &ctx.params.metrics {
+            // Count only Retries actually put on the wire.
+            m.retry_minted_total.inc();
         }
         return;
     }
@@ -636,6 +702,9 @@ async fn handle_initial(
     let now = Instant::now();
     if !tok.is_empty() {
         if let Err(e) = ctx.retry_signer.verify(tok, from, now) {
+            if let Some(m) = &ctx.params.metrics {
+                m.retry_rejected_total.inc();
+            }
             tracing::trace!(error = %e, peer = %from, "retry token verify failed");
             return;
         }
@@ -645,9 +714,26 @@ async fn handle_initial(
     // dispatch table has up to 2 keys per flow, so the table-size
     // bound is 2× cap.
     let cap = ctx.params.max_quic_connections;
-    while ctx.table.len() >= cap.saturating_mul(2) {
-        if evict_oldest(&ctx) == 0 {
-            break; // no entries to evict (table is empty); avoid spin.
+    if ctx.table.len() >= cap.saturating_mul(2) {
+        // Cap-hit audit line (design §A3, throttled one-per-window).
+        let now_ms = elapsed_ms(now, ctx.epoch);
+        if audit_allow(
+            &ctx.audit_last_cap_hit_ms,
+            now_ms,
+            ctx.params.audit_throttle_window,
+        ) {
+            tracing::warn!(
+                event = "audit/quic_passthrough_cap_hit",
+                peer = %from,
+                table_len = ctx.table.len(),
+                cap,
+                "passthrough flow cap hit; evicting oldest flow(s)"
+            );
+        }
+        while ctx.table.len() >= cap.saturating_mul(2) {
+            if evict_oldest(&ctx) == 0 {
+                break; // no entries to evict (table is empty); avoid spin.
+            }
         }
     }
 
@@ -665,11 +751,17 @@ async fn handle_initial(
     let backend_sock = match UdpSocket::bind(bind_any).await {
         Ok(s) => s,
         Err(e) => {
+            if let Some(m) = &ctx.params.metrics {
+                m.backend_socket_errors_total.inc();
+            }
             tracing::debug!(error = %e, "bind backend socket");
             return;
         }
     };
     if let Err(e) = backend_sock.connect(backend).await {
+        if let Some(m) = &ctx.params.metrics {
+            m.backend_socket_errors_total.inc();
+        }
         tracing::debug!(error = %e, %backend, "connect backend socket");
         return;
     }
@@ -699,16 +791,22 @@ async fn handle_initial(
     // as the wire DCID — so the existing key insertion does the right
     // thing.
     ctx.table.insert(dcid.to_vec(), Arc::clone(&flow));
+    // Self-correcting gauge: re-read the post-insert table size.
+    set_flows_gauge(&ctx);
 
     // Forward the inbound packet first.
     let _ = backlog_tx.try_send(pkt);
 
     // Spawn per-flow forward pump (client→backend).
     let backend_sock_fwd = Arc::clone(&backend_sock);
+    let ctx_fwd = Arc::clone(&ctx);
     tokio::spawn(async move {
         let mut rx = backlog_rx;
         while let Some(buf) = rx.recv().await {
             if let Err(e) = backend_sock_fwd.send(&buf).await {
+                if let Some(m) = &ctx_fwd.params.metrics {
+                    m.backend_socket_errors_total.inc();
+                }
                 tracing::trace!(error = %e, "forward send failed");
                 break;
             }
@@ -728,6 +826,9 @@ async fn reverse_pump(ctx: Arc<RouterCtx>, flow: Arc<FlowEntry>) {
         let n = match flow.backend_sock.recv(&mut buf).await {
             Ok(n) => n,
             Err(e) => {
+                if let Some(m) = &ctx.params.metrics {
+                    m.backend_socket_errors_total.inc();
+                }
                 tracing::trace!(error = %e, "backend recv");
                 break;
             }
@@ -824,11 +925,28 @@ fn forward_short_via(ctx: &RouterCtx, flow: &FlowEntry, _pkt: &[u8], from: Socke
     }
     let recorded = flow.get_peer();
     if recorded != from {
+        // Per-event debug trace (kept for full visibility).
         tracing::trace!(
             recorded = %recorded,
             observed = %from,
             "strict_source_binding drop"
         );
+        // Throttled audit record (design §A3): one `warn!` per
+        // `audit_throttle_window`, NOT one per dropped packet — a
+        // spoofing flood must not flood the audit log.
+        let now_ms = elapsed_ms(Instant::now(), ctx.epoch);
+        if audit_allow(
+            &ctx.audit_last_source_binding_ms,
+            now_ms,
+            ctx.params.audit_throttle_window,
+        ) {
+            tracing::warn!(
+                event = "audit/source_binding_violation",
+                recorded = %recorded,
+                observed = %from,
+                "strict source-binding violation; dropping short-header packet from unexpected 4-tuple"
+            );
+        }
         return false;
     }
     true
@@ -918,6 +1036,8 @@ impl PassthroughListener {
             table: Arc::clone(&table),
             listener_sock: Arc::clone(&dataplane),
             epoch: Instant::now(),
+            audit_last_source_binding_ms: AtomicU64::new(AUDIT_NEVER),
+            audit_last_cap_hit_ms: AtomicU64::new(AUDIT_NEVER),
         });
 
         tracing::info!(

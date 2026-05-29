@@ -28,7 +28,7 @@ use dashmap::DashMap;
 use dashmap::mapref::entry::Entry;
 use prometheus::{Histogram as PHistogram, core::Collector};
 use prometheus::{
-    HistogramOpts, HistogramVec, IntCounterVec, IntGauge, IntGaugeVec, Opts, Registry,
+    HistogramOpts, HistogramVec, IntCounterVec, IntGaugeVec, Opts, Registry,
     proto::MetricFamily,
 };
 
@@ -37,10 +37,16 @@ use prometheus::{
 /// ROUND8-L7-07 glitches counter) can name a registered counter
 /// handle without taking a direct `prometheus` dependency edge.
 pub use prometheus::IntCounter;
+/// Re-export of [`prometheus::IntGauge`] so downstream crates that depend
+/// on `lb-observability` (e.g. `lb-quic` for the `quic_passthrough_flows`
+/// gauge) can name a registered gauge handle without a direct
+/// `prometheus` dependency edge.
+pub use prometheus::IntGauge;
 
 pub mod admin_http;
 pub mod label_budget;
 pub mod log;
+pub mod passthrough_metrics;
 pub mod probes;
 pub mod prometheus_exposition;
 pub mod tracing_propagation;
@@ -51,6 +57,7 @@ pub use label_budget::{
     LabelBudget, LabelBudgetError, MAX_ROUTES_BUDGET,
 };
 pub use log::{LogFormat, TracingConfig, TracingError, init_tracing};
+pub use passthrough_metrics::PassthroughMetrics;
 pub use probes::{ProbeRegistry, ProbeState};
 pub use xdp_metrics::{ConntrackFamily, SamplerBaseline, XdpMetrics, stat_slot_labels};
 
