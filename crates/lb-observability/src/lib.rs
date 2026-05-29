@@ -28,8 +28,7 @@ use dashmap::DashMap;
 use dashmap::mapref::entry::Entry;
 use prometheus::{Histogram as PHistogram, core::Collector};
 use prometheus::{
-    HistogramOpts, HistogramVec, IntCounterVec, IntGaugeVec, Opts, Registry,
-    proto::MetricFamily,
+    HistogramOpts, HistogramVec, IntCounterVec, IntGaugeVec, Opts, Registry, proto::MetricFamily,
 };
 
 /// Re-export of [`prometheus::IntCounter`] so downstream crates that
