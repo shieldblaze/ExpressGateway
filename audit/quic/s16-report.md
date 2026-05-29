@@ -88,7 +88,42 @@ design decisions resolved; the one product fork (0-RTT) escalated and ruled:
 
 ## Phase 2 — Mode B increments (per-increment evidence)
 
-<< B1..B6 evidence appended as each lands; author≠verifier; pushed continuously >>
+### B1 — actor seam + dedicated upstream dial (dual-connection skeleton) — VERIFIED
+Author = builder-1 (`f6d0d8e1`); verify = independent (different agent).
+
+**Implementation:**
+- `conn_actor.rs`: `ActorParams.raw_quic_backend` seam; `run_actor` early-dispatches
+  to `run_raw_proxy_actor` as its FIRST statement → H3 path byte-for-byte unchanged
+  when `None` (R3). `router.rs`: threaded through `spawn_new_connection`.
+- `raw_proxy.rs` (new): `run_raw_proxy_actor` dual-connection skeleton — Phase 1
+  drives client to established, snapshots ALPN/SCID/trace_id, dials a dedicated
+  upstream mirroring the ALPN; Phase 2 runs both pumps in one biased `select!`
+  (cancel/client-inbound/upstream-recv/2 timeouts); `graceful_close` both. No app
+  relay yet (B2/B4). `RawProxyOutcome` + `run_raw_proxy_actor_for_test` hook.
+- `quic_pool.rs`: extracted `connect_and_drive` (R12 single-source dial loop);
+  `dial_new` delegates (`alpn_override=None`, behavior unchanged); `dial_dedicated`
+  → un-pooled `DedicatedQuic`, mirrors ALPN, for 1:1 re-origination.
+
+**Verification (independent):**
+- **Two-connections proof (real wire, by mechanism) — PASS.** `tests/s16_b1_two_connections.rs`:
+  real quiche client ⇄ Mode B actor ⇄ real backend; backend independently records
+  the SCID it observes via `Header::from_slice` before `accept`. Asserted:
+  `client_scid ≠ upstream_scid`; distinct `trace_id`s; `negotiated_alpn==h3` mirrored
+  (factory installs a bad ALPN → handshake would TLS-fail without the mirror);
+  **LOAD-BEARING bridge discriminator**: `backend_observed_scid == upstream_scid
+  (c31a52e1…) ≠ client_chosen_scid (c01d57ce…)` — the backend saw the LB's freshly
+  sampled SCID, not the client's; a bridge fails this, re-origination passes. Plus
+  SCID prefix-independence (≤2 common bytes). 1/1 PASS.
+- **H3 no-regression (R3) — PASS.** lb-quic 153/0 (incl. h3_h3_stream_e2e 22/0,
+  h3_h2 11/0, h3_h1 17/0, round8 3/0), lb-io quic_pool 7/0, lb-l7 bridging_h3_h3 1/0;
+  `quic-passthrough-only` compiles (NEVER-DECRYPTED linkage preserved).
+- **clippy** -D warnings clean; **fmt**: builder's source FAILED `fmt --check`
+  (defect caught by verifier — builder hadn't run fmt); lead applied `cargo fmt`,
+  now clean.
+- **R12**: `drain_conn_send` confirmed duplicated (log-string-only delta) →
+  single-sourced in B2.
+
+### B2..B6 — << appended as each lands >>
 
 ## Phase 3 — gates
 

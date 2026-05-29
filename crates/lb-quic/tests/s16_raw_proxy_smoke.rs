@@ -49,7 +49,8 @@ fn generate_loopback_certs() -> TestCerts {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_nanos())
         .unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!("lb-quic-s16-smoke-{}-{nanos}", std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("lb-quic-s16-smoke-{}-{nanos}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
 
     let mut params = rcgen::CertificateParams::new(vec![TEST_SNI.to_string()]).unwrap();
@@ -84,9 +85,7 @@ fn client_config_factory(
         // prove dial_dedicated's ALPN override actually takes effect (we
         // pass [h3] to dial_dedicated; the server only speaks h3).
         cfg.set_application_protos(&[b"factory-default-alpn"])?;
-        let ca = ca_path
-            .to_str()
-            .ok_or(quiche::Error::TlsFail)?;
+        let ca = ca_path.to_str().ok_or(quiche::Error::TlsFail)?;
         cfg.load_verify_locations_from_file(ca)
             .map_err(|_| quiche::Error::TlsFail)?;
         cfg.verify_peer(true);
@@ -150,7 +149,9 @@ async fn spawn_throwaway_server(certs: &TestCerts) -> SocketAddr {
                 loop {
                     match c.send(&mut out_buf) {
                         Ok((n, info)) => {
-                            let _ = socket.send_to(out_buf.get(..n).unwrap_or(&[]), info.to).await;
+                            let _ = socket
+                                .send_to(out_buf.get(..n).unwrap_or(&[]), info.to)
+                                .await;
                         }
                         Err(quiche::Error::Done) => break,
                         Err(_) => break,

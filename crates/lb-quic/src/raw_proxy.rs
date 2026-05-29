@@ -182,9 +182,7 @@ pub async fn run_raw_proxy_actor(params: ActorParams) -> std::io::Result<()> {
 /// Surfaces the upstream-dial / handshake / pump error verbatim (unlike
 /// the public entrypoint which logs + discards it).
 #[cfg(any(test, feature = "test-gauges"))]
-pub async fn run_raw_proxy_actor_for_test(
-    params: ActorParams,
-) -> std::io::Result<RawProxyOutcome> {
+pub async fn run_raw_proxy_actor_for_test(params: ActorParams) -> std::io::Result<RawProxyOutcome> {
     run_raw_proxy_actor_inner(params).await
 }
 
@@ -192,9 +190,7 @@ pub async fn run_raw_proxy_actor_for_test(
 /// dedicated upstream; Phase 2 runs both pumps concurrently until either
 /// side finishes, then closes the other. Returns the two-connections
 /// proof on graceful completion.
-async fn run_raw_proxy_actor_inner(
-    mut params: ActorParams,
-) -> std::io::Result<RawProxyOutcome> {
+async fn run_raw_proxy_actor_inner(mut params: ActorParams) -> std::io::Result<RawProxyOutcome> {
     // The seam guarantees this is `Some` (the dispatch in `run_actor`
     // only routes here when set), but match defensively rather than
     // unwrap — the crate denies `unwrap`/`expect`.
@@ -352,11 +348,7 @@ async fn drive_client_to_established(
 /// `poll_h3`), the bidirectional raw-stream relay passes over BOTH
 /// connections — both are `&mut` in scope, so no mutex (same reasoning
 /// as the H3 actor keeping per-stream state inline).
-async fn run_dual_pump(
-    params: &mut ActorParams,
-    upstream: &mut DedicatedQuic,
-    out_buf: &mut [u8],
-) {
+async fn run_dual_pump(params: &mut ActorParams, upstream: &mut DedicatedQuic, out_buf: &mut [u8]) {
     // The upstream recv needs its own inbound buffer (the client side
     // uses owned `Vec`s forwarded by the router; the upstream side
     // recv_from's straight off its dedicated socket).
