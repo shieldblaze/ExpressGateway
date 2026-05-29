@@ -62,7 +62,11 @@ use tracing_subscriber::registry::Registry;
 /// author this gate in parallel with the impl per the A3 task split.
 ///
 /// When `true`, the test additionally REQUIRES the audit event to fire.
-const AUDIT_LINE_REQUIRED: bool = false;
+/// FLIPPED true: builder-1's A3 wiring landed (integration tip
+/// `b8499ea2`) — passthrough.rs emits
+/// `tracing::warn!(event = "audit/source_binding_violation", …)` gated
+/// by `audit_allow`. The audit-line half is now binding.
+const AUDIT_LINE_REQUIRED: bool = true;
 
 /// The audit event the design §A3 names. Builder-1's wiring is expected
 /// to emit a tracing event whose target OR message carries this token.

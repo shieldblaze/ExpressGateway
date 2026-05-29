@@ -55,7 +55,12 @@ use tracing_subscriber::registry::Registry;
 /// lands. Until then the reachability + boundedness half is the binding
 /// assertion; the throttled-count half is observed-and-reported. That
 /// is the gate-2 completion bar.
-const AUDIT_LINE_REQUIRED: bool = false;
+/// FLIPPED true: builder-1's A3 wiring landed (integration tip
+/// `b8499ea2`) — `evict_oldest` emits
+/// `tracing::warn!(event = "audit/quic_passthrough_cap_hit", …)` gated
+/// by `audit_allow` (one line per window). The throttle half is now
+/// binding.
+const AUDIT_LINE_REQUIRED: bool = true;
 
 /// Token the cap-hit audit line is expected to carry. Design §11.5
 /// names the line `audit/quic_passthrough_cap_hit`; this matches the
