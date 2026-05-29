@@ -241,6 +241,10 @@ impl QuicListener {
             // flooding behind legitimate source-address retry tokens.
             max_connections: 100_000,
             cancel: shutdown.clone(),
+            // SESSION 16 / Mode B: `QuicListener` is the H3-termination
+            // listener; Mode B gets its own per-listener wiring in B6
+            // (`lb/src/main.rs`). `None` keeps this path on H3 (R3).
+            raw_quic_backend: None,
         };
         let router_handle = router::spawn(router_params);
         let handle = tokio::spawn(async move {

@@ -325,6 +325,8 @@ async fn run_case(authority: &str) -> (Option<u16>, u32) {
         backends: Arc::new(vec![backend]),
         h3_backend: None,
         h2_backend: None,
+        // S16 Mode B seam: None keeps this on the H3 termination path.
+        raw_quic_backend: None,
     };
     let actor = tokio::spawn(run_actor(params));
 

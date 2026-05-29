@@ -34,6 +34,8 @@ use lb_io::quic_pool::QuicUpstreamPool;
 
 use bytes::Bytes;
 
+use crate::raw_proxy::{RawBackend, run_raw_proxy_actor};
+
 use crate::h3_bridge::{
     BodyItem, H3_RESP_CHANNEL_DEPTH, H3Request, MAX_REQUEST_BODY_BYTES, MAX_RESPONSE_BODY_BYTES,
     ReqBodyEvent, RespEvent, StreamRxBuf, encode_h3_response, h3_to_h1_stream_resp,
@@ -126,6 +128,16 @@ pub struct ActorParams {
     /// (S6 R8 bounded-incremental). Takes precedence over `h3_backend`.
     /// PROTO-001 H3→H2 path.
     pub h2_backend: Option<(Http2Pool, SocketAddr)>,
+    /// SESSION 16 / Mode B (terminate-and-re-originate) seam. When
+    /// `Some`, [`run_actor`] dispatches to
+    /// [`run_raw_proxy_actor`](crate::raw_proxy::run_raw_proxy_actor) at
+    /// the very top — BEFORE any H3-specific local state is built — and
+    /// the connection is proxied as raw QUIC (streams + datagrams) to a
+    /// freshly re-originated upstream connection instead of being
+    /// H3-terminated. When `None` (every existing caller) the H3
+    /// termination path below runs byte-for-byte unchanged (R3
+    /// no-regression). See `audit/quic/s16-plan.md` §1.
+    pub raw_quic_backend: Option<RawBackend>,
 }
 
 /// Drive one `quiche::Connection` to completion, terminating H3 and
@@ -137,6 +149,15 @@ pub struct ActorParams {
 /// `io::Result<()>` shape exists so the caller can chain without
 /// bespoke error handling; the success variant is always returned.
 pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
+    // SESSION 16 / Mode B splice point (plan §1). When a raw-QUIC
+    // backend is configured this connection is terminated-and-
+    // re-originated as raw QUIC, NOT H3-terminated: dispatch BEFORE any
+    // H3-specific local state is built so the H3 path below stays
+    // byte-for-byte unchanged when `raw_quic_backend` is `None` (R3).
+    if params.raw_quic_backend.is_some() {
+        return run_raw_proxy_actor(params).await;
+    }
+
     let mut out_buf = vec![0u8; 65_535];
     let mut rx_buf_by_stream: HashMap<u64, StreamRxBuf> = HashMap::new();
     let mut stream_response: HashMap<u64, StreamTx> = HashMap::new();
