@@ -316,8 +316,7 @@ async fn short_window_releases_per_window() {
 
     // Sub-millisecond window: each burst, separated by a sleep longer
     // than the window, falls into its own window.
-    let (listener, lb_addr, cancel) =
-        spawn_listener(CAP, Duration::from_micros(1)).await;
+    let (listener, lb_addr, cancel) = spawn_listener(CAP, Duration::from_micros(1)).await;
 
     let client = UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
         .await

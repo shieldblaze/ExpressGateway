@@ -215,7 +215,12 @@ async fn spawn_counting_backend() -> (SocketAddr, Arc<AtomicU64>) {
 async fn spawn_listener(
     strict: bool,
     short_dcid_len: usize,
-) -> (PassthroughListener, SocketAddr, Arc<AtomicU64>, CancellationToken) {
+) -> (
+    PassthroughListener,
+    SocketAddr,
+    Arc<AtomicU64>,
+    CancellationToken,
+) {
     let dir = make_dir();
     let retry_path = dir.join("retry.bin");
     std::fs::write(&retry_path, RETRY_SECRET).expect("write retry secret");
@@ -243,7 +248,12 @@ async fn spawn_listener(
 
 /// Install one flow into the LB via a synthetic Retry-validated Initial
 /// from `client_a`. The DCID becomes the short-header routing key.
-async fn install_flow(lb: SocketAddr, client_a: &UdpSocket, signer: &RetryTokenSigner, dcid: &[u8]) {
+async fn install_flow(
+    lb: SocketAddr,
+    client_a: &UdpSocket,
+    signer: &RetryTokenSigner,
+    dcid: &[u8],
+) {
     let client_addr = client_a.local_addr().expect("local_addr");
     let token = signer.mint(client_addr, dcid);
     let scid = [0x55u8; 8];
