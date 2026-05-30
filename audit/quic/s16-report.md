@@ -232,6 +232,38 @@ No validated fix exists. The greedy-drain approach FAILED (13/19 still stalling)
 **Status: OPEN BLOCKER** — Phase 3's x3 --all-features gate is non-deterministic while it
 stands. Resolved by a verified fix or an R6 escalation before close; never asterisked (R4).
 
+**UPDATE — CAUSE CONFIRMED (neutral diagnosis agent, instrumented, read to completion):
+TEST-RIG BUG, production relay is CORRECT.** Decisive evidence captured at a real stall
+(pristine, isolated, foreground; repro 7/40 + 2/25 stalls, all at the 25.43s budget wall):
+- The stuck stream is **stream 0 (9000 B, the smallest)**, not stream 12. At freeze: backend
+  echoed all 9000 B + FIN; relay client-leg `lost=0` both directions (wire delivered
+  everything); relay→client `stream_send(0)` returns **`Ok(531)` with `capacity=Ok(9445)`**
+  EVERY turn — the production relay successfully delivers stream 0's tail + FIN into the
+  client connection. The client driver is frozen at `recvd=8209/9000, got_fin=false`.
+- Mechanism (test rig): the client driver (`s16_b2_multistream.rs` ~534-608) calls
+  `try_recv_one` = exactly ONE `recv_from` per loop iteration (helper line 348-360). Stream
+  0's trailing FIN-bearing datagram arrives last (behind the 4 large streams); the
+  one-datagram-per-turn loop can settle without ever dequeuing it → `got_fin[0]` never flips
+  → livespin to the 25s `done_rx` budget. Timing-sensitive → ~5-20%, non-deterministic.
+- A/B proof it's the DRIVER not the relay: perturbing only the driver's recv cadence moved
+  the rate (multi-datagram drain → 40/40 pass) with the relay code untouched. Contrast:
+  `s16_b3_reset_propagation_verify` passes 60/60 because it never has a small stream's late
+  FIN trailing behind bulk streams in a single-datagram-per-turn loop.
+- Production relay verdict: CORRECT for this scenario (sends all `Ok`, FIN delivered). Two
+  LATENT (non-causal) notes for a later look, neither fired in capture: `pump_dir`'s generic
+  `stream_recv`/`stream_send` `Err(e)` arms treat any non-Done/non-reset error as terminal
+  (drop, no FIN) — the only reader that does so; a transient quiche error would silently
+  truncate. Tracked as CF-S16-RELAY-GENERIC-ERR (LOW; not this stall).
+
+**FIX (tractable, test-rig only):** in `s16_b2_multistream.rs` client driver, drain ALL
+available datagrams each iteration (loop `recv_from` until empty, short per-recv timeout)
+instead of one — NOT a relay change. WARNING from the diagnosis: a naive multi-drain + an
+extra post-read flush went 100% stall; the drain (not flush) is load-bearing — implement
+drain-until-empty with no redundant flush, re-verify ≥40 iters = 0 stalls. Delegated to a
+builder; independent verifier re-confirms 0-stalls AND that the change is test-only +
+the production relay is genuinely untouched. **This un-blocks Phase 3** (the production code
+is sound; only the verifier's B2 test driver had the lost-wakeup).
+
 ### B4..B6 — << appended as each lands >>
 
 ## Phase 3 — gates
