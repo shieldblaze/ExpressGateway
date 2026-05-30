@@ -37,11 +37,20 @@
 //!    backpressure: a slow destination keeps the window full, the relay
 //!    stops reading the source, and quiche stops extending that source
 //!    stream's flow-control window (the source peer pauses). FIN is
-//!    propagated only after all buffered bytes drain. RESET_STREAM /
-//!    STOP_SENDING *propagation* is **B3** — B2 drops a reset/stopped
-//!    relay half WITHOUT synthesising a clean FIN (the F-MD-4 smuggling
-//!    guard); see the `// B3:` markers in [`pump_dir`]. Datagrams are
-//!    **B4**.
+//!    propagated only after all buffered bytes drain.
+//! 5. (B3) **Propagate cancellation** ([`pump_dir`]'s reset/stop arms):
+//!    a peer RESET_STREAM (surfaced as `stream_recv` →
+//!    `Err(StreamReset(code))`) is relayed onward as a RESET_STREAM
+//!    carrying the SAME code (`dst.stream_shutdown(sid, Shutdown::Write,
+//!    code)`); a peer STOP_SENDING (surfaced as `stream_send` →
+//!    `Err(StreamStopped(code))`) is relayed back toward the source as a
+//!    STOP_SENDING carrying the code (`src.stream_shutdown(sid,
+//!    Shutdown::Read, code)`). The B2 smuggling guard is KEPT — the
+//!    affected half is still marked `done` with its pending bytes dropped
+//!    and **never** a clean FIN — B3 only ADDS the positive propagation so
+//!    the peer observes a real stream reset/stop (the F-MD-4 analog, plan
+//!    §2.3). Only the affected unidirectional half is torn down; a bidi
+//!    stream's other direction stays live. Datagrams are **B4**.
 //!
 //! ## The two connections + the relay seam
 //!
@@ -52,8 +61,9 @@
 //!   `&mut` access to both, so no mutex is needed (same rationale as the
 //!   H3 actor keeping per-stream state inline).
 //! * The per-stream relay state ([`RawStreamState`], two [`RelayHalf`]s)
-//!   is the explicit bounded per-stream table (plan §2.2 / §3 R8). B3
-//!   extends [`RelayHalf`] with a reset code — see its docs.
+//!   is the explicit bounded per-stream table (plan §2.2 / §3 R8).
+//!   [`RelayHalf`] carries a `reset_code` so the B3 cancellation
+//!   propagation is recorded + idempotent — see its docs.
 //! * [`RawProxyOutcome`] (returned via the `io::Result` chain through a
 //!   test hook) surfaces both connections' SCIDs + trace_ids so the
 //!   verifier's two-connections proof can assert distinctness by
@@ -480,10 +490,10 @@ const STREAM_RELAY_WINDOW: usize = 256 * 1024;
 const RELAY_TICK: Duration = Duration::from_millis(2);
 
 /// One direction of a relayed raw stream: a BOUNDED pending byte buffer
-/// (capped at [`STREAM_RELAY_WINDOW`]) plus FIN bookkeeping. The pending
-/// buffer is the R8 bound and the backpressure point; the FIN flags
-/// ensure a clean stream end is only emitted AFTER every buffered byte
-/// has been accepted by the destination (never a FIN ahead of data).
+/// (capped at [`STREAM_RELAY_WINDOW`]) plus FIN/cancellation bookkeeping.
+/// The pending buffer is the R8 bound and the backpressure point; the FIN
+/// flags ensure a clean stream end is only emitted AFTER every buffered
+/// byte has been accepted by the destination (never a FIN ahead of data).
 #[derive(Default)]
 struct RelayHalf {
     /// Bytes read from the source but not yet accepted by the
@@ -496,29 +506,96 @@ struct RelayHalf {
     /// A clean FIN (`stream_send(.., &[], true)`) has been delivered to
     /// the destination — terminal for this direction.
     fin_sent: bool,
-    /// This direction is finished (FIN sent, or dropped on a reset/stop
-    /// for B3). No more reads or sends; the entry is reclaimed once both
-    /// directions are done.
+    /// This direction is finished (FIN sent, or dropped + cancellation
+    /// propagated on a reset/stop — B3). No more reads or sends; the entry
+    /// is reclaimed once both directions are done.
     done: bool,
+    /// B3: set to the application error code once a cancellation has been
+    /// PROPAGATED for this half — `Some(code)` after a peer RESET_STREAM
+    /// (`stream_recv` → `Err(StreamReset(code))`) was relayed onward as a
+    /// RESET_STREAM, or a peer STOP_SENDING (`stream_send` →
+    /// `Err(StreamStopped(code))`) was relayed back as a STOP_SENDING.
+    /// Records the propagated code (observability) and makes the
+    /// propagation idempotent: a half is only ever shut down once (it is
+    /// also `done` immediately, so it is not revisited, but this is the
+    /// explicit guard against any double-propagation).
+    reset_code: Option<u64>,
+}
+
+impl RelayHalf {
+    /// B3 — propagate a stream cancellation onto `peer` ONCE and mark this
+    /// half terminally done WITHOUT a clean FIN (the F-MD-4 smuggling
+    /// guard is kept: a truncated transfer must never look complete).
+    ///
+    /// `dir_for_peer` selects the shutdown direction (counterintuitive in
+    /// quiche — see `audit/quic/s16-quiche-api-notes.md`):
+    /// * [`quiche::Shutdown::Write`] ⇒ emits **RESET_STREAM** toward
+    ///   `peer` (used to relay a source RESET_STREAM onward to `dst`).
+    /// * [`quiche::Shutdown::Read`] ⇒ emits **STOP_SENDING** toward
+    ///   `peer` (used to relay a destination STOP_SENDING back to `src`).
+    ///
+    /// Idempotent: if this half already propagated a cancellation
+    /// (`reset_code.is_some()`) it is a no-op. `stream_shutdown` returning
+    /// `Err(Done)` (that side already reset/closed/unknown) is treated as
+    /// success; any other error is logged and swallowed — never a panic.
+    fn propagate_cancel(
+        &mut self,
+        peer: &mut quiche::Connection,
+        sid: u64,
+        code: u64,
+        dir_for_peer: quiche::Shutdown,
+        dir: Direction,
+    ) {
+        // Guard against double-propagation: only ever shut the peer down
+        // once for this half. (`done` already prevents a revisit, but a
+        // half can be reset in one direction while we are mid-pass; this
+        // is the explicit idempotency latch.)
+        if self.reset_code.is_some() {
+            self.pending.clear();
+            self.done = true;
+            return;
+        }
+        match peer.stream_shutdown(sid, dir_for_peer, code) {
+            // Propagated, or the peer side was already gone — either way
+            // the cancellation is (or will be) reflected to the peer.
+            Ok(()) | Err(quiche::Error::Done) => {}
+            Err(e) => {
+                // Do NOT panic: the half is failing anyway and the
+                // connection pump continues. Log for observability.
+                tracing::debug!(
+                    stream_id = sid, dir = dir.as_str(), error = %e,
+                    "Mode B B3: stream_shutdown while propagating cancellation \
+                     (swallowed; half still dropped without a FIN)"
+                );
+            }
+        }
+        // Smuggling guard (B2, kept): drop unsent bytes, terminate this
+        // half, NEVER a clean FIN.
+        self.pending.clear();
+        self.reset_code = Some(code);
+        self.done = true;
+    }
 }
 
 /// Bounded per-stream relay state (plan §2.2): identity stream-ID map, so
 /// the SAME `sid` indexes both connections. Holds the two directions'
 /// [`RelayHalf`]s. `c2u` = client→upstream, `u2c` = upstream→client.
 ///
-/// ## B3 (cancellation) handoff
+/// ## B3 (cancellation) propagation
 ///
-/// B3 will add RESET_STREAM / STOP_SENDING propagation. The shape it
-/// needs is already here: each direction is an independent [`RelayHalf`]
-/// keyed by `sid`. In B2, a `stream_recv`/`stream_send` that returns
-/// `Err(StreamReset)`/`Err(StreamStopped)` marks ONLY that half `done`
-/// and drops its pending bytes — it deliberately does **not** synthesise
-/// a clean FIN on the peer (that would deliver a truncated transfer as
-/// complete — the F-MD-4 smuggling bug). B3 replaces that drop with a
-/// `stream_shutdown(sid, Shutdown::Write|Read, code)` on the peer
-/// connection (see the `// B3:` markers in [`pump_dir`]); adding a
-/// `reset_code: Option<u64>` field to [`RelayHalf`] is the natural
-/// extension point.
+/// Each direction is an independent [`RelayHalf`] keyed by `sid`, so a
+/// cancellation tears down ONLY the affected unidirectional half — a bidi
+/// stream's other direction stays live. A `stream_recv` that returns
+/// `Err(StreamReset(code))` (the peer reset its send side) relays a
+/// RESET_STREAM onward to the destination via
+/// [`RelayHalf::propagate_cancel`] with [`quiche::Shutdown::Write`]; a
+/// `stream_send` that returns `Err(StreamStopped(code))` (the peer
+/// STOP_SENDING'd our send side) relays a STOP_SENDING back toward the
+/// source via [`RelayHalf::propagate_cancel`] with
+/// [`quiche::Shutdown::Read`]. The B2 smuggling guard is KEPT: the half is
+/// dropped (`pending` cleared, `done = true`) and **never** a clean FIN —
+/// a truncated transfer must not be presented as complete. See the
+/// `// B3:` arms in [`pump_dir`].
 #[derive(Default)]
 struct RawStreamState {
     /// client → upstream direction.
@@ -640,17 +717,24 @@ impl Direction {
 /// is `stream_send(sid, &[], true)` issued (one-shot, guarded by
 /// `fin_sent`). A FIN therefore can never overtake buffered data.
 ///
-/// ## Reset / stop (B3 boundary — NO reset→clean-FIN bug)
+/// ## Reset / stop (B3 — cancellation propagation, NO reset→clean-FIN bug)
 ///
-/// `Err(StreamReset)` from `stream_recv` (peer reset its send side) or
-/// `Err(StreamStopped)` from `stream_send` (peer STOP_SENDING'd our send
-/// side) terminate THIS direction by marking it `done` and dropping its
-/// pending bytes. B2 deliberately does **not** convert that to a clean
-/// FIN on the peer — doing so would present a truncated transfer as a
-/// complete one (the F-MD-4 smuggling bug). Proper RESET_STREAM /
-/// STOP_SENDING *propagation* to the peer connection is B3 (see the
-/// `// B3:` markers below). Any other error fails safe the same way
-/// (drop, no FIN).
+/// `Err(StreamReset(code))` from `stream_recv` (peer reset its send side)
+/// is RELAYED onward: a RESET_STREAM is emitted toward `dst` carrying the
+/// same `code` (`dst.stream_shutdown(sid, Shutdown::Write, code)`).
+/// `Err(StreamStopped(code))` from `stream_send` (peer STOP_SENDING'd our
+/// send side) is RELAYED back toward `src` (`src.stream_shutdown(sid,
+/// Shutdown::Read, code)`). Both then terminate THIS direction by marking
+/// it `done` and dropping pending bytes — and **never** synthesise a clean
+/// FIN, which would present a truncated transfer as complete (the F-MD-4
+/// smuggling bug). Only the affected unidirectional half is torn down (a
+/// bidi stream's reverse direction stays live). Propagation goes through
+/// [`RelayHalf::propagate_cancel`] (idempotent; `stream_shutdown` errors
+/// are logged + swallowed). A GENERIC (non-reset/stop) `stream_recv` /
+/// `stream_send` error fails safe — half dropped, no FIN — but does NOT
+/// synthesise a reset toward the peer (a generic fault is not a peer
+/// cancellation with a meaningful app code and usually accompanies a
+/// connection teardown).
 fn pump_dir(
     sid: u64,
     src: &mut quiche::Connection,
@@ -684,25 +768,36 @@ fn pump_dir(
             Err(quiche::Error::Done) => break,
             // B3: peer RESET_STREAM on its send side. The transfer is
             // TRUNCATED — must NOT become a clean FIN on `dst` (F-MD-4
-            // smuggling guard). B2 drops this direction; B3 will instead
-            // propagate `dst.stream_shutdown(sid, Shutdown::Write, code)`
-            // (RESET_STREAM upstream) carrying the peer's `code`.
+            // smuggling guard). PROPAGATE the reset onward: emit a
+            // RESET_STREAM toward `dst` carrying the SAME `code`
+            // (`Shutdown::Write` ⇒ RESET_STREAM), then drop this half
+            // without a FIN. Only THIS unidirectional half is torn down;
+            // the reverse-direction half on this bidi stream stays live.
             Err(quiche::Error::StreamReset(code)) => {
                 tracing::debug!(
                     stream_id = sid,
                     code,
                     dir = dir.as_str(),
-                    "Mode B B2: src RESET_STREAM; dropping relay half (B3 will \
-                     propagate the reset — never a clean FIN)"
+                    "Mode B B3: src RESET_STREAM; propagating RESET_STREAM to dst \
+                     (same code) — never a clean FIN"
                 );
-                half.pending.clear();
-                half.done = true;
+                half.propagate_cancel(dst, sid, code, quiche::Shutdown::Write, dir);
                 return;
             }
+            // Generic read error (NOT a peer RESET_STREAM). Fail safe:
+            // drop this half WITHOUT a clean FIN. We deliberately do NOT
+            // synthesise a reset toward `dst` here — a generic `stream_recv`
+            // fault is not a peer cancellation with a meaningful app code,
+            // and most such errors (`InvalidStreamState` on an
+            // already-closed/unknown stream, etc.) mean `dst` is already
+            // being torn down by the surrounding connection close. The
+            // smuggling guard (no FIN) is what matters; the catch-all
+            // reset/stop arms below cover the real cancellation cases.
             Err(e) => {
                 tracing::debug!(
                     stream_id = sid, dir = dir.as_str(), error = %e,
-                    "Mode B B2: src stream_recv error; dropping relay half"
+                    "Mode B B3: src stream_recv error (not a reset); dropping relay \
+                     half without a FIN (no synthetic reset for a generic fault)"
                 );
                 half.pending.clear();
                 half.done = true;
@@ -735,27 +830,35 @@ fn pump_dir(
                 );
                 break;
             }
-            // B3: peer STOP_SENDING on the stream we are writing. B2
-            // drops this direction (no FIN). B3 will instead propagate
-            // `src.stream_shutdown(sid, Shutdown::Read, code)`
-            // (STOP_SENDING toward the source) carrying the peer's
-            // `code`. NEVER a clean FIN (F-MD-4 smuggling guard).
+            // B3: peer STOP_SENDING on the stream we are writing. The peer
+            // asked us to stop producing on this direction. PROPAGATE it
+            // back toward `src`: emit a STOP_SENDING toward `src` carrying
+            // the SAME `code` (`Shutdown::Read` ⇒ STOP_SENDING) so the
+            // source stops producing, then drop this half without a FIN
+            // (smuggling guard). Only THIS unidirectional half is torn
+            // down; the reverse-direction half stays live.
             Err(quiche::Error::StreamStopped(code)) => {
                 tracing::debug!(
                     stream_id = sid,
                     code,
                     dir = dir.as_str(),
-                    "Mode B B2: dst STOP_SENDING; dropping relay half (B3 will \
-                     propagate the stop — never a clean FIN)"
+                    "Mode B B3: dst STOP_SENDING; propagating STOP_SENDING to src \
+                     (same code) — never a clean FIN"
                 );
-                half.pending.clear();
-                half.done = true;
+                half.propagate_cancel(src, sid, code, quiche::Shutdown::Read, dir);
                 return;
             }
+            // Generic write error (NOT a peer STOP_SENDING). Fail safe:
+            // drop this half WITHOUT a clean FIN, no synthetic reset (same
+            // rationale as the read-side generic arm above — a generic
+            // `stream_send` fault is not a peer cancellation with a
+            // meaningful code, and usually means `src`/the connection is
+            // already tearing down).
             Err(e) => {
                 tracing::debug!(
                     stream_id = sid, dir = dir.as_str(), error = %e,
-                    "Mode B B2: dst stream_send error; dropping relay half"
+                    "Mode B B3: dst stream_send error (not a stop); dropping relay \
+                     half without a FIN (no synthetic reset for a generic fault)"
                 );
                 half.pending.clear();
                 half.done = true;
@@ -792,20 +895,24 @@ fn pump_dir(
                     "Mode B B2: dst StreamLimit on FIN-only stream; retrying FIN next turn"
                 );
             }
-            // dst gone / stopped on the FIN itself — terminal anyway.
+            // B3: dst STOP_SENDING on the FIN itself — the peer cancelled
+            // its read side as we were about to clean-close. Propagate the
+            // STOP_SENDING back toward `src` (same code) so the source
+            // stops; the half is terminal anyway. (`pending` is already
+            // empty here — this arm is only reached once drained.)
             Err(quiche::Error::StreamStopped(code)) => {
                 tracing::debug!(
                     stream_id = sid,
                     code,
                     dir = dir.as_str(),
-                    "Mode B B2: dst STOP_SENDING on FIN; closing relay half"
+                    "Mode B B3: dst STOP_SENDING on FIN; propagating STOP_SENDING to src"
                 );
-                half.done = true;
+                half.propagate_cancel(src, sid, code, quiche::Shutdown::Read, dir);
             }
             Err(e) => {
                 tracing::debug!(
                     stream_id = sid, dir = dir.as_str(), error = %e,
-                    "Mode B B2: dst stream_send FIN error; closing relay half"
+                    "Mode B B3: dst stream_send FIN error; closing relay half"
                 );
                 half.done = true;
             }

@@ -160,7 +160,44 @@ spuriously re-resolved Cargo.lock (un-`--locked` cargo); not pushed. Lead reset 
 B1 tip, restored Cargo.lock, re-verified green, recommitted clean. Lesson captured;
 B3+ prompts mandate `--locked` + no-commit.
 
-### B3..B6 — << appended as each lands >>
+### B3 — cancellation propagation (F-MD-4 analog) — built, lead-checked, R13 verify pending
+Author = builder-1; lead build/test-checked; independent R13 verify next.
+
+**Implementation (`raw_proxy.rs`):** `RelayHalf` gains `reset_code: Option<u64>` (idempotency
+latch). New `propagate_cancel(peer, sid, code, peer_dir, dir)` helper: guard
+`if reset_code.is_some() || done { return }`; `peer.stream_shutdown(sid, peer_dir, code)`
+(Ok/Done ok, other errors swallowed — no panic); then `pending.clear()`,
+`reset_code=Some(code)`, `done=true` — **never a clean FIN** (smuggling guard kept).
+Three call sites in `pump_dir`: read-side `Err(StreamReset(code))` →
+`propagate_cancel(dst, .., Shutdown::Write, ..)` (RESET_STREAM onward); write-side
++ FIN-block `Err(StreamStopped(code))` → `propagate_cancel(src, .., Shutdown::Read, ..)`
+(STOP_SENDING back). Direction correct for both c2u and u2c (src/dst swap); only the
+affected unidirectional half is torn down. Generic-error arms keep B2 fail-safe (drop,
+no FIN, no synthesized reset) — documented.
+
+**Lead checks (independent, --locked):** build 0 / clippy -D 0 / fmt 0; B3 smoke
+(`s16_b3_reset_propagation_smoke.rs`) — backend's `stream_recv` returns
+`Err(StreamReset(0xBEEF))`, the exact client code, no clean FIN; B2 reset-not-FIN
+negative control still PASS; raw_proxy unit (fin_only) 2/2.
+
+**Test-correctness fix (verified legit, NOT a weakening):** the builder removed a
+`stream_finished()` secondary witness from `s16_b2_reset_not_fin.rs`. Confirmed against
+quiche 0.28 source (`lib.rs` `stream_finished`: `None => return true`): once B3 correctly
+resets+collects the upstream stream it becomes unknown → `stream_finished()` falsely
+reports a clean end. The genuine clean-FIN witness (`stream_recv` returning `fin==true`)
+is KEPT and is the real smuggling signal — negative control remains load-bearing.
+
+**R13 verify (independent, NEXT):** (a) in ×3 gate, (b) ≥50-iter isolation burst,
+(c) load-bearing negative control. Per [[h3h3-fmd4-no-r13-bc]]: confirm a STREAM-level
+RESET_STREAM carrying the code (backend `stream_recv`==`Err(StreamReset(code))`), NOT a
+stream dying from connection teardown; do not use `stream_finished()` as a witness.
+
+**WATCH (Phase 3, CF-SATURATION-1 class):** `s16_b2_multistream.rs` (B2 echo test, no
+reset path) flaked once on its 25s `RELAY_BUDGET` under 4-concurrent-wire-test 8-core
+saturation; passes isolated (0.7s) + on rerun. Pre-existing [[gate-saturation-test-fragility]];
+bump-don't-weaken if it recurs in the ×3 gate. Not a B3 issue.
+
+### B4..B6 — << appended as each lands >>
 
 ## Phase 3 — gates
 
