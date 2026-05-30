@@ -105,8 +105,46 @@ Builder: builder-2 (`55c8e453`). Verifier: independent (`2d98f941`).
   retain removed→unbounded/hang; router guard disabled→10>8).
 - Lead independent sanity: cap/admit/router unit + both wire tests pass.
 
-### B6 — wiring + metrics + 2 security proofs
-<pending>
+### B6 — wiring + metrics + 2 security proofs  ✅ VERIFIED
+Builder: builder-2 (`73847598` wiring/metrics + cap-knob fix). Verifier:
+independent (`acd0b947` security proofs).
+
+- **Config (lb-config)**: `QuicListenerConfig.raw_proxy: Option<RawQuicProxyConfig>`
+  {backend_addr, sni, backend_ca_path, dgram_queue_cap=1024,
+  max_relay_streams=256}, `#[serde(default)]` ⇒ H3 configs unchanged. Backend
+  leg always `verify_peer(true)` (CA path or default roots; no downgrade knob).
+- **Wiring (main.rs)**: `build_raw_quic_backend` → `QuicUpstreamPool`
+  (verify_peer + trust + ALPN-mirror + enable_dgram) → `RawBackend`; `spawn_quic`
+  registers `QuicModeBMetrics` + sets `RouterParams::raw_quic_backend` when
+  `raw_proxy` present. Mode B reachable end-to-end through the real entry point.
+- **R3**: `build_server_config(enable_datagrams = raw_backend.is_some())` ⇒
+  H3-terminate listeners pass false ⇒ advertised transport params byte-identical.
+- **Metrics (lb-observability)**: `QuicModeBMetrics` {connections gauge,
+  connections_total, datagrams_dropped_total, streams_active}, threaded at
+  run_dual_pump/actor-lifetime (RAII guard) — B4/B5 helper signatures untouched.
+- **R14/R12 cap-knob fix**: both config caps fully wired to the real bounds,
+  single-sourced (config → RawBackend → run_dual_pump → BoundedDgramQueue +
+  relay_streams/admit_or_refuse); consts kept as documented defaults; B5 test
+  call-sites pass the const (byte-identical behaviour).
+
+#### Security proofs (by-construction bar)
+- **TWO-CONNECTIONS** (s19_b6_two_connections): `client_scid != upstream_scid`,
+  distinct trace_ids, ALPN mirrored, + load-bearing independence witness
+  (backend's observed inbound SCID == upstream_scid, NOT derived from client ⇒
+  not a bridge). Structural 1:1: `quiche::accept_with_retry` (router.rs:351) +
+  `dial_dedicated` (quic_pool.rs:412) = two distinct `quiche::Connection` in one
+  actor — cannot be fewer than two.
+- **0-RTT-REJECTION** (s19_b6_zero_rtt_rejection): by construction —
+  `enable_early_data` absent from all non-test config ⇒ server cannot issue
+  early-data tickets / accept 0-RTT. Wire — a WILLING client resumes
+  (`is_resumed=true`) + attempts early data; observed `is_in_early_data=false`,
+  no pre-handshake server data, completes via full 1-RTT, early bytes delivered
+  only after. `ZeroRttReplayGuard` = defence-in-depth (untouched).
+- **Metrics non-vacuous** (s19_b6_metrics_nonvacuous): connections_total≥1,
+  gauge returns to 0 (RAII), datagrams_dropped=128>0 under flood, streams_active
+  moves off 0 — guards the stub-metric trap.
+- R3 re-confirmed (h3_h3 22/22, listener_lifecycle 6/6); B5 re-confirmed
+  (cap unit 10/10) under the const→param cap wiring. Lead sanity: all pass.
 
 ## Phase 3 — gates + promote
 <pending>
