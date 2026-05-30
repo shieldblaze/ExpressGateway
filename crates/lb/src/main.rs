@@ -65,7 +65,9 @@ use lb_l7::h2_security::H2SecurityThresholds;
 use lb_l7::upstream::{RoundRobinUpstreams, UpstreamBackend, UpstreamProto};
 use lb_l7::ws_proxy::{WsConfig, WsProxy};
 use lb_observability::{MetricsRegistry, admin_http, http_latency_buckets};
-use lb_quic::{PassthroughListener, PassthroughParams, QuicListener, QuicListenerParams};
+use lb_quic::{
+    PassthroughListener, PassthroughParams, QuicListener, QuicListenerParams, RawBackend,
+};
 use lb_security::{
     ConnGate, HooksBundle, SecurityHooks, SmuggleMode, TicketRotator, Watchdog, WatchdogConfig,
 };
@@ -476,6 +478,10 @@ fn split_host_port(s: &str) -> anyhow::Result<(&str, u16)> {
 fn quic_listener_params_from_config(
     bind_addr: SocketAddr,
     cfg: &QuicListenerConfig,
+    // SESSION 19 / Mode B (B6): the resolved raw backend + metric handles
+    // when `cfg.raw_proxy` is configured; `None` ⇒ H3-terminate (R3).
+    raw_backend: Option<RawBackend>,
+    quic_modeb_metrics: Option<lb_observability::QuicModeBMetrics>,
 ) -> QuicListenerParams {
     let mut params = QuicListenerParams::new(
         bind_addr,
@@ -485,6 +491,19 @@ fn quic_listener_params_from_config(
     );
     params.max_idle_timeout = Duration::from_millis(cfg.max_idle_timeout_ms);
     params.max_recv_udp_payload_size = cfg.max_recv_udp_payload_size;
+    // SESSION 19 / Mode B (B6): flip to Mode B ONLY when a raw backend was
+    // built. `with_raw_backend` sets `raw_quic_backend`, the DATAGRAM cap,
+    // and the metrics, and is the ONLY thing that enables datagrams on the
+    // client-facing config. Absent ⇒ params are byte-identical H3 (R3).
+    if let Some(backend) = raw_backend {
+        params = params.with_raw_backend(
+            backend,
+            cfg.raw_proxy
+                .as_ref()
+                .map_or(1_024, |rp| rp.dgram_queue_cap),
+            quic_modeb_metrics,
+        );
+    }
     params
 }
 
@@ -792,6 +811,79 @@ fn build_h3_upstream_pool(
     )))
 }
 
+/// SESSION 19 / Mode B (B6): build the [`RawBackend`] for a Mode-B
+/// (terminate-and-re-originate) QUIC listener from its
+/// `[listeners.quic.raw_proxy]` block.
+///
+/// Constructs a dedicated [`QuicUpstreamPool`] whose `config_factory`
+/// mirrors the upstream-leg requirements:
+/// * `verify_peer(true)` ALWAYS (peer-cert verification is never silently
+///   disabled in Mode B — see [`lb_config::RawQuicProxyConfig::backend_ca_path`]).
+///   When `backend_ca_path` is set, the bundle is loaded via
+///   `load_verify_locations_from_file`; when absent, `BoringSSL`'s built-in
+///   default trust roots are used. Startup fails clearly if a configured CA
+///   path cannot be loaded.
+/// * the default upstream ALPN tokens (the actual handshake ALPN is
+///   overridden per-dial by [`QuicUpstreamPool::dial_dedicated`] to mirror
+///   the client's negotiated protocol — same as the H3 pool does).
+/// * `enable_dgram(true, cap, cap)` so the re-originated upstream
+///   negotiates QUIC DATAGRAM (RFC 9221) support for the B4 relay.
+///
+/// The returned [`RawBackend`] carries the pool, the parsed backend
+/// `SocketAddr`, and the SNI; it is cloned into every per-connection
+/// actor. An unparseable `backend_addr` fails startup (no silent
+/// Mode-B-disable).
+fn build_raw_quic_backend(cfg: &lb_config::RawQuicProxyConfig) -> anyhow::Result<RawBackend> {
+    let addr: SocketAddr = cfg.backend_addr.parse().with_context(|| {
+        format!(
+            "invalid Mode B raw_proxy backend_addr: {}",
+            cfg.backend_addr
+        )
+    })?;
+    let ca_path = cfg.backend_ca_path.clone();
+    let dgram_cap = cfg.dgram_queue_cap;
+    let factory: Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> =
+        Arc::new(move || {
+            let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
+            // Default ALPN; dial_dedicated overrides per-connection to
+            // mirror the client's negotiated protocol.
+            config.set_application_protos(lb_io::quic_pool::UPSTREAM_H3_ALPN_PROTOS)?;
+            // Backend-trust: verify_peer is ALWAYS on (documented v1
+            // behaviour — never silently disabled). With a CA bundle, load
+            // it; without one, fall back to BoringSSL default roots.
+            if let Some(path) = ca_path.as_deref() {
+                config.load_verify_locations_from_file(path)?;
+            }
+            config.verify_peer(true);
+            config.set_max_idle_timeout(30_000);
+            config.set_max_recv_udp_payload_size(1_350);
+            config.set_max_send_udp_payload_size(1_350);
+            config.set_initial_max_data(10 * 1024 * 1024);
+            config.set_initial_max_stream_data_bidi_local(1024 * 1024);
+            config.set_initial_max_stream_data_bidi_remote(1024 * 1024);
+            config.set_initial_max_stream_data_uni(1024 * 1024);
+            config.set_initial_max_streams_bidi(64);
+            config.set_initial_max_streams_uni(64);
+            config.set_disable_active_migration(true);
+            // B4: negotiate QUIC DATAGRAM support on the upstream leg.
+            config.enable_dgram(true, dgram_cap, dgram_cap);
+            Ok(config)
+        });
+    let pool = QuicUpstreamPool::new(QuicPoolConfig::default(), factory);
+    Ok(RawBackend {
+        pool,
+        addr,
+        sni: cfg.sni.clone(),
+        // B6 (R14/R12): single-source the relay's two memory bounds from
+        // the operator config so the same value controls the wire-advertised
+        // queue length AND the relay's own `BoundedDgramQueue` (B4) /
+        // `admit_or_refuse` ceiling (B5). The config serde defaults equal
+        // `lb_quic::{DGRAM_QUEUE_CAP, MAX_RELAY_STREAMS}` (1024 / 256).
+        dgram_queue_cap: cfg.dgram_queue_cap,
+        max_relay_streams: cfg.max_relay_streams,
+    })
+}
+
 /// Build a [`H1Proxy`] from the listener's resolved upstream backends
 /// and optional H2/H3 upstream pools.
 ///
@@ -999,6 +1091,7 @@ fn merge_h2_security(cfg: Option<&H2SecurityConfig>) -> H2SecurityThresholds {
 /// listener-token cancel.
 async fn spawn_quic(
     listener_cfg: &lb_config::ListenerConfig,
+    metrics: &Arc<MetricsRegistry>,
     shutdown_token: CancellationToken,
 ) -> anyhow::Result<QuicListener> {
     let Some(quic_cfg) = listener_cfg.quic.as_ref() else {
@@ -1011,17 +1104,51 @@ async fn spawn_quic(
         .address
         .parse()
         .with_context(|| format!("invalid listen address: {}", listener_cfg.address))?;
-    let params = quic_listener_params_from_config(bind_addr, quic_cfg);
+
+    // SESSION 19 / Mode B (B6): when a `[listeners.quic.raw_proxy]` block
+    // is present, build the raw-QUIC re-origination backend + register the
+    // quic_modeb_* metric family. Absent ⇒ both are `None` and the
+    // listener runs H3-terminate byte-identically (R3).
+    let (raw_backend, modeb_metrics) = match quic_cfg.raw_proxy.as_ref() {
+        Some(rp) => {
+            let backend = build_raw_quic_backend(rp)
+                .with_context(|| format!("building Mode B raw_proxy backend for {bind_addr}"))?;
+            let m = lb_observability::QuicModeBMetrics::register(metrics)
+                .context("registering quic_modeb_* metrics")?;
+            (Some(backend), Some(m))
+        }
+        None => (None, None),
+    };
+    let mode_b = raw_backend.is_some();
+
+    let params = quic_listener_params_from_config(bind_addr, quic_cfg, raw_backend, modeb_metrics);
     let listener = QuicListener::spawn(params, shutdown_token)
         .await
         .with_context(|| format!("QUIC listener bind failed for {bind_addr}"))?;
-    tracing::info!(
-        address = %listener.local_addr(),
-        protocol = "quic",
-        cert = %quic_cfg.cert_path,
-        retry_secret = %quic_cfg.retry_secret_path,
-        "QUIC listener started"
-    );
+    if mode_b {
+        if let Some(rp) = quic_cfg.raw_proxy.as_ref() {
+            tracing::info!(
+                address = %listener.local_addr(),
+                protocol = "quic",
+                mode = "B",
+                backend = %rp.backend_addr,
+                sni = %rp.sni,
+                dgram_queue_cap = rp.dgram_queue_cap,
+                max_relay_streams = rp.max_relay_streams,
+                backend_verify = "verify_peer(true)",
+                backend_ca = rp.backend_ca_path.as_deref().unwrap_or("system-default-roots"),
+                "Mode B raw-QUIC proxy listener started"
+            );
+        }
+    } else {
+        tracing::info!(
+            address = %listener.local_addr(),
+            protocol = "quic",
+            cert = %quic_cfg.cert_path,
+            retry_secret = %quic_cfg.retry_secret_path,
+            "QUIC listener started"
+        );
+    }
     Ok(listener)
 }
 
@@ -1901,7 +2028,8 @@ async fn async_main() -> anyhow::Result<()> {
 
     for listener_cfg in &config.listeners {
         if listener_cfg.protocol == "quic" {
-            quic_listeners.push(spawn_quic(listener_cfg, shutdown.token().child_token()).await?);
+            quic_listeners
+                .push(spawn_quic(listener_cfg, &metrics, shutdown.token().child_token()).await?);
             continue;
         }
         if listener_cfg.backends.is_empty() {
@@ -3078,6 +3206,84 @@ mod tests {
         let a = h3_backend("127.0.0.1:4001", None, false);
         let b = h3_backend("127.0.0.1:4002", None, false);
         build_h3_upstream_pool(&[a, b]).unwrap();
+    }
+
+    // ── SESSION 19 / Mode B (B6) reachability: config → params wiring ──
+    //
+    // Proves the binary's config→`QuicListenerParams` path actually flips
+    // to Mode B when (and only when) a `[listeners.quic.raw_proxy]` block
+    // is present — i.e. Mode B is reachable end-to-end through the real
+    // `spawn_quic` helper chain. NOT a security proof (those — two-conns
+    // and 0-RTT — are the verifier's wire tests).
+
+    fn quic_cfg_with_raw_proxy(raw: Option<lb_config::RawQuicProxyConfig>) -> QuicListenerConfig {
+        QuicListenerConfig {
+            cert_path: "/tmp/eg-test-cert.pem".into(),
+            key_path: "/tmp/eg-test-key.pem".into(),
+            retry_secret_path: "/tmp/eg-test-retry.secret".into(),
+            max_idle_timeout_ms: 30_000,
+            max_recv_udp_payload_size: 1_350,
+            raw_proxy: raw,
+        }
+    }
+
+    fn raw_proxy_block() -> lb_config::RawQuicProxyConfig {
+        lb_config::RawQuicProxyConfig {
+            backend_addr: "127.0.0.1:4443".into(),
+            sni: "backend.test".into(),
+            backend_ca_path: None,
+            dgram_queue_cap: 512,
+            max_relay_streams: 128,
+        }
+    }
+
+    #[test]
+    fn raw_proxy_present_builds_mode_b_params() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let rp = raw_proxy_block();
+        let cfg = quic_cfg_with_raw_proxy(Some(rp.clone()));
+        // The same backend-build the binary does at spawn.
+        let backend = build_raw_quic_backend(&rp).expect("build raw backend");
+        let params = quic_listener_params_from_config(bind, &cfg, Some(backend), None);
+        assert!(
+            params.raw_quic_backend.is_some(),
+            "a raw_proxy block must produce a Mode-B listener (raw_quic_backend = Some)"
+        );
+        assert_eq!(
+            params.dgram_queue_cap, 512,
+            "the DATAGRAM cap must come from the raw_proxy block"
+        );
+    }
+
+    #[test]
+    fn no_raw_proxy_keeps_h3_termination_params() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let cfg = quic_cfg_with_raw_proxy(None);
+        // R3: without a raw_proxy block, no backend is built, so the
+        // params carry `raw_quic_backend = None` — the H3-termination path,
+        // which makes `build_server_config`'s `enable_datagrams = false`
+        // (transport params byte-identical to today).
+        let params = quic_listener_params_from_config(bind, &cfg, None, None);
+        assert!(
+            params.raw_quic_backend.is_none(),
+            "R3: a config without raw_proxy must stay on the H3-terminate path (raw_quic_backend = None)"
+        );
+        assert!(
+            params.quic_modeb_metrics.is_none(),
+            "R3: no Mode-B metrics on the H3 path"
+        );
+    }
+
+    #[test]
+    fn build_raw_quic_backend_rejects_unparseable_addr() {
+        let mut rp = raw_proxy_block();
+        rp.backend_addr = "not-an-addr".into();
+        let err = build_raw_quic_backend(&rp).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("invalid Mode B raw_proxy backend_addr"),
+            "expected a clear parse error (no silent Mode-B disable), got: {err}"
+        );
     }
 
     // CODE-2-03 Wave 2c proof: the three lifecycle signal kinds render

@@ -580,6 +580,10 @@ async fn s19_b5_stream_flood_bounded_table_completes_all() {
         pool,
         addr: backend_addr,
         sni: TEST_SNI.to_string(),
+        // B6 (R14/R12): caps now carried on RawBackend; the const
+        // defaults keep these tests byte-identical in behaviour.
+        dgram_queue_cap: lb_quic::DGRAM_QUEUE_CAP,
+        max_relay_streams: lb_quic::MAX_RELAY_STREAMS,
     };
     let runtime = lb_io::Runtime::new();
     let tcp_pool = TcpPool::new(PoolConfig::default(), BackendSockOpts::default(), runtime);
@@ -593,6 +597,7 @@ async fn s19_b5_stream_flood_bounded_table_completes_all() {
         h3_backend: None,
         h2_backend: None,
         raw_quic_backend: Some(raw_backend),
+        quic_modeb_metrics: None,
     };
 
     // 8) Run the actor; wait for every stream to complete, then cancel.

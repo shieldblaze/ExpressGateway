@@ -915,6 +915,22 @@ pub struct QuicListenerConfig {
     /// and QUIC overhead). Must be at least 1200 per RFC 9000 §14.
     #[serde(default = "default_quic_recv_udp_payload")]
     pub max_recv_udp_payload_size: u64,
+    /// SESSION 16 / Mode B (terminate-and-re-originate) raw-QUIC proxy.
+    ///
+    /// **Absent (the default) ⇒ H3-terminate exactly as today (R3).** When
+    /// this block is present the QUIC listener instead runs Mode B: it
+    /// terminates the client QUIC connection (reusing the full
+    /// accept/Retry/0-RTT machinery) and re-originates a fresh, dedicated
+    /// upstream QUIC connection, relaying raw streams + datagrams between
+    /// the two. Two distinct `quiche::Connection`s, never a CID bridge.
+    ///
+    /// Because the field is `#[serde(default)]` (deserialises to `None`
+    /// when omitted) every existing config parses byte-identically and the
+    /// listener's advertised transport parameters are unchanged: Mode-B
+    /// only listeners enable QUIC DATAGRAM support and set the raw backend
+    /// (see `lb_quic::QuicListenerParams`).
+    #[serde(default)]
+    pub raw_proxy: Option<RawQuicProxyConfig>,
 }
 
 const fn default_quic_idle_timeout_ms() -> u64 {
@@ -923,6 +939,72 @@ const fn default_quic_idle_timeout_ms() -> u64 {
 
 const fn default_quic_recv_udp_payload() -> u64 {
     1_350
+}
+
+/// SESSION 16 / Mode B raw-QUIC proxy backend configuration (B6).
+///
+/// Present under a `[listeners.quic.raw_proxy]` block, this switches the
+/// QUIC listener from H3-termination to terminate-and-re-originate Mode B
+/// and names the single upstream QUIC backend to re-originate to. All caps
+/// are R7 pre-auth (apply before the client is authenticated), so the
+/// defaults are conservative, industry-safe bounds — documented per helper
+/// below.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RawQuicProxyConfig {
+    /// Resolved upstream QUIC backend address (`host:port`) to
+    /// re-originate every terminated client connection to. Parsed to a
+    /// `SocketAddr` by the binary at spawn; an unparseable value fails
+    /// startup with a clear error rather than silently disabling Mode B.
+    pub backend_addr: String,
+    /// SNI presented to the upstream on the re-originated TLS handshake.
+    pub sni: String,
+    /// Optional PEM CA bundle used to verify the upstream backend's TLS
+    /// certificate on the re-originated handshake.
+    ///
+    /// ## Backend-trust v1 behaviour (documented; never silently disabled)
+    ///
+    /// * **Set** ⇒ the upstream-leg `quiche::Config` loads this bundle via
+    ///   `load_verify_locations_from_file` and engages `verify_peer(true)`.
+    ///   The re-originated handshake is rejected unless the backend cert
+    ///   chains to this CA.
+    /// * **Absent** ⇒ `verify_peer(true)` is STILL engaged, relying on
+    ///   `BoringSSL`'s built-in/system default trust roots. Verification is
+    ///   NOT disabled. (To proxy to a backend with a private CA, set this
+    ///   path; there is no config knob to turn verification off in Mode B —
+    ///   that would be an undocumented downgrade and is intentionally
+    ///   absent.)
+    #[serde(default)]
+    pub backend_ca_path: Option<String>,
+    /// B4 — per-direction bounded DATAGRAM relay queue capacity (count of
+    /// queued datagrams), and the DATAGRAM recv/send queue length
+    /// advertised to both peers via `enable_dgram(true, cap, cap)`.
+    /// Default `1024` (matches quiche's own recv/send-queue default and
+    /// the `lb_quic::raw_proxy` `DGRAM_QUEUE_CAP`). R7 pre-auth bound:
+    /// large enough to absorb a normal burst, small enough that a flooding
+    /// peer cannot grow relay memory without bound (over-cap is
+    /// drop-newest).
+    #[serde(default = "default_raw_proxy_dgram_queue_cap")]
+    pub dgram_queue_cap: usize,
+    /// B5 — explicit, defense-in-depth ceiling on the per-connection relay
+    /// stream table size. Default `256` (matches the `lb_quic::raw_proxy`
+    /// `MAX_RELAY_STREAMS`): comfortably above the negotiated concurrent
+    /// stream grant (~32) yet keeps the worst-case per-connection relay
+    /// memory a hard constant independent of a mis-set `max_streams`. R7
+    /// pre-auth bound.
+    #[serde(default = "default_raw_proxy_max_relay_streams")]
+    pub max_relay_streams: usize,
+}
+
+/// Mode B B4 default DATAGRAM relay queue capacity. `1024` mirrors
+/// `lb_quic::raw_proxy::DGRAM_QUEUE_CAP` + quiche's recv/send-queue default.
+const fn default_raw_proxy_dgram_queue_cap() -> usize {
+    1_024
+}
+
+/// Mode B B5 default relay stream-table ceiling. `256` mirrors
+/// `lb_quic::raw_proxy::MAX_RELAY_STREAMS` (defense-in-depth bound).
+const fn default_raw_proxy_max_relay_streams() -> usize {
+    256
 }
 
 /// S15 A2-8: Mode A QUIC passthrough listener configuration.
@@ -1994,6 +2076,7 @@ protocol = "h1"
                     retry_secret_path: "/z".into(),
                     max_idle_timeout_ms: 30_000,
                     max_recv_udp_payload_size: 500,
+                    raw_proxy: None,
                 }),
                 alt_svc: None,
                 http: None,

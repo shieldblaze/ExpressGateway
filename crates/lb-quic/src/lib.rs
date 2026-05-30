@@ -184,7 +184,9 @@ pub use listener::{QuicListener, QuicListenerParams};
 // root so the verifier's wire test + the B6 binary wiring import them
 // without reaching into `lb_quic::raw_proxy::*`.
 #[cfg(feature = "quic-terminate")]
-pub use raw_proxy::{RawBackend, RawProxyOutcome, run_raw_proxy_actor};
+pub use raw_proxy::{
+    DGRAM_QUEUE_CAP, MAX_RELAY_STREAMS, RawBackend, RawProxyOutcome, run_raw_proxy_actor,
+};
 #[cfg(feature = "quic-terminate")]
 pub use router::{RouterHandle, RouterParams, spawn as spawn_router};
 

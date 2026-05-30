@@ -127,6 +127,21 @@ pub struct RawBackend {
     pub addr: std::net::SocketAddr,
     /// SNI presented to the upstream on the re-originated handshake.
     pub sni: String,
+    /// B4 — per-direction bounded DATAGRAM relay queue capacity (count of
+    /// queued datagrams). Operator-configurable via
+    /// `lb_config::RawQuicProxyConfig::dgram_queue_cap`; the binary passes
+    /// the configured value here so the relay's [`BoundedDgramQueue`]
+    /// bound is single-sourced with the `enable_dgram(true, cap, cap)`
+    /// queue length advertised on the wire. Defaults to [`DGRAM_QUEUE_CAP`]
+    /// (the config helper returns the same constant).
+    pub dgram_queue_cap: usize,
+    /// B5 — explicit, defense-in-depth ceiling on the per-connection relay
+    /// stream table size. Operator-configurable via
+    /// `lb_config::RawQuicProxyConfig::max_relay_streams`; passed here so
+    /// [`relay_streams`]/[`admit_or_refuse`] gate on the configured value
+    /// (single-sourced, not the bare const). Defaults to
+    /// [`MAX_RELAY_STREAMS`] (the config helper returns the same constant).
+    pub max_relay_streams: usize,
 }
 
 impl std::fmt::Debug for RawBackend {
@@ -134,6 +149,8 @@ impl std::fmt::Debug for RawBackend {
         f.debug_struct("RawBackend")
             .field("addr", &self.addr)
             .field("sni", &self.sni)
+            .field("dgram_queue_cap", &self.dgram_queue_cap)
+            .field("max_relay_streams", &self.max_relay_streams)
             .finish_non_exhaustive()
     }
 }
@@ -286,9 +303,36 @@ async fn run_raw_proxy_actor_inner(mut params: ActorParams) -> std::io::Result<R
         negotiated_alpn,
     };
 
+    // B6 metrics — the two-connection relay is now ESTABLISHED. Bump the
+    // cumulative counter once and the active gauge up; the gauge is
+    // decremented on EVERY return path below (RAII-style `ActiveConnGuard`)
+    // so a graceful close, an early upstream/relay fault, or a cancel all
+    // restore the gauge. The increments live HERE at the actor lifetime —
+    // the B4/B5 relay helpers are never given the metrics (their
+    // signatures are unchanged). `None` (tests / H3 path) ⇒ no-op.
+    let modeb_metrics = params.quic_modeb_metrics.clone();
+    if let Some(m) = modeb_metrics.as_ref() {
+        m.connections_total.inc();
+    }
+    let _active_guard = ActiveConnGuard::new(modeb_metrics.clone());
+
     // ---- Phase 2: run BOTH pumps + the B2 bidirectional raw-STREAM
     // relay concurrently until either leg closes / idle-times-out.
-    run_dual_pump(&mut params, &mut upstream, &mut out_buf).await;
+    //
+    // B6 (R14/R12): the relay's two memory bounds are single-sourced from
+    // the operator config via `backend` — the B4 datagram-queue cap and the
+    // B5 relay-stream-table cap. Defaults equal the `DGRAM_QUEUE_CAP` /
+    // `MAX_RELAY_STREAMS` consts (the config helpers return them), so an
+    // unconfigured deployment behaves exactly as before.
+    run_dual_pump(
+        &mut params,
+        &mut upstream,
+        &mut out_buf,
+        modeb_metrics.as_ref(),
+        backend.dgram_queue_cap,
+        backend.max_relay_streams,
+    )
+    .await;
 
     // Either side closed / idle-timed-out: close the other gracefully.
     // (Both calls are idempotent — a no-op if the leg is already
@@ -297,6 +341,34 @@ async fn run_raw_proxy_actor_inner(mut params: ActorParams) -> std::io::Result<R
     graceful_close(&mut upstream.conn, &upstream.socket, &mut out_buf).await;
 
     Ok(outcome)
+}
+
+/// B6 — RAII guard for the `quic_modeb_connections` active gauge. Bumps
+/// the gauge up on construction (one established two-conn relay) and back
+/// down on `Drop`, so EVERY exit from [`run_raw_proxy_actor_inner`]'s
+/// Phase 2 — graceful close, an upstream/relay error, a panic-unwind, or a
+/// cancel — restores the gauge without scattering `dec()` calls across the
+/// return paths. `None` (tests / no registry) ⇒ a no-op guard.
+struct ActiveConnGuard {
+    gauge: Option<lb_observability::IntGauge>,
+}
+
+impl ActiveConnGuard {
+    fn new(metrics: Option<lb_observability::QuicModeBMetrics>) -> Self {
+        let gauge = metrics.map(|m| m.connections);
+        if let Some(g) = gauge.as_ref() {
+            g.inc();
+        }
+        Self { gauge }
+    }
+}
+
+impl Drop for ActiveConnGuard {
+    fn drop(&mut self) {
+        if let Some(g) = self.gauge.as_ref() {
+            g.dec();
+        }
+    }
 }
 
 /// Phase 1 pump: drive ONLY the client-facing connection until it is
@@ -384,7 +456,24 @@ async fn drive_client_to_established(
 /// ([`STREAM_RELAY_WINDOW`]) still caps in-flight bytes — we merely poll
 /// the gate more often. When idle (no relay state) the loop parks on the
 /// real quiche timeout, so there is no busy-spin.
-async fn run_dual_pump(params: &mut ActorParams, upstream: &mut DedicatedQuic, out_buf: &mut [u8]) {
+async fn run_dual_pump(
+    params: &mut ActorParams,
+    upstream: &mut DedicatedQuic,
+    out_buf: &mut [u8],
+    // B6: optional `quic_modeb_*` handles. The relay bumps them ONLY here
+    // at the per-pass aggregate level (datagrams-dropped delta +
+    // streams-active gauge); the B4 datagram helper + `pump_dir` are never
+    // given the metrics, so `relay_datagrams`/`pump_dir` keep their existing
+    // signatures + tests. `None` ⇒ every update is a no-op.
+    metrics: Option<&lb_observability::QuicModeBMetrics>,
+    // B6 (R14/R12): operator-configured B4 datagram-queue cap, single-
+    // sourced from `RawBackend`/`lb_config`. Defaults to `DGRAM_QUEUE_CAP`.
+    dgram_queue_cap: usize,
+    // B6 (R14/R12): operator-configured B5 relay-stream-table cap, single-
+    // sourced from `RawBackend`/`lb_config`. Defaults to `MAX_RELAY_STREAMS`.
+    // Threaded into `relay_streams` → `admit_or_refuse`.
+    max_relay_streams: usize,
+) {
     // The upstream recv needs its own inbound buffer (the client side
     // uses owned `Vec`s forwarded by the router; the upstream side
     // recv_from's straight off its dedicated socket).
@@ -401,8 +490,14 @@ async fn run_dual_pump(params: &mut ActorParams, upstream: &mut DedicatedQuic, o
     // reset, no ordering guarantee, so they live OUTSIDE the stream table
     // and never touch stream state. `c2u_q` carries client→upstream
     // datagrams, `u2c_q` upstream→client.
-    let mut c2u_q = BoundedDgramQueue::new(DGRAM_QUEUE_CAP);
-    let mut u2c_q = BoundedDgramQueue::new(DGRAM_QUEUE_CAP);
+    let mut c2u_q = BoundedDgramQueue::new(dgram_queue_cap);
+    let mut u2c_q = BoundedDgramQueue::new(dgram_queue_cap);
+
+    // B6: last observed total drop count across both queues, so we can
+    // surface only the DELTA into the cumulative `quic_modeb_datagrams_\
+    // dropped_total` counter each pass (the queues own a monotonic
+    // per-lifetime `dropped` accessor; the counter is process-cumulative).
+    let mut last_dropped_total: u64 = 0;
 
     loop {
         // Drain any queued outbound on both legs first (parity with the
@@ -474,7 +569,12 @@ async fn run_dual_pump(params: &mut ActorParams, upstream: &mut DedicatedQuic, o
         // readable data AND previously-backpressured pending bytes make
         // progress. The follow-up `drain_conn_send` at the top of the
         // next turn ships whatever this relay handed to quiche.
-        relay_streams(&mut params.conn, &mut upstream.conn, &mut streams);
+        relay_streams(
+            &mut params.conn,
+            &mut upstream.conn,
+            &mut streams,
+            max_relay_streams,
+        );
 
         // B4 relay: forward unreliable DATAGRAMs (RFC 9221) verbatim both
         // directions through the two bounded drop-newest queues. Runs
@@ -486,6 +586,26 @@ async fn run_dual_pump(params: &mut ActorParams, upstream: &mut DedicatedQuic, o
         // and is retried next wake. The follow-up `drain_conn_send` at the
         // top of the next turn ships whatever this relay handed to quiche.
         relay_datagrams(&mut params.conn, &mut upstream.conn, &mut c2u_q, &mut u2c_q);
+
+        // B6 metrics (per-pass aggregate; relay helpers untouched):
+        // * `streams_active` ← the B5 relay-table size after this pass
+        //   (post-`streams.retain` reclamation inside `relay_streams`).
+        // * `datagrams_dropped_total` ← the DELTA of both queues' B4
+        //   drop-newest counters since last pass (monotonic → non-negative
+        //   delta; `saturating_*` so a `usize`/`i64`/`u64` boundary can
+        //   never panic under the crate's no-panic bar).
+        if let Some(m) = metrics {
+            #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+            let table_len = i64::try_from(streams.len()).unwrap_or(i64::MAX);
+            m.streams_active.set(table_len);
+
+            let dropped_total = c2u_q.dropped().saturating_add(u2c_q.dropped());
+            let delta = dropped_total.saturating_sub(last_dropped_total);
+            if delta > 0 {
+                m.datagrams_dropped_total.inc_by(delta);
+                last_dropped_total = dropped_total;
+            }
+        }
     }
 }
 
@@ -539,7 +659,16 @@ const STREAM_RELAY_WINDOW: usize = 256 * 1024;
 /// while keeping the absolute memory ceiling sane (128 MiB worst-case,
 /// itself never reached because completed streams are reclaimed). An R7
 /// pre-auth-safe, conservatively-sized constant.
-const MAX_RELAY_STREAMS: usize = 256;
+///
+/// B6 (R14/R12): this is the **canonical DEFAULT** for the
+/// operator-configurable cap. The runtime value is single-sourced from
+/// [`RawBackend::max_relay_streams`] (set from
+/// `lb_config::RawQuicProxyConfig::max_relay_streams`, whose serde default
+/// helper returns this same `256`); [`relay_streams`]/[`admit_or_refuse`]
+/// gate on that param, NOT this const directly. It is `pub` so the params
+/// layer can use it as the documented fallback default and tests can pin
+/// the value.
+pub const MAX_RELAY_STREAMS: usize = 256;
 
 /// Short poll interval used while ANY stream is mid-transfer, so a
 /// partial/backpressured copy resumes without waiting out quiche's idle
@@ -686,29 +815,36 @@ impl RawStreamState {
 ///   destination frees window.
 ///
 /// `readable()` is a snapshot, so it is re-collected here every pass.
+///
+/// `max_relay_streams` is the B5 per-connection table ceiling, single-
+/// sourced from the operator config ([`RawBackend::max_relay_streams`] →
+/// `lb_config`); it defaults to [`MAX_RELAY_STREAMS`]. Threaded into
+/// [`admit_or_refuse`].
 fn relay_streams(
     client: &mut quiche::Connection,
     upstream: &mut quiche::Connection,
     streams: &mut HashMap<u64, RawStreamState>,
+    max_relay_streams: usize,
 ) {
     // Union of readable streams on both legs + every sid with live relay
     // state (pending bytes / deferred FIN). De-dup via the state map: a
     // readable sid that is not yet tracked gets a default entry; an
     // already-tracked sid is revisited regardless of readability.
     //
-    // B5 — explicit per-stream table cap ([`MAX_RELAY_STREAMS`],
-    // defense-in-depth): a NEW readable sid is admitted only while the table
-    // is below the cap; an already-tracked sid is ALWAYS re-processed
-    // (correctness — never drop a live stream mid-transfer). Over-cap is only
-    // reachable if the quiche `max_streams` grant is mis-configured far above
-    // the cap (a conforming client can have ≤ ~32 streams open — see
-    // [`MAX_RELAY_STREAMS`]); when it happens we refuse to TRACK the new sid
-    // (fail-safe, bounded) and log rate-aware, rather than grow without bound.
+    // B5 — explicit per-stream table cap (`max_relay_streams`, default
+    // [`MAX_RELAY_STREAMS`], defense-in-depth): a NEW readable sid is
+    // admitted only while the table is below the cap; an already-tracked sid
+    // is ALWAYS re-processed (correctness — never drop a live stream
+    // mid-transfer). Over-cap is only reachable if the quiche `max_streams`
+    // grant is mis-configured far above the cap (a conforming client can
+    // have ≤ ~32 streams open — see [`MAX_RELAY_STREAMS`]); when it happens
+    // we refuse to TRACK the new sid (fail-safe, bounded) and log rate-aware,
+    // rather than grow without bound.
     for sid in client.readable() {
-        admit_or_refuse(streams, sid);
+        admit_or_refuse(streams, sid, max_relay_streams);
     }
     for sid in upstream.readable() {
-        admit_or_refuse(streams, sid);
+        admit_or_refuse(streams, sid, max_relay_streams);
     }
 
     let sids: Vec<u64> = streams.keys().copied().collect();
@@ -743,20 +879,21 @@ fn relay_streams(
 }
 
 /// B5 — admit a NEW relay-stream `sid` into the per-connection table iff the
-/// table is below [`MAX_RELAY_STREAMS`]; an already-tracked `sid` is left
+/// table is below `max_relay_streams` (the operator-configured ceiling,
+/// default [`MAX_RELAY_STREAMS`]); an already-tracked `sid` is left
 /// untouched (a no-op `or_default` would be too — but the explicit
 /// `contains_key` short-circuit makes the always-process-existing invariant
 /// unmistakable). Over the cap a NEW sid is REFUSED (not inserted) and logged
 /// rate-aware — a fail-safe, bounded ceiling independent of the quiche
 /// `max_streams` grant (see [`MAX_RELAY_STREAMS`]). Returns nothing; the
 /// table mutation IS the effect.
-fn admit_or_refuse(streams: &mut HashMap<u64, RawStreamState>, sid: u64) {
+fn admit_or_refuse(streams: &mut HashMap<u64, RawStreamState>, sid: u64, max_relay_streams: usize) {
     if streams.contains_key(&sid) {
         // Already tracked: ALWAYS re-processed this pass (never drop a live
         // stream). No table growth, so the cap does not apply.
         return;
     }
-    if streams.len() < MAX_RELAY_STREAMS {
+    if streams.len() < max_relay_streams {
         streams.entry(sid).or_default();
     } else {
         // Over the explicit ceiling — refuse to track this new sid. Only
@@ -767,7 +904,7 @@ fn admit_or_refuse(streams: &mut HashMap<u64, RawStreamState>, sid: u64) {
         tracing::debug!(
             stream_id = sid,
             table_len = streams.len(),
-            cap = MAX_RELAY_STREAMS,
+            cap = max_relay_streams,
             "Mode B B5: relay stream table at cap; refusing new stream (R8 bound \
              — only reachable with a mis-configured max_streams)"
         );
@@ -784,7 +921,16 @@ fn admit_or_refuse(streams: &mut HashMap<u64, RawStreamState>, sid: u64) {
 /// enough to absorb a normal burst, small enough that a flooding peer
 /// cannot grow our memory without bound (over-cap arrivals are
 /// drop-newest, see [`BoundedDgramQueue::push`]).
-const DGRAM_QUEUE_CAP: usize = 1024;
+///
+/// B6 (R14/R12): this is the **canonical DEFAULT** for the
+/// operator-configurable cap. The runtime value is single-sourced from
+/// [`RawBackend::dgram_queue_cap`] (set from
+/// `lb_config::RawQuicProxyConfig::dgram_queue_cap`, whose serde default
+/// helper returns this same `1024`); [`run_dual_pump`] builds both
+/// [`BoundedDgramQueue`]s with that param, NOT this const directly. It is
+/// `pub` so the params layer can use it as the documented fallback default
+/// and tests can pin the value.
+pub const DGRAM_QUEUE_CAP: usize = 1024;
 
 /// B4 — scratch buffer size for one `dgram_recv` (the largest single
 /// datagram payload we will copy out of quiche). A QUIC datagram payload
@@ -2378,7 +2524,10 @@ mod tests {
         // Several passes: each pass admits new readable sids up to the cap and
         // pumps. The cap must hold on every pass.
         for _ in 0..4 {
-            relay_streams(&mut server, &mut upstream, &mut streams);
+            // B6 (R14/R12): the cap is now a param (single-sourced from
+            // config); the B5 proof drives it with the `MAX_RELAY_STREAMS`
+            // const default, so the asserted behaviour is byte-identical.
+            relay_streams(&mut server, &mut upstream, &mut streams, MAX_RELAY_STREAMS);
             assert!(
                 streams.len() <= MAX_RELAY_STREAMS,
                 "B5: the relay table must never exceed MAX_RELAY_STREAMS ({MAX_RELAY_STREAMS}); \
@@ -2407,9 +2556,11 @@ mod tests {
     #[test]
     fn admit_or_refuse_keeps_tracked_refuses_new_at_cap() {
         let mut streams: HashMap<u64, RawStreamState> = HashMap::new();
-        // Fill the table to EXACTLY the cap with sids 0..cap.
+        // Fill the table to EXACTLY the cap with sids 0..cap. The cap is now
+        // a param (single-sourced from config); the proof drives it with the
+        // `MAX_RELAY_STREAMS` const default ⇒ byte-identical behaviour.
         for sid in 0..(MAX_RELAY_STREAMS as u64) {
-            admit_or_refuse(&mut streams, sid);
+            admit_or_refuse(&mut streams, sid, MAX_RELAY_STREAMS);
         }
         assert_eq!(
             streams.len(),
@@ -2421,7 +2572,7 @@ mod tests {
         // kept, table unchanged (NEVER dropped because the table is full).
         let tracked = 7u64;
         assert!(streams.contains_key(&tracked));
-        admit_or_refuse(&mut streams, tracked);
+        admit_or_refuse(&mut streams, tracked, MAX_RELAY_STREAMS);
         assert_eq!(
             streams.len(),
             MAX_RELAY_STREAMS,
@@ -2437,7 +2588,7 @@ mod tests {
         // mis-configured huge max_streams).
         let fresh = 999_999u64;
         assert!(!streams.contains_key(&fresh));
-        admit_or_refuse(&mut streams, fresh);
+        admit_or_refuse(&mut streams, fresh, MAX_RELAY_STREAMS);
         assert!(
             !streams.contains_key(&fresh),
             "a new sid over the cap must be REFUSED (not inserted)"

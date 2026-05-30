@@ -455,6 +455,10 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
         pool,
         addr: backend_addr,
         sni: TEST_SNI.to_string(),
+        // B6 (R14/R12): caps now carried on RawBackend; the const
+        // defaults keep these tests byte-identical in behaviour.
+        dgram_queue_cap: lb_quic::DGRAM_QUEUE_CAP,
+        max_relay_streams: lb_quic::MAX_RELAY_STREAMS,
     };
 
     let runtime = lb_io::Runtime::new();
@@ -470,6 +474,7 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
         h3_backend: None,
         h2_backend: None,
         raw_quic_backend: Some(raw_backend),
+        quic_modeb_metrics: None,
     };
 
     // 8) Cancel the actor shortly after it has established both legs so

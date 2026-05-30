@@ -138,6 +138,13 @@ pub struct ActorParams {
     /// termination path below runs byte-for-byte unchanged (R3
     /// no-regression). See `audit/quic/s16-plan.md` §1.
     pub raw_quic_backend: Option<RawBackend>,
+    /// SESSION 19 / Mode B (B6) `quic_modeb_*` observability handles.
+    /// `Some` only on a Mode-B actor spawned with a metrics registry;
+    /// `None` on the H3-termination path (which never touches it — R3).
+    /// Consumed by [`run_raw_proxy_actor`](crate::raw_proxy::run_raw_proxy_actor):
+    /// the relay bumps the handles at its actor-lifetime + per-pass
+    /// aggregate sites; the B4/B5 relay helpers are unaware of it.
+    pub quic_modeb_metrics: Option<lb_observability::QuicModeBMetrics>,
 }
 
 /// Drive one `quiche::Connection` to completion, terminating H3 and

@@ -85,6 +85,15 @@ pub struct RouterParams {
     /// backend fans out to every per-connection actor. See
     /// `audit/quic/s16-plan.md` §1.
     pub raw_quic_backend: Option<crate::raw_proxy::RawBackend>,
+    /// SESSION 19 / Mode B (B6) `quic_modeb_*` observability handles.
+    /// `Some` only when a Mode-B (`raw_quic_backend`) listener was spawned
+    /// with a metrics registry; the H3-termination path leaves this `None`
+    /// (R3 — no metric churn on the unchanged path). Threaded verbatim into
+    /// each spawned actor's [`ActorParams::quic_modeb_metrics`]; the relay
+    /// actor bumps the handles at its lifetime + per-pass aggregate sites
+    /// (the B4/B5 helpers are NOT given the metrics — their signatures are
+    /// unchanged). Cheap to clone (an `Arc`-backed `prometheus` bundle).
+    pub quic_modeb_metrics: Option<lb_observability::QuicModeBMetrics>,
     /// Maximum number of concurrent QUIC connections served by this
     /// router. When the per-CID dispatch table is at this cap, new
     /// Initial packets are dropped (legitimate clients retry; a
@@ -380,6 +389,10 @@ fn spawn_new_connection(
         // SESSION 16 / Mode B: thread the raw-QUIC backend through so
         // `run_actor` early-dispatches to `run_raw_proxy_actor` when set.
         raw_quic_backend: params.raw_quic_backend.clone(),
+        // SESSION 19 / Mode B (B6): thread the quic_modeb_* metrics so the
+        // relay actor can bump them at its lifetime/per-pass sites. `None`
+        // on the H3 path (no churn — R3).
+        quic_modeb_metrics: params.quic_modeb_metrics.clone(),
     };
     // CODE-2-08: wrap the two DashMap entries in a CidEntryGuard so
     // cleanup runs unconditionally — clean exit, async-cancel
@@ -488,6 +501,7 @@ mod tests {
             h3_backend: None,
             h2_backend: None,
             raw_quic_backend: None,
+            quic_modeb_metrics: None,
             // TEST-001: reduced cap so the dashmap only needs 4 entries
             // to be saturated. cap_entries = 2 * 2 = 4.
             max_connections: 2,
@@ -704,6 +718,7 @@ mod tests {
             h3_backend: None,
             h2_backend: None,
             raw_quic_backend: None,
+            quic_modeb_metrics: None,
             max_connections: MAX_CONNECTIONS,
             cancel: cancel.clone(),
         };
