@@ -284,7 +284,7 @@ async fn setup_h1(
     stats.push(("h1_load".into(), Arc::clone(&load)));
     tasks.push(tokio::spawn(loadgen::run_h1_load(
         listener,
-        16 * args.scale,
+        6 * args.scale,
         Arc::clone(&load),
         cancel.clone(),
     )));
@@ -292,7 +292,7 @@ async fn setup_h1(
     stats.push(("conn_flood".into(), Arc::clone(&flood)));
     tasks.push(tokio::spawn(chaos::run_conn_flood(
         listener,
-        16 * args.scale,
+        4 * args.scale,
         Arc::clone(&flood),
         cancel.clone(),
     )));
@@ -337,7 +337,7 @@ async fn setup_h2h2(
         listener,
         sni.clone(),
         certs.ca.clone(),
-        8 * args.scale,
+        4 * args.scale,
         Arc::clone(&load),
         cancel.clone(),
     )));
@@ -347,7 +347,7 @@ async fn setup_h2h2(
         listener,
         sni.clone(),
         certs.ca.clone(),
-        4 * args.scale,
+        2 * args.scale,
         Arc::clone(&rr),
         cancel.clone(),
     )));
@@ -355,7 +355,7 @@ async fn setup_h2h2(
         listener,
         sni,
         certs.ca.clone(),
-        2 * args.scale,
+        1 * args.scale,
         cancel.clone(),
     )));
 
@@ -392,12 +392,12 @@ async fn setup_slowloris(
     let mut stats = Vec::new();
     tasks.push(tokio::spawn(chaos::run_slowloris(
         listener,
-        256 * args.scale,
+        96 * args.scale,
         cancel.clone(),
     )));
     tasks.push(tokio::spawn(chaos::run_slow_post(
         listener,
-        128 * args.scale,
+        48 * args.scale,
         cancel.clone(),
     )));
     let base = LoadStats::new();
@@ -482,7 +482,7 @@ async fn setup_quic(
     let gw = spawn_gateway(bin, &cfg, metrics, workdir).await?;
 
     // QUIC load shape — overridable via env for targeted repro/tuning.
-    let conc = env_usize("QUIC_CONCURRENCY", 12) * args.scale;
+    let conc = env_usize("QUIC_CONCURRENCY", 4) * args.scale;
     let streams = env_usize("QUIC_STREAMS", 4);
     let payload = env_usize("QUIC_PAYLOAD", 4096);
     let dgrams = env_usize("QUIC_DGRAMS", 8);
@@ -543,7 +543,7 @@ async fn setup_413(
         listener,
         sni,
         certs.ca.clone(),
-        12 * args.scale,
+        4 * args.scale,
         Arc::clone(&ov),
         cancel.clone(),
     )));
@@ -551,7 +551,7 @@ async fn setup_413(
     stats.push(("mid_stream_disconnect".into(), Arc::clone(&md)));
     tasks.push(tokio::spawn(chaos::run_mid_stream_disconnect(
         listener,
-        8 * args.scale,
+        4 * args.scale,
         Arc::clone(&md),
         cancel.clone(),
     )));

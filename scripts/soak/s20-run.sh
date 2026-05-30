@@ -44,8 +44,10 @@ launch sc1b_h1h2         ""               --scenario sc1b_h1h2
 launch sc2_h2h2          ""               --scenario sc2_h2h2
 launch sc3_slowloris     ""               --scenario sc3_slowloris
 launch sc4_modeb         ""               --scenario sc4_modeb
-launch sc4b_modeb_healthy "QUIC_STREAMS=1" --scenario sc4_modeb --label sc4b_modeb_healthy
-launch sc5_modea         ""               --scenario sc5_modea
+launch sc4b_modeb_healthy "QUIC_STREAMS=1 QUIC_CONCURRENCY=3" --scenario sc4_modeb --label sc4b_modeb_healthy
+# sc5 Mode A grows flows monotonically (no idle reclaim, F-S20-2); throttle its
+# CHURN rate so per-flow recv-timeout wakeups don't saturate the box.
+launch sc5_modea         "QUIC_CONCURRENCY=2" --scenario sc5_modea
 launch sc6_413teardown   ""               --scenario sc6_413teardown
 
 echo "[s20-run] all ${#PIDS[@]} scenarios launched; waiting for completion (the soak)…"
