@@ -70,6 +70,7 @@
 //!   mechanism rather than by a bridge assertion.
 
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -395,6 +396,14 @@ async fn run_dual_pump(params: &mut ActorParams, upstream: &mut DedicatedQuic, o
     // are terminally done (FIN flushed, or dropped on a reset for B3).
     let mut streams: HashMap<u64, RawStreamState> = HashMap::new();
 
+    // B4: the two bounded datagram relay queues (R8 — drop-newest when
+    // full). Datagrams (RFC 9221) are independent of streams: no FIN, no
+    // reset, no ordering guarantee, so they live OUTSIDE the stream table
+    // and never touch stream state. `c2u_q` carries client→upstream
+    // datagrams, `u2c_q` upstream→client.
+    let mut c2u_q = BoundedDgramQueue::new(DGRAM_QUEUE_CAP);
+    let mut u2c_q = BoundedDgramQueue::new(DGRAM_QUEUE_CAP);
+
     loop {
         // Drain any queued outbound on both legs first (parity with the
         // H3 actor draining before the wait).
@@ -407,11 +416,16 @@ async fn run_dual_pump(params: &mut ActorParams, upstream: &mut DedicatedQuic, o
 
         let mut client_wait = params.conn.timeout().unwrap_or(IDLE_TICK);
         let mut upstream_wait = upstream.conn.timeout().unwrap_or(IDLE_TICK);
-        // While any stream is mid-transfer, poll the relay gate often so
-        // a backpressured/partial stream resumes promptly (does NOT
-        // defeat the bounded window — see fn docs). When idle, fall
-        // through to the real quiche timeouts (no busy-spin).
-        if !streams.is_empty() {
+        // While any stream is mid-transfer OR a datagram is queued
+        // (B4: a `dgram_send` previously returned `Done` and we are
+        // holding a payload to retry, or a fresh recv-drain enqueued one),
+        // poll the relay gate often so a backpressured/partial stream
+        // resumes promptly AND datagram-only traffic (no streams at all)
+        // is still pumped without waiting out quiche's idle timeout. This
+        // does NOT defeat the bounded window/queue — see fn docs. When
+        // fully idle (no streams, no queued datagrams), fall through to
+        // the real quiche timeouts (no busy-spin).
+        if !streams.is_empty() || !c2u_q.is_empty() || !u2c_q.is_empty() {
             client_wait = client_wait.min(RELAY_TICK);
             upstream_wait = upstream_wait.min(RELAY_TICK);
         }
@@ -461,6 +475,17 @@ async fn run_dual_pump(params: &mut ActorParams, upstream: &mut DedicatedQuic, o
         // progress. The follow-up `drain_conn_send` at the top of the
         // next turn ships whatever this relay handed to quiche.
         relay_streams(&mut params.conn, &mut upstream.conn, &mut streams);
+
+        // B4 relay: forward unreliable DATAGRAMs (RFC 9221) verbatim both
+        // directions through the two bounded drop-newest queues. Runs
+        // every wake right after the stream relay. Datagrams have no
+        // FIN/reset/ordering and never touch stream state — a datagram
+        // queue full simply drops the NEWEST payload (the bound is the R8
+        // memory-safety mechanism), and a payload quiche could not accept
+        // this turn (`dst` send queue full) stays queued (bounded by cap)
+        // and is retried next wake. The follow-up `drain_conn_send` at the
+        // top of the next turn ships whatever this relay handed to quiche.
+        relay_datagrams(&mut params.conn, &mut upstream.conn, &mut c2u_q, &mut u2c_q);
     }
 }
 
@@ -668,6 +693,293 @@ fn relay_streams(
 
     // Reclaim entries whose BOTH directions are terminally done.
     streams.retain(|_, st| !st.is_complete());
+}
+
+/// B4 — maximum capacity (in datagrams) of ONE [`BoundedDgramQueue`], i.e.
+/// per connection-pair per direction. This is the R8 memory-safety bound
+/// for the datagram relay (NOT a body/total cap): worst-case relay memory
+/// for one direction is `DGRAM_QUEUE_CAP * MAX_DGRAM_SIZE`, bounded and
+/// independent of total traffic. `1024` matches quiche's own
+/// recv/send-queue length default (`enable_dgram(true, 1024, 1024)` on the
+/// Mode-B configs) and is an industry-safe pre-auth default per R7 — large
+/// enough to absorb a normal burst, small enough that a flooding peer
+/// cannot grow our memory without bound (over-cap arrivals are
+/// drop-newest, see [`BoundedDgramQueue::push`]).
+const DGRAM_QUEUE_CAP: usize = 1024;
+
+/// B4 — scratch buffer size for one `dgram_recv` (the largest single
+/// datagram payload we will copy out of quiche). A QUIC datagram payload
+/// cannot exceed one UDP datagram's worth of bytes; `65_535` is the
+/// absolute UDP payload ceiling (matches the crate-wide
+/// `MAX_UDP_DATAGRAM_SIZE`). `dgram_recv` into a buffer this large can
+/// therefore never return `BufferTooShort` in practice — that arm is
+/// defensive only.
+const MAX_DGRAM_SIZE: usize = 65_535;
+
+/// B4 — outcome of a [`BoundedDgramQueue::push`]: either the payload was
+/// queued, or the queue was at capacity and the payload was dropped
+/// (drop-newest). Returned so the recv-drain (and the unit tests) can
+/// observe the drop-newest decision by mechanism rather than by inspecting
+/// the counter.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DgramPushOutcome {
+    /// The payload was appended to the back of the queue.
+    Queued,
+    /// The queue was full (`len() >= cap`); the payload was DISCARDED and
+    /// the `dropped` counter incremented (drop-newest policy).
+    Dropped,
+}
+
+/// B4 — a bounded FIFO of QUIC DATAGRAM (RFC 9221) payloads with an
+/// explicit **drop-newest** full-policy (the R8 memory-safety bound for
+/// the datagram relay).
+///
+/// One queue per connection-pair per direction. Payloads are owned
+/// `Vec<u8>` stored **verbatim** (binary-safe; zero-length payloads are
+/// preserved as empty `Vec`s — datagrams have no length-implied
+/// semantics, so an empty datagram is a legitimate, distinct datagram).
+///
+/// ## Drop-newest policy
+///
+/// When the queue is at capacity (`len() >= cap`) an incoming
+/// [`push`](Self::push) DISCARDS the *arriving* payload (the newest) and
+/// increments [`dropped`](Self::dropped) — the already-queued (older)
+/// payloads are kept in order. This mirrors quiche's own recv-queue
+/// overflow behaviour (a full recv queue drops the arriving frame), so the
+/// relay layer's policy is owned, documented, and unit-testable. Datagrams
+/// are unreliable by contract (RFC 9221), so dropping the newest under
+/// pressure is correct: there is no retransmission obligation and no
+/// ordering guarantee to violate.
+///
+/// The alternative — an unbounded queue or drop-oldest — would either let
+/// a flooding peer grow relay memory without bound (the R8 violation this
+/// type prevents) or silently reorder by evicting in-flight head-of-line
+/// payloads; drop-newest keeps memory bounded AND preserves the order of
+/// what is retained.
+struct BoundedDgramQueue {
+    /// FIFO of datagram payloads (verbatim bytes, front = oldest).
+    q: VecDeque<Vec<u8>>,
+    /// Maximum number of queued payloads — the R8 bound. A `push` at this
+    /// length drops the newest.
+    cap: usize,
+    /// Count of drop-newest events over this queue's lifetime. Surfaced
+    /// (read-only via [`dropped`](Self::dropped)) so B6 can expose it as a
+    /// `quic_modeb_datagrams_dropped_total`-class metric. Saturates rather
+    /// than wraps (a `u64` of drops is not reachable in practice, but the
+    /// increment is `saturating_add` to honour the crate's no-panic bar
+    /// under any conceivable overflow).
+    dropped: u64,
+}
+
+impl BoundedDgramQueue {
+    /// Construct an empty queue bounded at `cap` payloads.
+    fn new(cap: usize) -> Self {
+        Self {
+            q: VecDeque::new(),
+            cap,
+            dropped: 0,
+        }
+    }
+
+    /// Enqueue `payload` (verbatim) unless the queue is full.
+    ///
+    /// **Drop-newest**: if `len() >= cap` the arriving `payload` is
+    /// discarded and [`dropped`](Self::dropped) is incremented; the
+    /// already-queued payloads are untouched. Otherwise `payload` is
+    /// appended at the back (FIFO). Returns which branch was taken so the
+    /// caller can observe the policy by mechanism.
+    fn push(&mut self, payload: Vec<u8>) -> DgramPushOutcome {
+        if self.q.len() >= self.cap {
+            // Drop-newest: discard the arriving payload, count it. The
+            // bound holds regardless of `cap == 0` (then every push is a
+            // drop).
+            self.dropped = self.dropped.saturating_add(1);
+            DgramPushOutcome::Dropped
+        } else {
+            self.q.push_back(payload);
+            DgramPushOutcome::Queued
+        }
+    }
+
+    /// Borrow the front (oldest) payload without removing it, or `None` if
+    /// empty. Used by the send-drain to peek the next payload before
+    /// attempting `dgram_send` (so a `Done`/full-send-queue can leave it
+    /// queued).
+    fn front(&self) -> Option<&Vec<u8>> {
+        self.q.front()
+    }
+
+    /// Remove and return the front (oldest) payload, or `None` if empty.
+    fn pop_front(&mut self) -> Option<Vec<u8>> {
+        self.q.pop_front()
+    }
+
+    /// Number of currently-queued payloads (never exceeds `cap`).
+    fn len(&self) -> usize {
+        self.q.len()
+    }
+
+    /// `true` iff no payloads are queued.
+    fn is_empty(&self) -> bool {
+        self.q.is_empty()
+    }
+
+    /// Total drop-newest events over this queue's lifetime (plumbed for
+    /// the B6 metric).
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn dropped(&self) -> u64 {
+        self.dropped
+    }
+}
+
+/// B4 — one bidirectional DATAGRAM (RFC 9221) relay pass over the two
+/// connections. Symmetric: [`pump_dgram_dir`] is run once per direction.
+///
+/// Datagrams are connectionless w.r.t. streams — no FIN, no reset, no
+/// ordering guarantee — so this relay NEVER touches stream state and is
+/// fully independent of [`relay_streams`]. Each direction recv-drains the
+/// source connection's datagram queue into the bounded relay queue
+/// (drop-newest when full) then send-drains that queue into the
+/// destination connection.
+fn relay_datagrams(
+    client: &mut quiche::Connection,
+    upstream: &mut quiche::Connection,
+    c2u_q: &mut BoundedDgramQueue,
+    u2c_q: &mut BoundedDgramQueue,
+) {
+    // client → upstream: drain client's recv'd datagrams, send to upstream.
+    pump_dgram_dir(client, upstream, c2u_q, Direction::ClientToUpstream);
+    // upstream → client: drain upstream's recv'd datagrams, send to client.
+    pump_dgram_dir(upstream, client, u2c_q, Direction::UpstreamToClient);
+}
+
+/// B4 — relay ONE direction of DATAGRAM traffic for this turn: recv-drain
+/// every datagram quiche has queued on `src` into the bounded `q`
+/// (drop-newest when full), then send-drain `q` into `dst`.
+///
+/// ## Recv-drain (`src` → `q`)
+///
+/// Loop `src.dgram_recv(buf)` (buf sized to [`MAX_DGRAM_SIZE`]):
+/// * `Ok(len)` → push `buf[..len].to_vec()` (verbatim) onto `q`
+///   (drop-newest if `q` is at `cap`).
+/// * `Err(Done)` → no more queued datagrams on `src`; stop draining.
+/// * `Err(BufferTooShort)` → the datagram was larger than our max buffer.
+///   With a [`MAX_DGRAM_SIZE`] (full UDP-payload-ceiling) buffer this is
+///   not reachable in practice; treat it defensively — log and stop
+///   draining this turn (do NOT spin).
+///
+/// ## Send-drain (`q` → `dst`), front-first (FIFO, preserve arrival order)
+///
+/// While `q.front()` is `Some`, attempt `dst.dgram_send(front)`:
+/// * `Ok(())` → accepted; `pop_front` and continue.
+/// * `Err(Done)` → `dst`'s OWN send queue is full → **stop this turn**,
+///   leaving the payload queued (bounded by `cap`; retried next wake when
+///   `dst` has drained). Do NOT drop — `Done` is transient backpressure.
+/// * `Err(BufferTooShort)` → the payload exceeds `dst`'s peer
+///   `max_datagram_frame_size` (it can NEVER be forwarded over this
+///   connection) → drop THIS payload (`pop_front`, count) and continue to
+///   the next (it would block the queue forever otherwise).
+/// * `Err(InvalidState)` → `dst` never negotiated DATAGRAM (mis-wired:
+///   negotiation is a config-time invariant). This direction cannot
+///   forward anything → drain + discard the whole queue (counting each)
+///   and log, so a non-negotiating `dst` cannot pin relay memory.
+fn pump_dgram_dir(
+    src: &mut quiche::Connection,
+    dst: &mut quiche::Connection,
+    q: &mut BoundedDgramQueue,
+    dir: Direction,
+) {
+    // ── Recv-drain: pull every datagram quiche has queued on `src` into
+    // the bounded relay queue (drop-newest when full).
+    let mut buf = vec![0u8; MAX_DGRAM_SIZE];
+    loop {
+        match src.dgram_recv(&mut buf) {
+            Ok(len) => {
+                // Verbatim copy of exactly `len` bytes (binary-safe,
+                // zero-length preserved). `get(..len)` cannot panic; on
+                // the impossible None it yields an empty payload.
+                let payload = buf.get(..len).unwrap_or(&[]).to_vec();
+                if q.push(payload) == DgramPushOutcome::Dropped {
+                    tracing::trace!(
+                        dir = dir.as_str(),
+                        dropped = q.dropped,
+                        "Mode B B4: datagram relay queue full; dropped newest (R8 bound)"
+                    );
+                }
+            }
+            Err(quiche::Error::Done) => break,
+            // Not reachable with a full-UDP-payload-sized buffer; defensive.
+            Err(quiche::Error::BufferTooShort) => {
+                tracing::debug!(
+                    dir = dir.as_str(),
+                    max = MAX_DGRAM_SIZE,
+                    "Mode B B4: dgram_recv BufferTooShort (datagram exceeds max buf); \
+                     stopping recv-drain this turn"
+                );
+                break;
+            }
+            Err(e) => {
+                tracing::debug!(
+                    dir = dir.as_str(), error = %e,
+                    "Mode B B4: dgram_recv error; stopping recv-drain this turn"
+                );
+                break;
+            }
+        }
+    }
+
+    // ── Send-drain: forward queued datagrams to `dst`, front-first.
+    while let Some(front) = q.front() {
+        match dst.dgram_send(front) {
+            Ok(()) => {
+                // Accepted by quiche's send queue — drop the front.
+                let _ = q.pop_front();
+            }
+            // `dst`'s send queue is full: transient backpressure. Leave
+            // the payload queued (bounded by cap) and retry next wake.
+            Err(quiche::Error::Done) => break,
+            // The payload is larger than `dst`'s peer max writable: it can
+            // NEVER be forwarded over this connection. Drop THIS one (it
+            // would otherwise block the queue forever) and continue.
+            Err(quiche::Error::BufferTooShort) => {
+                let _ = q.pop_front();
+                q.dropped = q.dropped.saturating_add(1);
+                tracing::debug!(
+                    dir = dir.as_str(),
+                    "Mode B B4: dgram_send BufferTooShort (payload exceeds dst max \
+                     writable); dropping this datagram"
+                );
+            }
+            // `dst` never negotiated DATAGRAM (only reachable if mis-wired
+            // — negotiation is a config-time invariant). This direction can
+            // forward NOTHING, so drain + discard the whole queue (counting
+            // each) so a non-negotiating peer cannot pin relay memory.
+            Err(quiche::Error::InvalidState) => {
+                let drained = q.len() as u64;
+                while q.pop_front().is_some() {}
+                q.dropped = q.dropped.saturating_add(drained);
+                tracing::warn!(
+                    dir = dir.as_str(),
+                    drained,
+                    "Mode B B4: dgram_send InvalidState (dst never negotiated DATAGRAM); \
+                     draining + disabling this direction's datagram queue"
+                );
+                break;
+            }
+            Err(e) => {
+                // Any other error: drop this datagram (datagrams are
+                // unreliable; do not block the queue) and stop this turn.
+                let _ = q.pop_front();
+                q.dropped = q.dropped.saturating_add(1);
+                tracing::debug!(
+                    dir = dir.as_str(), error = %e,
+                    "Mode B B4: dgram_send error; dropping this datagram, stopping \
+                     send-drain this turn"
+                );
+                break;
+            }
+        }
+    }
 }
 
 /// Relay direction — only used to disambiguate log lines (the relay
@@ -978,7 +1290,9 @@ mod tests {
     //! the unit-level branch: refuse ⇒ retryable (not dropped); credit ⇒
     //! delivered (peer observes the stream finished).
 
-    use super::{Direction, RelayHalf, pump_dir};
+    use super::{
+        BoundedDgramQueue, DGRAM_QUEUE_CAP, DgramPushOutcome, Direction, RelayHalf, pump_dir,
+    };
 
     use std::net::SocketAddr;
     use std::path::PathBuf;
@@ -1674,5 +1988,157 @@ mod tests {
             "the backend must observe the FIN on stream 0 (the FIN was forwarded, \
              not dropped) — CF-S16-RELAY-STALL"
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // B4 — BoundedDgramQueue unit coverage (the R13(c) seed; the verifier
+    // owns the authoritative flood/burst wire tests).
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// (a) FIFO ORDER: payloads dequeue front-first in arrival order, with
+    /// no reordering and no loss while under capacity.
+    #[test]
+    fn dgram_queue_preserves_fifo_order() {
+        let mut q = BoundedDgramQueue::new(8);
+        let payloads: Vec<Vec<u8>> = (0..5u8).map(|i| vec![i, i.wrapping_add(100)]).collect();
+        for p in &payloads {
+            assert_eq!(
+                q.push(p.clone()),
+                DgramPushOutcome::Queued,
+                "under capacity every push must be Queued"
+            );
+        }
+        assert_eq!(q.len(), payloads.len());
+        assert_eq!(q.dropped(), 0, "no drops while under capacity");
+
+        // Dequeue and confirm exact arrival order, front-first.
+        for expected in &payloads {
+            assert_eq!(
+                q.front(),
+                Some(expected),
+                "front must be the oldest payload"
+            );
+            assert_eq!(q.pop_front().as_ref(), Some(expected));
+        }
+        assert!(q.is_empty());
+        assert_eq!(q.pop_front(), None, "pop on empty yields None");
+    }
+
+    /// (b) DROP-NEWEST NEGATIVE CONTROL (R13(c) seed): push `cap + K` and
+    /// assert `len() == cap`, the OLDEST `cap` survived IN ORDER, the K
+    /// NEWEST were dropped, and `dropped == K`. An unbounded queue (the
+    /// pre-fix shape) would hold all `cap + K` and report `dropped == 0` —
+    /// this test fails it. The bounded drop-newest passes.
+    #[test]
+    fn dgram_queue_drop_newest_negative_control() {
+        const CAP: usize = 16;
+        const K: usize = 9;
+        let mut q = BoundedDgramQueue::new(CAP);
+
+        // Tag each payload by its arrival index so we can prove WHICH ones
+        // survived. (Two bytes so the index round-trips even past 255.)
+        let mk = |i: usize| -> Vec<u8> { vec![(i & 0xff) as u8, ((i >> 8) & 0xff) as u8] };
+
+        for i in 0..(CAP + K) {
+            let outcome = q.push(mk(i));
+            if i < CAP {
+                assert_eq!(
+                    outcome,
+                    DgramPushOutcome::Queued,
+                    "the first cap pushes fill the queue"
+                );
+            } else {
+                assert_eq!(
+                    outcome,
+                    DgramPushOutcome::Dropped,
+                    "every push past cap is drop-newest"
+                );
+            }
+        }
+
+        // The bound held: never more than cap retained.
+        assert_eq!(q.len(), CAP, "len must be clamped to cap (the R8 bound)");
+        // Exactly the K newest were dropped.
+        assert_eq!(
+            q.dropped(),
+            K as u64,
+            "exactly the K newest arrivals were dropped"
+        );
+
+        // The OLDEST cap survived, in order (0..CAP). The newest K
+        // (CAP..CAP+K) are gone.
+        for i in 0..CAP {
+            assert_eq!(
+                q.pop_front(),
+                Some(mk(i)),
+                "the oldest cap payloads survived in arrival order; index {i}"
+            );
+        }
+        assert!(q.is_empty(), "nothing beyond the oldest cap survived");
+    }
+
+    /// (c) BINARY / ZERO-LENGTH payloads are preserved VERBATIM (no UTF-8
+    /// assumption, no length-implied truncation): a zero-length datagram,
+    /// an all-zero-bytes payload, a high-bit non-UTF8 payload, and a near-
+    /// MAX_DGRAM_SIZE payload all round-trip byte-identical.
+    #[test]
+    fn dgram_queue_preserves_binary_and_zero_length_verbatim() {
+        let mut q = BoundedDgramQueue::new(8);
+        let empty: Vec<u8> = Vec::new();
+        let zeros: Vec<u8> = vec![0u8; 64];
+        let non_utf8: Vec<u8> = vec![0xff, 0xfe, 0x80, 0x00, 0x7f, 0xc0, 0xff];
+        // A large payload exercising verbatim copy of a big buffer.
+        let large: Vec<u8> = (0..50_000usize)
+            .map(|i| ((i * 37 + 11) % 256) as u8)
+            .collect();
+
+        for p in [&empty, &zeros, &non_utf8, &large] {
+            assert_eq!(q.push(p.clone()), DgramPushOutcome::Queued);
+        }
+
+        assert_eq!(
+            q.pop_front().as_ref(),
+            Some(&empty),
+            "a zero-length datagram is a distinct, preserved payload (empty Vec)"
+        );
+        assert_eq!(
+            q.pop_front().as_ref(),
+            Some(&zeros),
+            "all-zero bytes preserved verbatim"
+        );
+        assert_eq!(
+            q.pop_front().as_ref(),
+            Some(&non_utf8),
+            "non-UTF8 bytes preserved verbatim"
+        );
+        assert_eq!(
+            q.pop_front().as_ref(),
+            Some(&large),
+            "large payload preserved verbatim"
+        );
+        assert!(q.is_empty());
+    }
+
+    /// The production cap constant is the documented R8 bound. Pin it so a
+    /// silent change is caught (it is plumbed for the B6 metric default).
+    #[test]
+    fn dgram_queue_cap_constant_is_documented_default() {
+        assert_eq!(
+            DGRAM_QUEUE_CAP, 1024,
+            "the R8 datagram-queue bound is 1024 (matches quiche default)"
+        );
+        // The constant is usable as a real cap (a queue built with it
+        // accepts up to cap then drops-newest).
+        let mut q = BoundedDgramQueue::new(DGRAM_QUEUE_CAP);
+        for _ in 0..DGRAM_QUEUE_CAP {
+            assert_eq!(q.push(vec![1, 2, 3]), DgramPushOutcome::Queued);
+        }
+        assert_eq!(q.len(), DGRAM_QUEUE_CAP);
+        assert_eq!(
+            q.push(vec![4]),
+            DgramPushOutcome::Dropped,
+            "the cap+1'th push is drop-newest"
+        );
+        assert_eq!(q.dropped(), 1);
     }
 }
