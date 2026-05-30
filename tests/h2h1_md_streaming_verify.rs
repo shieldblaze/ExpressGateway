@@ -752,17 +752,33 @@ async fn spawn_body_counting_backend() -> (SocketAddr, Arc<AtomicUsize>) {
                 let mut seen_headers = false;
                 let mut acc: Vec<u8> = Vec::new();
                 loop {
-                    // S11: 30 s (was 3 s). The over-cap test streams 66 MiB and
-                    // the backend must keep draining for the whole upload; under
-                    // the full `--workspace --all-features` gate at 8-core
-                    // saturation a >3 s scheduling gap in THIS backend task fired
-                    // the read timeout, closed the upstream, and the gateway
+                    // S11: 30 s (was 3 s). S19: 90 s. The over-cap test streams
+                    // 66 MiB and the backend must keep draining for the whole
+                    // upload; under the full `--workspace --all-features` gate at
+                    // 8-core saturation a >3 s scheduling gap in THIS backend task
+                    // fired the read timeout, closed the upstream, and the gateway
                     // (correctly) returned 502 for a genuinely-dropped upstream —
-                    // a test-harness fragility, not a product defect. 30 s gives
-                    // ~10× starvation margin yet stays bounded under the test's
-                    // 60 s client budget so a truly-dead gateway still terminates
-                    // this task. (Mirror of the S11 reload_zero_drop hardening.)
-                    match tokio::time::timeout(Duration::from_secs(30), sock.read(&mut buf)).await {
+                    // a test-harness fragility, not a product defect.
+                    //
+                    // S19 re-hardening: 30 s was still the SHORTEST of the three
+                    // timeouts (backend-read 30 s < gateway-body 120 s < client
+                    // wait 130 s), so under load a >30 s forwarding gap fired HERE
+                    // first, dropping the upstream and yielding a 502 BEFORE the
+                    // 64 MiB cap could trip → the cap-trip 413 lost the race.
+                    // Reproduced ~1/13 in isolation under CPU contention:
+                    //   FCAP1_H2_OVER_CAP status=Some(502) written=51314688
+                    //   backend_body_bytes=51369274
+                    // i.e. the backend had drained ~51 MiB (< the 64 MiB cap) when
+                    // its 30 s read timeout fired. Bumping to 90 s gives ~10×
+                    // starvation margin over the observed normal-completion budget
+                    // (the unsaturated push completes in well under 10 s) yet stays
+                    // STRICTLY BELOW the gateway body timeout (120 s) and the client
+                    // wait (130 s), so on a TRUE wedge the gateway's own bounded
+                    // arm — not this backend — terminates the test. The cap-trip →
+                    // 413 assertion is UNCHANGED. (Mirror of the S11
+                    // reload_zero_drop hardening; closes the backend-side gap the
+                    // S11 30 s left as the weak link.)
+                    match tokio::time::timeout(Duration::from_secs(90), sock.read(&mut buf)).await {
                         Ok(Ok(0)) | Err(_) => break,
                         Ok(Ok(n)) => {
                             if !seen_headers {
