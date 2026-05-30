@@ -405,22 +405,8 @@ async fn run_dual_pump(params: &mut ActorParams, upstream: &mut DedicatedQuic, o
             break;
         }
 
-        // Bound the relay's max wake latency to IDLE_TICK. `conn.timeout()`
-        // can return the connection's full idle timeout (tens of seconds)
-        // when no loss/pacing timer is armed; if a leg still holds buffered
-        // outbound stream bytes that quiche could not flush this turn
-        // (cwnd / pacing / flow-control gated) and `streams` has already
-        // emptied (the relay queued the FIN, marking the half done, before
-        // quiche put the last packet on the wire), an un-capped sleep would
-        // park the loop for ~20s and the buffered tail+FIN would not be
-        // re-`drain_conn_send`'d until the next inbound packet — the
-        // CF-S16-RELAY-STALL load-triggered stall. Capping at IDLE_TICK
-        // guarantees `drain_conn_send` (top of loop) re-runs within 100 ms
-        // to flush whatever pacing/cwnd has since released. Not a busy-spin
-        // (100 ms floor when idle); the `streams`-non-empty branch below
-        // still tightens to RELAY_TICK while a transfer is actively moving.
-        let mut client_wait = params.conn.timeout().unwrap_or(IDLE_TICK).min(IDLE_TICK);
-        let mut upstream_wait = upstream.conn.timeout().unwrap_or(IDLE_TICK).min(IDLE_TICK);
+        let mut client_wait = params.conn.timeout().unwrap_or(IDLE_TICK);
+        let mut upstream_wait = upstream.conn.timeout().unwrap_or(IDLE_TICK);
         // While any stream is mid-transfer, poll the relay gate often so
         // a backpressured/partial stream resumes promptly (does NOT
         // defeat the bounded window — see fn docs). When idle, fall
