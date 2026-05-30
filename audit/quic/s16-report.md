@@ -303,7 +303,38 @@ short of a small stream's last bytes+FIN with `lost=0` and the loop spinning at 
 i.e. the relay is awake but not producing the final flight; cause not yet isolated after 3
 attempts. → ESCALATED to owner for disposition (keep-trying / R6-genuinely-large / pause).
 
-### B4..B6 — << appended as each lands >>
+**UPDATE 3 (2026-05-30) — sharpened mechanism from one clean fully-read capture; ESCALATED R6.**
+Instrumented `run_dual_pump` to dump per-stream RELAY-INTERNAL half-state at a real stall
+(read to completion, instrumentation reverted, tree pristine). Captured stall (stream 8, the
+200 KB stream; varies run-to-run — also seen on stream 0):
+```
+streams_len=1 cl[sent=2127 recv=2090 lost=39] cl_readable=0 cl_cap0=InvalidStreamState cl_fin0=true
+sid=8 c2u[pend=0 fin_seen=true fin_sent=true done=true]    <- request leg COMPLETE
+      u2c[pend=0 fin_seen=false fin_sent=false done=false] <- RESPONSE leg STUCK
+```
+Mechanism (sharper, but NOT root-caused to a line): the stuck direction is the **response
+leg** (`u2c`, backend->client). The request fully reached the backend (`c2u` done); the relay
+is waiting for the backend's echo on that stream — `pend=0, fin_seen=false`, **nothing readable
+on either leg**, **`lost>0` (real packet loss)**, connection still ACKing (recv climbs) but no
+stream progress. So it is a genuine loss-recovery / flow-control interaction on ONE stream's
+response path, surfacing under scheduling pressure; it involves the hand-rolled echo BACKEND
+loop too (its retransmit cadence), not only `run_dual_pump`. This DISPROVES the wake-latency
+theory (loop spins at ~26ms, not parked) and the test-driver-drain theory (nothing is sitting
+unread; `readable=0`).
+
+**Disposition: R6 GENUINELY-LARGE — escalated, fix attempts STOPPED.** Three targeted fix
+hypotheses failed and a fourth disciplined diagnosis pass sharpened but did not isolate the
+root cause; a correct fix needs deeper QUIC loss-recovery/flow-control analysis across the
+relay + the test backend (likely: who drives retransmission of a lost response-stream packet
+when both ends are busy with ACK traffic). This is beyond a quick fix and I will not attempt
+another in-loop. Recommended next step (fresh session, disciplined): instrument the ECHO
+BACKEND's per-stream send state + `path_stats()` (cwnd, lost, retrans) on BOTH the relay's
+upstream leg and the backend at a stall, to determine which side holds the un-retransmitted
+response packet. The bug is intermittent (~22% quiet box) and is a LIVENESS defect (no data
+corruption — byte-identical when it completes); the relay's correctness properties (B1/B2/B3:
+byte-identical, backpressure, cancellation) are independently verified and not in question.
+
+### B4..B6 — << NOT STARTED (blocked behind CF-S16-RELAY-STALL R6 escalation) >>
 
 ## Phase 3 — gates
 
