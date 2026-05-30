@@ -147,13 +147,118 @@ independent (`acd0b947` security proofs).
   (cap unit 10/10) under the const→param cap wiring. Lead sanity: all pass.
 
 ## Phase 3 — gates + promote
-<pending>
+
+### Session coverage (R10, verifier re-measured, scoped llvm-cov)  ✅ 85.68% ≥ 80%
+First measure was 74.27% raw — shortfall concentrated in the B6 `main.rs`
+Mode-B wiring SEAM (`spawn_quic` arm + `build_raw_quic_backend` config_factory
+closure) being integration-reachable but not line-exercised. **Owner ruling
+(Option 2)**: exercise the production entry point, don't assert reachability —
+the exact faith that hid CF-S16 for three sessions. Builder added (`0fe618dd`):
+- `lb/main.rs` `spawn_quic_mode_b_e2e_round_trips_through_real_listener` — a bin
+  unittest driving the REAL `spawn_quic(raw_proxy config)` → real quiche client
+  → real echo backend, 4 KiB byte-identical round-trip + relayed FIN + `h3`
+  ALPN. No test hook. Forces the config_factory closure (runs on the dedicated
+  dial, distinct backend CA), the `spawn_quic` Mode-B arm, and
+  `build_server_config(enable_datagrams=true)`.
+- `lb-config` serde-default test (covers the 2 const-fn helpers → 6 lines).
+- `raw_proxy.rs` 2 `pump_dgram_dir` defensive-arm unit tests (InvalidState
+  drain, BufferTooShort drop-and-continue).
+
+Re-measured **raw session coverage = 353/412 = 85.68%** (verifier, fresh
+instrumented `cargo llvm-cov --workspace --all-features`, 1389 tests/0 failed).
+Per-file: raw_proxy 84.98%, router 100%, listener 94.34%, quic_modeb_metrics
+100%, lb-config 100%, main.rs 77.17%. lcov confirms the config_factory closure
+(L845–871) + spawn_quic Mode-B arm (L1112–1119) NOW have hits attributable to
+the e2e. The 59 uncovered lines all classified, none a real reachable gap:
+tracing-macro lazy-field artifacts (parent line executes — e.g. admit_or_refuse
+over-cap `debug!` parent L904 = 257 hits), genuinely-unreachable defensive arms
+(recv `BufferTooShort` impossible with the 65535 buffer; send catch-all
+`Err(e)`), and brace/not-taken-H3-sibling artifacts. **Documented with
+mechanism, not asterisked.**
+R13 on the e2e (live-listener, timing-sensitive): (a) pass; (b) **50/50
+isolation burst, 0 flake**; (c) non-vacuous (drives real `spawn_quic`).
+
+### Pre-existing flake found + fixed during the ×3 gate (R2/R6)
+The full-workspace gate surfaced a PRE-EXISTING flake (NOT any S19 code path):
+`fcap1_h2_over_cap_upload_yields_413` (H2→H1 matrix) got 502 instead of 413.
+Mechanism captured (not hand-waved): the test streams 66 MiB through a raw-
+draining backend; under saturation the backend's 30s per-read timeout (the
+SHORTEST of backend-30s < gateway-body-120s < client-130s) fired on a >30s
+forwarding gap → upstream dropped → gateway correctly returned 502 before the
+cap could trip. Reproduced ~12% even in isolation (inherent race;
+CF-FCAP-MARGIN / CF-SATURATION-1). **Fixed** (`593981af`, test-harness only):
+backend read-timeout 30s→90s (~10× margin, still < gateway/client budgets so a
+true wedge terminates via the gateway arm). 413 assertion + cap + sizes
+UNCHANGED. Verified deterministic post-fix.
+
+### ESCALATED — second pre-existing flake (genuinely-large, R6/R7)
+While hardening, a SECOND distinct flake surfaced ONLY under artificial heavy
+contention (4–8 extra spinners), **0/70 in true isolation**, and did NOT appear
+in any of the 6 normal-gate runs: `status=None`, TLS `UnexpectedEof` ("peer
+closed without close_notify") at variable byte counts — the client sees a TLS
+EOF instead of the 413 head, i.e. the gateway's H2/TLS teardown races delivery
+of the 413 head on a cap-trip. Pre-existing, orthogonal to S19, mechanism
+proven. Plausibly a product-side question (does the gateway reliably flush the
+413 head before TLS teardown on cap-trip?) or a test-rig `close_notify`
+tolerance gap. **Escalated to owner, not asterisked; carried to S20** (a prime
+chaos/soak target). Owner acknowledged.
+
+### Gate results (final tree `0fe618dd`)
+- `cargo fmt --all --check`: clean. `cargo clippy --workspace --all-targets
+  --all-features -- -D warnings`: clean (0 warnings).
+- R1 ×3 (full `cargo test --workspace --all-features`, 8-core), on the post-fix
+  tree `593981af` (production code byte-identical to the promoted tree): **1388/
+  0/18 ×3 deterministic** (re-runs 1/2/3 all clean, `fcap1` passing, the
+  TLS-EOF flake absent in all 3).
+- R1 ×3 re-confirmed on the PROMOTED tree `0fe618dd` (adds the +4 deterministic
+  coverage tests incl. the live-listener e2e under full-gate saturation):
+  **1392/0/18 ×3 deterministic** (final runs 1/2/3 all exit 0; the e2e spawn
+  test + `fcap1` pass under full 8-core gate saturation in all 3; TLS-EOF flake
+  absent in all 3). Logs: phase3-final{1,2,3}.log.
+
+---
+
+## VERDICT: SESSION 19 COMPLETE — native QUIC proxy complete
+
+B4 + B5 + B6 all built and INDEPENDENTLY verified (author ≠ verifier on every
+increment); both B6 security proofs met to the by-construction bar
+(two-connections + 0-RTT-rejection wire test); Phase 3 green — ×3 deterministic
+1392/0/18, fmt + clippy `-D warnings` clean, session coverage 85.68% ≥ 80%
+(verifier re-measured), R13 (a)/(b)/(c) evidence cited for every timing path.
+Mode B (terminate-and-re-originate) is complete and reachable end-to-end through
+the real entry point → **native QUIC proxy complete** (Mode A passthrough +
+Mode B + the 9-cell matrix + H3 termination + XDP datapath). Native QUIC
+complete ≠ production-ready: the chaos/soak suite does not exist yet (S20).
+One pre-existing gate flake fixed (fcap1 502); one orthogonal pre-existing flake
+escalated, not asterisked (CF-S19-TLS-TEARDOWN-413 → S20).
 
 ## Carry-forwards
-CF-DEP-1, CF-IGN-1 (16 inherited #[ignore]), CF-FCAP-MARGIN, F-ESC-1,
-N-1 (jumbo-MTU), Mode A deferred perf tiers (io_uring v1.1, XDP v1.2),
-coverage/disk items.
+- **CF-S19-TLS-TEARDOWN-413** (NEW, escalated): `fcap1_h2_over_cap` second flake
+  — gateway H2/TLS teardown races the 413 head on a cap-trip (client sees
+  `UnexpectedEof`/no `close_notify`); only under heavy contention; pre-existing,
+  orthogonal to S19. Needs product-side teardown-ordering look OR test-rig EOF
+  tolerance. Prime S20 soak target.
+- **CF-FCAP-MARGIN / CF-SATURATION-1**: the fcap over-cap streaming tests remain
+  inherently saturation-sensitive (S11 3→30s, S19 30→90s backend timeout); the
+  64 MiB-stream-then-assert-413 design races timeouts. A soak-grade redesign is
+  the durable fix.
+- CF-DEP-1 (Dependabot — owner; now 2 advisories on a public main with Mode B
+  code), CF-IGN-1 (16 inherited #[ignore] — characterize before h3spec),
+  F-ESC-1 (multi-kernel CI lane), N-1 (jumbo-MTU), Mode A deferred perf tiers
+  (io_uring v1.1, XDP v1.2), prior coverage/disk items.
 
-## S20 handoff
-<pending — chaos/soak suite, with the stall-fix client-leg send/FIN path
-flagged as a priority soak target>
+## S20 handoff — BUILD THE CHAOS/SOAK SUITE
+Native QUIC proxy is COMPLETE (Mode A passthrough + Mode B terminate/relay +
+the 9-cell H1/H2/H3 matrix + H3 termination + XDP datapath), but **complete ≠
+production-ready** — the soak does not exist yet. S20 builds it + runs the first
+soak of the WHOLE system. Priority soak targets, highest-leverage first:
+1. **The S18 stall-fix client-leg send/FIN path** (`pump_dir` `!src_fin_seen`
+   gate) — a one-line FIN fix that earns real confidence only under sustained
+   load.
+2. **Mode B under sustained load**: the datagram drop-newest queue (B4), the
+   per-connection/per-stream bounds + eviction (B5) under a long connection/
+   stream flood, and the two-connection relay's memory stability over hours.
+3. **CF-S19-TLS-TEARDOWN-413 + CF-FCAP-MARGIN**: the saturation/teardown races
+   above — soak is exactly where these reproduce and get durably fixed.
+Then: WS-over-H2 (RFC 8441) + H3 (RFC 9220), gRPC-over-H3 conformance, full
+h3spec conformance. (Mode A perf tiers io_uring v1.1 / XDP v1.2 also pending.)
