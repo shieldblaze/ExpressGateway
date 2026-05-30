@@ -1759,6 +1759,51 @@ protocol = "tcp"
         assert!(result.is_err());
     }
 
+    // S19 / Mode B (B6): a MINIMAL `[listeners.quic.raw_proxy]` block —
+    // only `backend_addr` + `sni` — must deserialize with the two caps
+    // defaulting to 1024 / 256. Covers `default_raw_proxy_dgram_queue_cap`
+    // + `default_raw_proxy_max_relay_streams` (the serde-default helpers).
+    #[test]
+    fn raw_proxy_minimal_toml_defaults_caps() {
+        // Deserialize a `QuicListenerConfig` whose `[raw_proxy]` sub-table
+        // gives ONLY `backend_addr` + `sni` (the two caps + `backend_ca_path`
+        // omitted), exactly as a minimal `[listeners.quic.raw_proxy]` block
+        // would after TOML table-nesting resolves to this struct.
+        let input = r#"
+cert_path = "/c"
+key_path = "/k"
+retry_secret_path = "/r"
+
+[raw_proxy]
+backend_addr = "127.0.0.1:4443"
+sni = "backend.test"
+"#;
+        let quic: QuicListenerConfig =
+            toml::from_str(input).expect("minimal raw_proxy QuicListenerConfig must deserialize");
+        let rp = quic
+            .raw_proxy
+            .expect("raw_proxy block present ⇒ Some after deserialize");
+        assert_eq!(rp.backend_addr, "127.0.0.1:4443");
+        assert_eq!(rp.sni, "backend.test");
+        assert_eq!(
+            rp.dgram_queue_cap,
+            default_raw_proxy_dgram_queue_cap(),
+            "omitted dgram_queue_cap must default via the serde helper"
+        );
+        assert_eq!(rp.dgram_queue_cap, 1024, "documented B4 default");
+        assert_eq!(
+            rp.max_relay_streams,
+            default_raw_proxy_max_relay_streams(),
+            "omitted max_relay_streams must default via the serde helper"
+        );
+        assert_eq!(rp.max_relay_streams, 256, "documented B5 default");
+        // `backend_ca_path` is `#[serde(default)]` Option ⇒ None when omitted.
+        assert!(
+            rp.backend_ca_path.is_none(),
+            "omitted backend_ca_path defaults to None"
+        );
+    }
+
     #[test]
     fn validate_empty_listeners() {
         let config = LbConfig {

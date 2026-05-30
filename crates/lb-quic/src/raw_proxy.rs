@@ -1516,8 +1516,9 @@ mod tests {
     //! delivered (peer observes the stream finished).
 
     use super::{
-        BoundedDgramQueue, DGRAM_QUEUE_CAP, DgramPushOutcome, Direction, MAX_RELAY_STREAMS,
-        RawStreamState, RelayHalf, admit_or_refuse, pump_dir, relay_streams,
+        BoundedDgramQueue, DGRAM_QUEUE_CAP, DgramPushOutcome, Direction, MAX_DGRAM_SIZE,
+        MAX_RELAY_STREAMS, RawStreamState, RelayHalf, admit_or_refuse, pump_dgram_dir, pump_dir,
+        relay_streams,
     };
 
     use std::collections::HashMap;
@@ -2615,6 +2616,187 @@ mod tests {
             128 * 1024 * 1024,
             "documented per-conn relay memory ceiling = 128 MiB \
              (MAX_RELAY_STREAMS * 2 * STREAM_RELAY_WINDOW)"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // B4 — `pump_dgram_dir` REACHABLE defensive send-drain arms (S19 B6
+    // coverage close). Deterministic, socket-free: a real established quiche
+    // pair drives the send-drain against a `dst` (a) that never negotiated
+    // DATAGRAM (`dgram_send` → InvalidState → drain+disable) and (b) whose
+    // writable limit is exceeded by a payload (`dgram_send` → BufferTooShort
+    // → drop-this-one). The recv-side `BufferTooShort` arm is genuinely
+    // unreachable with the MAX_DGRAM_SIZE (65535) recv buffer and is left for
+    // the verifier to document. Asserts the BOUNDED outcome (queue drained /
+    // payload dropped + counted), not mere "no panic".
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// `quiche::Config` for an established pair where DATAGRAM negotiation is
+    /// independently switchable per side. `*_dgram = Some(max)` enables
+    /// `enable_dgram(true, max, max)`; `None` leaves DATAGRAM OFF (so a local
+    /// `dgram_send` returns `InvalidState`).
+    fn dgram_pair(
+        certs: &TestCerts,
+        client_dgram: Option<usize>,
+        server_dgram: Option<usize>,
+    ) -> (
+        quiche::Connection,
+        quiche::Connection,
+        SocketAddr,
+        SocketAddr,
+    ) {
+        let (caddr, saddr) = (
+            "127.0.0.1:6001".parse::<SocketAddr>().unwrap(),
+            "127.0.0.1:6002".parse::<SocketAddr>().unwrap(),
+        );
+        let mut ccfg = client_config(certs);
+        if let Some(max) = client_dgram {
+            ccfg.enable_dgram(true, max, max);
+        }
+        let mut scfg = server_config(certs, 4);
+        if let Some(max) = server_dgram {
+            scfg.enable_dgram(true, max, max);
+        }
+        let cscid = random_scid();
+        let sscid = random_scid();
+        let mut client = quiche::connect(
+            Some(TEST_SNI),
+            &quiche::ConnectionId::from_ref(&cscid),
+            caddr,
+            saddr,
+            &mut ccfg,
+        )
+        .unwrap();
+        let mut server = quiche::accept(
+            &quiche::ConnectionId::from_ref(&sscid),
+            None,
+            saddr,
+            caddr,
+            &mut scfg,
+        )
+        .unwrap();
+        handshake_pair(&mut client, &mut server, caddr, saddr);
+        (client, server, caddr, saddr)
+    }
+
+    /// B4 — `dgram_send` InvalidState arm: a `dst` that NEVER negotiated
+    /// DATAGRAM cannot forward anything, so the whole queue is drained +
+    /// every payload counted as dropped (a non-negotiating peer must not be
+    /// able to pin relay memory). Reachable only if mis-wired — negotiation
+    /// is a config-time invariant — but the arm exists and must hold.
+    #[test]
+    fn pump_dgram_dir_invalid_state_drains_and_disables() {
+        let certs = gen_certs();
+        // quiche: `dgram_send` returns `InvalidState` when the LOCAL side's
+        // PEER did not advertise DATAGRAM support (`dgram_max_writable_len()`
+        // is `None`). So to make `dst`'s send fail with InvalidState, `dst`'s
+        // PEER must have DATAGRAM OFF. Here `dst` = the server conn; its peer
+        // is the client conn → give the CLIENT `None`. `src` is irrelevant to
+        // the send-drain (it has no queued datagrams ⇒ recv-drain is a no-op),
+        // so we reuse the client conn as `src`.
+        let (mut src, mut dst, _caddr, _saddr) = dgram_pair(&certs, None, Some(1200));
+        // dst's peer never negotiated DATAGRAM ⇒ dst cannot send any datagram.
+        assert!(
+            dst.dgram_max_writable_len().is_none(),
+            "fixture: dst's peer must NOT have negotiated DATAGRAM (⇒ dgram_send InvalidState)"
+        );
+
+        // Pre-seed the relay queue with several payloads as if they had been
+        // recv-drained from `src` on a prior turn.
+        let mut q = BoundedDgramQueue::new(DGRAM_QUEUE_CAP);
+        for i in 0..3u8 {
+            assert_eq!(q.push(vec![i; 16]), DgramPushOutcome::Queued);
+        }
+        assert_eq!(q.len(), 3);
+        let dropped_before = q.dropped();
+
+        // One relay pass: recv-drain `src` (nothing queued) then send-drain
+        // into `dst` → InvalidState → drain + disable.
+        pump_dgram_dir(&mut src, &mut dst, &mut q, Direction::ClientToUpstream);
+
+        assert_eq!(
+            q.len(),
+            0,
+            "InvalidState must drain the whole queue (a non-negotiating dst cannot forward)"
+        );
+        assert_eq!(
+            q.dropped(),
+            dropped_before + 3,
+            "every drained payload must be counted as dropped"
+        );
+    }
+
+    /// B4 — `dgram_send` BufferTooShort arm: a payload larger than `dst`'s
+    /// negotiated writable limit can NEVER be forwarded over this connection,
+    /// so it is dropped (and counted) and the send-drain CONTINUES to the
+    /// next payload (it must not block the queue forever). Asserts the
+    /// oversized payload is dropped while a normal-sized one queued AFTER it
+    /// is still delivered (reaches `dst`'s peer).
+    #[test]
+    fn pump_dgram_dir_buffer_too_short_drops_one_continues() {
+        let certs = gen_certs();
+        // Both sides negotiate DATAGRAM. `dst` = server; its writable limit
+        // is what `dst`'s PEER (the client) advertised.
+        let (mut peer_of_dst, mut dst, daddr_peer, daddr_dst) =
+            dgram_pair(&certs, Some(1200), Some(1200));
+        let max = dst
+            .dgram_max_writable_len()
+            .expect("fixture: dst negotiated DATAGRAM ⇒ Some writable len");
+        assert!(max < MAX_DGRAM_SIZE, "fixture: writable len is bounded");
+
+        // `src` is irrelevant to the send-drain; reuse `peer_of_dst` as the
+        // (datagram-free) source — it has nothing queued so the recv-drain is
+        // a no-op and we go straight to the send-drain into `dst`.
+        let oversized = vec![0xABu8; max + 1]; // > dst writable ⇒ BufferTooShort
+        let normal = vec![0xCDu8; max.min(64)]; // fits ⇒ delivered
+        let mut q = BoundedDgramQueue::new(DGRAM_QUEUE_CAP);
+        assert_eq!(q.push(oversized), DgramPushOutcome::Queued);
+        assert_eq!(q.push(normal.clone()), DgramPushOutcome::Queued);
+        let dropped_before = q.dropped();
+
+        // Send-drain `dst` (note: src=`peer_of_dst` has no queued datagrams).
+        pump_dgram_dir(
+            &mut peer_of_dst,
+            &mut dst,
+            &mut q,
+            Direction::UpstreamToClient,
+        );
+
+        assert_eq!(
+            q.len(),
+            0,
+            "the oversized payload is dropped and the normal one is accepted ⇒ queue empties"
+        );
+        assert_eq!(
+            q.dropped(),
+            dropped_before + 1,
+            "exactly the one oversized payload is counted as dropped"
+        );
+
+        // The normal payload must actually have reached `dst`'s peer: flush
+        // `dst` → recv on `peer_of_dst` → `dgram_recv` yields the bytes.
+        let mut buf = vec![0u8; MAX_DGRAM_SIZE];
+        loop {
+            match dst.send(&mut buf) {
+                Ok((n, _)) => {
+                    let info = quiche::RecvInfo {
+                        from: daddr_dst,
+                        to: daddr_peer,
+                    };
+                    let _ = peer_of_dst.recv(buf.get_mut(..n).unwrap_or(&mut []), info);
+                }
+                Err(quiche::Error::Done) => break,
+                Err(_) => break,
+            }
+        }
+        let mut got = vec![0u8; MAX_DGRAM_SIZE];
+        let recvd = peer_of_dst
+            .dgram_recv(&mut got)
+            .expect("dst's peer must receive the normal-sized datagram");
+        assert_eq!(
+            got.get(..recvd).unwrap_or(&[]),
+            normal.as_slice(),
+            "the post-oversized normal payload is forwarded byte-identically (send-drain continued)"
         );
     }
 }
