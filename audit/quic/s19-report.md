@@ -53,8 +53,34 @@ regression in the inherited tree). No flakes, no asterisks.
 
 ---
 
-## Phase 1 — B4: datagram relay + bounded drop-newest queue
-<pending>
+## Phase 1 — B4: datagram relay + bounded drop-newest queue  ✅ VERIFIED
+
+Builder: builder-1 (`8ff3df6d`). Verifier: independent (`146701e8`).
+
+### Implementation (raw_proxy.rs)
+- `BoundedDgramQueue` (VecDeque<Vec<u8>> + cap + dropped) — explicit
+  **drop-newest** at `len >= cap`; `DGRAM_QUEUE_CAP = 1024` (matches quiche
+  `enable_dgram` default; R7 pre-auth; documented R8 bound).
+- `relay_datagrams`/`pump_dgram_dir`: recv-drain `src` → bounded queue
+  (drop-newest if full) → send-drain to `dst`. `dgram_send` policy:
+  `Err(Done)` = transient backpressure (retry, never drop); `BufferTooShort`
+  = drop-this (un-forwardable); `InvalidState` = drain+disable (mis-wired
+  guard). Independent of streams (no FIN/reset/ordering; stream table & pump
+  untouched).
+- Wired into `run_dual_pump` after `relay_streams`; RELAY_TICK gate extended
+  so datagram-only traffic is pumped promptly, no busy-spin when idle.
+- `dropped` counter plumbed (accessor) for B6's `quic_modeb_datagrams_dropped`.
+
+### Verification evidence (logs in audit/quic/s19-b4-verify-logs/ + s19-logs/)
+- Real-wire pass-through both directions, binary (zero-len/all-zero/non-UTF8/
+  near-max), byte-identical; two distinct conns (client_scid != upstream_scid).
+- Queue bound under 50k-datagram flood at a stalled sink: connection healthy,
+  bounded, no OOM/hang. Drop-newest: flood past cap → `received < sent`
+  (drops occurred, bounded), relay not wedged, delivered bytes intact.
+- **R13(a)** scoped gate 173/0/0; **R13(b)** 60/60 wire-flood burst + 60/60
+  unit burst (0 flake); **R13(c)** negative control proven load-bearing
+  (scratch unbounded shape fails len/dropped/order asserts).
+- Lead independent sanity: unit 4/0, builder-wire 1/0, verifier-wire 3/0.
 
 ## Phase 2 — B5 (bounded-state flood) + B6 (wiring + metrics + 2 security proofs)
 <pending>
