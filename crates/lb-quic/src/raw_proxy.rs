@@ -503,9 +503,43 @@ async fn run_dual_pump(params: &mut ActorParams, upstream: &mut DedicatedQuic, o
 /// RTT path (enough not to throttle a healthy transfer) while keeping
 /// worst-case per-stream relay memory bounded and independent of the
 /// total transfer size. Total per-connection relay memory is bounded by
-/// `max_streams_per_conn * 2 * STREAM_RELAY_WINDOW` (B5 caps the table
-/// size; the per-stream window is bounded here).
+/// `MAX_RELAY_STREAMS * 2 * STREAM_RELAY_WINDOW` ([`MAX_RELAY_STREAMS`]
+/// caps the table size; the per-stream window is bounded here).
 const STREAM_RELAY_WINDOW: usize = 256 * 1024;
+
+/// B5 — explicit, defense-in-depth CEILING on the per-connection relay
+/// stream table ([`run_dual_pump`]'s `streams: HashMap<u64,
+/// RawStreamState>`). Together with the per-stream [`STREAM_RELAY_WINDOW`]
+/// it makes the worst-case per-connection relay memory a HARD constant:
+///
+/// ```text
+///   per-conn relay memory  ≤  MAX_RELAY_STREAMS * 2 * STREAM_RELAY_WINDOW
+///                          =  256 * 2 * 256 KiB  =  128 MiB  (never approached)
+/// ```
+///
+/// ## Why an explicit cap on top of quiche's `max_streams`
+///
+/// In normal operation the table is already bounded WELL below this by
+/// quiche's negotiated stream grant: the client-facing
+/// [`crate::listener::build_server_config`] sets
+/// `initial_max_streams_bidi(16)` + `initial_max_streams_uni(16)`, so a
+/// conforming client can have at most ~32 streams concurrently OPEN, and
+/// the existing reclamation ([`relay_streams`]'s `streams.retain`) evicts
+/// each stream the moment BOTH its directions finish — the table grows
+/// with the *concurrent* count, NOT the *total* stream count over a
+/// connection's life. This cap is therefore NOT the primary bound in
+/// practice.
+///
+/// It exists as defense-in-depth so the relay's memory ceiling is
+/// INDEPENDENT of the quiche config: were `max_streams` ever mis-set to a
+/// huge value (operator error / a future config change), the negotiated
+/// grant alone would no longer bound the table, and this constant still
+/// would. `256` sits comfortably above the negotiated concurrent grant
+/// (~32 — an 8× margin so a correctly-configured connection NEVER hits it)
+/// while keeping the absolute memory ceiling sane (128 MiB worst-case,
+/// itself never reached because completed streams are reclaimed). An R7
+/// pre-auth-safe, conservatively-sized constant.
+const MAX_RELAY_STREAMS: usize = 256;
 
 /// Short poll interval used while ANY stream is mid-transfer, so a
 /// partial/backpressured copy resumes without waiting out quiche's idle
@@ -661,11 +695,20 @@ fn relay_streams(
     // state (pending bytes / deferred FIN). De-dup via the state map: a
     // readable sid that is not yet tracked gets a default entry; an
     // already-tracked sid is revisited regardless of readability.
+    //
+    // B5 — explicit per-stream table cap ([`MAX_RELAY_STREAMS`],
+    // defense-in-depth): a NEW readable sid is admitted only while the table
+    // is below the cap; an already-tracked sid is ALWAYS re-processed
+    // (correctness — never drop a live stream mid-transfer). Over-cap is only
+    // reachable if the quiche `max_streams` grant is mis-configured far above
+    // the cap (a conforming client can have ≤ ~32 streams open — see
+    // [`MAX_RELAY_STREAMS`]); when it happens we refuse to TRACK the new sid
+    // (fail-safe, bounded) and log rate-aware, rather than grow without bound.
     for sid in client.readable() {
-        streams.entry(sid).or_default();
+        admit_or_refuse(streams, sid);
     }
     for sid in upstream.readable() {
-        streams.entry(sid).or_default();
+        admit_or_refuse(streams, sid);
     }
 
     let sids: Vec<u64> = streams.keys().copied().collect();
@@ -691,8 +734,44 @@ fn relay_streams(
         );
     }
 
-    // Reclaim entries whose BOTH directions are terminally done.
+    // Reclaim entries whose BOTH directions are terminally done. This is the
+    // lifetime reclamation that keeps the table bounded by the CONCURRENT
+    // stream count (not the total over the connection's life) — the B5
+    // stream-flood test's primary bound, and the eviction whose removal makes
+    // the table grow with total streams (the load-bearing negative control).
     streams.retain(|_, st| !st.is_complete());
+}
+
+/// B5 — admit a NEW relay-stream `sid` into the per-connection table iff the
+/// table is below [`MAX_RELAY_STREAMS`]; an already-tracked `sid` is left
+/// untouched (a no-op `or_default` would be too — but the explicit
+/// `contains_key` short-circuit makes the always-process-existing invariant
+/// unmistakable). Over the cap a NEW sid is REFUSED (not inserted) and logged
+/// rate-aware — a fail-safe, bounded ceiling independent of the quiche
+/// `max_streams` grant (see [`MAX_RELAY_STREAMS`]). Returns nothing; the
+/// table mutation IS the effect.
+fn admit_or_refuse(streams: &mut HashMap<u64, RawStreamState>, sid: u64) {
+    if streams.contains_key(&sid) {
+        // Already tracked: ALWAYS re-processed this pass (never drop a live
+        // stream). No table growth, so the cap does not apply.
+        return;
+    }
+    if streams.len() < MAX_RELAY_STREAMS {
+        streams.entry(sid).or_default();
+    } else {
+        // Over the explicit ceiling — refuse to track this new sid. Only
+        // reachable with a mis-configured huge `max_streams` (a conforming
+        // peer cannot open this many concurrent streams). `debug!` keeps the
+        // log rate-bounded under a flood (one line per over-cap readable sid
+        // per pass; the conforming path never reaches here).
+        tracing::debug!(
+            stream_id = sid,
+            table_len = streams.len(),
+            cap = MAX_RELAY_STREAMS,
+            "Mode B B5: relay stream table at cap; refusing new stream (R8 bound \
+             — only reachable with a mis-configured max_streams)"
+        );
+    }
 }
 
 /// B4 — maximum capacity (in datagrams) of ONE [`BoundedDgramQueue`], i.e.
@@ -1291,9 +1370,11 @@ mod tests {
     //! delivered (peer observes the stream finished).
 
     use super::{
-        BoundedDgramQueue, DGRAM_QUEUE_CAP, DgramPushOutcome, Direction, RelayHalf, pump_dir,
+        BoundedDgramQueue, DGRAM_QUEUE_CAP, DgramPushOutcome, Direction, MAX_RELAY_STREAMS,
+        RawStreamState, RelayHalf, admit_or_refuse, pump_dir, relay_streams,
     };
 
+    use std::collections::HashMap;
     use std::net::SocketAddr;
     use std::path::PathBuf;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -2140,5 +2221,249 @@ mod tests {
             "the cap+1'th push is drop-newest"
         );
         assert_eq!(q.dropped(), 1);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // B5 — explicit per-stream relay-table cap (MAX_RELAY_STREAMS).
+    // Deterministic, socket-free: a real quiche pair whose grant EXCEEDS the
+    // cap opens > cap streams; `relay_streams` must clamp the table to the
+    // cap. Plus the load-bearing negative-control seed (without the cap the
+    // table would reach the higher opened-count). The verifier owns the
+    // authoritative real-wire flood/burst.
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// A `quiche::Config` pair granting MANY bidi streams (> the relay cap),
+    /// so the relay table can be driven OVER [`MAX_RELAY_STREAMS`] in a unit
+    /// test. The server (acting as the relay's `client` arg) grants
+    /// `bidi_limit` client-initiated bidi streams; the peer opens that many.
+    /// Generous per-stream + conn flow control so every opened stream carries
+    /// its byte and becomes readable in one drain.
+    fn over_cap_server_config(certs: &TestCerts, bidi_limit: u64) -> quiche::Config {
+        let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
+        cfg.set_application_protos(&[ALPN]).unwrap();
+        cfg.load_cert_chain_from_pem_file(certs.cert.to_str().unwrap())
+            .unwrap();
+        cfg.load_priv_key_from_pem_file(certs.key.to_str().unwrap())
+            .unwrap();
+        cfg.set_max_idle_timeout(5_000);
+        cfg.set_max_recv_udp_payload_size(1_350);
+        cfg.set_max_send_udp_payload_size(1_350);
+        cfg.set_initial_max_data(8 * 1024 * 1024);
+        cfg.set_initial_max_stream_data_bidi_local(64 * 1024);
+        cfg.set_initial_max_stream_data_bidi_remote(64 * 1024);
+        cfg.set_initial_max_stream_data_uni(64 * 1024);
+        cfg.set_initial_max_streams_bidi(bidi_limit);
+        cfg.set_initial_max_streams_uni(2);
+        cfg.set_disable_active_migration(true);
+        cfg
+    }
+
+    fn over_cap_client_config(certs: &TestCerts, bidi_limit: u64) -> quiche::Config {
+        let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
+        cfg.set_application_protos(&[ALPN]).unwrap();
+        cfg.load_verify_locations_from_file(certs.ca.to_str().unwrap())
+            .unwrap();
+        cfg.verify_peer(true);
+        cfg.set_max_idle_timeout(5_000);
+        cfg.set_max_recv_udp_payload_size(1_350);
+        cfg.set_max_send_udp_payload_size(1_350);
+        cfg.set_initial_max_data(8 * 1024 * 1024);
+        cfg.set_initial_max_stream_data_bidi_local(64 * 1024);
+        cfg.set_initial_max_stream_data_bidi_remote(64 * 1024);
+        cfg.set_initial_max_stream_data_uni(64 * 1024);
+        cfg.set_initial_max_streams_bidi(bidi_limit);
+        cfg.set_initial_max_streams_uni(2);
+        cfg.set_disable_active_migration(true);
+        cfg
+    }
+
+    /// Establish a peer→server pair where the peer (a client) opens
+    /// `open_count` client-initiated bidi streams, each carrying one byte +
+    /// FIN, then ferries them so `server` observes all `open_count` streams
+    /// readable. `server` is returned to play the relay's `client` arg; the
+    /// peer is returned so it stays alive/owned. `bidi_limit` (the grant) must
+    /// be >= `open_count`.
+    fn server_with_n_readable_streams(
+        certs: &TestCerts,
+        open_count: u64,
+        bidi_limit: u64,
+    ) -> (quiche::Connection, quiche::Connection) {
+        assert!(
+            bidi_limit >= open_count,
+            "fixture: the grant must allow opening all requested streams"
+        );
+        let caddr: SocketAddr = "127.0.0.1:5301".parse().unwrap();
+        let saddr: SocketAddr = "127.0.0.1:5302".parse().unwrap();
+        let mut ccfg = over_cap_client_config(certs, bidi_limit);
+        let mut scfg = over_cap_server_config(certs, bidi_limit);
+        let cscid = random_scid();
+        let sscid = random_scid();
+        let mut peer = quiche::connect(
+            Some(TEST_SNI),
+            &quiche::ConnectionId::from_ref(&cscid),
+            caddr,
+            saddr,
+            &mut ccfg,
+        )
+        .unwrap();
+        let mut server = quiche::accept(
+            &quiche::ConnectionId::from_ref(&sscid),
+            None,
+            saddr,
+            caddr,
+            &mut scfg,
+        )
+        .unwrap();
+        handshake_pair(&mut peer, &mut server, caddr, saddr);
+        // Open `open_count` client-initiated bidi streams (ids 0,4,8,…), each
+        // a single distinct byte + FIN.
+        for i in 0..open_count {
+            let sid = i * 4; // client-initiated bidi stream ids
+            peer.stream_send(sid, &[(i % 251) as u8], true).unwrap();
+        }
+        // Ferry until the server has all streams readable (a few rounds cover
+        // multi-packet fan-out of many small streams).
+        for _ in 0..16 {
+            pump_once(&mut peer, &mut server, caddr, saddr);
+            let readable = server.readable().count() as u64;
+            if readable >= open_count {
+                break;
+            }
+        }
+        let readable = server.readable().count() as u64;
+        assert!(
+            readable >= open_count,
+            "fixture: server must observe all {open_count} opened streams readable (got {readable})"
+        );
+        (server, peer)
+    }
+
+    /// B5 — THE per-stream cap holds: a peer opens `OPEN > MAX_RELAY_STREAMS`
+    /// streams over a grant that EXCEEDS the cap; `relay_streams` must clamp
+    /// the relay table to `MAX_RELAY_STREAMS` (never insert the over-cap
+    /// sids).
+    ///
+    /// Load-bearing negative control (seed): the peer opened `OPEN` distinct
+    /// streams and the server observes them ALL readable (asserted in the
+    /// fixture), so the relay table would reach `OPEN` (> cap) WITHOUT the
+    /// `admit_or_refuse` ceiling — the `streams.len() < MAX_RELAY_STREAMS`
+    /// gate is the only thing keeping it at the cap. Remove the gate (always
+    /// `or_default`) and the final assert below flips from `== cap` to
+    /// `== OPEN`. The verifier authors the authoritative cap-removed control.
+    #[test]
+    fn relay_table_clamped_to_max_relay_streams_under_flood() {
+        let certs = gen_certs();
+        // Open comfortably above the cap so the clamp is unambiguous.
+        let open: u64 = (MAX_RELAY_STREAMS as u64) + 64;
+        // Grant strictly more than we open (so quiche is NOT the limiter —
+        // the relay-side cap is the one under test).
+        let grant: u64 = open + 16;
+        let (mut server, _peer) = server_with_n_readable_streams(&certs, open, grant);
+
+        // The relay's `upstream` arg: a quiet established conn with no
+        // readable streams of its own (so the readable union is exactly the
+        // server's `open` streams). Reuse the standard established pair.
+        let (mut upstream, _backend, _ca, _sa) = established_pair(&certs, 4);
+
+        // Pre-condition (the negative-control seed): the server really does
+        // have > cap readable streams to offer.
+        let server_readable = server.readable().count();
+        assert!(
+            server_readable as u64 >= open,
+            "seed: the source offers {open} readable streams (> the {MAX_RELAY_STREAMS} cap); \
+             WITHOUT the cap the table would reach {server_readable}"
+        );
+
+        let mut streams: HashMap<u64, RawStreamState> = HashMap::new();
+        // Several passes: each pass admits new readable sids up to the cap and
+        // pumps. The cap must hold on every pass.
+        for _ in 0..4 {
+            relay_streams(&mut server, &mut upstream, &mut streams);
+            assert!(
+                streams.len() <= MAX_RELAY_STREAMS,
+                "B5: the relay table must never exceed MAX_RELAY_STREAMS ({MAX_RELAY_STREAMS}); \
+                 got {}",
+                streams.len()
+            );
+        }
+
+        // The cap was actually REACHED (not merely under it for some other
+        // reason): the source offered > cap streams, so the table filled to
+        // exactly the cap. This is what proves the ceiling is load-bearing
+        // here (vs. a vacuous "never exceeded" on an empty table).
+        assert_eq!(
+            streams.len(),
+            MAX_RELAY_STREAMS,
+            "B5: with > cap streams offered, the table must fill to exactly the cap \
+             (the over-cap sids are refused, not inserted)"
+        );
+    }
+
+    /// B5 — `admit_or_refuse` (the cap gate) directly: an ALREADY-TRACKED sid
+    /// is ALWAYS kept even when the table is AT the cap (correctness — the cap
+    /// must never drop a live stream mid-transfer), while a genuinely NEW sid
+    /// at the cap is REFUSED (not inserted). This is the pure-logic
+    /// counterpart to the wire-level clamp test — no quiche needed.
+    #[test]
+    fn admit_or_refuse_keeps_tracked_refuses_new_at_cap() {
+        let mut streams: HashMap<u64, RawStreamState> = HashMap::new();
+        // Fill the table to EXACTLY the cap with sids 0..cap.
+        for sid in 0..(MAX_RELAY_STREAMS as u64) {
+            admit_or_refuse(&mut streams, sid);
+        }
+        assert_eq!(
+            streams.len(),
+            MAX_RELAY_STREAMS,
+            "the first MAX_RELAY_STREAMS distinct sids fill the table to the cap"
+        );
+
+        // (a) An ALREADY-TRACKED sid offered again at the cap is a no-op —
+        // kept, table unchanged (NEVER dropped because the table is full).
+        let tracked = 7u64;
+        assert!(streams.contains_key(&tracked));
+        admit_or_refuse(&mut streams, tracked);
+        assert_eq!(
+            streams.len(),
+            MAX_RELAY_STREAMS,
+            "re-offering a tracked sid at the cap must not change the table"
+        );
+        assert!(
+            streams.contains_key(&tracked),
+            "the cap must NEVER drop an already-tracked (live) stream"
+        );
+
+        // (b) A genuinely NEW sid at the cap is REFUSED — not inserted, table
+        // size unchanged (the fail-safe bound; only reachable with a
+        // mis-configured huge max_streams).
+        let fresh = 999_999u64;
+        assert!(!streams.contains_key(&fresh));
+        admit_or_refuse(&mut streams, fresh);
+        assert!(
+            !streams.contains_key(&fresh),
+            "a new sid over the cap must be REFUSED (not inserted)"
+        );
+        assert_eq!(
+            streams.len(),
+            MAX_RELAY_STREAMS,
+            "refusing a new over-cap sid must not grow the table (the R8 bound)"
+        );
+    }
+
+    /// B5 — pin the cap constant + the documented memory-ceiling arithmetic so
+    /// a silent change is caught (it is the B6 `max_relay_streams` default).
+    #[test]
+    fn max_relay_streams_constant_is_documented_default() {
+        assert_eq!(
+            MAX_RELAY_STREAMS, 256,
+            "the B5 relay-table ceiling is 256 (8× the ~32 negotiated grant)"
+        );
+        // The documented worst-case memory ceiling: cap * 2 dirs * window.
+        let ceiling = MAX_RELAY_STREAMS * 2 * super::STREAM_RELAY_WINDOW;
+        assert_eq!(
+            ceiling,
+            128 * 1024 * 1024,
+            "documented per-conn relay memory ceiling = 128 MiB \
+             (MAX_RELAY_STREAMS * 2 * STREAM_RELAY_WINDOW)"
+        );
     }
 }
