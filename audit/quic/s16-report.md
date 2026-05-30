@@ -197,6 +197,29 @@ reset path) flaked once on its 25s `RELAY_BUDGET` under 4-concurrent-wire-test 8
 saturation; passes isolated (0.7s) + on rerun. Pre-existing [[gate-saturation-test-fragility]];
 bump-don't-weaken if it recurs in the ×3 gate. Not a B3 issue.
 
+### CF-S16-RELAY-STALL — relay liveness blocker (found by B3 verifier; cause confirmed by lead; fix delegated)
+**Severity: BLOCKER** (R1 determinism / R3). Found by the B3 verifier: `s16_b2_multistream`
+stalls intermittently. Lead repro (isolation, no contention): **4/20 hard-fail at the 25s
+test wall, ~20% stall rate**; bimodal (~0.55s healthy vs ≥25s). NOT CF-SATURATION-1.
+
+**Cause (CONFIRMED by lead diagnostic experiment, not hypothesis):** `run_dual_pump`'s
+`tokio::select!` completes exactly ONE arm per wake, making client-recv
+(`params.inbound.recv()`) and upstream-recv (`upstream.socket.recv_from()`) mutually
+exclusive. A chatty client (trickling ACKs after its upload) keeps the earlier arm
+ready and **starves the upstream receive path** → the backend's echo packets are never
+ingested into `upstream.conn` → relay can't forward them → stall until the test budget.
+(The prior fix attempt's tick-cadence hypothesis was DISPROVEN — 6 loop-timing variants
+all stalled at baseline; the fingerprint is upstream-leg freeze, not wake cadence.)
+
+**Fix (PROVEN by lead, delegated to builder to productionize):** after the select wakes,
+greedily drain BOTH recv sources non-blockingly (`params.inbound.try_recv()` +
+`upstream.socket.try_recv_from()` loops) so neither starves. Lead diagnostic patch
+measured **30/30 pass, max 1.68s, 0 stalls**. Preserves R8 backpressure (the 256 KiB
+stream-layer read-gate is the bound; draining UDP transport packets is always correct
+and does not extend stream flow-control) and does not busy-spin (select still blocks for
+the wait; `try_recv` returns immediately when empty). Builder authors the production
+version; independent verifier re-confirms (burst + regression + no backpressure regression).
+
 ### B4..B6 — << appended as each lands >>
 
 ## Phase 3 — gates
