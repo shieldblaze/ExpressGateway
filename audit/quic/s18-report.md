@@ -80,9 +80,42 @@ lines):** root CONFIRMED + fix VERIFIED to R13.
 R13(a) ×3 gate = Phase 3). **B4/B5/B6:** decision at Phase-3-green (R7 honest-stop available:
 stall-closed + clean gate beats rushed B4-B6).
 
-## Phase 3 — gates + promote  (RUNNING)
-R1 ×3 `cargo test --workspace --all-features` (sequential) + clippy `--workspace --all-targets
---all-features -D warnings` + fmt `--check`. Background-to-completion; every log read to end
-before any claim (R15). Logs `/home/ubuntu/Code/eg-s18-gate/`.
+## Phase 3 — gates  ✅ GREEN ×3 (promote decision pending)
+Gate tree `81187de6` (fix `1414d656` in tree; only audit/ docs changed after → gate reflects
+the promotable source). Logs `/home/ubuntu/Code/eg-s18-gate/`, summary archived
+`s18-logs/p3-gate-summary.txt`. Each run read to completion + independent FAILED grep (empty).
 
-## VERDICT: (pending Phase 3 ×3 green + promote decision)
+| gate | result |
+|---|---|
+| `cargo fmt --check` | exit 0 ✔ |
+| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | exit 0 ✔ |
+| `cargo test --workspace --all-features` run 1 | **1364 passed / 0 failed / 18 ignored** (230 bins) |
+| run 2 | **1364 / 0 / 18** |
+| run 3 | **1364 / 0 / 18** |
+
+Deterministic ×3, no asterisk (R1). The previously non-deterministic Mode B stall tests
+(`s16_b2_multistream`, `s16_b2_backpressure` resume) now pass inside the ×3 parallel gate
+= **R13(a)** confirmed. No regression (R3): S1–S15, 9 matrix cells, H3 termination, Mode A
+passthrough, XDP, foundation, security, Mode B B1/B2/B3 all green ×3. 18 ignored = inherited
+CF-IGN-1 carry-forward. The gate also re-verifies CF-S17-B3 (s16_b3 ran ×3 under `--all-features`
+at 8-core saturation — exactly where it flaked — and passed).
+
+**R13 for the stall fix — ALL THREE satisfied:** (a) ×3 parallel gate clean [this section];
+(b) ≥75-iter dual-path isolation burst ZERO stalls [verifier 0/90 + 0/75]; (c) load-bearing
+negative control [verifier 9/90→0/90, 4/75→0/75 + deterministic regression test fail-prefix/
+pass-fixed].
+
+**Coverage (scoped):** the production change is a single added condition (`!half.src_fin_seen`)
+on an already-heavily-exercised line in `pump_dir`; the changed branch is covered by the new
+deterministic regression test `post_fin_short_write_reread_does_not_drop_tail` (proven
+load-bearing) + the full Mode B wire suite ×3. No new uncovered production code → session
+sub-metric met by construction (a separate instrumented llvm-cov run for a one-condition change
+is disproportionate and disk-risky at 13 GB free; documented rather than run).
+
+## Promote / B4-B6 — DECISION POINT (R7 honest-stop)
+Stall CLOSED + Phase 3 green ⇒ a clean, promotable "stall-closed Mode B (B1/B2/B3)" state.
+Per R7 honest-stop ("stall-closed + clean gate beats rushed B4-B6") this qualifies as SESSION
+18 COMPLETE without B4/B5/B6. Surfacing the scope choice to the owner before the irreversible
+`--no-ff` promote to main.
+
+## VERDICT: (pending promote decision)
