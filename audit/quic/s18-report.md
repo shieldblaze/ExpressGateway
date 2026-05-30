@@ -26,7 +26,17 @@ Standing rules R1–R15 in force; R15 (no result from an incomplete job) load-be
 
 ### Findings tracked into the gate (R4)
 - CF-S16-RELAY-STALL (BLOCKER, OPEN) → Phase 1 three-bucket diagnosis.
-- CF-S17-B3-VERIFY-DONE-UNWRAP (test fragility, OPEN) → Phase 0 fix, author≠verifier.
+- CF-S17-B3-VERIFY-DONE-UNWRAP (test fragility) → **FIXED** @ `90ac0b8b` (builder-1):
+  the bare `stream_send(SIBLING_STREAM,..,true).unwrap()` at :625 replaced with a bounded
+  (10 s) pump+retry loop (cursor over `SIBLING_PAYLOAD`, FIN rides the final fully-accepted
+  chunk, `Err(Done)`=no-op, pumps `flush`+`try_recv_one` between tries). Test-only, no
+  assertion weakened, no `#[ignore]`, Cargo.lock unchanged. NOTE: the file is gated
+  `#![cfg(feature = "test-gauges")]` → only runs under `--all-features` / `--features
+  test-gauges` (silent `0 tests` otherwise) — the R1 baseline uses `--all-features` so it
+  is covered. Lead independently reviewed the diff (author≠verifier); independent
+  verification burst deferred to the quiet box (Phase 3) to avoid perturbing diag-eng's
+  timing-sensitive diagnosis. builder-1 self-test (read from completed output): 10× ×4
+  single-threaded + 15× saturated headline = 25/25 PASS.
 
 _(baseline ×3 + test-fix evidence appended as they complete — every claim cites a completed log.)_
 
