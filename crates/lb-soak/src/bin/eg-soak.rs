@@ -355,7 +355,7 @@ async fn setup_h2h2(
         listener,
         sni,
         certs.ca.clone(),
-        1 * args.scale,
+        args.scale,
         cancel.clone(),
     )));
 
