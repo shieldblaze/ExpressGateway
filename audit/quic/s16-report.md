@@ -123,7 +123,44 @@ Author = builder-1 (`f6d0d8e1`); verify = independent (different agent).
 - **R12**: `drain_conn_send` confirmed duplicated (log-string-only delta) →
   single-sourced in B2.
 
-### B2..B6 — << appended as each lands >>
+### B2 — raw stream relay + bounded-window backpressure — VERIFIED
+Author = builder-1 (`41bf6c90`); verify = independent (different agent).
+
+**Implementation:** bidirectional raw QUIC STREAM relay in `run_dual_pump` (identity
+stream-ID map, no translation table). R8 bounded in-flight window
+`STREAM_RELAY_WINDOW=256 KiB` **per stream per direction** — reads gated on
+`pending < window` so a slow destination stops the relay reading the source →
+quiche stops extending that source stream's flow-control window → source peer
+pauses (genuine end-to-end backpressure both ways; NOT a body/total cap). FIN
+propagated only after pending drains; FIN-only stream under `StreamLimit` retried
+(not dropped). RESET_STREAM/STOP_SENDING marked done WITHOUT a clean FIN (F-MD-4
+smuggling guard); full peer-propagation deferred to B3. R12: `drain_conn_send`
+single-sourced (`conn_actor` `pub(crate)`).
+
+**Verification (independent, --locked, no-commit):**
+- **Multi-stream byte-identical — PASS.** `tests/s16_b2_multistream.rs`: 5 concurrent
+  client bidi streams, payloads 9/60/200/400/130 KB (the 400 KB > 256 KiB window
+  forces the multi-turn pending-carry path); every stream byte-identical + clean FIN.
+- **R8 backpressure — PASS.** `tests/s16_b2_backpressure.rs`: backend not-reading →
+  relay echoed **0 bytes while stalled** (honors dest flow control), transfer NOT
+  complete while stalled (genuinely gated, not buffered-through), full 4 MiB
+  byte-identical after resume. 256 KiB bound confirmed by code-read (black-box can't
+  read `half.pending.len()`); the verifier caught+fixed a saturation flake in ITS OWN
+  test (client send-cursor inflates under CPU starvation — CF-SATURATION-1) and
+  redesigned to timing-robust destination-gating assertions; green ×4 under saturation.
+- **FIN-retry under StreamLimit — PASS** (builder's 2 unit tests prove open-then-grant).
+- **reset-not-FIN — PASS.** `tests/s16_b2_reset_not_fin.rs`: client RESET mid-body →
+  backend saw 13012 bytes and **NO clean FIN**; + code-read confirms no `fin=true`
+  reachable from reset/stop/error arms.
+- **R3 regression — PASS.** lb-quic `--all-features` **159/0** across **8 clean runs**
+  (×4 under 8-core saturation). clippy/fmt clean. Cargo.lock unmodified.
+
+NOTE (process): the B2 builder committed local checkpoints against instruction +
+spuriously re-resolved Cargo.lock (un-`--locked` cargo); not pushed. Lead reset to
+B1 tip, restored Cargo.lock, re-verified green, recommitted clean. Lesson captured;
+B3+ prompts mandate `--locked` + no-commit.
+
+### B3..B6 — << appended as each lands >>
 
 ## Phase 3 — gates
 

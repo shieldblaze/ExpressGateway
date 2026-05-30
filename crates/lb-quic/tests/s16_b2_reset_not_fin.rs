@@ -1,0 +1,545 @@
+//! SESSION 16 / Mode B — B2 VERIFIER's "reset is NOT a clean FIN" boundary
+//! proof (the F-MD-4 smuggling guard; plan §2.3 + the `pump_dir` reset/stop
+//! arms in `crates/lb-quic/src/raw_proxy.rs`).
+//!
+//! Author ≠ verifier. B2 does NOT yet PROPAGATE a client RESET_STREAM /
+//! STOP_SENDING to the backend (that is B3). But it MUST NOT convert a peer
+//! reset into a clean FIN: doing so would deliver a TRUNCATED transfer to
+//! the backend as a COMPLETE one — the matrix F-MD-4 smuggling/corruption
+//! class.
+//!
+//!   real quiche CLIENT  ⇄  Mode B actor  ⇄  real quiche BACKEND (records)
+//!
+//! The client opens bidi stream 0, sends a PARTIAL body (no FIN), waits
+//! until the backend has actually received some of those bytes (so the
+//! upstream mirror stream 0 genuinely exists), then RESET_STREAMs stream 0.
+//! The backend records whether it EVER observes a CLEAN end on stream 0
+//! (`stream_recv` returning `fin == true`, or `stream_finished(0)`). The
+//! assertion: it must NEVER see a clean FIN — the relay must drop the half
+//! WITHOUT synthesising `stream_send(.., fin=true)`.
+//!
+//! ## Why this is the load-bearing negative control
+//!
+//! A buggy relay that mapped `Err(StreamReset)` (or any read error) onto a
+//! clean `dst.stream_send(sid, &[], true)` would make the backend observe a
+//! clean stream finish on a truncated transfer — and THIS test would FAIL.
+//! The B2 code instead does `half.pending.clear(); half.done = true;`
+//! (no FIN) on the reset/stop/error arms (verified by code-read); this test
+//! is the wire-level witness of that behaviour.
+//!
+//! Driven with `--features test-gauges` so the
+//! `run_raw_proxy_actor_for_test` hook (gated
+//! `#[cfg(any(test, feature = "test-gauges"))]`) is reachable.
+
+#![cfg(feature = "test-gauges")]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+
+use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::time::Duration;
+
+use tokio::net::UdpSocket;
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
+
+use lb_io::pool::{PoolConfig, TcpPool};
+use lb_io::quic_pool::{QuicPoolConfig, QuicUpstreamPool};
+use lb_io::sockopts::BackendSockOpts;
+use lb_quic::RawBackend;
+use lb_quic::conn_actor::{ActorParams, InboundPacket};
+use lb_quic::raw_proxy::run_raw_proxy_actor_for_test;
+
+const TEST_SNI: &str = "expressgateway.test";
+const H3_ALPN: &[u8] = b"h3";
+const MAX_UDP: usize = 65_535;
+const HANDSHAKE_BUDGET: Duration = Duration::from_secs(5);
+/// The client bidi stream that is reset mid-transfer (identity-mapped both
+/// legs).
+const STREAM_ID: u64 = 0;
+/// Application error code the client puts on its RESET_STREAM. Arbitrary
+/// non-zero; B2 does not propagate it, so its exact value only matters for
+/// B3 — here it just has to be a real reset.
+const RESET_CODE: u64 = 0x42;
+/// Partial body the client sends BEFORE the reset (multi-packet, no FIN).
+const PARTIAL_LEN: usize = 24 * 1024;
+
+// ─────────────────────────────────────────────────────────────────────
+// Cert plumbing (mirrors s16_b2_stream_relay_smoke.rs).
+// ─────────────────────────────────────────────────────────────────────
+
+static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
+
+struct TestCerts {
+    dir: PathBuf,
+    cert: PathBuf,
+    key: PathBuf,
+    ca: PathBuf,
+}
+
+impl Drop for TestCerts {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+fn generate_loopback_certs() -> TestCerts {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let seq = DIR_SEQ.fetch_add(1, Ordering::Relaxed);
+    let dir = std::env::temp_dir().join(format!(
+        "lb-quic-s16-b2-resetfin-{}-{nanos}-{seq}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+
+    let mut params = rcgen::CertificateParams::new(vec![TEST_SNI.to_string()]).unwrap();
+    params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    params
+        .extended_key_usages
+        .push(rcgen::ExtendedKeyUsagePurpose::ServerAuth);
+    let key_pair = rcgen::KeyPair::generate().unwrap();
+    let cert = params.self_signed(&key_pair).unwrap();
+    let cert_path = dir.join("cert.pem");
+    let key_path = dir.join("key.pem");
+    let ca_path = dir.join("ca.pem");
+    std::fs::write(&cert_path, cert.pem().as_bytes()).unwrap();
+    std::fs::write(&key_path, key_pair.serialize_pem().as_bytes()).unwrap();
+    std::fs::write(&ca_path, cert.pem().as_bytes()).unwrap();
+    TestCerts {
+        dir,
+        cert: cert_path,
+        key: key_path,
+        ca: ca_path,
+    }
+}
+
+fn random_scid() -> [u8; quiche::MAX_CONN_ID_LEN] {
+    use ring::rand::SecureRandom;
+    let mut scid = [0u8; quiche::MAX_CONN_ID_LEN];
+    ring::rand::SystemRandom::new().fill(&mut scid).unwrap();
+    scid
+}
+
+/// A deterministic binary payload (not all-ASCII).
+fn make_payload(len: usize) -> Vec<u8> {
+    (0..len).map(|i| ((i * 37 + 13) % 256) as u8).collect()
+}
+
+/// CLIENT-facing SERVER config (the LB-as-server leg). Generous windows so
+/// the partial body is admitted; the reset behaviour is what's under test.
+fn lb_server_config(certs: &TestCerts) -> quiche::Config {
+    let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
+    cfg.set_application_protos(&[H3_ALPN]).unwrap();
+    cfg.load_cert_chain_from_pem_file(certs.cert.to_str().unwrap())
+        .unwrap();
+    cfg.load_priv_key_from_pem_file(certs.key.to_str().unwrap())
+        .unwrap();
+    cfg.set_max_idle_timeout(15_000);
+    cfg.set_max_recv_udp_payload_size(1_350);
+    cfg.set_max_send_udp_payload_size(1_350);
+    cfg.set_initial_max_data(4 * 1024 * 1024);
+    cfg.set_initial_max_stream_data_bidi_local(512 * 1024);
+    cfg.set_initial_max_stream_data_bidi_remote(512 * 1024);
+    cfg.set_initial_max_stream_data_uni(64 * 1024);
+    cfg.set_initial_max_streams_bidi(16);
+    cfg.set_initial_max_streams_uni(8);
+    cfg.set_disable_active_migration(true);
+    cfg.enable_dgram(true, 1024, 1024);
+    cfg
+}
+
+/// The real downstream CLIENT config — verifies the LB's cert.
+fn client_config(certs: &TestCerts) -> quiche::Config {
+    let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
+    cfg.set_application_protos(&[H3_ALPN]).unwrap();
+    cfg.load_verify_locations_from_file(certs.ca.to_str().unwrap())
+        .unwrap();
+    cfg.verify_peer(true);
+    cfg.set_max_idle_timeout(15_000);
+    cfg.set_max_recv_udp_payload_size(1_350);
+    cfg.set_max_send_udp_payload_size(1_350);
+    cfg.set_initial_max_data(4 * 1024 * 1024);
+    cfg.set_initial_max_stream_data_bidi_local(512 * 1024);
+    cfg.set_initial_max_stream_data_bidi_remote(512 * 1024);
+    cfg.set_initial_max_stream_data_uni(64 * 1024);
+    cfg.set_initial_max_streams_bidi(16);
+    cfg.set_initial_max_streams_uni(8);
+    cfg.set_disable_active_migration(true);
+    cfg.enable_dgram(true, 1024, 1024);
+    cfg
+}
+
+/// The pool's per-dial CLIENT config factory (LB → backend leg). Installs a
+/// deliberately-wrong ALPN so the actor must MIRROR the client's `h3`.
+fn upstream_config_factory(
+    ca: PathBuf,
+) -> Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> {
+    Arc::new(move || {
+        let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
+        cfg.set_application_protos(&[b"mode-b-factory-default"])?;
+        cfg.load_verify_locations_from_file(ca.to_str().ok_or(quiche::Error::TlsFail)?)
+            .map_err(|_| quiche::Error::TlsFail)?;
+        cfg.verify_peer(true);
+        cfg.set_max_idle_timeout(15_000);
+        cfg.set_max_recv_udp_payload_size(1_350);
+        cfg.set_max_send_udp_payload_size(1_350);
+        cfg.set_initial_max_data(4 * 1024 * 1024);
+        cfg.set_initial_max_stream_data_bidi_local(512 * 1024);
+        cfg.set_initial_max_stream_data_bidi_remote(512 * 1024);
+        cfg.set_initial_max_stream_data_uni(64 * 1024);
+        cfg.set_initial_max_streams_bidi(16);
+        cfg.set_initial_max_streams_uni(8);
+        cfg.set_disable_active_migration(true);
+        cfg.enable_dgram(true, 1024, 1024);
+        Ok(cfg)
+    })
+}
+
+/// A throwaway BACKEND that accepts ONE connection and, on stream 0,
+/// RECORDS (a) how many bytes it received and (b) whether it ever observed
+/// a CLEAN end — `stream_recv` returning `fin == true` OR
+/// `stream_finished(0)`. It does NOT echo: we only care about the upstream-
+/// observed END STATE of the relayed stream. `saw_clean_fin` staying FALSE
+/// after a client reset is the load-bearing witness (no false clean FIN).
+fn spawn_recording_backend(
+    certs: &TestCerts,
+    recv_bytes: Arc<AtomicUsize>,
+    saw_clean_fin: Arc<AtomicBool>,
+) -> SocketAddr {
+    let std_sock = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    std_sock.set_nonblocking(true).unwrap();
+    let addr = std_sock.local_addr().unwrap();
+    let mut config = lb_server_config(certs);
+
+    tokio::spawn(async move {
+        let socket = UdpSocket::from_std(std_sock).unwrap();
+        let mut in_buf = vec![0u8; MAX_UDP];
+        let mut out_buf = vec![0u8; MAX_UDP];
+        let mut rd = vec![0u8; MAX_UDP];
+        let mut conn: Option<quiche::Connection> = None;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+
+        loop {
+            if tokio::time::Instant::now() >= deadline {
+                return;
+            }
+            if let Some(c) = conn.as_mut() {
+                // Drain readable streams; record bytes + any CLEAN end on
+                // stream 0. A peer RESET surfaces as Err(StreamReset) — that
+                // is NOT a clean end, so we must NOT set the witness on it.
+                let readable: Vec<u64> = c.readable().collect();
+                for sid in readable {
+                    loop {
+                        match c.stream_recv(sid, &mut rd) {
+                            Ok((n, fin)) => {
+                                if sid == STREAM_ID {
+                                    recv_bytes.fetch_add(n, Ordering::Relaxed);
+                                    if fin {
+                                        saw_clean_fin.store(true, Ordering::Relaxed);
+                                    }
+                                }
+                                if fin || n == 0 {
+                                    break;
+                                }
+                            }
+                            Err(quiche::Error::StreamReset(_)) => break,
+                            Err(quiche::Error::Done) => break,
+                            Err(_) => break,
+                        }
+                    }
+                    // Independent witness: quiche's own finished() flag.
+                    if sid == STREAM_ID && c.stream_finished(STREAM_ID) {
+                        saw_clean_fin.store(true, Ordering::Relaxed);
+                    }
+                }
+                // Flush outbound (ACKs / flow-control updates).
+                loop {
+                    match c.send(&mut out_buf) {
+                        Ok((n, info)) => {
+                            let _ = socket
+                                .send_to(out_buf.get(..n).unwrap_or(&[]), info.to)
+                                .await;
+                        }
+                        Err(quiche::Error::Done) => break,
+                        Err(_) => break,
+                    }
+                }
+            }
+            let timeout = conn
+                .as_ref()
+                .and_then(quiche::Connection::timeout)
+                .unwrap_or(Duration::from_millis(5))
+                .min(Duration::from_millis(5));
+            match tokio::time::timeout(timeout, socket.recv_from(&mut in_buf)).await {
+                Ok(Ok((n, from))) => {
+                    if conn.is_none() {
+                        let scid = random_scid();
+                        let scid_ref = quiche::ConnectionId::from_ref(&scid);
+                        match quiche::accept(&scid_ref, None, addr, from, &mut config) {
+                            Ok(c) => conn = Some(c),
+                            Err(_) => continue,
+                        }
+                    }
+                    if let Some(c) = conn.as_mut() {
+                        let slice = in_buf.get_mut(..n).unwrap_or(&mut []);
+                        let info = quiche::RecvInfo { from, to: addr };
+                        let _ = c.recv(slice, info);
+                    }
+                }
+                Ok(Err(_)) | Err(_) => {
+                    if let Some(c) = conn.as_mut() {
+                        c.on_timeout();
+                    }
+                }
+            }
+        }
+    });
+
+    addr
+}
+
+async fn flush(conn: &mut quiche::Connection, socket: &UdpSocket, out: &mut [u8]) {
+    loop {
+        match conn.send(out) {
+            Ok((n, info)) => {
+                let _ = socket.send_to(out.get(..n).unwrap_or(&[]), info.to).await;
+            }
+            Err(quiche::Error::Done) => break,
+            Err(e) => panic!("client conn.send: {e:?}"),
+        }
+    }
+}
+
+async fn try_recv_one(
+    conn: &mut quiche::Connection,
+    socket: &UdpSocket,
+    local: SocketAddr,
+    in_buf: &mut [u8],
+    wait: Duration,
+) {
+    if let Ok(Ok((n, from))) = tokio::time::timeout(wait, socket.recv_from(in_buf)).await {
+        let info = quiche::RecvInfo { from, to: local };
+        let slice = in_buf.get_mut(..n).unwrap_or(&mut []);
+        let _ = conn.recv(slice, info);
+    }
+}
+
+/// THE B2 boundary verify: a client RESET_STREAM mid-transfer must NOT make
+/// the backend observe a clean stream end (no false FIN).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn s16_b2_client_reset_does_not_become_clean_fin_upstream() {
+    let certs = generate_loopback_certs();
+
+    let recv_bytes = Arc::new(AtomicUsize::new(0));
+    let saw_clean_fin = Arc::new(AtomicBool::new(false));
+
+    let backend_addr =
+        spawn_recording_backend(&certs, Arc::clone(&recv_bytes), Arc::clone(&saw_clean_fin));
+
+    let lb_socket = Arc::new(
+        UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap(),
+    );
+    let lb_local = lb_socket.local_addr().unwrap();
+
+    let client_socket = Arc::new(
+        UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap(),
+    );
+    let client_local = client_socket.local_addr().unwrap();
+
+    let mut server_cfg = lb_server_config(&certs);
+    let mut client_cfg = client_config(&certs);
+
+    let s_scid = random_scid();
+    let s_scid_ref = quiche::ConnectionId::from_ref(&s_scid);
+    let c_scid = random_scid();
+    let c_scid_ref = quiche::ConnectionId::from_ref(&c_scid);
+
+    let mut server_conn =
+        quiche::accept(&s_scid_ref, None, lb_local, client_local, &mut server_cfg).unwrap();
+    let mut client_conn = quiche::connect(
+        Some(TEST_SNI),
+        &c_scid_ref,
+        client_local,
+        lb_local,
+        &mut client_cfg,
+    )
+    .unwrap();
+
+    // Drive client⇄LB to established.
+    let mut out = vec![0u8; MAX_UDP];
+    let mut in_buf = vec![0u8; MAX_UDP];
+    let deadline = tokio::time::Instant::now() + HANDSHAKE_BUDGET;
+    while !(server_conn.is_established() && client_conn.is_established()) {
+        if tokio::time::Instant::now() > deadline {
+            panic!("client⇄LB handshake did not establish");
+        }
+        flush(&mut client_conn, &client_socket, &mut out).await;
+        flush(&mut server_conn, &lb_socket, &mut out).await;
+        try_recv_one(
+            &mut server_conn,
+            &lb_socket,
+            lb_local,
+            &mut in_buf,
+            Duration::from_millis(20),
+        )
+        .await;
+        try_recv_one(
+            &mut client_conn,
+            &client_socket,
+            client_local,
+            &mut in_buf,
+            Duration::from_millis(20),
+        )
+        .await;
+    }
+    assert_eq!(client_conn.application_proto(), H3_ALPN);
+
+    // Send a PARTIAL body (no FIN).
+    let payload = make_payload(PARTIAL_LEN);
+    let _ = client_conn.stream_send(STREAM_ID, &payload, false).unwrap();
+    flush(&mut client_conn, &client_socket, &mut out).await;
+
+    // Forwarder: drain the shared LB socket into the actor's inbound mpsc.
+    let (tx, rx) = mpsc::channel::<InboundPacket>(256);
+    let cancel = CancellationToken::new();
+    let fwd_socket = Arc::clone(&lb_socket);
+    let fwd_cancel = cancel.clone();
+    let forwarder = tokio::spawn(async move {
+        let mut buf = vec![0u8; MAX_UDP];
+        loop {
+            tokio::select! {
+                () = fwd_cancel.cancelled() => break,
+                r = fwd_socket.recv_from(&mut buf) => {
+                    if let Ok((n, from)) = r {
+                        let pkt = InboundPacket {
+                            data: buf.get(..n).unwrap_or(&[]).to_vec(),
+                            from,
+                            to: lb_local,
+                        };
+                        if tx.send(pkt).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    // Client driver: keep the client live; RESET stream 0 when told to.
+    let do_reset = Arc::new(AtomicBool::new(false));
+    let did_reset = Arc::new(AtomicBool::new(false));
+    let client_cancel = cancel.clone();
+    let do_reset_drv = Arc::clone(&do_reset);
+    let did_reset_drv = Arc::clone(&did_reset);
+    let client_driver = tokio::spawn(async move {
+        let mut out = vec![0u8; MAX_UDP];
+        let mut in_buf = vec![0u8; MAX_UDP];
+        loop {
+            if client_cancel.is_cancelled() || client_conn.is_closed() {
+                break;
+            }
+            if do_reset_drv.load(Ordering::Relaxed) && !did_reset_drv.load(Ordering::Relaxed) {
+                // Shutdown::Write ⇒ RESET_STREAM (per quiche API notes).
+                let _ = client_conn.stream_shutdown(STREAM_ID, quiche::Shutdown::Write, RESET_CODE);
+                did_reset_drv.store(true, Ordering::Relaxed);
+            }
+            flush(&mut client_conn, &client_socket, &mut out).await;
+            try_recv_one(
+                &mut client_conn,
+                &client_socket,
+                client_local,
+                &mut in_buf,
+                Duration::from_millis(5),
+            )
+            .await;
+        }
+    });
+
+    // The Mode B actor.
+    let pool = QuicUpstreamPool::new(
+        QuicPoolConfig::default(),
+        upstream_config_factory(certs.ca.clone()),
+    );
+    let raw_backend = RawBackend {
+        pool,
+        addr: backend_addr,
+        sni: TEST_SNI.to_string(),
+    };
+    let runtime = lb_io::Runtime::new();
+    let tcp_pool = TcpPool::new(PoolConfig::default(), BackendSockOpts::default(), runtime);
+    let params = ActorParams {
+        conn: server_conn,
+        socket: Arc::clone(&lb_socket),
+        inbound: rx,
+        cancel: cancel.clone(),
+        pool: tcp_pool,
+        backends: Arc::new(Vec::new()),
+        h3_backend: None,
+        h2_backend: None,
+        raw_quic_backend: Some(raw_backend),
+    };
+    let actor = tokio::spawn(run_raw_proxy_actor_for_test(params));
+
+    // Wait until the backend has actually received SOME of the partial body
+    // (so the upstream mirror stream 0 exists), then trigger the reset.
+    let wait_recv = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if recv_bytes.load(Ordering::Relaxed) > 0 {
+            break;
+        }
+        if tokio::time::Instant::now() >= wait_recv {
+            panic!(
+                "backend never received any of the partial body — cannot \
+                 stage the mid-transfer reset (relay did not forward)"
+            );
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let bytes_before_reset = recv_bytes.load(Ordering::Relaxed);
+    eprintln!("reset-not-FIN: backend received {bytes_before_reset} bytes before reset");
+
+    // Fire the reset.
+    do_reset.store(true, Ordering::Relaxed);
+
+    // Give the system ample time to (mis)propagate. Under B2 the relay drops
+    // the c2u half on StreamReset; the backend must NEVER see a clean FIN.
+    let observe = tokio::time::Instant::now() + Duration::from_secs(3);
+    while tokio::time::Instant::now() < observe {
+        if saw_clean_fin.load(Ordering::Relaxed) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    // ── THE ASSERTION: no false clean FIN upstream. ──
+    assert!(
+        !saw_clean_fin.load(Ordering::Relaxed),
+        "F-MD-4 SMUGGLING BUG: the backend observed a CLEAN FIN on stream 0 \
+         after the client RESET it mid-transfer — a truncated transfer was \
+         presented as complete. The relay must drop the reset half WITHOUT \
+         synthesising a clean stream_send(.., fin=true)."
+    );
+    assert!(
+        did_reset.load(Ordering::Relaxed),
+        "fixture: the client must have issued the RESET_STREAM"
+    );
+    eprintln!(
+        "reset-not-FIN: VERIFIED — backend saw {} bytes and NO clean FIN \
+         after the mid-transfer client reset",
+        recv_bytes.load(Ordering::Relaxed)
+    );
+
+    // Tidy up.
+    cancel.cancel();
+    forwarder.abort();
+    let _ = client_driver.await;
+    let _ = tokio::time::timeout(Duration::from_secs(5), actor).await;
+}
