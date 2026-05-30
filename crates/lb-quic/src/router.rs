@@ -85,6 +85,15 @@ pub struct RouterParams {
     /// backend fans out to every per-connection actor. See
     /// `audit/quic/s16-plan.md` §1.
     pub raw_quic_backend: Option<crate::raw_proxy::RawBackend>,
+    /// SESSION 19 / Mode B (B6) `quic_modeb_*` observability handles.
+    /// `Some` only when a Mode-B (`raw_quic_backend`) listener was spawned
+    /// with a metrics registry; the H3-termination path leaves this `None`
+    /// (R3 — no metric churn on the unchanged path). Threaded verbatim into
+    /// each spawned actor's [`ActorParams::quic_modeb_metrics`]; the relay
+    /// actor bumps the handles at its lifetime + per-pass aggregate sites
+    /// (the B4/B5 helpers are NOT given the metrics — their signatures are
+    /// unchanged). Cheap to clone (an `Arc`-backed `prometheus` bundle).
+    pub quic_modeb_metrics: Option<lb_observability::QuicModeBMetrics>,
     /// Maximum number of concurrent QUIC connections served by this
     /// router. When the per-CID dispatch table is at this cap, new
     /// Initial packets are dropped (legitimate clients retry; a
@@ -380,6 +389,10 @@ fn spawn_new_connection(
         // SESSION 16 / Mode B: thread the raw-QUIC backend through so
         // `run_actor` early-dispatches to `run_raw_proxy_actor` when set.
         raw_quic_backend: params.raw_quic_backend.clone(),
+        // SESSION 19 / Mode B (B6): thread the quic_modeb_* metrics so the
+        // relay actor can bump them at its lifetime/per-pass sites. `None`
+        // on the H3 path (no churn — R3).
+        quic_modeb_metrics: params.quic_modeb_metrics.clone(),
     };
     // CODE-2-08: wrap the two DashMap entries in a CidEntryGuard so
     // cleanup runs unconditionally — clean exit, async-cancel
@@ -488,6 +501,7 @@ mod tests {
             h3_backend: None,
             h2_backend: None,
             raw_quic_backend: None,
+            quic_modeb_metrics: None,
             // TEST-001: reduced cap so the dashmap only needs 4 entries
             // to be saturated. cap_entries = 2 * 2 = 4.
             max_connections: 2,
@@ -571,5 +585,218 @@ mod tests {
             4,
             "cap-drop must not grow the dispatch table"
         );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // S19 B5 — CONNECTION-FLOOD bound. The TEST-001 test above fires ONE
+    // Initial at an already-saturated table; this drives a FLOOD of MANY
+    // DISTINCT real Initials from EMPTY, proving the dispatch table fills to
+    // exactly `2 * max_connections` and EVERY over-cap Initial is DROPPED
+    // (the bound holds — no OOM, no panic, no growth past the cap).
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// A minimal but REAL server config so `accept_with_retry` actually
+    /// succeeds (the flood needs connections to be admitted, not refused at
+    /// the config step). A long idle timeout keeps the spawned actors alive
+    /// for the duration of the synchronous size assertions (so their
+    /// `CidEntryGuard` does NOT race-remove entries mid-test).
+    fn flood_server_config_factory()
+    -> Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> {
+        // Self-signed cert/key generated once, shared by every dial.
+        let mut params =
+            rcgen::CertificateParams::new(vec!["flood.test".to_string()]).expect("cert params");
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        params
+            .extended_key_usages
+            .push(rcgen::ExtendedKeyUsagePurpose::ServerAuth);
+        let key_pair = rcgen::KeyPair::generate().expect("keypair");
+        let cert = params.self_signed(&key_pair).expect("self-signed");
+        let cert_pem = cert.pem();
+        let key_pem = key_pair.serialize_pem();
+        Arc::new(move || {
+            let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
+            cfg.set_application_protos(&[crate::LB_QUIC_TEST_ALPN])?;
+            cfg.load_cert_chain_from_pem_file(&write_tmp(&cert_pem, "cert"))
+                .map_err(|_| quiche::Error::TlsFail)?;
+            cfg.load_priv_key_from_pem_file(&write_tmp(&key_pem, "key"))
+                .map_err(|_| quiche::Error::TlsFail)?;
+            // Long idle timeout so admitted actors stay alive through the
+            // synchronous assertions (no guard race-removal mid-test).
+            cfg.set_max_idle_timeout(30_000);
+            cfg.set_max_recv_udp_payload_size(1_350);
+            cfg.set_max_send_udp_payload_size(1_350);
+            cfg.set_initial_max_data(1024);
+            cfg.set_initial_max_stream_data_bidi_local(1024);
+            cfg.set_initial_max_streams_bidi(1);
+            cfg.set_disable_active_migration(true);
+            Ok(cfg)
+        })
+    }
+
+    /// Write `pem` to a unique temp file and return its path string. The
+    /// quiche config loaders need on-disk PEMs.
+    fn write_tmp(pem: &str, kind: &str) -> String {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!(
+            "lb-quic-s19-b5-flood-{kind}-{}-{nanos}-{seq}.pem",
+            std::process::id()
+        ));
+        std::fs::write(&path, pem.as_bytes()).expect("write tmp pem");
+        path.to_string_lossy().into_owned()
+    }
+
+    /// Mint a fresh, DISTINCT real Initial packet (its own random SCID, hence
+    /// a distinct DCID/ODCID per call) ready to hand to
+    /// `spawn_new_connection`. Returns the wire bytes; the caller re-parses
+    /// for the borrow-bound `Header` (and clones for the owned
+    /// `first_packet`).
+    fn mint_distinct_initial() -> Vec<u8> {
+        let local: SocketAddr = "127.0.0.1:4433".parse().expect("local");
+        let mut client_cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).expect("client cfg");
+        client_cfg
+            .set_application_protos(&[crate::LB_QUIC_TEST_ALPN])
+            .expect("alpn");
+        client_cfg.verify_peer(false);
+        client_cfg.set_max_idle_timeout(5_000);
+        client_cfg.set_max_recv_udp_payload_size(1_350);
+        client_cfg.set_max_send_udp_payload_size(1_350);
+        client_cfg.set_initial_max_data(1024);
+        client_cfg.set_initial_max_stream_data_bidi_local(1024);
+        client_cfg.set_initial_max_streams_bidi(1);
+        client_cfg.set_disable_active_migration(true);
+
+        let scid_bytes = sample_conn_id();
+        let scid = ConnectionId::from_ref(&scid_bytes);
+        let mut conn =
+            quiche::connect(Some("test"), &scid, local, local, &mut client_cfg).expect("connect");
+        let mut send_buf = vec![0u8; MAX_UDP];
+        let (n, _info) = conn.send(&mut send_buf).expect("client send");
+        send_buf.get(..n).unwrap_or(&[]).to_vec()
+    }
+
+    /// S19 B5 — drive a FLOOD of distinct Initials at an EMPTY router with a
+    /// small `max_connections`. The dispatch table must fill to EXACTLY
+    /// `2 * max_connections` then every further Initial is DROPPED with the
+    /// cap-drop `Err`; the bound is NEVER exceeded.
+    ///
+    /// Load-bearing: this exercises the admit→saturate→drop transition (not
+    /// just the steady-state drop the TEST-001 test covers). Removing the
+    /// `connections.len() >= cap_entries` guard would let the table grow to
+    /// `2 * FLOOD` (the negative control), which this test's exact-cap
+    /// asserts catch.
+    #[tokio::test]
+    async fn router_drops_flood_of_distinct_initials_at_cap() {
+        const MAX_CONNECTIONS: usize = 4;
+        const CAP_ENTRIES: usize = MAX_CONNECTIONS * 2; // 8
+        const FLOOD: usize = 40; // ≫ MAX_CONNECTIONS so the cap is crossed
+
+        let socket = Arc::new(
+            UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+                .await
+                .expect("bind udp"),
+        );
+
+        let retry_signer = Arc::new(RetryTokenSigner::new_with_secret([0x5au8; 32]));
+        let replay_guard = Arc::new(PlMutex::new(ZeroRttReplayGuard::new(64)));
+        let runtime = Runtime::new();
+        let pool = TcpPool::new(PoolConfig::default(), BackendSockOpts::default(), runtime);
+
+        let cancel = CancellationToken::new();
+        let params = RouterParams {
+            socket,
+            retry_signer,
+            replay_guard,
+            config_factory: flood_server_config_factory(),
+            pool,
+            backends: Arc::new(Vec::new()),
+            h3_backend: None,
+            h2_backend: None,
+            raw_quic_backend: None,
+            quic_modeb_metrics: None,
+            max_connections: MAX_CONNECTIONS,
+            cancel: cancel.clone(),
+        };
+
+        let connections: Arc<dashmap::DashMap<Vec<u8>, mpsc::Sender<InboundPacket>>> =
+            Arc::new(dashmap::DashMap::new());
+
+        let peer: SocketAddr = "127.0.0.1:4433".parse().expect("peer");
+        let local = peer;
+        let mut admitted = 0usize;
+        let mut dropped = 0usize;
+        for _ in 0..FLOOD {
+            let wire = mint_distinct_initial();
+            let first_packet = wire.clone();
+            let mut hdr_buf = wire;
+            let header =
+                Header::from_slice(&mut hdr_buf, quiche::MAX_CONN_ID_LEN).expect("parse header");
+            let odcid = header.dcid.to_vec();
+            let before = connections.len();
+            let result = spawn_new_connection(
+                &header,
+                &odcid,
+                first_packet,
+                peer,
+                local,
+                &params,
+                &connections,
+            );
+            match result {
+                Ok(()) => {
+                    admitted += 1;
+                    // Each admit inserts EXACTLY two entries.
+                    assert_eq!(
+                        connections.len(),
+                        before + 2,
+                        "an admitted connection must add exactly 2 dispatch entries"
+                    );
+                }
+                Err(msg) => {
+                    dropped += 1;
+                    assert_eq!(
+                        msg, "router at max_connections",
+                        "an over-cap Initial must be dropped with the cap-drop Err"
+                    );
+                    // A drop must NOT change the table.
+                    assert_eq!(
+                        connections.len(),
+                        before,
+                        "a cap-drop must not grow the dispatch table"
+                    );
+                }
+            }
+            // THE BOUND: the table must NEVER exceed 2 * max_connections.
+            assert!(
+                connections.len() <= CAP_ENTRIES,
+                "dispatch table ({}) must never exceed 2 * max_connections ({CAP_ENTRIES})",
+                connections.len()
+            );
+        }
+
+        // Exactly MAX_CONNECTIONS were admitted (table at the cap), the rest
+        // dropped — the admit→saturate→drop transition is proven.
+        assert_eq!(
+            connections.len(),
+            CAP_ENTRIES,
+            "the table must be saturated at exactly 2 * max_connections"
+        );
+        assert_eq!(
+            admitted, MAX_CONNECTIONS,
+            "exactly max_connections Initials may be admitted"
+        );
+        assert_eq!(
+            dropped,
+            FLOOD - MAX_CONNECTIONS,
+            "every Initial beyond the cap must be dropped"
+        );
+
+        // Tidy up: cancel the spawned actors.
+        cancel.cancel();
     }
 }

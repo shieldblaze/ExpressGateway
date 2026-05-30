@@ -1,36 +1,39 @@
-//! SESSION 16 / Mode B — B2 VERIFIER's MULTI-STREAM byte-identical wire
-//! proof (the B2 headline bar, plan §5 "multiple bidi streams + datagrams;
-//! binary byte-identical").
+//! SESSION 19 / Mode B — B5 STREAM-FLOOD eviction-under-load proof
+//! (builder-2's self-check seed; the verifier owns the authoritative
+//! ≥50-iter burst + the cap-removed / retain-removed negative controls).
 //!
-//! Author ≠ verifier: the builder's self-check
-//! (`s16_b2_stream_relay_smoke.rs`) only proves ONE small (4 KiB) bidi
-//! stream round-trips. THIS test stands up the same real wire path —
+//! Proves the per-connection relay STREAM table stays BOUNDED while the
+//! connection carries a TOTAL stream count FAR larger than the negotiated
+//! concurrent grant — i.e. the reclamation (`streams.retain` in
+//! `relay_streams`) evicts each completed stream so memory does NOT grow
+//! with the total number of streams over the connection's life.
 //!
 //!   real quiche CLIENT  ⇄  Mode B actor (`run_raw_proxy_actor_for_test`)
 //!                          ⇄  real quiche ECHO backend
 //!
-//! — but opens MULTIPLE concurrent client bidi streams, each carrying a
-//! DISTINCT multi-KiB BINARY payload, and asserts that every stream's
-//! echoed bytes arrive at the client BYTE-IDENTICAL and each FINs cleanly.
+//! The client opens MANY bidi streams SEQUENTIALLY: open + payload + FIN,
+//! read the echo to FIN, then move to the next stream id. Because each
+//! stream is fully finished before the next is opened, at most a handful
+//! are concurrently live, yet the TOTAL (`TOTAL_STREAMS`) far exceeds the
+//! 16/16 grant in `build_server_config`. The proxy must complete every
+//! stream byte-identically with a healthy connection and no OOM / hang /
+//! unbounded growth.
 //!
-//! ## What makes this load-bearing (beyond the smoke test)
+//! ## What makes this load-bearing (the negative control, by reasoning)
 //!
-//! * **Concurrency / no cross-talk**: 5 streams in flight at once. The
-//!   identity stream-ID relay must keep each stream's bytes on its own
-//!   stream — a bug that merged/swapped per-stream pending buffers would
-//!   make at least one payload mismatch.
-//! * **Multi-turn / multi-packet**: payloads are deliberately sized so at
-//!   least one EXCEEDS [`STREAM_RELAY_WINDOW`] (256 KiB) — that stream
-//!   CANNOT be carried in a single relay turn (the read gate caps pending
-//!   at the window), so it forces the backpressure carry-over path
-//!   (pending tail held, FIN deferred until fully drained) to run for real
-//!   on the happy path. Several payloads also far exceed one UDP packet.
-//! * **Distinct binary content**: each stream gets a different
-//!   pseudo-random byte stream (different seed), so a correct length but
-//!   wrong-bytes relay (e.g. zero-fill, stale-buffer reuse) is caught.
-//! * **Clean FIN per stream**: the client reads each stream to FIN; a
-//!   relay that lost or mis-ordered a FIN would hang (caught by the budget)
-//!   or deliver short (caught by the length assert).
+//! The eviction mechanism is `relay_streams`'s
+//! `streams.retain(|_, st| !st.is_complete())`. WITHOUT it, every finished
+//! stream's `RawStreamState` would stay in the table, so the table would
+//! grow with the TOTAL stream count (`TOTAL_STREAMS`), not the concurrent
+//! count — eventually crossing the `MAX_RELAY_STREAMS` ceiling and (pre-
+//! ceiling) growing without bound. This test drives `TOTAL_STREAMS` well
+//! above both the concurrent grant AND the `MAX_RELAY_STREAMS` cap, so a
+//! retain-removed build would (a) refuse later streams once the table hit
+//! the cap → the client would hang on an un-relayed stream (caught by the
+//! budget), and (b) without the cap, grow memory unbounded. The bounded
+//! build completes all `TOTAL_STREAMS`. (The verifier authors the source-
+//! patched retain-removed run; here the control is established by
+//! reasoning verified against `raw_proxy.rs` + the in-module unit test.)
 //!
 //! Driven with `--features test-gauges` so `run_raw_proxy_actor_for_test`
 //! (gated `#[cfg(any(test, feature = "test-gauges"))]`) is reachable.
@@ -60,12 +63,28 @@ const TEST_SNI: &str = "expressgateway.test";
 const H3_ALPN: &[u8] = b"h3";
 const MAX_UDP: usize = 65_535;
 const HANDSHAKE_BUDGET: Duration = Duration::from_secs(5);
-/// Generous: the largest payload (>256 KiB) must traverse
-/// client→LB→backend→LB→client over many relay turns at the 2 ms tick.
-const RELAY_BUDGET: Duration = Duration::from_secs(25);
+/// Generous: 400 sequential small streams, each a full
+/// client→LB→backend→LB→client echo round trip at the 2 ms relay tick.
+const RELAY_BUDGET: Duration = Duration::from_secs(60);
+
+/// TOTAL bidi streams the client opens over the connection's life. Chosen
+/// FAR above both the negotiated concurrent grant (16) AND the relay
+/// table ceiling (`MAX_RELAY_STREAMS` = 256): only the reclamation keeps
+/// the table bounded across this many total streams. (Each stream is tiny
+/// so the run stays fast.)
+const TOTAL_STREAMS: u64 = 400;
+
+/// How many streams the client keeps in flight at once. Small, so the
+/// CONCURRENT count (hence the steady-state table size) is tiny while the
+/// TOTAL is large — that gap is the whole point.
+const CONCURRENCY: u64 = 4;
+
+/// Per-stream payload length (tiny — this test is about stream COUNT /
+/// table lifetime, not per-stream volume).
+const PAYLOAD_LEN: usize = 64;
 
 // ─────────────────────────────────────────────────────────────────────
-// Cert plumbing (mirrors s16_b2_stream_relay_smoke.rs).
+// Cert plumbing (mirrors s16_b2_multistream.rs).
 // ─────────────────────────────────────────────────────────────────────
 
 static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -90,7 +109,7 @@ fn generate_loopback_certs() -> TestCerts {
         .unwrap_or(0);
     let seq = DIR_SEQ.fetch_add(1, Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!(
-        "lb-quic-s16-b2-multi-{}-{nanos}-{seq}",
+        "lb-quic-s19-b5-flood-{}-{nanos}-{seq}",
         std::process::id()
     ));
     std::fs::create_dir_all(&dir).unwrap();
@@ -123,10 +142,7 @@ fn random_scid() -> [u8; quiche::MAX_CONN_ID_LEN] {
     scid
 }
 
-/// A deterministic, per-stream-DISTINCT pseudo-random binary payload. The
-/// `seed` differs per stream so two streams of the same length still carry
-/// different bytes (catches a cross-stream buffer mix-up). A simple LCG —
-/// not crypto, just a cheap full-range byte spread that is not all-ASCII.
+/// Distinct per-stream payload so a cross-stream mix-up is caught.
 fn make_payload(seed: u64, len: usize) -> Vec<u8> {
     let mut state = seed
         .wrapping_mul(0x9E37_79B9_7F4A_7C15)
@@ -141,9 +157,10 @@ fn make_payload(seed: u64, len: usize) -> Vec<u8> {
     out
 }
 
-/// CLIENT-facing SERVER config (the LB-as-server leg). Generous flow
-/// control so the CLIENT can buffer whole payloads; the relay window
-/// (256 KiB) is the bound under test, not these.
+/// CLIENT-facing SERVER config (the LB-as-server leg). The grant
+/// (`initial_max_streams_bidi(16)`) deliberately MIRRORS the production
+/// `build_server_config` so the concurrent ceiling under test is the real
+/// one — `TOTAL_STREAMS` (400) far exceeds it.
 fn lb_server_config(certs: &TestCerts) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
     cfg.set_application_protos(&[H3_ALPN]).unwrap();
@@ -151,44 +168,44 @@ fn lb_server_config(certs: &TestCerts) -> quiche::Config {
         .unwrap();
     cfg.load_priv_key_from_pem_file(certs.key.to_str().unwrap())
         .unwrap();
-    cfg.set_max_idle_timeout(20_000);
+    cfg.set_max_idle_timeout(30_000);
     cfg.set_max_recv_udp_payload_size(1_350);
     cfg.set_max_send_udp_payload_size(1_350);
     cfg.set_initial_max_data(16 * 1024 * 1024);
-    cfg.set_initial_max_stream_data_bidi_local(2 * 1024 * 1024);
-    cfg.set_initial_max_stream_data_bidi_remote(2 * 1024 * 1024);
+    cfg.set_initial_max_stream_data_bidi_local(256 * 1024);
+    cfg.set_initial_max_stream_data_bidi_remote(256 * 1024);
     cfg.set_initial_max_stream_data_uni(64 * 1024);
-    cfg.set_initial_max_streams_bidi(32);
-    cfg.set_initial_max_streams_uni(8);
+    // Mirror production build_server_config: a small concurrent grant so the
+    // 400 total streams MUST be opened sequentially (reclamation-bounded).
+    cfg.set_initial_max_streams_bidi(16);
+    cfg.set_initial_max_streams_uni(16);
     cfg.set_disable_active_migration(true);
-    cfg.enable_dgram(true, 1024, 1024);
     cfg
 }
 
-/// The real downstream CLIENT config — verifies the LB's cert.
+/// The real downstream CLIENT config.
 fn client_config(certs: &TestCerts) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
     cfg.set_application_protos(&[H3_ALPN]).unwrap();
     cfg.load_verify_locations_from_file(certs.ca.to_str().unwrap())
         .unwrap();
     cfg.verify_peer(true);
-    cfg.set_max_idle_timeout(20_000);
+    cfg.set_max_idle_timeout(30_000);
     cfg.set_max_recv_udp_payload_size(1_350);
     cfg.set_max_send_udp_payload_size(1_350);
     cfg.set_initial_max_data(16 * 1024 * 1024);
-    cfg.set_initial_max_stream_data_bidi_local(2 * 1024 * 1024);
-    cfg.set_initial_max_stream_data_bidi_remote(2 * 1024 * 1024);
+    cfg.set_initial_max_stream_data_bidi_local(256 * 1024);
+    cfg.set_initial_max_stream_data_bidi_remote(256 * 1024);
     cfg.set_initial_max_stream_data_uni(64 * 1024);
-    cfg.set_initial_max_streams_bidi(32);
-    cfg.set_initial_max_streams_uni(8);
+    cfg.set_initial_max_streams_bidi(16);
+    cfg.set_initial_max_streams_uni(16);
     cfg.set_disable_active_migration(true);
-    cfg.enable_dgram(true, 1024, 1024);
     cfg
 }
 
-/// The pool's per-dial CLIENT config factory (LB → backend leg). Installs
-/// a deliberately-wrong ALPN so the actor must MIRROR the client's `h3`.
-/// Generous flow control so the backend grants the LB-as-client room.
+/// The pool's per-dial CLIENT config factory (LB → backend leg). Grants
+/// the LB-as-client the SAME small bidi ceiling so the relay must
+/// re-open/finish backend streams sequentially too.
 fn upstream_config_factory(
     ca: PathBuf,
 ) -> Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> {
@@ -198,26 +215,24 @@ fn upstream_config_factory(
         cfg.load_verify_locations_from_file(ca.to_str().ok_or(quiche::Error::TlsFail)?)
             .map_err(|_| quiche::Error::TlsFail)?;
         cfg.verify_peer(true);
-        cfg.set_max_idle_timeout(20_000);
+        cfg.set_max_idle_timeout(30_000);
         cfg.set_max_recv_udp_payload_size(1_350);
         cfg.set_max_send_udp_payload_size(1_350);
         cfg.set_initial_max_data(16 * 1024 * 1024);
-        cfg.set_initial_max_stream_data_bidi_local(2 * 1024 * 1024);
-        cfg.set_initial_max_stream_data_bidi_remote(2 * 1024 * 1024);
+        cfg.set_initial_max_stream_data_bidi_local(256 * 1024);
+        cfg.set_initial_max_stream_data_bidi_remote(256 * 1024);
         cfg.set_initial_max_stream_data_uni(64 * 1024);
-        cfg.set_initial_max_streams_bidi(32);
-        cfg.set_initial_max_streams_uni(8);
+        cfg.set_initial_max_streams_bidi(16);
+        cfg.set_initial_max_streams_uni(16);
         cfg.set_disable_active_migration(true);
-        cfg.enable_dgram(true, 1024, 1024);
         Ok(cfg)
     })
 }
 
 /// A throwaway BACKEND quiche server that accepts ONE connection and
-/// ECHOes any received STREAM bytes back on the SAME stream id, FINing
-/// each stream once it has fully echoed the peer FIN. Far end of the
-/// relay: client→LB→**backend (echo)**→LB→client. (Same shape as the
-/// smoke test's backend; carries N concurrent streams.)
+/// ECHOes received STREAM bytes on the SAME stream id, FINing each stream
+/// once it has echoed the peer FIN. Reclaims its own finished-stream echo
+/// state so the backend itself stays bounded across `TOTAL_STREAMS`.
 fn spawn_echo_backend(certs: &TestCerts) -> SocketAddr {
     let std_sock = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     std_sock.set_nonblocking(true).unwrap();
@@ -232,14 +247,13 @@ fn spawn_echo_backend(certs: &TestCerts) -> SocketAddr {
         let mut conn: Option<quiche::Connection> = None;
         // Per-stream: (bytes queued to echo, peer-FIN-seen, our-FIN-sent).
         let mut echo_pending: HashMap<u64, (Vec<u8>, bool, bool)> = HashMap::new();
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
 
         loop {
             if tokio::time::Instant::now() >= deadline {
                 return;
             }
             if let Some(c) = conn.as_mut() {
-                // 1) Read readable streams into the per-stream echo queue.
                 let readable: Vec<u64> = c.readable().collect();
                 for sid in readable {
                     loop {
@@ -262,7 +276,6 @@ fn spawn_echo_backend(certs: &TestCerts) -> SocketAddr {
                         }
                     }
                 }
-                // 2) Drain each echo queue back onto the same stream.
                 let sids: Vec<u64> = echo_pending.keys().copied().collect();
                 for sid in sids {
                     if let Some(e) = echo_pending.get_mut(&sid) {
@@ -288,7 +301,9 @@ fn spawn_echo_backend(certs: &TestCerts) -> SocketAddr {
                         }
                     }
                 }
-                // 3) Flush outbound.
+                // Reclaim fully-echoed streams so the backend's own state is
+                // bounded across TOTAL_STREAMS too.
+                echo_pending.retain(|_, e| !(e.1 && e.0.is_empty() && e.2));
                 loop {
                     match c.send(&mut out_buf) {
                         Ok((n, info)) => {
@@ -304,7 +319,7 @@ fn spawn_echo_backend(certs: &TestCerts) -> SocketAddr {
             let timeout = conn
                 .as_ref()
                 .and_then(quiche::Connection::timeout)
-                .unwrap_or(Duration::from_millis(5));
+                .unwrap_or(Duration::from_millis(2));
             match tokio::time::timeout(timeout, socket.recv_from(&mut in_buf)).await {
                 Ok(Ok((n, from))) => {
                     if conn.is_none() {
@@ -359,24 +374,15 @@ async fn try_recv_one(
     }
 }
 
-/// THE B2 headline verify: N concurrent bidi streams, each a distinct
-/// multi-KiB binary payload (one >256 KiB relay window), all round-trip
-/// client→LB→backend(echo)→LB→client byte-identically + clean FIN.
+/// THE B5 stream-flood proof: `TOTAL_STREAMS` (≫ the 16 concurrent grant
+/// AND ≫ the 256-entry relay-table ceiling) bidi streams opened with a
+/// bounded `CONCURRENCY` window all round-trip byte-identically. A
+/// reclamation-broken proxy would either hang (table hits the cap and
+/// refuses later streams) or OOM (unbounded table); the bounded proxy
+/// completes every stream and the connection stays healthy.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn s16_b2_multistream_byte_identical_round_trip() {
+async fn s19_b5_stream_flood_bounded_table_completes_all() {
     let certs = generate_loopback_certs();
-
-    // Stream plan: (client bidi stream id, payload length). Stream ids are
-    // client-initiated bidi = 0,4,8,12,16. Lengths chosen to span: small
-    // multi-packet, ~window, and one OVER the 256 KiB relay window so it
-    // needs many relay turns (the multi-turn backpressure carry path).
-    let plan: Vec<(u64, usize)> = vec![
-        (0, 9_000),    // > 1 packet (~1350 B), small
-        (4, 60_000),   // many packets
-        (8, 200_000),  // approaching the 256 KiB window
-        (12, 400_000), // > 256 KiB window — MUST take multiple relay turns
-        (16, 130_000), // distinct mid-size
-    ];
 
     // 1) Real echo backend.
     let backend_addr = spawn_echo_backend(&certs);
@@ -445,47 +451,8 @@ async fn s16_b2_multistream_byte_identical_round_trip() {
     }
     assert_eq!(client_conn.application_proto(), H3_ALPN);
 
-    // 5) Build the distinct payloads and OPEN every stream up front. Each
-    //    stream_send may be a SHORT write (payload > current send window);
-    //    the client driver below keeps flushing AND keeps sending the
-    //    unsent tail until the whole payload + FIN is on the wire. This is
-    //    what forces the relay's bounded-window multi-turn carry for the
-    //    >256 KiB stream.
-    let payloads: HashMap<u64, Vec<u8>> = plan
-        .iter()
-        .map(|&(sid, len)| (sid, make_payload(sid.wrapping_add(1), len)))
-        .collect();
-
-    // Sanity: every payload is distinct and the big one exceeds the window.
-    assert!(
-        plan.iter().any(|&(_, len)| len > 256 * 1024),
-        "fixture: at least one payload must exceed the 256 KiB relay window"
-    );
-
-    // Per-stream send cursor (how many bytes of the payload are queued into
-    // quiche so far) and whether the FIN has been queued.
-    let mut send_cursor: HashMap<u64, usize> = plan.iter().map(|&(sid, _)| (sid, 0usize)).collect();
-    let mut fin_queued: HashMap<u64, bool> = plan.iter().map(|&(sid, _)| (sid, false)).collect();
-
-    // Kick off the first send for each stream before handing off.
-    for &(sid, _) in &plan {
-        let payload = payloads.get(&sid).unwrap();
-        match client_conn.stream_send(sid, payload, true) {
-            Ok(n) => {
-                send_cursor.insert(sid, n);
-                if n == payload.len() {
-                    fin_queued.insert(sid, true);
-                }
-            }
-            Err(quiche::Error::Done) => {}
-            Err(e) => panic!("initial client stream_send(sid={sid}): {e:?}"),
-        }
-    }
-    flush(&mut client_conn, &client_socket, &mut out).await;
-
-    // 6) Forwarder: drain the shared LB socket into the actor's inbound
-    //    mpsc (the router's job in production).
-    let (tx, rx) = mpsc::channel::<InboundPacket>(256);
+    // 5) Forwarder: drain the shared LB socket into the actor's inbound mpsc.
+    let (tx, rx) = mpsc::channel::<InboundPacket>(512);
     let cancel = CancellationToken::new();
     let fwd_socket = Arc::clone(&lb_socket);
     let fwd_cancel = cancel.clone();
@@ -510,55 +477,43 @@ async fn s16_b2_multistream_byte_identical_round_trip() {
         }
     });
 
-    // 7) Client driver: keep the client live, KEEP SENDING the unsent tail
-    //    of each payload (+ FIN) as the send window opens, and collect the
-    //    echoed bytes per stream until every stream FINs. Returns the
-    //    per-stream received bytes via a oneshot.
-    let (done_tx, done_rx) = tokio::sync::oneshot::channel::<HashMap<u64, Vec<u8>>>();
+    // 6) Client driver: open TOTAL_STREAMS bidi streams with a bounded
+    //    CONCURRENCY window. A stream is "in flight" once opened until its
+    //    echo has fully FIN'd; a new stream is opened only when a slot frees.
+    //    Returns how many streams completed byte-identically.
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel::<u64>();
     let client_cancel = cancel.clone();
-    let plan_for_driver = plan.clone();
-    let payloads_for_driver = payloads.clone();
     let client_driver = tokio::spawn(async move {
         let mut out = vec![0u8; MAX_UDP];
         let mut in_buf = vec![0u8; MAX_UDP];
         let mut recv_buf = vec![0u8; MAX_UDP];
-        let mut received: HashMap<u64, Vec<u8>> = plan_for_driver
-            .iter()
-            .map(|&(sid, _)| (sid, Vec::new()))
-            .collect();
-        let mut got_fin: HashMap<u64, bool> = plan_for_driver
-            .iter()
-            .map(|&(sid, _)| (sid, false))
-            .collect();
+
+        // Next client-initiated bidi stream id to open (0,4,8,…).
+        let mut next_index: u64 = 0;
+        // In-flight streams: sid -> (expected payload, bytes received so far).
+        let mut inflight: HashMap<u64, (Vec<u8>, Vec<u8>)> = HashMap::new();
+        let mut completed: u64 = 0;
+        let mut mismatches: u64 = 0;
         let mut done_tx = Some(done_tx);
+
         loop {
             if client_cancel.is_cancelled() || client_conn.is_closed() {
                 break;
             }
 
-            // (a) Push any unsent payload tail + FIN for each stream.
-            for &(sid, _) in &plan_for_driver {
-                let payload = payloads_for_driver.get(&sid).unwrap();
-                let cursor = *send_cursor.get(&sid).unwrap();
-                if cursor < payload.len() {
-                    let tail = payload.get(cursor..).unwrap_or(&[]);
-                    match client_conn.stream_send(sid, tail, true) {
-                        Ok(n) => {
-                            let nc = cursor + n;
-                            send_cursor.insert(sid, nc);
-                            if nc == payload.len() {
-                                fin_queued.insert(sid, true);
-                            }
-                        }
-                        Err(quiche::Error::Done) => {}
-                        Err(_) => {}
+            // (a) Top up the in-flight window with fresh streams.
+            while (inflight.len() as u64) < CONCURRENCY && next_index < TOTAL_STREAMS {
+                let sid = next_index * 4; // client-initiated bidi ids
+                let payload = make_payload(next_index.wrapping_add(1), PAYLOAD_LEN);
+                match client_conn.stream_send(sid, &payload, true) {
+                    Ok(_) => {
+                        inflight.insert(sid, (payload, Vec::new()));
+                        next_index += 1;
                     }
-                } else if !*fin_queued.get(&sid).unwrap() {
-                    // All bytes queued but FIN was not (cursor reached len
-                    // via a non-FIN send) — send the standalone FIN.
-                    if client_conn.stream_send(sid, &[], true).is_ok() {
-                        fin_queued.insert(sid, true);
-                    }
+                    // Concurrent stream-grant exhausted for the moment: stop
+                    // opening, let some complete and free credit, retry later.
+                    Err(quiche::Error::StreamLimit) | Err(quiche::Error::Done) => break,
+                    Err(e) => panic!("client stream_send(open sid): {e:?}"),
                 }
             }
 
@@ -568,24 +523,22 @@ async fn s16_b2_multistream_byte_identical_round_trip() {
                 &client_socket,
                 client_local,
                 &mut in_buf,
-                Duration::from_millis(5),
+                Duration::from_millis(3),
             )
             .await;
 
-            // (b) Pull echoed bytes off every readable stream.
+            // (b) Pull echoed bytes; finish streams whose echo FIN'd.
             let readable: Vec<u64> = client_conn.readable().collect();
             for sid in readable {
-                if *got_fin.get(&sid).unwrap_or(&true) {
-                    continue;
-                }
+                let mut fin_seen = false;
                 loop {
                     match client_conn.stream_recv(sid, &mut recv_buf) {
                         Ok((n, fin)) => {
-                            if let Some(v) = received.get_mut(&sid) {
-                                v.extend_from_slice(recv_buf.get(..n).unwrap_or(&[]));
+                            if let Some(e) = inflight.get_mut(&sid) {
+                                e.1.extend_from_slice(recv_buf.get(..n).unwrap_or(&[]));
                             }
                             if fin {
-                                got_fin.insert(sid, true);
+                                fin_seen = true;
                                 break;
                             }
                             if n == 0 {
@@ -596,19 +549,29 @@ async fn s16_b2_multistream_byte_identical_round_trip() {
                         Err(_) => break,
                     }
                 }
+                if fin_seen {
+                    if let Some((want, got)) = inflight.remove(&sid) {
+                        if got == want {
+                            completed += 1;
+                        } else {
+                            mismatches += 1;
+                        }
+                    }
+                }
             }
 
-            // (c) Done when every stream has FIN'd.
-            if got_fin.values().all(|&f| f) {
+            // (c) Done when every stream has been opened AND completed.
+            if next_index >= TOTAL_STREAMS && inflight.is_empty() {
                 if let Some(tx) = done_tx.take() {
-                    let _ = tx.send(std::mem::take(&mut received));
+                    // Report completed only if no byte mismatch occurred.
+                    let _ = tx.send(if mismatches == 0 { completed } else { 0 });
                 }
                 break;
             }
         }
     });
 
-    // 8) The Mode B backend.
+    // 7) The Mode B actor.
     let pool = QuicUpstreamPool::new(
         QuicPoolConfig::default(),
         upstream_config_factory(certs.ca.clone()),
@@ -637,39 +600,29 @@ async fn s16_b2_multistream_byte_identical_round_trip() {
         quic_modeb_metrics: None,
     };
 
-    // 9) Run the actor; wait for all echoed payloads, then cancel.
+    // 8) Run the actor; wait for every stream to complete, then cancel.
     let actor = tokio::spawn(run_raw_proxy_actor_for_test(params));
 
-    let received = tokio::time::timeout(RELAY_BUDGET, done_rx)
+    let completed = tokio::time::timeout(RELAY_BUDGET, done_rx)
         .await
-        .expect("client must receive every echoed payload before the budget")
-        .expect("client driver must deliver the received bytes");
+        .expect(
+            "the proxy must complete ALL TOTAL_STREAMS within the budget — a hang here \
+             means the relay table was NOT reclaimed (it hit the cap and refused later \
+             streams) or the connection wedged",
+        )
+        .expect("client driver must report a completion count");
 
-    // ── THE ASSERTIONS: every stream byte-identical + cleanly FIN'd. ──
-    for &(sid, len) in &plan {
-        let got = received
-            .get(&sid)
-            .unwrap_or_else(|| panic!("no bytes for stream {sid}"));
-        let want = payloads.get(&sid).unwrap();
-        assert_eq!(
-            got.len(),
-            len,
-            "stream {sid}: echoed length {} != sent length {len} \
-             (a FIN was lost or the transfer was truncated)",
-            got.len()
-        );
-        assert_eq!(
-            got, want,
-            "stream {sid}: echoed bytes are NOT byte-identical to what the \
-             client sent (cross-stream mix-up, reorder, or corruption in \
-             the raw-stream relay)"
-        );
-    }
+    assert_eq!(
+        completed, TOTAL_STREAMS,
+        "the proxy must relay ALL {TOTAL_STREAMS} sequential streams byte-identically \
+         with a bounded relay table (reclamation evicts completed streams); a smaller \
+         count means a stream was dropped, mismatched, or the table grew unbounded / \
+         hit the cap and refused later streams"
+    );
     eprintln!(
-        "s16_b2_multistream: {} streams round-tripped byte-identical; \
-         sizes = {:?}",
-        plan.len(),
-        plan.iter().map(|&(_, l)| l).collect::<Vec<_>>()
+        "s19_b5_stream_flood: {TOTAL_STREAMS} total streams (concurrency {CONCURRENCY}, \
+         grant 16, cap 256) all round-tripped byte-identical — relay table stayed bounded \
+         by reclamation"
     );
 
     // Tidy up.

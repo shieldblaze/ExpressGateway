@@ -489,6 +489,10 @@ async fn s16_b2_client_reset_does_not_become_clean_fin_upstream() {
         pool,
         addr: backend_addr,
         sni: TEST_SNI.to_string(),
+        // B6 (R14/R12): caps now carried on RawBackend; the const
+        // defaults keep these tests byte-identical in behaviour.
+        dgram_queue_cap: lb_quic::DGRAM_QUEUE_CAP,
+        max_relay_streams: lb_quic::MAX_RELAY_STREAMS,
     };
     let runtime = lb_io::Runtime::new();
     let tcp_pool = TcpPool::new(PoolConfig::default(), BackendSockOpts::default(), runtime);
@@ -502,6 +506,7 @@ async fn s16_b2_client_reset_does_not_become_clean_fin_upstream() {
         h3_backend: None,
         h2_backend: None,
         raw_quic_backend: Some(raw_backend),
+        quic_modeb_metrics: None,
     };
     let actor = tokio::spawn(run_raw_proxy_actor_for_test(params));
 

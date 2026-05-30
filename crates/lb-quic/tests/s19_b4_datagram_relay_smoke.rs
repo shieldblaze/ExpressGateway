@@ -1,49 +1,37 @@
-//! SESSION 16 / Mode B — B1 VERIFIER's TWO-CONNECTIONS proof (real wire).
+//! SESSION 19 / Mode B — B4 MINIMAL datagram-relay smoke test
+//! (builder-1's self-check).
 //!
-//! Author ≠ verifier: this is the INDEPENDENT verification of the B1
-//! headline bar (plan §5 "Two-connections proof: by mechanism — distinct
-//! SCIDs, distinct keys, two `quiche::Connection` objects in LB state;
-//! NOT a CID bridge"). The builder's self-check
-//! (`s16_raw_proxy_smoke.rs`) only proves the dedicated-dial path in
-//! isolation; THIS test stands up a REAL wire path —
+//! Scope is deliberately narrow (author ≠ verifier): this proves that
+//! the B4 bidirectional raw-DATAGRAM (RFC 9221) relay carries a handful
+//! of binary datagram payloads byte-identically through the full wire
+//! path, BOTH directions —
 //!
 //!   real quiche CLIENT  ⇄  Mode B actor (`run_raw_proxy_actor_for_test`)
-//!                          ⇄  real quiche BACKEND server
+//!                          ⇄  real quiche DATAGRAM-ECHO backend
 //!
-//! — and asserts on the returned [`lb_quic::RawProxyOutcome`] that the LB
-//! operates TWO DISTINCT quiche connections, NOT a bridge of the client's
-//! connection to the backend.
+//! — i.e. client→LB→backend→LB→client. It does NOT author the
+//! flood / drop-newest / bounded-queue / R13 proofs — those are the
+//! VERIFIER's (plan §"Verification"). It mirrors the S16-B2 stream-relay
+//! rig (`s16_b2_stream_relay_smoke.rs`) but exercises datagrams instead
+//! of streams.
 //!
-//! ## What "by mechanism" means here
-//!
-//! 1. `client_scid != upstream_scid` — the LB chose an independent SCID
-//!    when re-originating (as server it has one SCID; as client to the
-//!    backend it has a DIFFERENT one).
-//! 2. `client_trace_id != upstream_trace_id` — two genuinely separate
-//!    `quiche::Connection` objects (quiche derives `trace_id` per object).
-//! 3. `negotiated_alpn` == the ALPN the client negotiated, mirrored onto
-//!    the upstream dial (plan §2 ALPN mirroring).
-//! 4. **LOAD-BEARING independence**: the BACKEND independently records the
-//!    SCID it observed on the inbound Initial (= the SCID the LB chose as
-//!    client = the upstream SCID). We assert that backend-observed SCID
-//!    (a) equals `outcome.upstream_scid` and (b) is NOT equal to — and not
-//!    a byte-derivation of — `outcome.client_scid`. A bridge that
-//!    forwarded the client's connection would make the backend see the
-//!    CLIENT's SCID (or a value derived from it); a true re-origination
-//!    makes it see a freshly-sampled random SCID. This is the assertion
-//!    that would FAIL on a bridge and PASS on Mode B.
+//! The mechanism under test: the client sends several datagrams of
+//! varied shapes (zero-length, all-zero bytes, non-UTF8 high-bit bytes,
+//! a near-UDP-payload-max one). The actor's `relay_datagrams` forwards
+//! each verbatim client→upstream. The backend echoes every received
+//! datagram straight back. The actor relays them upstream→client. The
+//! client MUST receive a byte-identical multiset of what it sent.
 //!
 //! Driven with `--features test-gauges` so the `run_raw_proxy_actor_for_test`
-//! hook (gated `#[cfg(any(test, feature = "test-gauges"))]`) is reachable
-//! from this integration-test target.
+//! hook (gated `#[cfg(any(test, feature = "test-gauges"))]`) is reachable.
 
 #![cfg(feature = "test-gauges")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
+use std::collections::HashSet;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -62,9 +50,10 @@ const TEST_SNI: &str = "expressgateway.test";
 const H3_ALPN: &[u8] = b"h3";
 const MAX_UDP: usize = 65_535;
 const HANDSHAKE_BUDGET: Duration = Duration::from_secs(5);
+const RELAY_BUDGET: Duration = Duration::from_secs(10);
 
 // ─────────────────────────────────────────────────────────────────────
-// Cert plumbing (mirrors s16_raw_proxy_smoke.rs / h3_h3_stream_e2e.rs).
+// Cert plumbing (mirrors s16_b2_stream_relay_smoke.rs).
 // ─────────────────────────────────────────────────────────────────────
 
 static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -89,7 +78,7 @@ fn generate_loopback_certs() -> TestCerts {
         .unwrap_or(0);
     let seq = DIR_SEQ.fetch_add(1, Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!(
-        "lb-quic-s16-b1-2conn-{}-{nanos}-{seq}",
+        "lb-quic-s19-b4-dgram-{}-{nanos}-{seq}",
         std::process::id()
     ));
     std::fs::create_dir_all(&dir).unwrap();
@@ -123,7 +112,7 @@ fn random_scid() -> [u8; quiche::MAX_CONN_ID_LEN] {
 }
 
 /// CLIENT-facing SERVER config (the LB-as-server leg). Serves the
-/// loopback cert; advertises `h3` so the client negotiates it.
+/// loopback cert; advertises `h3`; negotiates DATAGRAM (RFC 9221).
 fn lb_server_config(certs: &TestCerts) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
     cfg.set_application_protos(&[H3_ALPN]).unwrap();
@@ -135,17 +124,17 @@ fn lb_server_config(certs: &TestCerts) -> quiche::Config {
     cfg.set_max_recv_udp_payload_size(1_350);
     cfg.set_max_send_udp_payload_size(1_350);
     cfg.set_initial_max_data(1024 * 1024);
-    cfg.set_initial_max_stream_data_bidi_local(64 * 1024);
-    cfg.set_initial_max_stream_data_bidi_remote(64 * 1024);
+    cfg.set_initial_max_stream_data_bidi_local(256 * 1024);
+    cfg.set_initial_max_stream_data_bidi_remote(256 * 1024);
     cfg.set_initial_max_stream_data_uni(64 * 1024);
-    cfg.set_initial_max_streams_bidi(4);
-    cfg.set_initial_max_streams_uni(4);
+    cfg.set_initial_max_streams_bidi(8);
+    cfg.set_initial_max_streams_uni(8);
     cfg.set_disable_active_migration(true);
     cfg.enable_dgram(true, 1024, 1024);
     cfg
 }
 
-/// The real CLIENT (downstream) config — verifies the LB's cert.
+/// The real downstream CLIENT config — verifies the LB's cert.
 fn client_config(certs: &TestCerts) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
     cfg.set_application_protos(&[H3_ALPN]).unwrap();
@@ -156,20 +145,17 @@ fn client_config(certs: &TestCerts) -> quiche::Config {
     cfg.set_max_recv_udp_payload_size(1_350);
     cfg.set_max_send_udp_payload_size(1_350);
     cfg.set_initial_max_data(1024 * 1024);
-    cfg.set_initial_max_stream_data_bidi_local(64 * 1024);
-    cfg.set_initial_max_stream_data_bidi_remote(64 * 1024);
+    cfg.set_initial_max_stream_data_bidi_local(256 * 1024);
+    cfg.set_initial_max_stream_data_bidi_remote(256 * 1024);
     cfg.set_initial_max_stream_data_uni(64 * 1024);
-    cfg.set_initial_max_streams_bidi(4);
-    cfg.set_initial_max_streams_uni(4);
+    cfg.set_initial_max_streams_bidi(8);
+    cfg.set_initial_max_streams_uni(8);
     cfg.set_disable_active_migration(true);
     cfg.enable_dgram(true, 1024, 1024);
     cfg
 }
 
-/// The pool's per-dial CLIENT config factory (LB → backend re-origination
-/// leg). Installs a DELIBERATELY-WRONG ALPN so the test proves the actor
-/// MIRRORS the client's negotiated `h3` onto the dedicated dial (without
-/// the override the backend — which only speaks `h3` — would TLS-fail).
+/// The pool's per-dial CLIENT config factory (LB → backend leg).
 fn upstream_config_factory(
     ca: PathBuf,
 ) -> Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> {
@@ -183,34 +169,35 @@ fn upstream_config_factory(
         cfg.set_max_recv_udp_payload_size(1_350);
         cfg.set_max_send_udp_payload_size(1_350);
         cfg.set_initial_max_data(1024 * 1024);
-        cfg.set_initial_max_stream_data_bidi_local(64 * 1024);
-        cfg.set_initial_max_stream_data_bidi_remote(64 * 1024);
+        cfg.set_initial_max_stream_data_bidi_local(256 * 1024);
+        cfg.set_initial_max_stream_data_bidi_remote(256 * 1024);
         cfg.set_initial_max_stream_data_uni(64 * 1024);
-        cfg.set_initial_max_streams_bidi(4);
-        cfg.set_initial_max_streams_uni(4);
+        cfg.set_initial_max_streams_bidi(8);
+        cfg.set_initial_max_streams_uni(8);
         cfg.set_disable_active_migration(true);
         cfg.enable_dgram(true, 1024, 1024);
         Ok(cfg)
     })
 }
 
-/// A throwaway BACKEND quiche server that accepts ONE connection, drives
-/// it to established, and RECORDS the SCID it observed on the inbound
-/// Initial header (= the SCID the LB-as-client chose for the upstream
-/// connection). That recorded value is the load-bearing independence
-/// witness: a bridge would make the backend see the CLIENT's SCID.
-fn spawn_backend_recording_scid(certs: &TestCerts) -> (SocketAddr, Arc<Mutex<Option<Vec<u8>>>>) {
+/// A throwaway BACKEND quiche server that accepts ONE connection and
+/// ECHOes any received DATAGRAM straight back (recv dgram → send the
+/// same bytes back as a datagram). This is the far end of the relay:
+/// client→LB→**backend (dgram-echo)**→LB→client.
+fn spawn_dgram_echo_backend(certs: &TestCerts) -> SocketAddr {
     let std_sock = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     std_sock.set_nonblocking(true).unwrap();
     let addr = std_sock.local_addr().unwrap();
-    let observed: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
-    let observed_task = Arc::clone(&observed);
-    let mut config = server_config_for_backend(certs);
+    let mut config = lb_server_config(certs);
 
     tokio::spawn(async move {
         let socket = UdpSocket::from_std(std_sock).unwrap();
         let mut in_buf = vec![0u8; MAX_UDP];
         let mut out_buf = vec![0u8; MAX_UDP];
+        let mut rd = vec![0u8; MAX_UDP];
+        // Datagrams the backend received and still owes back to the peer
+        // (echoed FIFO; a full send queue retries next turn).
+        let mut echo_q: std::collections::VecDeque<Vec<u8>> = std::collections::VecDeque::new();
         let mut conn: Option<quiche::Connection> = None;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
 
@@ -219,6 +206,30 @@ fn spawn_backend_recording_scid(certs: &TestCerts) -> (SocketAddr, Arc<Mutex<Opt
                 return;
             }
             if let Some(c) = conn.as_mut() {
+                // 1) Drain received datagrams into the echo queue.
+                loop {
+                    match c.dgram_recv(&mut rd) {
+                        Ok(n) => echo_q.push_back(rd.get(..n).unwrap_or(&[]).to_vec()),
+                        Err(quiche::Error::Done) => break,
+                        Err(_) => break,
+                    }
+                }
+                // 2) Echo them back, front-first; a full send queue (Done)
+                //    stops this turn and retries next.
+                while let Some(front) = echo_q.front() {
+                    match c.dgram_send(front) {
+                        Ok(()) => {
+                            let _ = echo_q.pop_front();
+                        }
+                        Err(quiche::Error::Done) => break,
+                        Err(_) => {
+                            // Drop an un-forwardable datagram (e.g. too
+                            // large for the peer) and keep going.
+                            let _ = echo_q.pop_front();
+                        }
+                    }
+                }
+                // 3) Flush outbound.
                 loop {
                     match c.send(&mut out_buf) {
                         Ok((n, info)) => {
@@ -234,22 +245,10 @@ fn spawn_backend_recording_scid(certs: &TestCerts) -> (SocketAddr, Arc<Mutex<Opt
             let timeout = conn
                 .as_ref()
                 .and_then(quiche::Connection::timeout)
-                .unwrap_or(Duration::from_millis(50));
+                .unwrap_or(Duration::from_millis(5));
             match tokio::time::timeout(timeout, socket.recv_from(&mut in_buf)).await {
                 Ok(Ok((n, from))) => {
                     if conn.is_none() {
-                        // Record the SCID the LB chose as client (the
-                        // upstream connection's SCID) straight off the
-                        // wire — BEFORE accept, independently of the
-                        // RawProxyOutcome the actor returns.
-                        if let Ok(hdr) = quiche::Header::from_slice(
-                            in_buf.get_mut(..n).unwrap_or(&mut []),
-                            quiche::MAX_CONN_ID_LEN,
-                        ) {
-                            if let Ok(mut g) = observed_task.lock() {
-                                *g = Some(hdr.scid.to_vec());
-                            }
-                        }
                         let scid = random_scid();
                         let scid_ref = quiche::ConnectionId::from_ref(&scid);
                         match quiche::accept(&scid_ref, None, addr, from, &mut config) {
@@ -272,12 +271,7 @@ fn spawn_backend_recording_scid(certs: &TestCerts) -> (SocketAddr, Arc<Mutex<Opt
         }
     });
 
-    (addr, observed)
-}
-
-fn server_config_for_backend(certs: &TestCerts) -> quiche::Config {
-    // The backend presents the loopback cert and speaks ONLY `h3`.
-    lb_server_config(certs)
+    addr
 }
 
 async fn flush(conn: &mut quiche::Connection, socket: &UdpSocket, out: &mut [u8]) {
@@ -306,18 +300,35 @@ async fn try_recv_one(
     }
 }
 
-/// THE headline B1 verify: real client ⇄ Mode B actor ⇄ real backend,
-/// asserting two distinct quiche connections by mechanism.
+/// The datagrams the client sends. Varied shapes to prove verbatim,
+/// binary-safe, zero-length-preserving relay. Each is sized to fit the
+/// negotiated datagram-frame writable len (the 1350 UDP-payload configs
+/// give ~1300 writable bytes), so the "large" one is ~1200 bytes — large
+/// but never refused with BufferTooShort.
+fn datagram_set() -> Vec<Vec<u8>> {
+    vec![
+        Vec::new(),                                           // zero-length
+        vec![0u8; 64],                                        // all-zero bytes
+        vec![0xff, 0xfe, 0x80, 0x00, 0x7f, 0xc0, 0xff, 0x01], // non-UTF8 high-bit
+        b"plain-ascii-datagram".to_vec(),                     // ordinary text
+        (0..1_200usize)
+            .map(|i| ((i * 53 + 17) % 256) as u8)
+            .collect(), // large near-max
+        vec![0x00],                                           // single zero byte
+    ]
+}
+
+/// THE B4 self-check: a varied set of binary datagrams survives
+/// client→LB→backend(dgram-echo)→LB→client byte-identically (as a
+/// multiset — datagrams are unordered).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn s16_b1_two_distinct_connections_not_a_bridge() {
+async fn s19_b4_datagrams_round_trip_byte_identical() {
     let certs = generate_loopback_certs();
 
-    // 1) Real backend that records the SCID the LB dials it with.
-    let (backend_addr, observed_upstream_scid) = spawn_backend_recording_scid(&certs);
+    // 1) Real datagram-echo backend.
+    let backend_addr = spawn_dgram_echo_backend(&certs);
 
-    // 2) The shared LB listener socket (the "server" leg). The actor
-    //    writes client-facing packets out of it; a forwarder task drains
-    //    inbound client packets into the actor's mpsc (router stand-in).
+    // 2) Shared LB listener socket (the "server" leg).
     let lb_socket = Arc::new(
         UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
             .await
@@ -325,7 +336,7 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
     );
     let lb_local = lb_socket.local_addr().unwrap();
 
-    // 3) The real downstream CLIENT.
+    // 3) Real downstream CLIENT.
     let client_socket = Arc::new(
         UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
             .await
@@ -341,7 +352,6 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
     let c_scid = random_scid();
     let c_scid_ref = quiche::ConnectionId::from_ref(&c_scid);
 
-    // The LB-as-server connection (handed to the actor) + the real client.
     let mut server_conn =
         quiche::accept(&s_scid_ref, None, lb_local, client_local, &mut server_cfg).unwrap();
     let mut client_conn = quiche::connect(
@@ -353,13 +363,7 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
     )
     .unwrap();
 
-    // The client's CHOSEN SCID — what a bridge would forward to the
-    // backend. Recorded here for the independence assertion.
-    let client_chosen_scid = client_conn.source_id().as_ref().to_vec();
-
-    // 4) Inline-drive BOTH legs to established (the round8 pattern). After
-    //    this the actor's `drive_client_to_established` sees an already-
-    //    established conn and proceeds straight to the dedicated dial.
+    // 4) Inline-drive the client⇄LB legs to established.
     let mut out = vec![0u8; MAX_UDP];
     let mut in_buf = vec![0u8; MAX_UDP];
     let deadline = tokio::time::Instant::now() + HANDSHAKE_BUDGET;
@@ -386,18 +390,19 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
         )
         .await;
     }
+    assert_eq!(client_conn.application_proto(), H3_ALPN);
 
-    // Sanity: the client negotiated `h3` against the LB.
-    assert_eq!(
-        client_conn.application_proto(),
-        H3_ALPN,
-        "fixture: client must negotiate h3 with the LB"
-    );
+    // 5) Queue the datagrams on the client BEFORE handing off, so they are
+    //    buffered in quiche; the client driver below keeps flushing.
+    let sent = datagram_set();
+    for d in &sent {
+        client_conn
+            .dgram_send(d)
+            .expect("client dgram_send (fits negotiated frame size)");
+    }
+    flush(&mut client_conn, &client_socket, &mut out).await;
 
-    // 5) Forwarder: drain the shared LB socket into the actor's inbound
-    //    mpsc (the router's job in production). The actor only reads its
-    //    mpsc for the client leg and writes via lb_socket.send_to, so
-    //    there is no recv_from contention.
+    // 6) Forwarder: drain the shared LB socket into the actor's inbound.
     let (tx, rx) = mpsc::channel::<InboundPacket>(64);
     let cancel = CancellationToken::new();
     let fwd_socket = Arc::clone(&lb_socket);
@@ -423,13 +428,17 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
         }
     });
 
-    // 6) Client keep-alive driver: keep the client conn live (flush +
-    //    recv) while the actor dials upstream and runs the dual pump, so
-    //    neither leg idles out during re-origination.
+    // 7) Client driver: keep the client live (flush + recv) and collect
+    //    echoed datagrams until it has received `expected_count` of them.
+    let expected_count = sent.len();
+    let (done_tx, done_rx) = tokio::sync::oneshot::channel::<Vec<Vec<u8>>>();
     let client_cancel = cancel.clone();
     let client_driver = tokio::spawn(async move {
         let mut out = vec![0u8; MAX_UDP];
         let mut in_buf = vec![0u8; MAX_UDP];
+        let mut recv_buf = vec![0u8; MAX_UDP];
+        let mut received: Vec<Vec<u8>> = Vec::new();
+        let mut done_tx = Some(done_tx);
         loop {
             if client_cancel.is_cancelled() || client_conn.is_closed() {
                 break;
@@ -440,13 +449,27 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
                 &client_socket,
                 client_local,
                 &mut in_buf,
-                Duration::from_millis(20),
+                Duration::from_millis(10),
             )
             .await;
+            // Pull echoed datagrams.
+            loop {
+                match client_conn.dgram_recv(&mut recv_buf) {
+                    Ok(n) => received.push(recv_buf.get(..n).unwrap_or(&[]).to_vec()),
+                    Err(quiche::Error::Done) => break,
+                    Err(_) => break,
+                }
+            }
+            if received.len() >= expected_count {
+                if let Some(tx) = done_tx.take() {
+                    let _ = tx.send(std::mem::take(&mut received));
+                }
+                break;
+            }
         }
     });
 
-    // 7) The Mode B re-origination backend.
+    // 8) The Mode B backend.
     let pool = QuicUpstreamPool::new(
         QuicPoolConfig::default(),
         upstream_config_factory(certs.ca.clone()),
@@ -460,10 +483,8 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
         dgram_queue_cap: lb_quic::DGRAM_QUEUE_CAP,
         max_relay_streams: lb_quic::MAX_RELAY_STREAMS,
     };
-
     let runtime = lb_io::Runtime::new();
     let tcp_pool = TcpPool::new(PoolConfig::default(), BackendSockOpts::default(), runtime);
-
     let params = ActorParams {
         conn: server_conn,
         socket: Arc::clone(&lb_socket),
@@ -477,112 +498,49 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
         quic_modeb_metrics: None,
     };
 
-    // 8) Cancel the actor shortly after it has established both legs so
-    //    the dual pump exits and `run_raw_proxy_actor_inner` returns the
-    //    RawProxyOutcome (graceful_close both, then Ok(outcome)).
-    let cancel_for_timer = cancel.clone();
-    tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(600)).await;
-        cancel_for_timer.cancel();
-    });
+    // 9) Run the actor; wait for the echoed datagrams, then cancel.
+    let actor = tokio::spawn(run_raw_proxy_actor_for_test(params));
 
-    // 9) Drive the actor via the test hook and capture the outcome.
-    let outcome = tokio::time::timeout(
-        Duration::from_secs(15),
-        run_raw_proxy_actor_for_test(params),
-    )
-    .await
-    .expect("Mode B actor must not hang")
-    .expect("Mode B actor must establish both legs and return RawProxyOutcome");
+    let received = tokio::time::timeout(RELAY_BUDGET, done_rx)
+        .await
+        .expect("client must receive the echoed datagrams before the budget")
+        .expect("client driver must deliver the received datagrams");
 
-    // Tidy up the driver tasks.
+    // ── THE ASSERTION: every sent datagram came back byte-identical.
+    // Datagrams are unordered, so compare as a multiset.
+    assert_eq!(
+        received.len(),
+        sent.len(),
+        "client must receive exactly as many datagrams as it sent \
+         (echoed verbatim through the Mode B relay both directions)"
+    );
+    let mut remaining: Vec<Vec<u8>> = received;
+    for s in &sent {
+        let pos = remaining.iter().position(|r| r == s).unwrap_or_else(|| {
+            panic!(
+                "sent datagram of len {} was not received byte-identical \
+                 (client→LB→backend→LB→client datagram relay)",
+                s.len()
+            )
+        });
+        remaining.swap_remove(pos);
+    }
+    assert!(
+        remaining.is_empty(),
+        "no unexpected/extra datagrams should remain"
+    );
+
+    // Sanity: the zero-length datagram in particular round-tripped (it is
+    // the one most likely to be silently dropped by a naive relay).
+    let lens: HashSet<usize> = sent.iter().map(Vec::len).collect();
+    assert!(
+        lens.contains(&0),
+        "fixture must include a zero-length datagram"
+    );
+
+    // Tidy up.
     cancel.cancel();
     forwarder.abort();
     let _ = client_driver.await;
-
-    // ── MECHANISM ASSERTIONS ─────────────────────────────────────────
-    eprintln!("client_scid    = {:02x?}", outcome.client_scid);
-    eprintln!("upstream_scid  = {:02x?}", outcome.upstream_scid);
-    eprintln!("client_trace   = {}", outcome.client_trace_id);
-    eprintln!("upstream_trace = {}", outcome.upstream_trace_id);
-    eprintln!(
-        "negotiated_alpn= {:?}",
-        String::from_utf8_lossy(&outcome.negotiated_alpn)
-    );
-    eprintln!("client_chosen_scid (downstream) = {client_chosen_scid:02x?}");
-
-    // (1) Distinct SCIDs — the LB chose an independent SCID upstream.
-    assert_ne!(
-        outcome.client_scid, outcome.upstream_scid,
-        "two-connections proof: client SCID and upstream SCID MUST differ \
-         (a bridge would reuse/derive one CID)"
-    );
-
-    // (2) Distinct quiche::Connection objects — distinct trace_ids.
-    assert_ne!(
-        outcome.client_trace_id, outcome.upstream_trace_id,
-        "two-connections proof: client and upstream MUST be distinct \
-         quiche::Connection objects (distinct trace_ids)"
-    );
-
-    // (3) ALPN mirrored upstream (and NOT the factory default).
-    assert_eq!(
-        outcome.negotiated_alpn,
-        H3_ALPN,
-        "ALPN mirroring: the actor must mirror the client's negotiated \
-         `h3` upstream; got {:?}",
-        String::from_utf8_lossy(&outcome.negotiated_alpn)
-    );
-
-    // (4) LOAD-BEARING independence — the BACKEND's own witness.
-    let backend_saw = observed_upstream_scid.lock().unwrap().clone().expect(
-        "backend must have observed an inbound Initial (the LB \
-             re-originated a real upstream connection)",
-    );
-    eprintln!("backend_observed_scid = {backend_saw:02x?}");
-
-    // The SCID the backend saw is the LB-as-client SCID === upstream_scid.
-    assert_eq!(
-        backend_saw, outcome.upstream_scid,
-        "the SCID the backend observed on the inbound Initial MUST equal \
-         the actor's reported upstream SCID (same upstream connection)"
-    );
-    // A bridge would forward the CLIENT's connection — the backend would
-    // see the CLIENT's chosen SCID. Re-origination samples a fresh one.
-    assert_ne!(
-        backend_saw, client_chosen_scid,
-        "two-connections proof (LOAD-BEARING): the backend MUST NOT see \
-         the CLIENT's SCID — a Mode B re-origination dials with a freshly \
-         sampled SCID; equality here would mean the client's connection \
-         was bridged to the backend"
-    );
-    // And the upstream SCID must not be the LB-as-server SCID either
-    // (defence against an accidental SCID reuse across the two legs).
-    assert_ne!(
-        backend_saw, outcome.client_scid,
-        "the upstream SCID must be independent of the LB's client-facing \
-         (server) SCID"
-    );
-
-    // (5) Independence is not a trivial length coincidence: the upstream
-    //     SCID is a full-length random CID, not a truncation/derivation of
-    //     the client SCID. Assert it shares no common prefix with the
-    //     client's chosen SCID beyond what randomness would give (a
-    //     derive-from-client bridge would copy a prefix).
-    let common_prefix = outcome
-        .upstream_scid
-        .iter()
-        .zip(client_chosen_scid.iter())
-        .take_while(|(a, b)| a == b)
-        .count();
-    assert!(
-        common_prefix < outcome.upstream_scid.len(),
-        "upstream SCID must not be byte-identical to the client SCID"
-    );
-    assert!(
-        common_prefix <= 2,
-        "upstream SCID shares a {common_prefix}-byte prefix with the \
-         client SCID — suspicious of a derive-from-client bridge (expected \
-         independent randomness)"
-    );
+    let _ = tokio::time::timeout(Duration::from_secs(5), actor).await;
 }

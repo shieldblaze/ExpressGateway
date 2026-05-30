@@ -76,6 +76,25 @@ pub struct QuicListenerParams {
     /// both are configured; mixed-protocol routing is not supported in
     /// v1.
     pub h2_backend: Option<(Http2Pool, SocketAddr)>,
+    /// SESSION 19 / Mode B (B6): optional raw-QUIC re-origination backend.
+    /// When `Some`, this listener runs Mode B (terminate-and-re-originate)
+    /// — every accepted connection is handed to the raw-proxy actor — and
+    /// the client-facing `quiche::Config` enables QUIC DATAGRAM support
+    /// (`enable_datagrams = true`). When `None` (every existing caller) the
+    /// listener runs H3-termination EXACTLY as today and DATAGRAM support
+    /// is NOT advertised, so the transport parameters are byte-identical
+    /// (R3). Threaded into [`RouterParams::raw_quic_backend`].
+    pub raw_quic_backend: Option<crate::raw_proxy::RawBackend>,
+    /// SESSION 19 / Mode B (B6): DATAGRAM recv/send queue length to
+    /// advertise to peers via `enable_dgram(true, cap, cap)` on a Mode-B
+    /// listener. Only consulted when `raw_quic_backend` is `Some`; ignored
+    /// (DATAGRAM disabled) on the H3 path. Mirrors the backend-leg
+    /// `dgram_queue_cap`.
+    pub dgram_queue_cap: usize,
+    /// SESSION 19 / Mode B (B6): `quic_modeb_*` metric handles, threaded to
+    /// [`RouterParams::quic_modeb_metrics`]. `None` ⇒ no Mode-B metrics
+    /// (and always `None` on the H3 path).
+    pub quic_modeb_metrics: Option<lb_observability::QuicModeBMetrics>,
 }
 
 impl std::fmt::Debug for QuicListenerParams {
@@ -92,6 +111,9 @@ impl std::fmt::Debug for QuicListenerParams {
             .field("pool_set", &self.pool.is_some())
             .field("h3_backend_set", &self.h3_backend.is_some())
             .field("h2_backend_set", &self.h2_backend.is_some())
+            .field("raw_quic_backend_set", &self.raw_quic_backend.is_some())
+            .field("dgram_queue_cap", &self.dgram_queue_cap)
+            .field("quic_modeb_metrics_set", &self.quic_modeb_metrics.is_some())
             .finish()
     }
 }
@@ -118,6 +140,12 @@ impl QuicListenerParams {
             pool: None,
             h3_backend: None,
             h2_backend: None,
+            // SESSION 19 / Mode B (B6): H3-terminate by default — Mode B
+            // is opted in via `with_raw_backend`. DATAGRAM stays disabled
+            // (R3) until then.
+            raw_quic_backend: None,
+            dgram_queue_cap: 1_024,
+            quic_modeb_metrics: None,
         }
     }
 
@@ -150,6 +178,27 @@ impl QuicListenerParams {
     #[must_use]
     pub fn with_h2_backend(mut self, pool: Http2Pool, addr: SocketAddr) -> Self {
         self.h2_backend = Some((pool, addr));
+        self
+    }
+
+    /// SESSION 19 / Mode B (B6): switch this listener to
+    /// terminate-and-re-originate Mode B. Sets the raw-QUIC re-origination
+    /// `backend`, the DATAGRAM queue cap to advertise to peers
+    /// (`enable_dgram(true, cap, cap)`), and the optional `quic_modeb_*`
+    /// metric handles. Calling this is the ONLY thing that flips the
+    /// client-facing config's `enable_datagrams` to `true` and sets
+    /// [`RouterParams::raw_quic_backend`]; without it the listener is
+    /// byte-identical H3-terminate (R3).
+    #[must_use]
+    pub fn with_raw_backend(
+        mut self,
+        backend: crate::raw_proxy::RawBackend,
+        dgram_queue_cap: usize,
+        quic_modeb_metrics: Option<lb_observability::QuicModeBMetrics>,
+    ) -> Self {
+        self.raw_quic_backend = Some(backend);
+        self.dgram_queue_cap = dgram_queue_cap;
+        self.quic_modeb_metrics = quic_modeb_metrics;
         self
     }
 }
@@ -205,8 +254,24 @@ impl QuicListener {
         let key = params.key_pem_path.clone();
         let idle_ms = u64::try_from(params.max_idle_timeout.as_millis()).unwrap_or(u64::MAX);
         let recv_payload = usize::try_from(params.max_recv_udp_payload_size).unwrap_or(1_350);
+        // SESSION 19 / Mode B (B6): enable QUIC DATAGRAM support on the
+        // client-facing config ONLY for a Mode-B listener. On the H3 path
+        // (`raw_quic_backend` is `None`) `enable_datagrams` is `false`, so
+        // `build_server_config` does NOT call `enable_dgram` and the
+        // advertised transport parameters are byte-identical to today (R3).
+        let enable_datagrams = params.raw_quic_backend.is_some();
+        let dgram_queue_cap = params.dgram_queue_cap;
         let config_factory: Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> =
-            Arc::new(move || build_server_config(&cert, &key, idle_ms, recv_payload));
+            Arc::new(move || {
+                build_server_config(
+                    &cert,
+                    &key,
+                    idle_ms,
+                    recv_payload,
+                    enable_datagrams,
+                    dgram_queue_cap,
+                )
+            });
 
         // Pool is required for real traffic; if the caller did not
         // supply one (3b.3c-1 smoke path), build a transient in-memory
@@ -241,10 +306,15 @@ impl QuicListener {
             // flooding behind legitimate source-address retry tokens.
             max_connections: 100_000,
             cancel: shutdown.clone(),
-            // SESSION 16 / Mode B: `QuicListener` is the H3-termination
-            // listener; Mode B gets its own per-listener wiring in B6
-            // (`lb/src/main.rs`). `None` keeps this path on H3 (R3).
-            raw_quic_backend: None,
+            // SESSION 16 / Mode B + SESSION 19 (B6): thread the configured
+            // raw-QUIC backend through. `None` keeps this listener on the
+            // H3-termination path byte-for-byte (R3); `Some` (set via
+            // `QuicListenerParams::with_raw_backend`) hands every accepted
+            // connection to the raw-proxy actor.
+            raw_quic_backend: params.raw_quic_backend.clone(),
+            // SESSION 19 / Mode B (B6): the `quic_modeb_*` handles (always
+            // `None` on the H3 path — no metric churn, R3).
+            quic_modeb_metrics: params.quic_modeb_metrics.clone(),
         };
         let router_handle = router::spawn(router_params);
         let handle = tokio::spawn(async move {
@@ -343,11 +413,23 @@ fn write_secret_file(path: &Path, secret: &[u8]) -> std::io::Result<()> {
     std::fs::write(path, secret)
 }
 
+/// Build the client-facing `quiche::Config`.
+///
+/// SESSION 19 / Mode B (B6): `enable_datagrams` is `true` ONLY for a
+/// Mode-B listener — it calls `cfg.enable_dgram(true, dgram_queue_cap,
+/// dgram_queue_cap)` so QUIC DATAGRAM (RFC 9221) is advertised to clients
+/// (the B4 relay needs it negotiated). When `false` (the H3-termination
+/// path) `enable_dgram` is NOT called, so the advertised transport
+/// parameters — and therefore the wire-visible config — are byte-identical
+/// to before B6 (R3 no-regression). `dgram_queue_cap` is ignored when
+/// `enable_datagrams` is `false`.
 fn build_server_config(
     cert: &Path,
     key: &Path,
     idle_ms: u64,
     recv_payload: usize,
+    enable_datagrams: bool,
+    dgram_queue_cap: usize,
 ) -> Result<quiche::Config, quiche::Error> {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
     cfg.set_application_protos(H3_ALPN_PROTOS)?;
@@ -361,6 +443,11 @@ fn build_server_config(
     cfg.set_initial_max_streams_bidi(16);
     cfg.set_initial_max_streams_uni(16);
     cfg.set_disable_active_migration(true);
+    // R3: only a Mode-B listener advertises DATAGRAM support. The H3 path
+    // skips this branch entirely ⇒ unchanged transport params.
+    if enable_datagrams {
+        cfg.enable_dgram(true, dgram_queue_cap, dgram_queue_cap);
+    }
     let cert = cert.to_str().ok_or(quiche::Error::TlsFail)?;
     let key = key.to_str().ok_or(quiche::Error::TlsFail)?;
     cfg.load_cert_chain_from_pem_file(cert)?;

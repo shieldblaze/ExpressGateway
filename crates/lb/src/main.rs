@@ -65,7 +65,9 @@ use lb_l7::h2_security::H2SecurityThresholds;
 use lb_l7::upstream::{RoundRobinUpstreams, UpstreamBackend, UpstreamProto};
 use lb_l7::ws_proxy::{WsConfig, WsProxy};
 use lb_observability::{MetricsRegistry, admin_http, http_latency_buckets};
-use lb_quic::{PassthroughListener, PassthroughParams, QuicListener, QuicListenerParams};
+use lb_quic::{
+    PassthroughListener, PassthroughParams, QuicListener, QuicListenerParams, RawBackend,
+};
 use lb_security::{
     ConnGate, HooksBundle, SecurityHooks, SmuggleMode, TicketRotator, Watchdog, WatchdogConfig,
 };
@@ -476,6 +478,10 @@ fn split_host_port(s: &str) -> anyhow::Result<(&str, u16)> {
 fn quic_listener_params_from_config(
     bind_addr: SocketAddr,
     cfg: &QuicListenerConfig,
+    // SESSION 19 / Mode B (B6): the resolved raw backend + metric handles
+    // when `cfg.raw_proxy` is configured; `None` ⇒ H3-terminate (R3).
+    raw_backend: Option<RawBackend>,
+    quic_modeb_metrics: Option<lb_observability::QuicModeBMetrics>,
 ) -> QuicListenerParams {
     let mut params = QuicListenerParams::new(
         bind_addr,
@@ -485,6 +491,19 @@ fn quic_listener_params_from_config(
     );
     params.max_idle_timeout = Duration::from_millis(cfg.max_idle_timeout_ms);
     params.max_recv_udp_payload_size = cfg.max_recv_udp_payload_size;
+    // SESSION 19 / Mode B (B6): flip to Mode B ONLY when a raw backend was
+    // built. `with_raw_backend` sets `raw_quic_backend`, the DATAGRAM cap,
+    // and the metrics, and is the ONLY thing that enables datagrams on the
+    // client-facing config. Absent ⇒ params are byte-identical H3 (R3).
+    if let Some(backend) = raw_backend {
+        params = params.with_raw_backend(
+            backend,
+            cfg.raw_proxy
+                .as_ref()
+                .map_or(1_024, |rp| rp.dgram_queue_cap),
+            quic_modeb_metrics,
+        );
+    }
     params
 }
 
@@ -792,6 +811,79 @@ fn build_h3_upstream_pool(
     )))
 }
 
+/// SESSION 19 / Mode B (B6): build the [`RawBackend`] for a Mode-B
+/// (terminate-and-re-originate) QUIC listener from its
+/// `[listeners.quic.raw_proxy]` block.
+///
+/// Constructs a dedicated [`QuicUpstreamPool`] whose `config_factory`
+/// mirrors the upstream-leg requirements:
+/// * `verify_peer(true)` ALWAYS (peer-cert verification is never silently
+///   disabled in Mode B — see [`lb_config::RawQuicProxyConfig::backend_ca_path`]).
+///   When `backend_ca_path` is set, the bundle is loaded via
+///   `load_verify_locations_from_file`; when absent, `BoringSSL`'s built-in
+///   default trust roots are used. Startup fails clearly if a configured CA
+///   path cannot be loaded.
+/// * the default upstream ALPN tokens (the actual handshake ALPN is
+///   overridden per-dial by [`QuicUpstreamPool::dial_dedicated`] to mirror
+///   the client's negotiated protocol — same as the H3 pool does).
+/// * `enable_dgram(true, cap, cap)` so the re-originated upstream
+///   negotiates QUIC DATAGRAM (RFC 9221) support for the B4 relay.
+///
+/// The returned [`RawBackend`] carries the pool, the parsed backend
+/// `SocketAddr`, and the SNI; it is cloned into every per-connection
+/// actor. An unparseable `backend_addr` fails startup (no silent
+/// Mode-B-disable).
+fn build_raw_quic_backend(cfg: &lb_config::RawQuicProxyConfig) -> anyhow::Result<RawBackend> {
+    let addr: SocketAddr = cfg.backend_addr.parse().with_context(|| {
+        format!(
+            "invalid Mode B raw_proxy backend_addr: {}",
+            cfg.backend_addr
+        )
+    })?;
+    let ca_path = cfg.backend_ca_path.clone();
+    let dgram_cap = cfg.dgram_queue_cap;
+    let factory: Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> =
+        Arc::new(move || {
+            let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
+            // Default ALPN; dial_dedicated overrides per-connection to
+            // mirror the client's negotiated protocol.
+            config.set_application_protos(lb_io::quic_pool::UPSTREAM_H3_ALPN_PROTOS)?;
+            // Backend-trust: verify_peer is ALWAYS on (documented v1
+            // behaviour — never silently disabled). With a CA bundle, load
+            // it; without one, fall back to BoringSSL default roots.
+            if let Some(path) = ca_path.as_deref() {
+                config.load_verify_locations_from_file(path)?;
+            }
+            config.verify_peer(true);
+            config.set_max_idle_timeout(30_000);
+            config.set_max_recv_udp_payload_size(1_350);
+            config.set_max_send_udp_payload_size(1_350);
+            config.set_initial_max_data(10 * 1024 * 1024);
+            config.set_initial_max_stream_data_bidi_local(1024 * 1024);
+            config.set_initial_max_stream_data_bidi_remote(1024 * 1024);
+            config.set_initial_max_stream_data_uni(1024 * 1024);
+            config.set_initial_max_streams_bidi(64);
+            config.set_initial_max_streams_uni(64);
+            config.set_disable_active_migration(true);
+            // B4: negotiate QUIC DATAGRAM support on the upstream leg.
+            config.enable_dgram(true, dgram_cap, dgram_cap);
+            Ok(config)
+        });
+    let pool = QuicUpstreamPool::new(QuicPoolConfig::default(), factory);
+    Ok(RawBackend {
+        pool,
+        addr,
+        sni: cfg.sni.clone(),
+        // B6 (R14/R12): single-source the relay's two memory bounds from
+        // the operator config so the same value controls the wire-advertised
+        // queue length AND the relay's own `BoundedDgramQueue` (B4) /
+        // `admit_or_refuse` ceiling (B5). The config serde defaults equal
+        // `lb_quic::{DGRAM_QUEUE_CAP, MAX_RELAY_STREAMS}` (1024 / 256).
+        dgram_queue_cap: cfg.dgram_queue_cap,
+        max_relay_streams: cfg.max_relay_streams,
+    })
+}
+
 /// Build a [`H1Proxy`] from the listener's resolved upstream backends
 /// and optional H2/H3 upstream pools.
 ///
@@ -999,6 +1091,7 @@ fn merge_h2_security(cfg: Option<&H2SecurityConfig>) -> H2SecurityThresholds {
 /// listener-token cancel.
 async fn spawn_quic(
     listener_cfg: &lb_config::ListenerConfig,
+    metrics: &Arc<MetricsRegistry>,
     shutdown_token: CancellationToken,
 ) -> anyhow::Result<QuicListener> {
     let Some(quic_cfg) = listener_cfg.quic.as_ref() else {
@@ -1011,17 +1104,51 @@ async fn spawn_quic(
         .address
         .parse()
         .with_context(|| format!("invalid listen address: {}", listener_cfg.address))?;
-    let params = quic_listener_params_from_config(bind_addr, quic_cfg);
+
+    // SESSION 19 / Mode B (B6): when a `[listeners.quic.raw_proxy]` block
+    // is present, build the raw-QUIC re-origination backend + register the
+    // quic_modeb_* metric family. Absent ⇒ both are `None` and the
+    // listener runs H3-terminate byte-identically (R3).
+    let (raw_backend, modeb_metrics) = match quic_cfg.raw_proxy.as_ref() {
+        Some(rp) => {
+            let backend = build_raw_quic_backend(rp)
+                .with_context(|| format!("building Mode B raw_proxy backend for {bind_addr}"))?;
+            let m = lb_observability::QuicModeBMetrics::register(metrics)
+                .context("registering quic_modeb_* metrics")?;
+            (Some(backend), Some(m))
+        }
+        None => (None, None),
+    };
+    let mode_b = raw_backend.is_some();
+
+    let params = quic_listener_params_from_config(bind_addr, quic_cfg, raw_backend, modeb_metrics);
     let listener = QuicListener::spawn(params, shutdown_token)
         .await
         .with_context(|| format!("QUIC listener bind failed for {bind_addr}"))?;
-    tracing::info!(
-        address = %listener.local_addr(),
-        protocol = "quic",
-        cert = %quic_cfg.cert_path,
-        retry_secret = %quic_cfg.retry_secret_path,
-        "QUIC listener started"
-    );
+    if mode_b {
+        if let Some(rp) = quic_cfg.raw_proxy.as_ref() {
+            tracing::info!(
+                address = %listener.local_addr(),
+                protocol = "quic",
+                mode = "B",
+                backend = %rp.backend_addr,
+                sni = %rp.sni,
+                dgram_queue_cap = rp.dgram_queue_cap,
+                max_relay_streams = rp.max_relay_streams,
+                backend_verify = "verify_peer(true)",
+                backend_ca = rp.backend_ca_path.as_deref().unwrap_or("system-default-roots"),
+                "Mode B raw-QUIC proxy listener started"
+            );
+        }
+    } else {
+        tracing::info!(
+            address = %listener.local_addr(),
+            protocol = "quic",
+            cert = %quic_cfg.cert_path,
+            retry_secret = %quic_cfg.retry_secret_path,
+            "QUIC listener started"
+        );
+    }
     Ok(listener)
 }
 
@@ -1901,7 +2028,8 @@ async fn async_main() -> anyhow::Result<()> {
 
     for listener_cfg in &config.listeners {
         if listener_cfg.protocol == "quic" {
-            quic_listeners.push(spawn_quic(listener_cfg, shutdown.token().child_token()).await?);
+            quic_listeners
+                .push(spawn_quic(listener_cfg, &metrics, shutdown.token().child_token()).await?);
             continue;
         }
         if listener_cfg.backends.is_empty() {
@@ -3020,6 +3148,7 @@ where
 mod tests {
     use super::*;
     use lb_config::BackendConfig;
+    use std::net::Ipv4Addr;
 
     fn h3_backend(address: &str, ca: Option<&str>, verify: bool) -> BackendConfig {
         BackendConfig {
@@ -3078,6 +3207,504 @@ mod tests {
         let a = h3_backend("127.0.0.1:4001", None, false);
         let b = h3_backend("127.0.0.1:4002", None, false);
         build_h3_upstream_pool(&[a, b]).unwrap();
+    }
+
+    // ── SESSION 19 / Mode B (B6) reachability: config → params wiring ──
+    //
+    // Proves the binary's config→`QuicListenerParams` path actually flips
+    // to Mode B when (and only when) a `[listeners.quic.raw_proxy]` block
+    // is present — i.e. Mode B is reachable end-to-end through the real
+    // `spawn_quic` helper chain. NOT a security proof (those — two-conns
+    // and 0-RTT — are the verifier's wire tests).
+
+    fn quic_cfg_with_raw_proxy(raw: Option<lb_config::RawQuicProxyConfig>) -> QuicListenerConfig {
+        QuicListenerConfig {
+            cert_path: "/tmp/eg-test-cert.pem".into(),
+            key_path: "/tmp/eg-test-key.pem".into(),
+            retry_secret_path: "/tmp/eg-test-retry.secret".into(),
+            max_idle_timeout_ms: 30_000,
+            max_recv_udp_payload_size: 1_350,
+            raw_proxy: raw,
+        }
+    }
+
+    fn raw_proxy_block() -> lb_config::RawQuicProxyConfig {
+        lb_config::RawQuicProxyConfig {
+            backend_addr: "127.0.0.1:4443".into(),
+            sni: "backend.test".into(),
+            backend_ca_path: None,
+            dgram_queue_cap: 512,
+            max_relay_streams: 128,
+        }
+    }
+
+    #[test]
+    fn raw_proxy_present_builds_mode_b_params() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let rp = raw_proxy_block();
+        let cfg = quic_cfg_with_raw_proxy(Some(rp.clone()));
+        // The same backend-build the binary does at spawn.
+        let backend = build_raw_quic_backend(&rp).expect("build raw backend");
+        let params = quic_listener_params_from_config(bind, &cfg, Some(backend), None);
+        assert!(
+            params.raw_quic_backend.is_some(),
+            "a raw_proxy block must produce a Mode-B listener (raw_quic_backend = Some)"
+        );
+        assert_eq!(
+            params.dgram_queue_cap, 512,
+            "the DATAGRAM cap must come from the raw_proxy block"
+        );
+    }
+
+    #[test]
+    fn no_raw_proxy_keeps_h3_termination_params() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let cfg = quic_cfg_with_raw_proxy(None);
+        // R3: without a raw_proxy block, no backend is built, so the
+        // params carry `raw_quic_backend = None` — the H3-termination path,
+        // which makes `build_server_config`'s `enable_datagrams = false`
+        // (transport params byte-identical to today).
+        let params = quic_listener_params_from_config(bind, &cfg, None, None);
+        assert!(
+            params.raw_quic_backend.is_none(),
+            "R3: a config without raw_proxy must stay on the H3-terminate path (raw_quic_backend = None)"
+        );
+        assert!(
+            params.quic_modeb_metrics.is_none(),
+            "R3: no Mode-B metrics on the H3 path"
+        );
+    }
+
+    #[test]
+    fn build_raw_quic_backend_rejects_unparseable_addr() {
+        let mut rp = raw_proxy_block();
+        rp.backend_addr = "not-an-addr".into();
+        let err = build_raw_quic_backend(&rp).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("invalid Mode B raw_proxy backend_addr"),
+            "expected a clear parse error (no silent Mode-B disable), got: {err}"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // S19 / Mode B (B6) — REAL spawn_quic e2e (the production entry point is
+    // genuinely EXERCISED, not just asserted-reachable).
+    //
+    // This drives the REAL `spawn_quic` Mode-B arm: a real quiche CLIENT
+    // connects to the listener `spawn_quic` bound (so the LB's own router +
+    // accept/Retry/0-RTT machinery run), the Mode-B actor re-originates to a
+    // real quiche ECHO backend (which forces `build_raw_quic_backend`'s
+    // `config_factory` CLOSURE to run on the dedicated dial, and
+    // `build_server_config(enable_datagrams=true)` to build the client-facing
+    // config), relays a bidi stream both ways, and the client gets its bytes
+    // back byte-identically. No test hook — the round-trip goes THROUGH the
+    // spawned listener, which is the mechanism proof that the wiring glue ran.
+    //
+    // Hardened against flake (owner-cited lesson): generous BOUNDED budgets,
+    // a single pump loop per side, NO tight per-read timeouts. Deterministic.
+    // ─────────────────────────────────────────────────────────────────────
+
+    const MODEB_E2E_MAX_UDP: usize = 65_535;
+    const MODEB_E2E_LB_SNI: &str = "lb.modeb.test";
+    const MODEB_E2E_BACKEND_SNI: &str = "backend.modeb.test";
+    const MODEB_E2E_ALPN: &[u8] = b"h3";
+    /// Whole-test budget (handshake + relay round-trip). Generous + bounded.
+    const MODEB_E2E_BUDGET: Duration = Duration::from_secs(10);
+
+    struct ModeBE2eCerts {
+        dir: std::path::PathBuf,
+        cert: std::path::PathBuf,
+        key: std::path::PathBuf,
+        ca: std::path::PathBuf,
+    }
+
+    impl Drop for ModeBE2eCerts {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    /// Issue a self-signed leaf (= its own CA, the s16 pattern) for `sni`,
+    /// written to a unique temp dir as cert/key/ca PEMs.
+    fn modeb_e2e_gen_certs(sni: &str, tag: &str) -> ModeBE2eCerts {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "lb-s19-b6-e2e-{tag}-{}-{nanos}-{seq}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut params = rcgen::CertificateParams::new(vec![sni.to_string()]).unwrap();
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        params
+            .extended_key_usages
+            .push(rcgen::ExtendedKeyUsagePurpose::ServerAuth);
+        let key_pair = rcgen::KeyPair::generate().unwrap();
+        let cert = params.self_signed(&key_pair).unwrap();
+        let cert_path = dir.join("cert.pem");
+        let key_path = dir.join("key.pem");
+        let ca_path = dir.join("ca.pem");
+        std::fs::write(&cert_path, cert.pem().as_bytes()).unwrap();
+        std::fs::write(&key_path, key_pair.serialize_pem().as_bytes()).unwrap();
+        std::fs::write(&ca_path, cert.pem().as_bytes()).unwrap();
+        ModeBE2eCerts {
+            dir,
+            cert: cert_path,
+            key: key_path,
+            ca: ca_path,
+        }
+    }
+
+    fn modeb_e2e_random_scid() -> [u8; quiche::MAX_CONN_ID_LEN] {
+        use ring::rand::SecureRandom;
+        let mut scid = [0u8; quiche::MAX_CONN_ID_LEN];
+        ring::rand::SystemRandom::new().fill(&mut scid).unwrap();
+        scid
+    }
+
+    fn modeb_e2e_payload(len: usize) -> Vec<u8> {
+        (0..len).map(|i| ((i * 31 + 7) % 256) as u8).collect()
+    }
+
+    /// The downstream CLIENT config — verifies the LB's leaf via `lb_ca`.
+    fn modeb_e2e_client_config(lb_ca: &std::path::Path) -> quiche::Config {
+        let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
+        cfg.set_application_protos(&[MODEB_E2E_ALPN]).unwrap();
+        cfg.load_verify_locations_from_file(lb_ca.to_str().unwrap())
+            .unwrap();
+        cfg.verify_peer(true);
+        cfg.set_max_idle_timeout(10_000);
+        cfg.set_max_recv_udp_payload_size(1_350);
+        cfg.set_max_send_udp_payload_size(1_350);
+        cfg.set_initial_max_data(1024 * 1024);
+        cfg.set_initial_max_stream_data_bidi_local(256 * 1024);
+        cfg.set_initial_max_stream_data_bidi_remote(256 * 1024);
+        cfg.set_initial_max_stream_data_uni(64 * 1024);
+        cfg.set_initial_max_streams_bidi(8);
+        cfg.set_initial_max_streams_uni(8);
+        cfg.set_disable_active_migration(true);
+        cfg.enable_dgram(true, 1024, 1024);
+        cfg
+    }
+
+    /// A throwaway quiche SERVER backend: accepts ONE connection (the LB's
+    /// re-originated dial), echoes STREAM bytes back on the same stream id,
+    /// FINs back once the peer FIN'd and its echo queue drained. Mirrors the
+    /// s16 `spawn_echo_backend`. Bounded by its own 30s deadline.
+    fn modeb_e2e_spawn_echo_backend(certs: &ModeBE2eCerts) -> SocketAddr {
+        let std_sock = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        std_sock.set_nonblocking(true).unwrap();
+        let addr = std_sock.local_addr().unwrap();
+
+        let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
+        cfg.set_application_protos(&[MODEB_E2E_ALPN]).unwrap();
+        cfg.load_cert_chain_from_pem_file(certs.cert.to_str().unwrap())
+            .unwrap();
+        cfg.load_priv_key_from_pem_file(certs.key.to_str().unwrap())
+            .unwrap();
+        cfg.set_max_idle_timeout(10_000);
+        cfg.set_max_recv_udp_payload_size(1_350);
+        cfg.set_max_send_udp_payload_size(1_350);
+        cfg.set_initial_max_data(1024 * 1024);
+        cfg.set_initial_max_stream_data_bidi_local(256 * 1024);
+        cfg.set_initial_max_stream_data_bidi_remote(256 * 1024);
+        cfg.set_initial_max_stream_data_uni(64 * 1024);
+        cfg.set_initial_max_streams_bidi(8);
+        cfg.set_initial_max_streams_uni(8);
+        cfg.set_disable_active_migration(true);
+        cfg.enable_dgram(true, 1024, 1024);
+
+        tokio::spawn(async move {
+            let socket = tokio::net::UdpSocket::from_std(std_sock).unwrap();
+            let mut in_buf = vec![0u8; MODEB_E2E_MAX_UDP];
+            let mut out_buf = vec![0u8; MODEB_E2E_MAX_UDP];
+            let mut rd = vec![0u8; MODEB_E2E_MAX_UDP];
+            let mut conn: Option<quiche::Connection> = None;
+            let mut echo: std::collections::HashMap<u64, (Vec<u8>, bool, bool)> =
+                std::collections::HashMap::new();
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+            loop {
+                if tokio::time::Instant::now() >= deadline {
+                    return;
+                }
+                if let Some(c) = conn.as_mut() {
+                    let readable: Vec<u64> = c.readable().collect();
+                    for sid in readable {
+                        // Any recv error (incl. `Done`) ends the drain for this
+                        // sid; a FIN / empty read also ends it.
+                        while let Ok((n, fin)) = c.stream_recv(sid, &mut rd) {
+                            let e = echo.entry(sid).or_insert((Vec::new(), false, false));
+                            e.0.extend_from_slice(rd.get(..n).unwrap_or(&[]));
+                            if fin {
+                                e.1 = true;
+                            }
+                            if fin || n == 0 {
+                                break;
+                            }
+                        }
+                    }
+                    let sids: Vec<u64> = echo.keys().copied().collect();
+                    for sid in sids {
+                        if let Some(e) = echo.get_mut(&sid) {
+                            let mut acc = 0usize;
+                            while acc < e.0.len() {
+                                let chunk = e.0.get(acc..).unwrap_or(&[]);
+                                match c.stream_send(sid, chunk, false) {
+                                    Ok(0) | Err(quiche::Error::Done) => break,
+                                    Ok(n) => {
+                                        acc += n;
+                                        if n < chunk.len() {
+                                            break;
+                                        }
+                                    }
+                                    Err(_) => break,
+                                }
+                            }
+                            if acc > 0 {
+                                e.0.drain(..acc.min(e.0.len()));
+                            }
+                            if e.1
+                                && e.0.is_empty()
+                                && !e.2
+                                && c.stream_send(sid, &[], true).is_ok()
+                            {
+                                e.2 = true;
+                            }
+                        }
+                    }
+                    // Any send error (incl. `Done`) ends the flush this turn.
+                    while let Ok((n, info)) = c.send(&mut out_buf) {
+                        let _ = socket
+                            .send_to(out_buf.get(..n).unwrap_or(&[]), info.to)
+                            .await;
+                    }
+                }
+                let timeout = conn
+                    .as_ref()
+                    .and_then(quiche::Connection::timeout)
+                    .unwrap_or(Duration::from_millis(5));
+                match tokio::time::timeout(timeout, socket.recv_from(&mut in_buf)).await {
+                    Ok(Ok((n, from))) => {
+                        if conn.is_none() {
+                            let scid = modeb_e2e_random_scid();
+                            let scid_ref = quiche::ConnectionId::from_ref(&scid);
+                            match quiche::accept(&scid_ref, None, addr, from, &mut cfg) {
+                                Ok(c) => conn = Some(c),
+                                Err(_) => continue,
+                            }
+                        }
+                        if let Some(c) = conn.as_mut() {
+                            let slice = in_buf.get_mut(..n).unwrap_or(&mut []);
+                            let info = quiche::RecvInfo { from, to: addr };
+                            let _ = c.recv(slice, info);
+                        }
+                    }
+                    Ok(Err(_)) | Err(_) => {
+                        if let Some(c) = conn.as_mut() {
+                            c.on_timeout();
+                        }
+                    }
+                }
+            }
+        });
+
+        addr
+    }
+
+    /// **S19 B6 — the REAL `spawn_quic` Mode-B e2e.** A real quiche client
+    /// round-trips a binary payload THROUGH the listener `spawn_quic` bound,
+    /// proving the production wiring glue (spawn_quic Mode-B arm +
+    /// `build_raw_quic_backend` + the dial `config_factory` closure +
+    /// `build_server_config(enable_datagrams=true)`) actually executes.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn spawn_quic_mode_b_e2e_round_trips_through_real_listener() {
+        // Distinct CAs: the client trusts the LB leaf; the LB (Mode-B
+        // upstream config_factory) trusts the BACKEND leaf via backend_ca_path.
+        let lb_certs = modeb_e2e_gen_certs(MODEB_E2E_LB_SNI, "lb");
+        let backend_certs = modeb_e2e_gen_certs(MODEB_E2E_BACKEND_SNI, "be");
+
+        // 1) Real quiche echo backend (the Mode-B re-origination target).
+        let backend_addr = modeb_e2e_spawn_echo_backend(&backend_certs);
+
+        // 2) Retry-secret path (auto-generated 0600 by the listener if absent).
+        let retry_secret_path = lb_certs.dir.join("retry.secret");
+
+        // 3) Build the REAL ListenerConfig with a [raw_proxy] block → Mode B.
+        let listener_cfg = lb_config::ListenerConfig {
+            address: "127.0.0.1:0".to_string(),
+            protocol: "quic".to_string(),
+            tls: None,
+            quic: Some(QuicListenerConfig {
+                cert_path: lb_certs.cert.to_string_lossy().into_owned(),
+                key_path: lb_certs.key.to_string_lossy().into_owned(),
+                retry_secret_path: retry_secret_path.to_string_lossy().into_owned(),
+                max_idle_timeout_ms: 10_000,
+                max_recv_udp_payload_size: 1_350,
+                raw_proxy: Some(lb_config::RawQuicProxyConfig {
+                    backend_addr: backend_addr.to_string(),
+                    sni: MODEB_E2E_BACKEND_SNI.to_string(),
+                    backend_ca_path: Some(backend_certs.ca.to_string_lossy().into_owned()),
+                    dgram_queue_cap: 1024,
+                    max_relay_streams: 256,
+                }),
+            }),
+            alt_svc: None,
+            http: None,
+            h2_security: None,
+            websocket: None,
+            grpc: None,
+            drain_timeout_ms: None,
+            drain_jitter_ms: None,
+            backends: vec![],
+        };
+
+        // 4) Drive the REAL production entry point.
+        let metrics = Arc::new(MetricsRegistry::new());
+        let token = CancellationToken::new();
+        let listener = spawn_quic(&listener_cfg, &metrics, token.clone())
+            .await
+            .expect("spawn_quic Mode-B must start");
+        let lb_addr = listener.local_addr();
+
+        // 5) Real downstream CLIENT → the listener bound addr.
+        let client_socket = Arc::new(
+            tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+                .await
+                .unwrap(),
+        );
+        let client_local = client_socket.local_addr().unwrap();
+        let mut client_cfg = modeb_e2e_client_config(&lb_certs.ca);
+        let c_scid = modeb_e2e_random_scid();
+        let mut client = quiche::connect(
+            Some(MODEB_E2E_LB_SNI),
+            &quiche::ConnectionId::from_ref(&c_scid),
+            client_local,
+            lb_addr,
+            &mut client_cfg,
+        )
+        .unwrap();
+
+        let payload = modeb_e2e_payload(4096);
+        let mut out = vec![0u8; MODEB_E2E_MAX_UDP];
+        let mut in_buf = vec![0u8; MODEB_E2E_MAX_UDP];
+        let mut sent = false;
+        let mut echoed: Vec<u8> = Vec::new();
+        let mut fin_seen = false;
+        let deadline = tokio::time::Instant::now() + MODEB_E2E_BUDGET;
+
+        // 6) Single pump loop: flush → (on established) send once → read echo
+        //    → recv with a SHORT bounded wait that is NOT a correctness
+        //    timeout (the loop just re-polls; the only hard deadline is the
+        //    generous whole-test budget). quiche handles the LB's RETRY
+        //    transparently inside `client.recv`.
+        loop {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "Mode-B e2e budget exhausted: established={}, echoed={}, fin={fin_seen}",
+                client.is_established(),
+                echoed.len()
+            );
+
+            // Flush all pending outbound.
+            loop {
+                match client.send(&mut out) {
+                    Ok((n, info)) => {
+                        let _ = client_socket
+                            .send_to(out.get(..n).unwrap_or(&[]), info.to)
+                            .await;
+                    }
+                    Err(quiche::Error::Done) => break,
+                    Err(e) => panic!("client send: {e:?}"),
+                }
+            }
+
+            if client.is_established() && !sent {
+                let n = client
+                    .stream_send(0, &payload, true)
+                    .expect("client stream_send");
+                assert_eq!(n, payload.len(), "fixture: whole payload fits the window");
+                sent = true;
+                // Flush the freshly-queued stream bytes immediately.
+                loop {
+                    match client.send(&mut out) {
+                        Ok((m, info)) => {
+                            let _ = client_socket
+                                .send_to(out.get(..m).unwrap_or(&[]), info.to)
+                                .await;
+                        }
+                        Err(quiche::Error::Done) => break,
+                        Err(e) => panic!("client send (post stream): {e:?}"),
+                    }
+                }
+            }
+
+            if client.is_established() {
+                let readable: Vec<u64> = client.readable().collect();
+                for sid in readable {
+                    if sid != 0 {
+                        continue;
+                    }
+                    loop {
+                        match client.stream_recv(sid, &mut in_buf) {
+                            Ok((n, fin)) => {
+                                echoed.extend_from_slice(in_buf.get(..n).unwrap_or(&[]));
+                                if fin {
+                                    fin_seen = true;
+                                    break;
+                                }
+                            }
+                            Err(quiche::Error::Done) => break,
+                            Err(quiche::Error::InvalidStreamState(_)) => break,
+                            Err(e) => panic!("client stream_recv: {e:?}"),
+                        }
+                    }
+                }
+                if fin_seen && echoed.len() >= payload.len() {
+                    break;
+                }
+            }
+
+            // Bounded re-poll: read one inbound datagram if it arrives within
+            // a short window, else loop to re-flush / re-check (no hard fail
+            // on this short wait — the budget above is the only deadline).
+            let timeout = client.timeout().unwrap_or(Duration::from_millis(20));
+            let wait = timeout.min(Duration::from_millis(20));
+            if let Ok(Ok((n, from))) =
+                tokio::time::timeout(wait, client_socket.recv_from(&mut in_buf)).await
+            {
+                let info = quiche::RecvInfo {
+                    from,
+                    to: client_local,
+                };
+                let slice = in_buf.get_mut(..n).unwrap_or(&mut []);
+                let _ = client.recv(slice, info);
+            } else {
+                client.on_timeout();
+            }
+        }
+
+        // 7) THE PROOF: the bytes round-tripped THROUGH the spawned listener
+        //    (client → spawn_quic'd LB → Mode-B re-origination → backend echo
+        //    → relay → client), byte-identical. This can only happen if the
+        //    spawn_quic Mode-B arm + the dial config_factory closure ran.
+        assert!(fin_seen, "client must observe the relayed FIN");
+        assert_eq!(
+            echoed, payload,
+            "the payload must round-trip byte-identically through the real Mode-B listener"
+        );
+        // The client negotiated `h3` with the LB listener (build_server_config
+        // advertised it on the Mode-B client-facing config).
+        assert_eq!(client.application_proto(), MODEB_E2E_ALPN);
+
+        // 8) Clean shutdown via the production token.
+        token.cancel();
+        let _ = tokio::time::timeout(Duration::from_secs(5), listener.shutdown()).await;
     }
 
     // CODE-2-03 Wave 2c proof: the three lifecycle signal kinds render
