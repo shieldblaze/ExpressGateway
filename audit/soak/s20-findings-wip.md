@@ -96,10 +96,29 @@ low fd ulimit this exhausts fds long before the flow cap.
 found in `audit/deferred.md` / `audit/quic/` (grep empty). Appears to be a
 genuine gap, not a known carry-forward. (Confirm in Phase 3.)
 
-**Soak question (PENDING-COMPLETED-RUN):** does sc5_modea plateau at ~2×cap
-(LRU steady-state, evicted_total rising) — confirming the bound — or climb
-unbounded (a true leak)? The completed time-series decides; the *expected*
-shape from code is climb-to-200k-then-plateau.
+**Soak evidence (two runs):**
+- run1 (overloaded, concurrency 12): flows climbed LINEARLY 0→62k over ~35 min,
+  `evicted_total=0`, NO plateau, RSS 7→295 MB, fds 0→25k. (Archived:
+  `audit/soak/s20-soak-data/run1-partial-overloaded/sc5_modea.heartbeats.txt`.)
+- run2 (concurrency 2): flows shot to ~56k in 90 s then **plateaued at 56433**
+  (flat for the rest), `evicted_total=0`, RSS 7→325 MB, fds 0→28k — the plateau
+  is BELOW the 200k LRU cap. Mechanism: the gateway saturates servicing 56k
+  unreclaimed flows' per-flow 2 s recv-timeout wakeups and can no longer accept
+  NEW connections (the client's new handshakes start failing) → an **effective
+  connection-acceptance DoS at ~56k retained flows, well under the configured
+  cap**. This is a SHARPER + more severe characterization than "grows to the
+  cap": the unreclaimed-flow CPU cost caps the gateway's *useful* capacity far
+  below its configured flow cap.
+
+**Run management:** sc5 is the box's resource polluter (its 56k-flow servicing
+load thrashes a co-located run). It was run to characterization then surgically
+removed from run2 so the other 7 scenarios soak clean. F-S20-2 gets its own
+ISOLATED verdict run in Phase 3 (clean box, dedicated) for a proper
+BOUNDED/DRIFT time-series + the saturation-knee measurement.
+
+**Soak verdict (PENDING-ISOLATED-RUN):** DRIFT/finding is the expected verdict
+(monotonic growth + saturation knee); confirmed from the isolated run's
+time-series.
 
 **Fix (S21):** add a periodic idle-timeout sweep that evicts flows whose
 `last_seen_ms` exceeds an idle threshold (≈ the QUIC idle timeout) — the
