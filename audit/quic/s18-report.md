@@ -66,11 +66,23 @@ completed output): with fix PASS; one-line reverted → FAILS (`pending=0, done=
 fin_sent=false` = tail dropped); restored PASS. Self-check: 20/20 `s16_b2_multistream`
 isolation (no 90 s stall). Only raw_proxy.rs changed; Cargo.lock unchanged. Lead diff-review
 PASS (author≠verifier).
-**Independent verifier (RUNNING, quiet box, own worktree @ 1414d656):** TASK1 reproduce the
-drop on pre-fix `a231b761`; TASK2 R13 ≥75-iter dual-path ZERO-stall burst + negative control +
-regression-test toggle; TASK3 Mode B suite no-regression. → `s18-logs/p2-verifier-findings.md`.
-**B4/B5/B6:** decision pending (R7 honest-stop: likely defer to S19 with the stall CLOSED).
+**Independent verifier (DONE — `s18-logs/p2-verifier-findings.md`, lead spot-checked BURST_DONE
+lines):** root CONFIRMED + fix VERIFIED to R13.
+- R13(b) isolation burst BOTH paths: FIXED `1414d656` **0/90 multistream + 0/75 backpressure**
+  (own worktree/target, quiet box). PRE-FIX `a231b761` 9/90 + 4/75.
+- R13(c) load-bearing negative control: same harness 9/90→0/90, 4/75→0/75; + deterministic
+  regression test PASS-fixed/FAIL-prefix on a one-line toggle.
+- Root independently reproduced: every drop (10/10) = `InvalidStreamState` arm, `src_fin_seen=true`,
+  `dropping_pending == short_by` EXACT; write-error arm never fired.
+- No-regression: all 5 Mode B wire tests + lb-quic lib (68) pass under `--features test-gauges`.
 
-## Phase 3 — gates + promote  (PENDING — gated behind verifier confirmation)
+**⇒ CF-S16-RELAY-STALL is CLOSED** (proven + independently confirmed + fixed + R13 b/c verified;
+R13(a) ×3 gate = Phase 3). **B4/B5/B6:** decision at Phase-3-green (R7 honest-stop available:
+stall-closed + clean gate beats rushed B4-B6).
 
-## VERDICT: (pending verifier confirmation + Phase 3)
+## Phase 3 — gates + promote  (RUNNING)
+R1 ×3 `cargo test --workspace --all-features` (sequential) + clippy `--workspace --all-targets
+--all-features -D warnings` + fmt `--check`. Background-to-completion; every log read to end
+before any claim (R15). Logs `/home/ubuntu/Code/eg-s18-gate/`.
+
+## VERDICT: (pending Phase 3 ×3 green + promote decision)
