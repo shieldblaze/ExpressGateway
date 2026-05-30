@@ -622,9 +622,37 @@ async fn forward_client_reset_propagates_with_code_conn_stays_up() {
     // 4) Simultaneously OPEN the sibling stream (after the reset) and drive
     //    both: wait for (a) backend observes the reset code, AND (b) the
     //    sibling round-trips back to the client with a clean FIN.
-    client
-        .stream_send(SIBLING_STREAM, SIBLING_PAYLOAD, true)
-        .unwrap();
+    //
+    //    Right after the FWD_STREAM RESET_STREAM, quiche can transiently return
+    //    `Err(Done)` here (stream-grant / connection-flow-control not yet
+    //    available) and can also SHORT-WRITE (`Ok(n)` with `n < len`). Pump the
+    //    connection and retry until the whole sibling payload (with FIN riding
+    //    the final chunk) is queued, bounded by a deadline.
+    let mut sibling_sent = 0usize;
+    let queue_by = tokio::time::Instant::now() + Duration::from_secs(10);
+    while sibling_sent < SIBLING_PAYLOAD.len() {
+        if tokio::time::Instant::now() >= queue_by {
+            panic!(
+                "could not queue the sibling payload within 10s (queued {sibling_sent} of {} \
+                 bytes) — client-local stream_send kept returning Done after the reset",
+                SIBLING_PAYLOAD.len()
+            );
+        }
+        match client.stream_send(SIBLING_STREAM, &SIBLING_PAYLOAD[sibling_sent..], true) {
+            Ok(n) => sibling_sent += n,
+            Err(quiche::Error::Done) => {}
+            Err(e) => panic!("sibling stream_send failed unexpectedly: {e:?}"),
+        }
+        flush(&mut client, &client_socket, &mut out).await;
+        try_recv_one(
+            &mut client,
+            &client_socket,
+            client_local,
+            &mut in_buf,
+            Duration::from_millis(5),
+        )
+        .await;
+    }
 
     let mut sibling_recv: Vec<u8> = Vec::new();
     let mut sibling_done = false;
