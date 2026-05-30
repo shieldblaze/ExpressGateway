@@ -349,70 +349,19 @@ impl QuicUpstreamPool {
 
     /// Dial a fresh QUIC connection and drive it to established state.
     async fn dial_new(&self, addr: SocketAddr, sni: &str) -> io::Result<PooledQuic> {
-        let socket = UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(
-            Ipv4Addr::new(0, 0, 0, 0),
-            0,
-        )))
-        .await?;
-        let local = match socket.local_addr() {
-            Ok(a) => a,
-            Err(e) => return Err(e),
-        };
-        let socket = Arc::new(socket);
-
+        // R12: the bind + connect + handshake-drive is single-sourced in
+        // [`connect_and_drive`]; `dial_new` wraps the established parts
+        // into a pooled `UpstreamQuicConn`, `dial_dedicated` hands them
+        // back to a caller un-pooled. `alpn_override = None` keeps
+        // `dial_new` on the `config_factory`'s ALPN exactly as before.
         let mut config = (self.inner.config_factory)()
             .map_err(|e| io::Error::other(format!("quic_pool config_factory: {e}")))?;
-        let mut scid = [0u8; quiche::MAX_CONN_ID_LEN];
-        ring::rand::SystemRandom::new()
-            .fill(&mut scid)
-            .map_err(|e| io::Error::other(format!("rng: {e}")))?;
-        let scid_ref = quiche::ConnectionId::from_ref(&scid);
-        let mut qconn = quiche::connect(Some(sni), &scid_ref, local, addr, &mut config)
-            .map_err(|e| io::Error::other(format!("quiche::connect: {e}")))?;
-
-        // Drive handshake.
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        let mut in_buf = vec![0u8; 65_535];
-        let mut out_buf = vec![0u8; 65_535];
-        loop {
-            if tokio::time::Instant::now() >= deadline {
-                return Err(io::Error::other("quic upstream handshake timeout"));
-            }
-            if qconn.is_closed() {
-                return Err(io::Error::other("quic upstream closed before established"));
-            }
-            // Flush outbound.
-            loop {
-                match qconn.send(&mut out_buf) {
-                    Ok((n, info)) => {
-                        let bytes = out_buf.get(..n).unwrap_or(&[]);
-                        socket.send_to(bytes, info.to).await?;
-                    }
-                    Err(quiche::Error::Done) => break,
-                    Err(e) => {
-                        return Err(io::Error::other(format!("conn.send: {e}")));
-                    }
-                }
-            }
-            if qconn.is_established() {
-                break;
-            }
-            let timeout = qconn.timeout().unwrap_or(Duration::from_millis(50));
-            match tokio::time::timeout(timeout, socket.recv_from(&mut in_buf)).await {
-                Ok(Ok((n, from))) => {
-                    let slice = in_buf.get_mut(..n).unwrap_or(&mut []);
-                    let info = quiche::RecvInfo { from, to: local };
-                    match qconn.recv(slice, info) {
-                        Ok(_) | Err(quiche::Error::Done) => {}
-                        Err(e) => return Err(io::Error::other(format!("conn.recv: {e}"))),
-                    }
-                }
-                Ok(Err(e)) => return Err(e),
-                Err(_) => {
-                    qconn.on_timeout();
-                }
-            }
-        }
+        let DialedUpstream {
+            conn: qconn,
+            socket,
+            local,
+            scid,
+        } = connect_and_drive(addr, sni, &mut config, None).await?;
 
         self.inner.fresh_dials.fetch_add(1, Ordering::Relaxed);
 
@@ -434,6 +383,194 @@ impl QuicUpstreamPool {
             pool: Some(Arc::clone(&self.inner)),
             reusable: true,
         })
+    }
+
+    /// Dial a fresh, **dedicated** (non-pooled) QUIC connection and drive
+    /// its handshake to established.
+    ///
+    /// Unlike [`acquire`](Self::acquire) / [`dial_new`](Self::dial_new),
+    /// the returned connection is **never** inserted into the idle pool:
+    /// it is owned by the caller for its whole lifetime (Mode B
+    /// re-origination — one upstream connection per client connection,
+    /// 1:1; S16 B1). The caller drives the pump (recv/send/on_timeout) on
+    /// the returned [`UdpSocket`] and closes the connection itself.
+    ///
+    /// `alpn` mirrors the client's negotiated ALPN onto the per-dial
+    /// config via `set_application_protos`, overriding whatever the
+    /// `config_factory` installed, so the upstream handshake advertises
+    /// exactly the protocol the client chose (plan §2 ALPN mirroring).
+    /// Pass an empty slice to keep the factory's ALPN.
+    ///
+    /// The fresh-dial counter is bumped (parity with `dial_new`) so the
+    /// metric still reflects every real `quiche::connect`.
+    ///
+    /// # Errors
+    ///
+    /// * `io::Error::other` wrapping a `quiche::Error` if config build,
+    ///   `connect`, or the handshake fails / times out.
+    /// * Bubbled `io::Error` from UDP socket operations.
+    pub async fn dial_dedicated(
+        &self,
+        addr: SocketAddr,
+        sni: &str,
+        alpn: &[&[u8]],
+    ) -> io::Result<DedicatedQuic> {
+        let mut config = (self.inner.config_factory)()
+            .map_err(|e| io::Error::other(format!("quic_pool config_factory: {e}")))?;
+        let alpn_override = if alpn.is_empty() { None } else { Some(alpn) };
+        // R12: reuse the EXACT same `connect_and_drive` loop `dial_new`
+        // uses — no duplicate-and-diverge handshake code.
+        let DialedUpstream {
+            conn,
+            socket,
+            local,
+            ..
+        } = connect_and_drive(addr, sni, &mut config, alpn_override).await?;
+
+        self.inner.fresh_dials.fetch_add(1, Ordering::Relaxed);
+
+        Ok(DedicatedQuic {
+            conn,
+            socket,
+            local,
+            peer: addr,
+        })
+    }
+}
+
+/// Established upstream parts produced by [`connect_and_drive`] before
+/// they are wrapped (pooled) or handed back (dedicated).
+struct DialedUpstream {
+    conn: quiche::Connection,
+    socket: Arc<UdpSocket>,
+    local: SocketAddr,
+    scid: [u8; quiche::MAX_CONN_ID_LEN],
+}
+
+/// Bind an ephemeral UDP socket, `quiche::connect` to `addr` with SNI
+/// `sni`, and drive the handshake to established (or fail on timeout /
+/// close). The single source of the upstream-dial handshake loop —
+/// both [`QuicUpstreamPool::dial_new`] (pooled) and
+/// [`QuicUpstreamPool::dial_dedicated`] (un-pooled) call it (R12).
+///
+/// When `alpn_override` is `Some`, `set_application_protos` is called on
+/// `config` to mirror the supplied ALPN (Mode B mirrors the client's
+/// negotiated protocol upstream); when `None` the config's existing ALPN
+/// (from the factory) is used unchanged — the historical `dial_new`
+/// behaviour.
+async fn connect_and_drive(
+    addr: SocketAddr,
+    sni: &str,
+    config: &mut quiche::Config,
+    alpn_override: Option<&[&[u8]]>,
+) -> io::Result<DialedUpstream> {
+    if let Some(protos) = alpn_override {
+        config
+            .set_application_protos(protos)
+            .map_err(|e| io::Error::other(format!("set_application_protos: {e}")))?;
+    }
+
+    let socket = UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(
+        Ipv4Addr::new(0, 0, 0, 0),
+        0,
+    )))
+    .await?;
+    let local = match socket.local_addr() {
+        Ok(a) => a,
+        Err(e) => return Err(e),
+    };
+    let socket = Arc::new(socket);
+
+    let mut scid = [0u8; quiche::MAX_CONN_ID_LEN];
+    ring::rand::SystemRandom::new()
+        .fill(&mut scid)
+        .map_err(|e| io::Error::other(format!("rng: {e}")))?;
+    let scid_ref = quiche::ConnectionId::from_ref(&scid);
+    let mut qconn = quiche::connect(Some(sni), &scid_ref, local, addr, config)
+        .map_err(|e| io::Error::other(format!("quiche::connect: {e}")))?;
+
+    // Drive handshake.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let mut in_buf = vec![0u8; 65_535];
+    let mut out_buf = vec![0u8; 65_535];
+    loop {
+        if tokio::time::Instant::now() >= deadline {
+            return Err(io::Error::other("quic upstream handshake timeout"));
+        }
+        if qconn.is_closed() {
+            return Err(io::Error::other("quic upstream closed before established"));
+        }
+        // Flush outbound.
+        loop {
+            match qconn.send(&mut out_buf) {
+                Ok((n, info)) => {
+                    let bytes = out_buf.get(..n).unwrap_or(&[]);
+                    socket.send_to(bytes, info.to).await?;
+                }
+                Err(quiche::Error::Done) => break,
+                Err(e) => {
+                    return Err(io::Error::other(format!("conn.send: {e}")));
+                }
+            }
+        }
+        if qconn.is_established() {
+            break;
+        }
+        let timeout = qconn.timeout().unwrap_or(Duration::from_millis(50));
+        match tokio::time::timeout(timeout, socket.recv_from(&mut in_buf)).await {
+            Ok(Ok((n, from))) => {
+                let slice = in_buf.get_mut(..n).unwrap_or(&mut []);
+                let info = quiche::RecvInfo { from, to: local };
+                match qconn.recv(slice, info) {
+                    Ok(_) | Err(quiche::Error::Done) => {}
+                    Err(e) => return Err(io::Error::other(format!("conn.recv: {e}"))),
+                }
+            }
+            Ok(Err(e)) => return Err(e),
+            Err(_) => {
+                qconn.on_timeout();
+            }
+        }
+    }
+
+    Ok(DialedUpstream {
+        conn: qconn,
+        socket,
+        local,
+        scid,
+    })
+}
+
+/// A fresh, **dedicated** upstream QUIC connection owned entirely by the
+/// caller (Mode B re-origination — S16 B1).
+///
+/// Returned by [`QuicUpstreamPool::dial_dedicated`]. Unlike
+/// [`PooledQuic`] it is NOT tied to the pool: there is no `Drop` that
+/// re-parks it, no `reusable` flag, no liveness probe. The caller (the
+/// raw-proxy actor) owns the [`quiche::Connection`] and its [`UdpSocket`]
+/// for the connection's whole lifetime and is responsible for the pump
+/// (recv/send/on_timeout) and the eventual `close`.
+pub struct DedicatedQuic {
+    /// The established upstream connection.
+    pub conn: quiche::Connection,
+    /// The dedicated UDP socket this connection dials out over. The
+    /// actor recv_from's inbound upstream packets here and `send_to`'s
+    /// quiche's outbound packets back.
+    pub socket: Arc<UdpSocket>,
+    /// Resolved local address of `socket` (the `to` for `RecvInfo`).
+    pub local: SocketAddr,
+    /// Remote backend peer address.
+    pub peer: SocketAddr,
+}
+
+impl std::fmt::Debug for DedicatedQuic {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DedicatedQuic")
+            .field("local", &self.local)
+            .field("peer", &self.peer)
+            .field("trace_id", &self.conn.trace_id())
+            .field("is_established", &self.conn.is_established())
+            .finish()
     }
 }
 

@@ -74,6 +74,17 @@ pub struct RouterParams {
     /// Optional upstream H2 backend `(pool, addr)`. PROTO-001 H3→H2
     /// path. Takes precedence over `h3_backend`.
     pub h2_backend: Option<(lb_io::http2_pool::Http2Pool, SocketAddr)>,
+    /// SESSION 16 / Mode B (terminate-and-re-originate) seam. When
+    /// `Some`, every connection this router accepts is handed to the
+    /// raw-QUIC proxy actor (see [`ActorParams::raw_quic_backend`] /
+    /// [`crate::raw_proxy::run_raw_proxy_actor`]) instead of the H3
+    /// termination path. Threaded into each spawned actor's
+    /// `ActorParams` verbatim. When `None` (every existing caller) the
+    /// H3 termination path is unchanged (R3). `RawBackend` is `Clone`
+    /// (cheap — an `Arc` config factory + addr + sni) so one configured
+    /// backend fans out to every per-connection actor. See
+    /// `audit/quic/s16-plan.md` §1.
+    pub raw_quic_backend: Option<crate::raw_proxy::RawBackend>,
     /// Maximum number of concurrent QUIC connections served by this
     /// router. When the per-CID dispatch table is at this cap, new
     /// Initial packets are dropped (legitimate clients retry; a
@@ -366,6 +377,9 @@ fn spawn_new_connection(
         backends: Arc::clone(&params.backends),
         h3_backend: params.h3_backend.clone(),
         h2_backend: params.h2_backend.clone(),
+        // SESSION 16 / Mode B: thread the raw-QUIC backend through so
+        // `run_actor` early-dispatches to `run_raw_proxy_actor` when set.
+        raw_quic_backend: params.raw_quic_backend.clone(),
     };
     // CODE-2-08: wrap the two DashMap entries in a CidEntryGuard so
     // cleanup runs unconditionally — clean exit, async-cancel
@@ -473,6 +487,7 @@ mod tests {
             backends: Arc::new(Vec::new()),
             h3_backend: None,
             h2_backend: None,
+            raw_quic_backend: None,
             // TEST-001: reduced cap so the dashmap only needs 4 entries
             // to be saturated. cap_entries = 2 * 2 = 4.
             max_connections: 2,

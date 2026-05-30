@@ -148,6 +148,15 @@ pub mod conn_actor;
 pub mod h3_bridge;
 #[cfg(feature = "quic-terminate")]
 mod listener;
+// SESSION 16 / Mode B (terminate-and-re-originate). Same gate as the H3
+// termination tree: it reuses the client-facing termination machinery
+// (`conn_actor::ActorParams`/`InboundPacket`) and the `lb-io` QUIC dial
+// pool (`DedicatedQuic`), all of which require `quiche` + `lb-io` —
+// i.e. the `quic-terminate` deps. `pub` so the verifier's wire test +
+// the B6 `lb/src/main.rs` wiring can construct `RawBackend` and (via the
+// test hook) drive `run_raw_proxy_actor`. See `audit/quic/s16-plan.md`.
+#[cfg(feature = "quic-terminate")]
+pub mod raw_proxy;
 #[cfg(feature = "quic-terminate")]
 mod router;
 
@@ -171,6 +180,11 @@ pub use h3_bridge::{
 };
 #[cfg(feature = "quic-terminate")]
 pub use listener::{QuicListener, QuicListenerParams};
+// SESSION 16 / Mode B: re-export the raw-proxy seam types at the crate
+// root so the verifier's wire test + the B6 binary wiring import them
+// without reaching into `lb_quic::raw_proxy::*`.
+#[cfg(feature = "quic-terminate")]
+pub use raw_proxy::{RawBackend, RawProxyOutcome, run_raw_proxy_actor};
 #[cfg(feature = "quic-terminate")]
 pub use router::{RouterHandle, RouterParams, spawn as spawn_router};
 
