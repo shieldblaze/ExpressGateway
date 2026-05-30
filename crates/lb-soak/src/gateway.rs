@@ -85,12 +85,15 @@ impl GatewayChild {
     ) -> anyhow::Result<Self> {
         let log = std::fs::File::create(&log_path)?;
         let log_err = log.try_clone()?;
+        // Honour a parent-set RUST_LOG (so the operator can crank verbosity for
+        // a targeted debug run); default to warn for a quiet soak.
+        let rust_log = std::env::var("RUST_LOG").unwrap_or_else(|_| "warn".to_string());
         let child = Command::new(bin)
             .arg(config)
             .stdin(Stdio::null())
             .stdout(Stdio::from(log))
             .stderr(Stdio::from(log_err))
-            .env("RUST_LOG", "warn")
+            .env("RUST_LOG", rust_log)
             .spawn()?;
         let pid = child.id();
         let mut me = Self {

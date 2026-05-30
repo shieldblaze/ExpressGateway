@@ -46,6 +46,9 @@ const SCENARIOS: &[&str] = &[
 
 struct Args {
     scenario: String,
+    /// Output-file prefix (defaults to `scenario`); lets the same scenario run
+    /// under two configs (e.g. Mode B 4-stream vs 1-stream) into one out dir.
+    label: String,
     duration: u64,
     sample: u64,
     scale: usize,
@@ -54,6 +57,7 @@ struct Args {
 
 fn parse_args() -> anyhow::Result<Option<Args>> {
     let mut scenario = None;
+    let mut label = None;
     let mut duration = 120u64;
     let mut sample = 15u64;
     let mut scale = 1usize;
@@ -68,6 +72,7 @@ fn parse_args() -> anyhow::Result<Option<Args>> {
                 return Ok(None);
             }
             "--scenario" => scenario = it.next(),
+            "--label" => label = it.next(),
             "--duration-secs" => duration = it.next().unwrap_or_default().parse().unwrap_or(120),
             "--sample-secs" => sample = it.next().unwrap_or_default().parse().unwrap_or(15),
             "--scale" => scale = it.next().unwrap_or_default().parse().unwrap_or(1).max(1),
@@ -76,8 +81,10 @@ fn parse_args() -> anyhow::Result<Option<Args>> {
         }
     }
     let scenario = scenario.ok_or_else(|| anyhow::anyhow!("--scenario required (or --list)"))?;
+    let label = label.unwrap_or_else(|| scenario.clone());
     Ok(Some(Args {
         scenario,
+        label,
         duration,
         sample,
         scale,
@@ -113,7 +120,7 @@ async fn async_main() -> anyhow::Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     std::fs::create_dir_all(&args.out)?;
-    let workdir = args.out.join(format!("{}-work", args.scenario));
+    let workdir = args.out.join(format!("{}-work", args.label));
     std::fs::create_dir_all(&workdir)?;
 
     let bin = gateway::find_binary()?;
@@ -150,7 +157,7 @@ async fn async_main() -> anyhow::Result<()> {
         running.gauges.clone(),
         Duration::from_secs(args.sample),
         cancel.clone(),
-        &args.scenario,
+        &args.label,
     )
     .await;
 
@@ -172,25 +179,25 @@ async fn async_main() -> anyhow::Result<()> {
     let overall_drift = verdicts.iter().any(|v| v.verdict == Verdict::Drift);
 
     // Write outputs.
-    let csv_path = args.out.join(format!("{}.csv", args.scenario));
+    let csv_path = args.out.join(format!("{}.csv", args.label));
     std::fs::write(&csv_path, ts.to_csv())?;
 
     let summary = render_summary(&args, &ts, &verdicts, &running.stats, overall_drift);
     std::fs::write(
-        args.out.join(format!("{}.summary.txt", args.scenario)),
+        args.out.join(format!("{}.summary.txt", args.label)),
         &summary,
     )?;
     print!("{summary}");
 
     let json = render_json(&args, &ts, &verdicts, &running.stats, overall_drift);
     std::fs::write(
-        args.out.join(format!("{}.verdict.json", args.scenario)),
+        args.out.join(format!("{}.verdict.json", args.label)),
         serde_json::to_string_pretty(&json)?,
     )?;
 
     std::fs::write(
         args.out
-            .join(format!("{}.soak_complete.marker", args.scenario)),
+            .join(format!("{}.soak_complete.marker", args.label)),
         format!(
             "scenario={} duration_secs={} samples={} overall={}\n",
             args.scenario,
@@ -232,6 +239,13 @@ async fn setup_scenario(
         "sc6_413teardown" => setup_413(args, bin, workdir, cancel).await,
         other => anyhow::bail!("unknown scenario {other} (try --list)"),
     }
+}
+
+fn env_usize(key: &str, default: usize) -> usize {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(default)
 }
 
 fn metrics_addr() -> anyhow::Result<SocketAddr> {
@@ -467,6 +481,12 @@ async fn setup_quic(
 
     let gw = spawn_gateway(bin, &cfg, metrics, workdir).await?;
 
+    // QUIC load shape — overridable via env for targeted repro/tuning.
+    let conc = env_usize("QUIC_CONCURRENCY", 12) * args.scale;
+    let streams = env_usize("QUIC_STREAMS", 4);
+    let payload = env_usize("QUIC_PAYLOAD", 4096);
+    let dgrams = env_usize("QUIC_DGRAMS", 8);
+
     let mut tasks = Vec::new();
     let mut stats = Vec::new();
     let load = LoadStats::new();
@@ -475,10 +495,10 @@ async fn setup_quic(
         listen,
         client_sni,
         client_ca,
-        12 * args.scale, // concurrency
-        4,               // streams per conn
-        4096,            // payload bytes
-        8,               // datagrams per conn (the datagram flood)
+        conc,
+        streams,
+        payload,
+        dgrams,
         Arc::clone(&load),
         cancel.clone(),
     )));
@@ -680,6 +700,7 @@ fn render_json(
         .collect();
     serde_json::json!({
         "scenario": args.scenario,
+        "label": args.label,
         "duration_secs": args.duration,
         "sample_secs": args.sample,
         "scale": args.scale,

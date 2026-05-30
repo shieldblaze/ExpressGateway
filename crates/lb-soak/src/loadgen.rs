@@ -167,7 +167,12 @@ pub async fn run_h2_load(
                             stats.ok();
                         }
                     }
-                    Err(_) => stats.err(),
+                    Err(e) => {
+                        if std::env::var("H2_DEBUG").is_ok() {
+                            eprintln!("[h2_batch err] {e}");
+                        }
+                        stats.err();
+                    }
                 }
             }
         }));
@@ -177,16 +182,66 @@ pub async fn run_h2_load(
     }
 }
 
-/// Build a rustls TLS connector that trusts the CA at `ca_path` and advertises
-/// ALPN `h2`. Shared with the chaos injectors (rapid-reset / stream-flood).
-pub fn h2_tls_connector(ca_path: &std::path::Path) -> anyhow::Result<tokio_rustls::TlsConnector> {
-    let ca_pem = std::fs::read(ca_path)?;
-    let mut roots = rustls::RootCertStore::empty();
-    for cert in rustls_pemfile::certs(&mut &ca_pem[..]) {
-        roots.add(cert?)?;
+/// Accept-any server-cert verifier for the loopback LOAD client. The soak's
+/// concern is datapath stability, not cert validation; the gateway's loopback
+/// certs are `is_ca=true` (required so BoringSSL/quiche accept them as their own
+/// CA on the QUIC path), which rustls rejects as an end-entity leaf
+/// (`CaUsedAsEndEntity`). A load client legitimately skips verification — this
+/// is NOT product code and never ships to an operator path.
+#[derive(Debug)]
+struct AcceptAnyServerCert(Arc<rustls::crypto::CryptoProvider>);
+
+impl rustls::client::danger::ServerCertVerifier for AcceptAnyServerCert {
+    fn verify_server_cert(
+        &self,
+        _end_entity: &rustls_pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls_pki_types::CertificateDer<'_>],
+        _server_name: &rustls_pki_types::ServerName<'_>,
+        _ocsp: &[u8],
+        _now: rustls_pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
     }
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls_pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &rustls_pki_types::CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(
+            message,
+            cert,
+            dss,
+            &self.0.signature_verification_algorithms,
+        )
+    }
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.0.signature_verification_algorithms.supported_schemes()
+    }
+}
+
+/// Build a rustls TLS connector for the loopback load client (accept-any cert,
+/// ALPN `h2`). Shared with the chaos injectors (rapid-reset / stream-flood).
+/// `_ca_path` is retained for call-site symmetry but unused (see
+/// [`AcceptAnyServerCert`]).
+pub fn h2_tls_connector(_ca_path: &std::path::Path) -> anyhow::Result<tokio_rustls::TlsConnector> {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
     let mut cfg = rustls::ClientConfig::builder()
-        .with_root_certificates(roots)
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(AcceptAnyServerCert(provider)))
         .with_no_client_auth();
     cfg.alpn_protocols = vec![b"h2".to_vec()];
     Ok(tokio_rustls::TlsConnector::from(Arc::new(cfg)))
@@ -213,10 +268,11 @@ async fn h2_stream_batch(
     for i in 0..batch {
         let body = body_for(seed.wrapping_add(i as u64));
         let method = if i % 2 == 0 { "GET" } else { "POST" };
+        // hyper's H2 client requires ABSOLUTE-form URIs (to populate
+        // :scheme/:authority). Origin-form `/` is H1-only.
         let req = Request::builder()
             .method(method)
-            .uri("/")
-            .header("host", sni)
+            .uri(format!("https://{sni}/"))
             .body(body)?;
         futs.push(sender.send_request(req));
     }
@@ -269,7 +325,12 @@ pub async fn run_quic_load(
                 .await
                 {
                     Ok(()) => stats.ok(),
-                    Err(_) => stats.err(),
+                    Err(e) => {
+                        if std::env::var("QUIC_DEBUG").is_ok() {
+                            eprintln!("[quic_session err] {e}");
+                        }
+                        stats.err();
+                    }
                 }
             }
         }));
