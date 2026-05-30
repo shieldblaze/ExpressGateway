@@ -42,8 +42,35 @@ _(baseline ×3 + test-fix evidence appended as they complete — every claim cit
 
 ---
 
-## Phase 1 — three-bucket diagnosis  (PENDING)
-## Phase 2 — stall fix + B4/B5/B6  (PENDING)
-## Phase 3 — gates + promote  (PENDING)
+## Phase 1 — three-bucket diagnosis  ✅ ROOT PROVEN (diag-eng + lead code-confirm)
+**Bucket (a)-RELAY-DROPS-BUFFERED-TAIL** — relay-side production bug in
+`raw_proxy.rs::pump_dir`. Read gate not gated on `src_fin_seen`; after the source FIN is read
+(quiche collects the stream) a short-write leaves a tail in `half.pending`; the next turn
+re-reads the collected stream → `Err(InvalidStreamState)` → generic arm `pending.clear();
+done=true` DROPS the tail + never forwards the FIN. Measured both paths: `dropping_pending ==
+short_by` 4/4; only the InvalidStreamState arm fires; `send_off_back == client got_len` 7/7
+(ZERO wire loss); `bytes_in_flight=0`, `loss_timer=None` (explains S17 `total_pto=0`). Koch:
+client `on_timeout` REFUTED (12/90 ≈ baseline); read gate `!src_fin_seen` ELIMINATES (0/90 +
+0/75). Findings: `s18-logs/p1-diag-findings.md` (10 cited evidence logs). REFUTES S17's
+lost-flight framing AND the brief's test-harness hypothesis — the bytes were DELETED by the
+relay, not lost on the wire. Lead independently re-verified the mechanism in source.
 
-## VERDICT: (pending)
+## Phase 2 — stall fix + B4/B5/B6  (fix landed; independent verify RUNNING)
+**FIX @ `1414d656` (builder-1):** `pump_dir` read gate → `while !half.src_fin_seen &&
+half.pending.len() < STREAM_RELAY_WINDOW`. One condition; B3 reset/stop arms untouched;
+single-sourced (fixes both relay legs, R12). + deterministic regression test
+`post_fin_short_write_reread_does_not_drop_tail` (drives pump_dir directly; completes BOTH
+sides of the src bidi so quiche genuinely collects it → the real InvalidStreamState re-read;
+byte-exact + FIN asserts). **Negative control PROVEN load-bearing** (builder, read from
+completed output): with fix PASS; one-line reverted → FAILS (`pending=0, done=true,
+fin_sent=false` = tail dropped); restored PASS. Self-check: 20/20 `s16_b2_multistream`
+isolation (no 90 s stall). Only raw_proxy.rs changed; Cargo.lock unchanged. Lead diff-review
+PASS (author≠verifier).
+**Independent verifier (RUNNING, quiet box, own worktree @ 1414d656):** TASK1 reproduce the
+drop on pre-fix `a231b761`; TASK2 R13 ≥75-iter dual-path ZERO-stall burst + negative control +
+regression-test toggle; TASK3 Mode B suite no-regression. → `s18-logs/p2-verifier-findings.md`.
+**B4/B5/B6:** decision pending (R7 honest-stop: likely defer to S19 with the stall CLOSED).
+
+## Phase 3 — gates + promote  (PENDING — gated behind verifier confirmation)
+
+## VERDICT: (pending verifier confirmation + Phase 3)
