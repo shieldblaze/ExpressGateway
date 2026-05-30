@@ -112,10 +112,27 @@ load-bearing) + the full Mode B wire suite ×3. No new uncovered production code
 sub-metric met by construction (a separate instrumented llvm-cov run for a one-condition change
 is disproportionate and disk-risky at 13 GB free; documented rather than run).
 
-## Promote / B4-B6 — DECISION POINT (R7 honest-stop)
-Stall CLOSED + Phase 3 green ⇒ a clean, promotable "stall-closed Mode B (B1/B2/B3)" state.
-Per R7 honest-stop ("stall-closed + clean gate beats rushed B4-B6") this qualifies as SESSION
-18 COMPLETE without B4/B5/B6. Surfacing the scope choice to the owner before the irreversible
-`--no-ff` promote to main.
+## Promote (R7 honest-stop — OWNER-APPROVED)
+Owner ruling (2026-05-30): promote the stall-closed state now → SESSION 18 COMPLETE; B4/B5/B6
+get a fresh session with full budget (the exact "stall-closed + clean gate beats rushed B4-B6"
+case R7 was written for; B6's 0-RTT/two-connections security proofs must not be rushed at
+end-of-budget — same pressure that produced the S16 fabrication). Promoted `feature/quic-proxy-s18`
+→ `main` `--no-ff`. main was at S15 `30cc22f2` (Mode A only); this promote brings the full Mode B
+**core relay** (S16 B1/B2/B3 built → S17 diagnosed → S18 stall-fixed) — the first Mode B promote.
+S19 handoff: `audit/quic/s19-handoff.md` (B4/B5/B6 then the chaos/soak suite; stall mechanism
+recorded for the soak to watch the loss-recovery path under sustained load).
 
-## VERDICT: (pending promote decision)
+## VERDICT: **SESSION 18 COMPLETE** — CF-S16-RELAY-STALL CLOSED + R13-verified; stall-closed
+Mode B core relay (B1/B2/B3) promoted to main.
+- **Stall:** root PROVEN (relay-side `pump_dir` post-FIN re-read drop), independently confirmed
+  (diag-eng + verifier + lead code-read), FIXED (`1414d656`), R13 (a)+(b)+(c) all satisfied on
+  BOTH affected paths (multistream + backpressure resume), zero stalls post-fix.
+- **Refutations (integrity):** S17's "lost client-leg tail / no PTO" framing and the brief's
+  "test client never runs loss recovery" hypothesis were BOTH refuted by measurement (Koch:
+  client `on_timeout` 12/90 ≈ baseline) — the bytes were DELETED by the relay, not lost.
+- **Gates:** R1 ×3 GREEN deterministic (1364/0/18), clippy + fmt clean, no regression (R3).
+- **Test fix:** CF-S17-B3-VERIFY-DONE-UNWRAP fixed + verified.
+- **Mode B B4/B5/B6:** NOT started (honest-stop → S19). Native QUIC NOT complete; NOT
+  production ready (no chaos/soak suite — S19).
+- **Integrity:** zero fabrications; every gate/burst/repro cites a completed log read to end
+  (R15); author≠verifier on every increment; tree pristine between agents; promote owner-approved.
