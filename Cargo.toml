@@ -39,6 +39,9 @@ members = [
     # JSON inspection) are in audit/deferred.md.
     "crates/lb-observability",
     "crates/lb",
+    # S20: chaos/soak suite (external-process soak apparatus + its own
+    # harness unit tests). Permanent infrastructure; links no product crates.
+    "crates/lb-soak",
 ]
 
 # MSRV-pin notes:
