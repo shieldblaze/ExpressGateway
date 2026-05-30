@@ -64,6 +64,24 @@ Gate ALL of it behind an env var (e.g. `EG_RELAY_DIAG3`), OFF by default. Add an
 at-EXIT dump in `run_dual_pump` for the short sid (the relay loop exits at ~20s idle; the
 at-EXIT dump captured S17's decisive state — keep that approach).
 
+### Exact quiche-0.28 internal paths (lead-verified — saves you the dig)
+- **send-buffer-not-yet-emitted length**: `Stream.send: SendBuf`; `SendBuf::len` (private,
+  `src/stream/send_buf.rs:110`) is decremented in `emit()` (`self.len -= buf_len`) and
+  RE-ADDED in `retransmit()` (`self.len += …`). So `send.len > 0` ⟺ quiche has stream bytes
+  queued to (re)transmit that it has NOT put on the wire (flow-control or cwnd blocked).
+  `off_back()`/`off_front()` are already public. Add `pub fn send_buf_len(&self)->u64` on
+  `SendBuf` and a `pub fn debug_stream_send_buf_len(&self, sid)->Option<u64>` on `Connection`
+  reaching `self.streams.get(sid)?.send.send_buf_len()`.
+- **bytes_in_flight / cwnd / loss timer**: trait `RecoveryOps` (`src/recovery/mod.rs:231-272`)
+  already has `fn loss_detection_timer(&self)->Option<Instant>`, `fn cwnd(&self)->usize`,
+  `fn bytes_in_flight(&self)->usize`. The active path's recovery is reachable from
+  `Connection` via its `paths`/active-path; add a `pub fn debug_recovery(&self, sid)`
+  accessor that returns `(bytes_in_flight, cwnd, loss_detection_timer.is_some(),
+  loss_detection_timer)` for the active path. (Find the active-path getter — `paths.get_active()`
+  or the path used for the default send.)
+- `stream_capacity(sid)` is already public (`src/lib.rs:6261`): == 0 ⟺ send-side flow-control
+  exhausted for that stream (relay cannot send more until the peer raises MAX_STREAM_DATA).
+
 Run a **≥75-iter isolation burst** of `s16_b2_multistream` AND a burst of the
 `s16_b2_backpressure` resume path (both affected). FOREGROUND or background-to-completion;
 read the FULL completed log before citing any number (R15). Capture, at ≥3 distinct stalls
