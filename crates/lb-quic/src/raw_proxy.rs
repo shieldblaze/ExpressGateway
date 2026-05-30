@@ -746,9 +746,17 @@ fn pump_dir(
         return;
     }
 
-    // ── Read gate: pull from src only while pending is below the window.
-    // Loop so a burst is moved into pending in one turn (still capped).
-    while half.pending.len() < STREAM_RELAY_WINDOW {
+    // ── Read gate: pull from src only while pending is below the window AND
+    // the source FIN has not yet been observed. Loop so a burst is moved into
+    // pending in one turn (still capped).
+    //
+    // CF-S16-RELAY-STALL: once the source FIN is read, quiche has COLLECTED the
+    // stream (`stream.is_complete()`); re-issuing `stream_recv` on a collected
+    // stream returns `Err(InvalidStreamState)`, which the generic read-error arm
+    // below would treat as a fault and DROP the still-pending tail + the FIN.
+    // There is nothing more to read after the FIN, so skip the read entirely and
+    // let the pending tail drain + the deferred FIN forward on subsequent turns.
+    while !half.src_fin_seen && half.pending.len() < STREAM_RELAY_WINDOW {
         let room = STREAM_RELAY_WINDOW.saturating_sub(half.pending.len());
         // Read at most `room` so pending never exceeds the window in a
         // single recv (the cap is the R8 bound).
@@ -1335,6 +1343,336 @@ mod tests {
         assert!(
             backend.stream_finished(0),
             "the backend must observe stream 0 finished (clean FIN delivered)"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // CF-S16-RELAY-STALL regression (post-FIN re-read drop)
+    // ─────────────────────────────────────────────────────────────────────
+
+    /// Server (the LB's upstream PEER) config with a CUSTOM, deliberately
+    /// SMALL `initial_max_stream_data_bidi_remote`. When the relay's `dst`
+    /// (the LB-as-client) sends on a client-initiated bidi stream, the
+    /// backend's `bidi_remote` limit caps how much it accepts — set it tiny
+    /// to force `dst.stream_send` to SHORT-WRITE deterministically, leaving a
+    /// pending tail in the relay half. (`initial_max_data` is left generous
+    /// so the per-stream limit, not the conn limit, is the binding one.)
+    fn server_config_small_stream_window(
+        certs: &TestCerts,
+        bidi_remote_window: u64,
+    ) -> quiche::Config {
+        let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
+        cfg.set_application_protos(&[ALPN]).unwrap();
+        cfg.load_cert_chain_from_pem_file(certs.cert.to_str().unwrap())
+            .unwrap();
+        cfg.load_priv_key_from_pem_file(certs.key.to_str().unwrap())
+            .unwrap();
+        cfg.set_max_idle_timeout(5_000);
+        cfg.set_max_recv_udp_payload_size(1_350);
+        cfg.set_max_send_udp_payload_size(1_350);
+        cfg.set_initial_max_data(1024 * 1024);
+        cfg.set_initial_max_stream_data_bidi_local(64 * 1024);
+        // The binding limit: how much the relay's `dst` may push onto the
+        // client-initiated bidi stream before the backend backpressures.
+        cfg.set_initial_max_stream_data_bidi_remote(bidi_remote_window);
+        cfg.set_initial_max_stream_data_uni(64 * 1024);
+        cfg.set_initial_max_streams_bidi(4);
+        cfg.set_initial_max_streams_uni(2);
+        cfg.set_disable_active_migration(true);
+        cfg
+    }
+
+    /// Like [`established_pair`] but the SERVER peer (`backend`) advertises a
+    /// small `initial_max_stream_data_bidi_remote`, so the relay's `dst`
+    /// (the returned client conn) short-writes on its first stream send.
+    fn established_pair_small_dst_window(
+        certs: &TestCerts,
+        bidi_remote_window: u64,
+    ) -> (
+        quiche::Connection,
+        quiche::Connection,
+        SocketAddr,
+        SocketAddr,
+    ) {
+        let (caddr, saddr) = addrs();
+        let mut ccfg = client_config(certs);
+        let mut scfg = server_config_small_stream_window(certs, bidi_remote_window);
+        let cscid = random_scid();
+        let sscid = random_scid();
+        let mut client = quiche::connect(
+            Some(TEST_SNI),
+            &quiche::ConnectionId::from_ref(&cscid),
+            caddr,
+            saddr,
+            &mut ccfg,
+        )
+        .unwrap();
+        let mut server = quiche::accept(
+            &quiche::ConnectionId::from_ref(&sscid),
+            None,
+            saddr,
+            caddr,
+            &mut scfg,
+        )
+        .unwrap();
+        handshake_pair(&mut client, &mut server, caddr, saddr);
+        (client, server, caddr, saddr)
+    }
+
+    /// Build a relay `src` for stream 0 carrying `payload` followed by a FIN:
+    /// a server conn whose peer (a client) opened stream 0, wrote the full
+    /// payload, and FIN'd it, then ferried it across. The returned `src`
+    /// therefore has stream 0 readable with the whole payload AND the FIN
+    /// available in a single drain — so a single `pump_dir` read pulls
+    /// `(payload.len(), fin=true)`, which makes quiche COLLECT the stream
+    /// (`stream.is_complete()`). The peer client is returned so it stays
+    /// alive / owned. (`payload` must fit the 64 KiB per-stream window.)
+    fn src_server_with_payload_fin_stream0(
+        certs: &TestCerts,
+        payload: &[u8],
+    ) -> (quiche::Connection, quiche::Connection) {
+        let caddr: SocketAddr = "127.0.0.1:5101".parse().unwrap();
+        let saddr: SocketAddr = "127.0.0.1:5102".parse().unwrap();
+        let mut ccfg = client_config(certs);
+        let mut scfg = server_config(certs, 4);
+        let cscid = random_scid();
+        let sscid = random_scid();
+        let mut peer_client = quiche::connect(
+            Some(TEST_SNI),
+            &quiche::ConnectionId::from_ref(&cscid),
+            caddr,
+            saddr,
+            &mut ccfg,
+        )
+        .unwrap();
+        let mut src = quiche::accept(
+            &quiche::ConnectionId::from_ref(&sscid),
+            None,
+            saddr,
+            caddr,
+            &mut scfg,
+        )
+        .unwrap();
+        handshake_pair(&mut peer_client, &mut src, caddr, saddr);
+        // Peer client writes the full payload + FIN on stream 0 in one shot,
+        // then ferry it to `src`.
+        let sent = peer_client.stream_send(0, payload, true).unwrap();
+        assert_eq!(
+            sent,
+            payload.len(),
+            "fixture: the whole payload must fit the peer's stream window"
+        );
+        pump_once(&mut peer_client, &mut src, caddr, saddr);
+        assert!(
+            src.readable().any(|s| s == 0),
+            "fixture: src must observe stream 0 readable with the payload+FIN"
+        );
+        (src, peer_client)
+    }
+
+    /// CF-S16-RELAY-STALL — THE post-FIN re-read drop regression.
+    ///
+    /// Reproduces the proven defect deterministically (Phase-1 diag): a
+    /// CLEANLY-FINISHED source stream whose drain into `dst` SHORT-WRITES on
+    /// the FIN-carrying turn (leaving a pending tail) must NOT have that tail
+    /// + FIN dropped by a spurious post-FIN re-read.
+    ///
+    /// Mechanism this drives: turn 1's `pump_dir` reads the full payload +
+    /// FIN in a single `stream_recv` (so `src_fin_seen=true` AND quiche
+    /// COLLECTS the source stream), but the drain into `dst` short-writes
+    /// against the backend's tiny per-stream window ⇒ `half.pending` is
+    /// non-empty ⇒ the FIN-forward block is (correctly) skipped. Turn 2's
+    /// read gate is where the bug lived: PRE-FIX it re-issued `stream_recv`
+    /// on the now-collected source, hit `Err(InvalidStreamState)`, and the
+    /// generic read-error arm ran `pending.clear(); done = true` — DROPPING
+    /// the tail and the FIN. POST-FIX the read gate is short-circuited by
+    /// `!half.src_fin_seen`, so turn 2 only drains; once the dst window is
+    /// opened the full byte-identical payload + a clean FIN are delivered.
+    ///
+    /// Load-bearing: with the one-line fix reverted, this test FAILS (the
+    /// tail is dropped: `half.done` true via drop, `fin_sent` false, the
+    /// backend never sees the full payload / FIN). It PASSES only with the
+    /// `!half.src_fin_seen` read-gate condition in place.
+    #[test]
+    fn post_fin_short_write_reread_does_not_drop_tail() {
+        let certs = gen_certs();
+
+        // A multi-KiB payload (> the backend's tiny stream window below, so
+        // the first drain CANNOT clear it). Kept comfortably under the src
+        // peer's per-stream window so the whole payload + FIN is buffered in
+        // a single `stream_send` (the peer's effective initial credit after
+        // the handshake is < 64 KiB). Distinct byte pattern so a
+        // dropped/duplicated/reordered tail is caught by a byte-exact check.
+        let payload: Vec<u8> = (0..10_240u32).map(|i| (i % 251) as u8).collect();
+
+        // `src` = client-leg conn with stream 0 = payload + FIN, collected on
+        // the read.
+        let (mut src, mut peer) = src_server_with_payload_fin_stream0(&certs, &payload);
+        let (src_caddr, src_saddr): (SocketAddr, SocketAddr) = (
+            "127.0.0.1:5101".parse().unwrap(),
+            "127.0.0.1:5102".parse().unwrap(),
+        );
+
+        // `dst` = LB-as-client whose backend grants a TINY per-stream window
+        // (4 KiB) so the relay's `dst.stream_send` short-writes, leaving a
+        // pending tail with `src_fin_seen` already true.
+        let dst_window: u64 = 4 * 1024;
+        let (mut dst, mut backend, caddr, saddr) =
+            established_pair_small_dst_window(&certs, dst_window);
+
+        let mut half = RelayHalf::default();
+
+        // ── Turn 1: read payload+FIN (collects src), drain short-writes.
+        pump_dir(
+            0,
+            &mut src,
+            &mut dst,
+            &mut half,
+            Direction::UpstreamToClient,
+        );
+        assert!(
+            half.src_fin_seen,
+            "turn 1 must read the source FIN (it carried payload+FIN in one recv)"
+        );
+        assert!(
+            !half.pending.is_empty(),
+            "turn 1's drain must SHORT-WRITE against the tiny dst window, \
+             leaving a pending tail (the precondition for the bug)"
+        );
+        assert!(
+            !half.fin_sent,
+            "the FIN must NOT be forwarded while a tail is still pending"
+        );
+        assert!(
+            !half.done,
+            "the half must still be live after turn 1 (a tail remains to drain)"
+        );
+
+        // Complete the bidi stream 0 on `src` so quiche COLLECTS it (matching
+        // the production wire path, where the reverse relay leg's FIN finishes
+        // the send side). `src`'s recv side is already finished (read the FIN
+        // on turn 1); finishing its SEND side makes the stream `is_complete()`,
+        // so the next `stream_recv(0)` returns `InvalidStreamState` — the exact
+        // post-collection re-read the bug trips on. The peer client closes its
+        // own send+read sides too and is pumped so all FINs/acks settle.
+        src.stream_send(0, &[], true).unwrap();
+        peer.stream_send(0, &[], true).ok();
+        for _ in 0..8 {
+            pump_once(&mut src, &mut peer, src_saddr, src_caddr);
+        }
+        // Drain the peer's recv of stream 0 so its recv side completes too.
+        {
+            let mut sink = [0u8; 256];
+            while let Ok((_n, _fin)) = peer.stream_recv(0, &mut sink) {}
+        }
+        for _ in 0..8 {
+            pump_once(&mut src, &mut peer, src_saddr, src_caddr);
+        }
+        // Sanity: the source stream is now collected — a direct read would
+        // return InvalidStreamState (proven below by the negative control).
+        assert!(
+            src.stream_finished(0),
+            "fixture: src stream 0 must be finished/collected before turn 2 \
+             (so the buggy re-read trips InvalidStreamState)"
+        );
+
+        // ── Turn 2: THE buggy re-read turn. Pre-fix this re-issues
+        // stream_recv on the collected source → InvalidStreamState → the
+        // generic arm drops the tail + FIN. Post-fix the read gate is
+        // skipped (src_fin_seen) and only the drain runs.
+        pump_dir(
+            0,
+            &mut src,
+            &mut dst,
+            &mut half,
+            Direction::UpstreamToClient,
+        );
+        assert!(
+            !half.done || half.fin_sent,
+            "turn 2 must NOT drop the half via a spurious post-FIN re-read \
+             (CF-S16-RELAY-STALL): if done, it must be via a clean FIN, not a drop"
+        );
+
+        // ── Open the dst window (deliver the backend's flow-control updates)
+        // and pump the relay to completion. Each round: drain whatever the
+        // backend can read (accumulating into `got` AND freeing per-stream
+        // credit so the backend issues MAX_STREAM_DATA), ferry packets so
+        // that credit reaches `dst`, then drive `pump_dir` to drain the
+        // carried-over tail and finally forward the FIN.
+        let mut got = Vec::new();
+        let mut backend_fin = false;
+        let mut sink = vec![0u8; 65_535];
+        for _ in 0..128 {
+            // Deliver any pending relay output to the backend first.
+            pump_once(&mut dst, &mut backend, caddr, saddr);
+            // Drain the backend stream (accumulate + free credit).
+            loop {
+                match backend.stream_recv(0, &mut sink) {
+                    Ok((n, fin)) => {
+                        got.extend_from_slice(sink.get(..n).unwrap_or(&[]));
+                        backend_fin |= fin;
+                    }
+                    Err(quiche::Error::Done) => break,
+                    Err(_) => break,
+                }
+            }
+            // Ferry the freed credit (MAX_STREAM_DATA) back to `dst`.
+            pump_once(&mut dst, &mut backend, caddr, saddr);
+            // Drive the relay: drain the carried-over tail, forward the FIN.
+            pump_dir(
+                0,
+                &mut src,
+                &mut dst,
+                &mut half,
+                Direction::UpstreamToClient,
+            );
+            if half.fin_sent && half.pending.is_empty() && backend_fin {
+                // Flush the FIN frame to the backend before stopping.
+                pump_once(&mut dst, &mut backend, caddr, saddr);
+                break;
+            }
+        }
+        // Final flush + drain so the backend definitely observes the FIN.
+        pump_once(&mut dst, &mut backend, caddr, saddr);
+        loop {
+            match backend.stream_recv(0, &mut sink) {
+                Ok((n, fin)) => {
+                    got.extend_from_slice(sink.get(..n).unwrap_or(&[]));
+                    backend_fin |= fin;
+                }
+                Err(quiche::Error::Done) => break,
+                Err(_) => break,
+            }
+        }
+
+        // ── The tail must NOT have been dropped: a clean FIN was forwarded…
+        assert!(
+            half.fin_sent,
+            "the relay must forward the deferred FIN (tail drained, not dropped) \
+             — CF-S16-RELAY-STALL"
+        );
+        assert!(
+            half.pending.is_empty(),
+            "no bytes may be left stranded in pending after completion"
+        );
+
+        // …and the backend received the FULL, byte-identical payload + FIN.
+        assert_eq!(
+            got.len(),
+            payload.len(),
+            "the backend must receive the WHOLE payload (no dropped tail): \
+             got {} of {} bytes",
+            got.len(),
+            payload.len()
+        );
+        assert_eq!(
+            got, payload,
+            "the backend must receive the byte-identical payload (order preserved)"
+        );
+        assert!(
+            backend_fin,
+            "the backend must observe the FIN on stream 0 (the FIN was forwarded, \
+             not dropped) — CF-S16-RELAY-STALL"
         );
     }
 }
