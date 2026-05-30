@@ -83,6 +83,29 @@ Builder: builder-1 (`8ff3df6d`). Verifier: independent (`146701e8`).
 - Lead independent sanity: unit 4/0, builder-wire 1/0, verifier-wire 3/0.
 
 ## Phase 2 — B5 (bounded-state flood) + B6 (wiring + metrics + 2 security proofs)
+
+### B5 — bounded-state flood + explicit per-stream cap  ✅ VERIFIED
+Builder: builder-2 (`55c8e453`). Verifier: independent (`2d98f941`).
+
+- **Per-stream cap**: `MAX_RELAY_STREAMS = 256` (defense-in-depth ceiling,
+  independent of quiche's ~32-concurrent grant; per-conn relay memory ≤
+  256·2·STREAM_RELAY_WINDOW = 128 MiB hard const). `admit_or_refuse()` in
+  `relay_streams`: NEW sid tracked only while table < cap; already-tracked
+  sid always processed; over-cap refused (fail-safe, rate-logged).
+  `pump_dir`/`streams.retain` unchanged.
+- **Bounds proven TAKEN not vacuous (F-CAP-1 bar)**:
+  - Per-stream cap refuse branch: grant 320+16, open 320 → table clamps to
+    exactly 256 (grant exceeds open count ⇒ clamp = refuse path).
+  - Eviction reclamation: 600 sequential streams (≫16 grant, ≫256 cap),
+    peak in-flight ≤32, all byte-identical ⇒ bounded by `streams.retain`.
+  - Router drop: 40 distinct Initials at max_connections=4 → table caps at
+    2·4=8, 36 dropped. Existing cap test not weakened.
+- **R13(a)** scoped gate 178/0; **R13(b)** 50/50 wire + 50/50 unit (0 flake);
+  **R13(c)** three load-bearing negative controls proven (cap removed→320;
+  retain removed→unbounded/hang; router guard disabled→10>8).
+- Lead independent sanity: cap/admit/router unit + both wire tests pass.
+
+### B6 — wiring + metrics + 2 security proofs
 <pending>
 
 ## Phase 3 — gates + promote
