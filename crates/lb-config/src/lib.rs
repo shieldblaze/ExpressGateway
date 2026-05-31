@@ -1072,6 +1072,18 @@ pub struct PassthroughConfig {
     /// ODCID + backend extracts on verify); deferred to S15.x / S16.
     #[serde(default = "default_passthrough_mint_retry")]
     pub mint_retry: bool,
+    /// Idle-flow reaper threshold, in milliseconds (F-S20-2). A flow with
+    /// no inbound packet for longer than this is reclaimed by the periodic
+    /// idle sweep — its backend UDP socket fd + both pump tasks are freed —
+    /// bounding the table by the LIVE connection count rather than waiting
+    /// for the LRU cap at `2 * max_quic_connections`. Passthrough cannot
+    /// observe the encrypted CONNECTION_CLOSE, so without this sweep a flow
+    /// for a closed connection persists indefinitely (the S20 soak measured
+    /// flows 0→56k, fds→28k, RSS→331MB, evicted=0). Default 60_000 (60 s),
+    /// the standard stateless-passthrough reclamation window (Katran/Pingora
+    /// style); `0` disables the sweep (LRU-only, the pre-S21 behaviour).
+    #[serde(default = "default_passthrough_flow_idle_timeout_ms")]
+    pub flow_idle_timeout_ms: u64,
 }
 
 /// S15 A2-8: owner ruling §9.4 — 100k flows is the documented
@@ -1112,6 +1124,13 @@ const fn default_passthrough_max_dcid_len_routed() -> usize {
 /// backend; see `PassthroughConfig::mint_retry` doc.
 const fn default_passthrough_mint_retry() -> bool {
     true
+}
+
+/// F-S20-2: idle-flow reaper default. 60 s is the standard stateless-
+/// passthrough reclamation window (nginx-style idle reclaim / Katran /
+/// Pingora). Configurable; `0` disables the sweep (LRU-only).
+const fn default_passthrough_flow_idle_timeout_ms() -> u64 {
+    60_000
 }
 
 /// Configuration for a single upstream backend.
@@ -2771,6 +2790,7 @@ address = "127.0.0.1:3000"
             audit_throttle_window_secs: default_passthrough_audit_throttle_window_secs(),
             max_dcid_len_routed: default_passthrough_max_dcid_len_routed(),
             mint_retry: default_passthrough_mint_retry(),
+            flow_idle_timeout_ms: default_passthrough_flow_idle_timeout_ms(),
         }
     }
 
