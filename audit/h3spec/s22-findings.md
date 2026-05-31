@@ -133,6 +133,17 @@ All four pseudo-header findings now pass h3spec (`4 examples, 0 failures`), inde
 ### New finding discovered: F-S22-QPACK — non-conformant QPACK Literal-Literal-Name (RFC 9204 §4.5.6)
 NOT one of the original 25 (h3spec is a client, doesn't test the server's response QPACK encoding), but found while fixing #14/#15. The lb-h3 codec wrote/read a **separate 7-bit length byte** for the literal NAME instead of the **first-byte 3-bit name-length prefix**. Encoder and decoder were **self-consistent** (so internal round-trips + h2spec passed) but **both non-conformant** — every conformant peer (h3spec, browsers) mis-decodes the gateway's literal-named response headers, and the gateway mis-decodes theirs. **Fixed both directions together** (so internal round-trips stay consistent AND interop is correct); 3 lb-h3 regression tests incl. a hand-built conformant-block decode. **Severity: real interop defect** (response-header corruption against conformant clients) — the most valuable thing this pass found.
 
+## Phase 2 RESULTS — E2 frame-sequencing (#11, #21) CLOSED
+
+| # | Result | How |
+|---|---|---|
+| 11 | ✅ PASS | DATA before HEADERS on a request stream → `H3_FRAME_UNEXPECTED` connection close (RFC 9114 §4.1) |
+| 21 | ✅ PASS | CANCEL_PUSH (also SETTINGS/GOAWAY/MAX_PUSH_ID/PUSH_PROMISE) on a request stream → `H3_FRAME_UNEXPECTED` (§7.2). Reserved/grease types still ignored (§7.2.8) |
+
+`StreamRxBuf::feed` now returns a `FeedError` enum: `Decode` (reset the stream, existing) vs `FrameUnexpected` (the caller closes the connection). 3 lb-h3-style unit tests + the live h3spec re-run.
+
+**Measure-first lesson (recorded): application vs transport CONNECTION_CLOSE.** The first attempt closed with `conn.close(false, …)` — `app=false` = a *transport* CONNECTION_CLOSE (frame 0x1c), so h3spec saw the H3 code 0x105 in the *transport* error space and rejected it. H3/QPACK codes are *application* codes → must use `conn.close(true, …)` (frame 0x1d). The qlog showed `error_space: transport` — that's how it was caught. **All remaining connection-error findings (#16–20, #22–25) must use `app=true`.**
+
 ### Carry-forward opened
 - **CF-S22-QPACK-HUFFMAN** — the codec is raw-only (no Huffman name/value coding); a conformant peer that Huffman-encodes a literal name/value is unsupported (pre-existing codec limitation, surfaced here). Browsers Huffman-encode → needed before real-browser H3. Tier: correctness, own workstream.
 

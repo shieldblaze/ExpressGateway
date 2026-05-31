@@ -357,6 +357,36 @@ pub struct StreamRxBuf {
     body: BodyParse,
 }
 
+/// SESSION 22 (h3spec #11/#21) — outcome of [`StreamRxBuf::feed`] on a
+/// request stream that the caller (the sole H3 ingress in
+/// [`crate::conn_actor::poll_h3`]) must act on distinctly:
+///
+/// * [`FeedError::Decode`] — a malformed frame / QPACK error. The caller
+///   resets the offending **stream** (existing behaviour).
+/// * [`FeedError::FrameUnexpected`] — a control-stream-only or
+///   out-of-sequence frame arrived on a request stream (RFC 9114 §4.1 /
+///   §7.2). This is a **connection** error: the caller closes the whole
+///   connection with `H3_FRAME_UNEXPECTED`. The numeric code lives with
+///   the other H3 codes in `conn_actor`, so this variant only names the
+///   reason.
+#[derive(Debug)]
+pub enum FeedError {
+    /// Malformed frame or QPACK decode failure — reset the stream.
+    Decode(String),
+    /// RFC 9114 §4.1/§7.2 connection-fatal framing violation on a request
+    /// stream → the caller closes the connection with `H3_FRAME_UNEXPECTED`.
+    FrameUnexpected(&'static str),
+}
+
+impl std::fmt::Display for FeedError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FeedError::Decode(s) => write!(f, "{s}"),
+            FeedError::FrameUnexpected(r) => write!(f, "{r}"),
+        }
+    }
+}
+
 impl StreamRxBuf {
     /// Append freshly-received bytes and return `Ok(Some(headers))` once
     /// a full HEADERS frame has been decoded. Returns `Ok(None)` if more
@@ -369,11 +399,19 @@ impl StreamRxBuf {
     /// The observable `Ok(Some(headers))` / `Ok(None)` return shape is
     /// unchanged from S1.
     ///
+    /// SESSION 22 (h3spec #11/#21): the pre-HEADERS frame loop now REJECTS
+    /// a control-stream-only or out-of-sequence frame (DATA before HEADERS,
+    /// CANCEL_PUSH / SETTINGS / GOAWAY / MAX_PUSH_ID / PUSH_PROMISE on a
+    /// request stream) as [`FeedError::FrameUnexpected`] (RFC 9114 §4.1 /
+    /// §7.2). Reserved/grease frame types (`H3Frame::Unknown`) are still
+    /// ignored (§7.2.8).
+    ///
     /// # Errors
     ///
-    /// Surfaces a string-formatted decode error if the H3 frame parser
-    /// rejects the buffer or if QPACK cannot decode the field block.
-    pub fn feed(&mut self, chunk: &[u8]) -> Result<Option<Vec<(String, String)>>, String> {
+    /// [`FeedError::Decode`] on a malformed frame / QPACK failure (reset
+    /// the stream); [`FeedError::FrameUnexpected`] on a §7.2 framing
+    /// violation (close the connection with `H3_FRAME_UNEXPECTED`).
+    pub fn feed(&mut self, chunk: &[u8]) -> Result<Option<Vec<(String, String)>>, FeedError> {
         if self.phase == RxPhase::Body {
             // Headers already emitted; new bytes belong to the body
             // phase. Retain them; caller pulls via `feed_body`.
@@ -389,17 +427,38 @@ impl StreamRxBuf {
                     let decoder = QpackDecoder::new();
                     let headers = decoder
                         .decode(&header_block)
-                        .map_err(|e| format!("qpack decode: {e}"))?;
+                        .map_err(|e| FeedError::Decode(format!("qpack decode: {e}")))?;
                     return Ok(Some(headers));
                 }
-                Ok((_other, consumed)) => {
-                    // Non-HEADERS frames are either SETTINGS (ignored
-                    // on request stream anyway) or future-protocol
-                    // extensions we can skip per RFC 9114 §7.2.8.
+                // #11 — DATA before HEADERS on a request stream is
+                // H3_FRAME_UNEXPECTED (RFC 9114 §4.1: a request begins with
+                // HEADERS).
+                Ok((H3Frame::Data { .. }, _)) => {
+                    return Err(FeedError::FrameUnexpected(
+                        "h3 DATA before HEADERS on request stream (RFC 9114 §4.1)",
+                    ));
+                }
+                // #21 + §7.2 — CANCEL_PUSH/SETTINGS/GOAWAY/MAX_PUSH_ID are
+                // control-stream-only; PUSH_PROMISE is server-initiated.
+                // Any of them on a request stream is H3_FRAME_UNEXPECTED.
+                Ok((
+                    H3Frame::CancelPush { .. }
+                    | H3Frame::Settings { .. }
+                    | H3Frame::GoAway { .. }
+                    | H3Frame::MaxPushId { .. }
+                    | H3Frame::PushPromise { .. },
+                    _,
+                )) => {
+                    return Err(FeedError::FrameUnexpected(
+                        "h3 control-only frame on request stream (RFC 9114 §7.2)",
+                    ));
+                }
+                // Reserved/grease frame types MUST be ignored (§7.2.8).
+                Ok((H3Frame::Unknown { .. }, consumed)) => {
                     self.buf.drain(..consumed);
                 }
                 Err(lb_h3::H3Error::Incomplete) => return Ok(None),
-                Err(e) => return Err(format!("h3 decode_frame: {e}")),
+                Err(e) => return Err(FeedError::Decode(format!("h3 decode_frame: {e}"))),
             }
         }
     }
@@ -4463,6 +4522,80 @@ mod tests {
             (":path", "/"),
         ]);
         assert!(validate_request_pseudo_headers(&after).is_err());
+    }
+
+    // ── SESSION 22 (h3spec #11/#21): request-stream frame sequencing ──
+
+    #[test]
+    fn feed_11_data_before_headers_is_frame_unexpected() {
+        // #11 — a DATA frame before any HEADERS on a request stream is a
+        // CONNECTION error H3_FRAME_UNEXPECTED (RFC 9114 §4.1).
+        let data = encode_frame(&H3Frame::Data {
+            payload: Bytes::from_static(b"early"),
+        })
+        .unwrap();
+        let mut rx = StreamRxBuf::default();
+        match rx.feed(&data) {
+            Err(FeedError::FrameUnexpected(_)) => {}
+            other => panic!("expected FrameUnexpected, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn feed_21_cancel_push_on_request_stream_is_frame_unexpected() {
+        // #21 — CANCEL_PUSH is control-stream-only; on a request stream it
+        // is H3_FRAME_UNEXPECTED (RFC 9114 §7.2).
+        let cp = encode_frame(&H3Frame::CancelPush { push_id: 0 }).unwrap();
+        let mut rx = StreamRxBuf::default();
+        match rx.feed(&cp) {
+            Err(FeedError::FrameUnexpected(_)) => {}
+            other => panic!("expected FrameUnexpected, got {other:?}"),
+        }
+        // SETTINGS/GOAWAY/MAX_PUSH_ID/PUSH_PROMISE on a request stream are
+        // likewise §7.2 violations.
+        for f in [
+            H3Frame::Settings {
+                params: vec![(0x06, 4096)],
+            },
+            H3Frame::GoAway { stream_id: 0 },
+            H3Frame::MaxPushId { push_id: 1 },
+        ] {
+            let bytes = encode_frame(&f).unwrap();
+            let mut rx = StreamRxBuf::default();
+            assert!(
+                matches!(rx.feed(&bytes), Err(FeedError::FrameUnexpected(_))),
+                "{f:?} on a request stream must be FrameUnexpected"
+            );
+        }
+    }
+
+    #[test]
+    fn feed_unknown_grease_frame_is_ignored_then_headers_decodes() {
+        // Reserved/grease frame types MUST be ignored (§7.2.8) — a grease
+        // frame before HEADERS must NOT trip the §7.2 guard; the following
+        // HEADERS still decodes.
+        let grease = encode_frame(&H3Frame::Unknown {
+            frame_type: 0x21, // a reserved 0x1f*N+0x21 grease type
+            payload: Bytes::from_static(b"\x00\x00"),
+        })
+        .unwrap();
+        let hblock = QpackEncoder::new()
+            .encode(&[
+                (":method".to_string(), "GET".to_string()),
+                (":scheme".to_string(), "https".to_string()),
+                (":authority".to_string(), "x".to_string()),
+                (":path".to_string(), "/".to_string()),
+            ])
+            .unwrap();
+        let headers_frame = encode_frame(&H3Frame::Headers {
+            header_block: hblock,
+        })
+        .unwrap();
+        let mut wire = grease.to_vec();
+        wire.extend_from_slice(&headers_frame);
+        let mut rx = StreamRxBuf::default();
+        let got = rx.feed(&wire).expect("grease+HEADERS must decode");
+        assert!(got.is_some(), "HEADERS after a grease frame must decode");
     }
 
     #[test]

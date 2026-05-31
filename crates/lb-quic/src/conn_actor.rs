@@ -38,7 +38,7 @@ use crate::raw_proxy::{RawBackend, run_raw_proxy_actor};
 
 use crate::h3_bridge::{
     BodyItem, H3_RESP_CHANNEL_DEPTH, H3Request, MAX_REQUEST_BODY_BYTES, MAX_RESPONSE_BODY_BYTES,
-    ReqBodyEvent, RespEvent, StreamRxBuf, encode_h3_response, h3_to_h1_stream_resp,
+    FeedError, ReqBodyEvent, RespEvent, StreamRxBuf, encode_h3_response, h3_to_h1_stream_resp,
     h3_to_h2_stream_resp, h3_to_h3_stream_resp, validate_request_pseudo_headers,
 };
 
@@ -89,6 +89,15 @@ pub const H3_INTERNAL_ERROR: u64 = 0x0102;
 /// emitted via `stream_shutdown` (RESET_STREAM + STOP_SENDING), not a
 /// connection close — the connection survives and other streams proceed.
 pub const H3_MESSAGE_ERROR: u64 = 0x010e;
+
+/// SESSION 22 (h3spec #11/#21) — RFC 9114 §8.1 `H3_FRAME_UNEXPECTED`
+/// (`0x0105`): "a frame was received in a context where it is not
+/// permitted". Emitted as a **connection** close (RFC 9114 §7.2 classifies
+/// these as connection errors) when a request stream carries a
+/// control-stream-only or out-of-sequence frame — DATA before HEADERS
+/// (#11), or CANCEL_PUSH / SETTINGS / GOAWAY / MAX_PUSH_ID / PUSH_PROMISE
+/// on a request stream (#21 + §7.2).
+pub const H3_FRAME_UNEXPECTED: u64 = 0x0105;
 
 /// Upper bound on how long [`graceful_h3_shutdown`] will pump the
 /// connection after issuing `close()` before giving up. Quiche enters
@@ -1113,7 +1122,38 @@ fn poll_h3(
                                 break;
                             }
                         }
-                        Err(e) => {
+                        // SESSION 22 (h3spec #11/#21): a control-only or
+                        // out-of-sequence frame on a request stream is a
+                        // CONNECTION error of type H3_FRAME_UNEXPECTED
+                        // (RFC 9114 §7.2). Close the whole connection; the
+                        // loop's next `drain_conn_send` emits the
+                        // CONNECTION_CLOSE and `is_closed()` then breaks the
+                        // actor (the H3 conn is established, so the close is
+                        // not suppressed — cf. the transport #1-8 case).
+                        Err(FeedError::FrameUnexpected(reason)) => {
+                            tracing::warn!(
+                                stream_id = sid,
+                                reason,
+                                "SESSION 22: H3_FRAME_UNEXPECTED — closing connection (RFC 9114 §7.2)"
+                            );
+                            // `app = true`: H3_FRAME_UNEXPECTED is an HTTP/3
+                            // APPLICATION error code (RFC 9114 §8.1), so it
+                            // must ride an application CONNECTION_CLOSE
+                            // (frame 0x1d), not a transport one (0x1c) — a
+                            // transport close would carry the code in the
+                            // wrong error space and h3spec would not see the
+                            // expected H3 error. (Mirrors graceful_h3_shutdown's
+                            // `conn.close(true, H3_NO_ERROR, …)`.)
+                            match conn.close(true, H3_FRAME_UNEXPECTED, reason.as_bytes()) {
+                                Ok(()) | Err(quiche::Error::Done) => {}
+                                Err(e) => {
+                                    tracing::debug!(error = %e, "conn.close (H3_FRAME_UNEXPECTED)");
+                                }
+                            }
+                            rx_by_stream.remove(&sid);
+                            break;
+                        }
+                        Err(FeedError::Decode(e)) => {
                             tracing::warn!(error = %e, stream_id = sid, "h3 decode");
                         }
                     }
