@@ -410,13 +410,28 @@ async fn quic_session(
     let payload: Vec<u8> = (0..payload_len)
         .map(|i| ((i * 31 + 7) % 256) as u8)
         .collect();
-    // Open streams_per_conn bidi streams; send payload+FIN on each.
+    // Open streams_per_conn bidi streams. `expecting[sid]` tracks echo bytes
+    // received; `send_off[sid]` tracks payload bytes the local quiche has
+    // ACCEPTED on the send side (a stream is fully sent — payload + FIN —
+    // once `send_off[sid] == payload.len()`, since quiche applies the FIN
+    // only when a `stream_send(.., fin=true)` call accepts the whole slice).
+    //
+    // F-S20-1 (S21): quiche `stream_send` is bounded by the connection's
+    // SEND CAPACITY (cwnd-aware) and may accept only a PREFIX. The initial
+    // congestion window (~10 packets ≈ 13.5 KB) is shared across all streams,
+    // so opening several streams in one flight exhausts it and the last
+    // stream's `stream_send` returns a partial write. The correct QUIC client
+    // contract is to keep re-sending the remainder (with FIN) as capacity
+    // frees up — NOT to call `stream_send` once and assume the whole payload
+    // was queued. Sending once and ignoring the partial return is what made
+    // S20 misread a 4-concurrent-stream client truncation as a "gateway relay
+    // stall" (sid12 stuck at 1212/4096 + no FIN). See audit/soak/s21-report.md.
     let mut expecting: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
+    let mut send_off: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
     for s in 0..streams_per_conn {
         let sid = (s as u64) * 4; // client-initiated bidi stream ids: 0,4,8,…
-        if conn.stream_send(sid, &payload, true).is_ok() {
-            expecting.insert(sid, 0);
-        }
+        expecting.insert(sid, 0);
+        send_off.insert(sid, 0);
     }
     // Datagram flood (drop-newest is tested on the gateway's bounded queue).
     for _ in 0..datagrams_per_conn {
@@ -429,14 +444,18 @@ async fn quic_session(
     while !expecting.is_empty() {
         if tokio::time::Instant::now() > relay_deadline || conn.is_closed() {
             // Diagnostic detail (F-S20-1): report WHICH sids stalled and how
-            // many bytes each received vs the payload. A stalled sid with
-            // got==want means the DATA arrived but the FIN did not (FIN-loss,
-            // S18 RELAY-STALL lineage); got<want means the tail was lost.
+            // many bytes each received vs the payload, plus how many payload
+            // bytes the CLIENT actually queued (`sent`). `sent<want` means the
+            // client never finished sending (a load-client send bug); `sent==
+            // want` but `got<want` means a genuine relay/echo tail loss.
             let mut left: Vec<(u64, usize)> = expecting.iter().map(|(k, v)| (*k, *v)).collect();
             left.sort_unstable();
             let detail: Vec<String> = left
                 .iter()
-                .map(|(sid, got)| format!("sid{sid}={got}/{payload_len}"))
+                .map(|(sid, got)| {
+                    let sent = send_off.get(sid).copied().unwrap_or(0);
+                    format!("sid{sid}=got{got}/sent{sent}/want{payload_len}")
+                })
                 .collect();
             anyhow::bail!(
                 "relay timeout / closed (streams left: {} [{}]); closed={}",
@@ -444,6 +463,32 @@ async fn quic_session(
                 detail.join(" "),
                 conn.is_closed()
             );
+        }
+        // Keep pushing each stream's remaining payload + FIN as the
+        // connection's send capacity (cwnd) frees up. `stream_send` may accept
+        // a partial write; loop until `send_off[sid] == payload.len()` (FIN
+        // applied on the call that accepts the final bytes).
+        let mut wrote = false;
+        for s in 0..streams_per_conn {
+            let sid = (s as u64) * 4;
+            let off = *send_off.get(&sid).unwrap_or(&0);
+            if off >= payload.len() {
+                continue; // fully sent (payload + FIN)
+            }
+            match conn.stream_send(sid, &payload[off..], true) {
+                Ok(n) => {
+                    send_off.insert(sid, off + n);
+                    if n > 0 {
+                        wrote = true;
+                    }
+                }
+                // No send capacity / stream credit yet — retry next turn.
+                Err(quiche::Error::Done) | Err(quiche::Error::StreamLimit) => {}
+                Err(e) => anyhow::bail!("stream_send sid={sid}: {e:?}"),
+            }
+        }
+        if wrote {
+            flush(&mut conn, &socket, &mut out).await?;
         }
         recv_one(
             &mut conn,

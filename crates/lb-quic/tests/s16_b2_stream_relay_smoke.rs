@@ -554,3 +554,273 @@ async fn s16_b2_one_bidi_stream_round_trips_byte_identical() {
     let _ = client_driver.await;
     let _ = tokio::time::timeout(Duration::from_secs(5), actor).await;
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// S21 — N concurrent bidi streams through the Mode B relay.
+//
+// F-S20-1 (S21): the S20 soak reported a "Mode B 4-concurrent-stream relay
+// stall" (the 4th stream, sid12, wedged at 1212/4096). Measure-first (S21)
+// PROVED that was a LOAD-CLIENT artifact, NOT a gateway defect: quiche
+// `stream_send` is bounded by the connection's send capacity (cwnd-aware) and
+// returns a PARTIAL write; the soak client called `stream_send` once per
+// stream and ignored the partial return, so once the initial congestion
+// window (~10 packets ≈ 13.5 KB) was spent on the first streams, the last
+// stream's tail + FIN were never sent — the client waited forever for an echo
+// of bytes it never sent. The relay was always correct.
+//
+// These tests are the durable GUARD that the relay handles N truly-concurrent
+// fully-sent streams. `full_send=true` is the correct client contract (re-send
+// the remainder + FIN as cwnd frees); `full_send=false` reproduces the S20
+// single-shot bug as a LOAD-BEARING NEGATIVE CONTROL (it must leave a stream
+// incomplete — proving the positive tests genuinely exercise concurrency and
+// that the fix is in the CLIENT, not the relay).
+// ─────────────────────────────────────────────────────────────────────
+
+/// Drive `n_streams` concurrent client bidi streams (ids 0,4,8,…) through the
+/// Mode B relay and return how many completed a byte-identical echo + FIN
+/// within `RELAY_BUDGET`. Asserts byte-identity for every COMPLETED stream.
+async fn run_concurrent_relay(n_streams: u64, payload_len: usize, full_send: bool) -> usize {
+    let certs = generate_loopback_certs();
+    let backend_addr = spawn_echo_backend(&certs);
+
+    let lb_socket = Arc::new(
+        UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap(),
+    );
+    let lb_local = lb_socket.local_addr().unwrap();
+    let client_socket = Arc::new(
+        UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
+            .await
+            .unwrap(),
+    );
+    let client_local = client_socket.local_addr().unwrap();
+
+    let mut server_cfg = lb_server_config(&certs);
+    let mut client_cfg = client_config(&certs);
+    let s_scid = random_scid();
+    let s_scid_ref = quiche::ConnectionId::from_ref(&s_scid);
+    let c_scid = random_scid();
+    let c_scid_ref = quiche::ConnectionId::from_ref(&c_scid);
+    let mut server_conn =
+        quiche::accept(&s_scid_ref, None, lb_local, client_local, &mut server_cfg).unwrap();
+    let mut client_conn = quiche::connect(
+        Some(TEST_SNI),
+        &c_scid_ref,
+        client_local,
+        lb_local,
+        &mut client_cfg,
+    )
+    .unwrap();
+
+    // Handshake the client⇄LB legs to established.
+    let mut out = vec![0u8; MAX_UDP];
+    let mut in_buf = vec![0u8; MAX_UDP];
+    let deadline = tokio::time::Instant::now() + HANDSHAKE_BUDGET;
+    while !(server_conn.is_established() && client_conn.is_established()) {
+        if tokio::time::Instant::now() > deadline {
+            panic!("client⇄LB handshake did not establish");
+        }
+        flush(&mut client_conn, &client_socket, &mut out).await;
+        flush(&mut server_conn, &lb_socket, &mut out).await;
+        try_recv_one(
+            &mut server_conn,
+            &lb_socket,
+            lb_local,
+            &mut in_buf,
+            Duration::from_millis(20),
+        )
+        .await;
+        try_recv_one(
+            &mut client_conn,
+            &client_socket,
+            client_local,
+            &mut in_buf,
+            Duration::from_millis(20),
+        )
+        .await;
+    }
+
+    let payload = make_payload(payload_len);
+    let sids: Vec<u64> = (0..n_streams).map(|i| i * 4).collect();
+    let mut send_off: std::collections::HashMap<u64, usize> =
+        sids.iter().map(|&s| (s, 0usize)).collect();
+    // Initial send: one `stream_send` per stream (this is ALL the broken
+    // single-shot client ever does; the full-send client re-pushes below).
+    for &sid in &sids {
+        if let Ok(n) = client_conn.stream_send(sid, &payload, true) {
+            send_off.insert(sid, n);
+        }
+    }
+    flush(&mut client_conn, &client_socket, &mut out).await;
+
+    // Forwarder: shared LB socket → actor inbound mpsc (the router's job).
+    let (tx, rx) = mpsc::channel::<InboundPacket>(64);
+    let cancel = CancellationToken::new();
+    let fwd_socket = Arc::clone(&lb_socket);
+    let fwd_cancel = cancel.clone();
+    let forwarder = tokio::spawn(async move {
+        let mut buf = vec![0u8; MAX_UDP];
+        loop {
+            tokio::select! {
+                () = fwd_cancel.cancelled() => break,
+                r = fwd_socket.recv_from(&mut buf) => {
+                    if let Ok((n, from)) = r {
+                        let pkt = InboundPacket {
+                            data: buf.get(..n).unwrap_or(&[]).to_vec(),
+                            from,
+                            to: lb_local,
+                        };
+                        if tx.send(pkt).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    });
+
+    // The Mode B backend + actor.
+    let pool = QuicUpstreamPool::new(
+        QuicPoolConfig::default(),
+        upstream_config_factory(certs.ca.clone()),
+    );
+    let raw_backend = RawBackend {
+        pool,
+        addr: backend_addr,
+        sni: TEST_SNI.to_string(),
+        dgram_queue_cap: lb_quic::DGRAM_QUEUE_CAP,
+        max_relay_streams: lb_quic::MAX_RELAY_STREAMS,
+    };
+    let runtime = lb_io::Runtime::new();
+    let tcp_pool = TcpPool::new(PoolConfig::default(), BackendSockOpts::default(), runtime);
+    let params = ActorParams {
+        conn: server_conn,
+        socket: Arc::clone(&lb_socket),
+        inbound: rx,
+        cancel: cancel.clone(),
+        pool: tcp_pool,
+        backends: Arc::new(Vec::new()),
+        h3_backend: None,
+        h2_backend: None,
+        raw_quic_backend: Some(raw_backend),
+        quic_modeb_metrics: None,
+    };
+    let actor = tokio::spawn(run_raw_proxy_actor_for_test(params));
+
+    // Inline client driver: keep the client live, re-push remaining bytes (if
+    // full_send), and collect each stream's echo until FIN.
+    let mut recv_buf = vec![0u8; MAX_UDP];
+    let mut received: std::collections::HashMap<u64, Vec<u8>> =
+        sids.iter().map(|&s| (s, Vec::new())).collect();
+    let mut done: std::collections::HashSet<u64> = std::collections::HashSet::new();
+    let relay_deadline = tokio::time::Instant::now() + RELAY_BUDGET;
+    while done.len() < sids.len() {
+        if tokio::time::Instant::now() > relay_deadline || client_conn.is_closed() {
+            break;
+        }
+        if full_send {
+            for &sid in &sids {
+                let off = *send_off.get(&sid).unwrap_or(&0);
+                if off >= payload.len() {
+                    continue;
+                }
+                if let Ok(n) = client_conn.stream_send(sid, &payload[off..], true) {
+                    send_off.insert(sid, off + n);
+                }
+            }
+        }
+        flush(&mut client_conn, &client_socket, &mut out).await;
+        try_recv_one(
+            &mut client_conn,
+            &client_socket,
+            client_local,
+            &mut in_buf,
+            Duration::from_millis(10),
+        )
+        .await;
+        for &sid in &sids {
+            if done.contains(&sid) {
+                continue;
+            }
+            loop {
+                match client_conn.stream_recv(sid, &mut recv_buf) {
+                    Ok((n, fin)) => {
+                        received
+                            .get_mut(&sid)
+                            .unwrap()
+                            .extend_from_slice(recv_buf.get(..n).unwrap_or(&[]));
+                        if fin {
+                            done.insert(sid);
+                            break;
+                        }
+                        if n == 0 {
+                            break;
+                        }
+                    }
+                    Err(quiche::Error::Done) => break,
+                    Err(_) => break,
+                }
+            }
+        }
+    }
+
+    cancel.cancel();
+    forwarder.abort();
+    let _ = tokio::time::timeout(Duration::from_secs(5), actor).await;
+
+    // Byte-identity for every COMPLETED stream (a completed stream that
+    // mis-echoed would be a real relay bug).
+    for &sid in &sids {
+        if done.contains(&sid) {
+            assert_eq!(
+                received.get(&sid).unwrap(),
+                &payload,
+                "completed stream {sid} must echo byte-identically through the relay"
+            );
+        }
+    }
+    done.len()
+}
+
+/// F-S20-1 regression: FOUR concurrent bidi streams (the exact count the S20
+/// soak flagged) all relay byte-identically with a correct full-send client.
+/// 4 × 4096 = 16 KB > the ~13.5 KB initial congestion window, so the 4th
+/// stream's first `stream_send` IS a partial write — the precise condition
+/// the broken single-shot client mishandled.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn s21_four_concurrent_bidi_streams_all_echo() {
+    let completed = run_concurrent_relay(4, 4096, true).await;
+    assert_eq!(
+        completed, 4,
+        "all 4 concurrent streams must complete a byte-identical echo through \
+         the Mode B relay (the relay was never the F-S20-1 fault)"
+    );
+}
+
+/// Higher concurrency: EIGHT concurrent bidi streams (the harness's negotiated
+/// `initial_max_streams_bidi`) all relay byte-identically.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn s21_eight_concurrent_bidi_streams_all_echo() {
+    let completed = run_concurrent_relay(8, 4096, true).await;
+    assert_eq!(
+        completed, 8,
+        "all 8 concurrent streams must complete a byte-identical echo"
+    );
+}
+
+/// LOAD-BEARING NEGATIVE CONTROL: the S20 single-shot send (no re-push of the
+/// partial-write remainder) with 4 streams leaves at LEAST one stream
+/// incomplete — reproducing the F-S20-1 symptom and proving (a) the positive
+/// tests above genuinely exercise the multi-stream/partial-write condition,
+/// and (b) the defect was the CLIENT's send loop, not the relay. If this ever
+/// completed all 4, the positive tests would be vacuous.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn s21_singleshot_send_wedges_a_stream_negative_control() {
+    let completed = run_concurrent_relay(4, 4096, false).await;
+    assert!(
+        completed < 4,
+        "single-shot send (ignoring stream_send partial writes) MUST leave a \
+         stream incomplete — the F-S20-1 client artifact; got completed={completed}"
+    );
+}
