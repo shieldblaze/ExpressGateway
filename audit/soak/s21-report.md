@@ -225,9 +225,21 @@ held under 11.76 M rapid-resets.
 
 ---
 
-## 6. R1 ×3 regression gate (changed tree) — PENDING
+## 6. R1 ×3 regression gate (changed tree) — GREEN
 
-_[fmt/clippy/×3 on the final committed tree — filled at Phase 4.]_
+On the final committed tree (`scripts/soak/s21-gate.sh`): `fmt --all --check`
+clean; `clippy --workspace --all-targets --all-features -D warnings` exit 0;
+`cargo test --workspace --all-features` **×3 ALL exit 0** (cargo exits non-zero
+on ANY failure → exit 0 = all-pass). Authoritative `--list` count: **1454 tests**
+(S20 baseline 1432 + S21 additions: 3 concurrent-stream regression tests, 1
+idle-sweep unit test, +config/assertions). No regression (R3); the additions are
+purely additive.
+
+Disk-fitting note: the gate built with `RUSTFLAGS="-C debuginfo=0"` (a cold
+`--all-features` debug build is ~47G; ~49G free). This omits only DWARF symbols —
+the IDENTICAL test set runs (not a test weakening; R5). (`tail -50` in the gate
+log truncates the per-suite breakdown to the last 50 lines — the `--list` count
+and the ×3 exit-0 are the authoritative signals.)
 
 ---
 
