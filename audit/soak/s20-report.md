@@ -112,12 +112,19 @@ Full mechanism notes: `s20-findings-wip.md`.
   `tokio::time` is a per-recv timeout, L1418). Passthrough can't observe the
   encrypted CONNECTION_CLOSE, so closed-connection flows persist.
 - **Isolated verdict run = DRIFT:** flows 0→56457 (monotone 100%, slope
-  1009/sample), fds 11→28240 (DRIFT), RSS 8→330 MB (DRIFT),
-  **evicted_total=0 throughout** (zero reclaim). Saturates ~56k flows BELOW the
-  200k LRU cap — the gateway's CPU is exhausted by unreclaimed-flow recv-timeout
-  wakeups and it stops accepting new connections (**effective accept-DoS at
-  ~56k retained flows**, well under the configured cap). Corroborated by run1
-  (0→62k linear) + run2.
+  1009/sample), fds 11→28240 (DRIFT; verifier measured **0.5 fd/flow** = ~1
+  backend UDP socket per flow), RSS 8→330 MB (DRIFT), **evicted_total=0
+  throughout** (zero reclaim). Corroborated by run1 (0→62k linear) + run2 + the
+  independent verifier (§7).
+- **Plateau nuance (R13 correction):** the curve plateaus at ~56k flows at low
+  concurrency (and was still climbing at 62k+ at high concurrency in run1).
+  This session did NOT definitively isolate WHETHER the plateau is the gateway
+  saturating (unable to admit new flows) vs the soak driver reaching a churn
+  steady state — `evicted_total` stayed 0 and the fd ulimit (524288) was not
+  hit, so it is NOT an LRU or OS-fd cap. The PROVEN finding is the absence of
+  idle reclamation (flows only ever rise, never shrink; would only LRU-evict at
+  2×cap = 200k); the saturation-knee mechanism is a carry-forward to
+  investigate alongside the fix.
 - **S21 fix:** add a periodic idle-timeout sweep evicting flows past an idle
   threshold (Katran/Pingora-style) — bounds the table by LIVE connections.
   Needs a regression test (flows reclaim after idle).
@@ -129,9 +136,26 @@ this injector. NOT cleared — my injector likely doesn't hit the exact
 contention window. S21: a more targeted trigger (concurrent TLS renegotiation /
 precise mid-413-flush abort). Stated, not asterisked.
 
-## 6. R1 ×3 regression gate — `PENDING-GATE` (running; §to be filled)
+## 6. R1 ×3 regression gate — `PENDING-GATE` (running; fmt ✓, clippy ✓; test ×3 in progress)
 
-## 7. Independent verification (R13) — `PENDING-VERIFIER`
+## 7. Independent verification (R13) — author ≠ verifier
+
+A separate agent independently reproduced both findings with its OWN runs
+(lead's numbers not consulted during measurement):
+- **F-S20-1: REPRODUCED.** 3 streams → ok=8863/err=0; 4 streams → ok=0/err=3;
+  every error `sid12=1212/4096` (bit-for-bit match); Mode A 4-stream control →
+  ok=15592/err=0 (gateway-relay-specific); state flat (rss 7.6→11.3 MB, fds
+  11→12, conns/streams steady at 1) — no leak.
+- **F-S20-2: REPRODUCED.** flows 0→56457, fds 11→28240 (exactly 0.5 fd/flow),
+  evicted_total=0 throughout. Code-confirmed: gauge = `table.len()`; eviction
+  LRU-only on `len()≥2×cap`; no time/idle path.
+- **Measurement sanity:** /proc VmRSS (58032 kB) vs `ps rss` (58088 kB) agree —
+  the sampler's RSS is trustworthy.
+- **Clean verdicts:** spot-checked sc2 (227M rapid-resets, BOUNDED) + sc4
+  (stall but bounded state) — AGREE with the archived summaries.
+- **Verifier's refinement (incorporated):** the F-S20-2 plateau is a
+  driver/gateway steady state, NOT an LRU or OS-fd cap — see §5 nuance. Core
+  finding (no idle reclaim) stands. No other discrepancies.
 
 ## 8. S21 handoff — `s21-handoff.md` (prioritized fix list)
 

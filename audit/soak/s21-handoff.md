@@ -37,15 +37,18 @@ NOT co-locate sc5 Mode A with the others — it is the resource polluter).
 ### 2. [MEDIUM-HIGH / security-adjacent] F-S20-2 — Mode A passthrough flow/fd retention, no idle reclaim
 - **What:** passthrough flows reclaimed ONLY by LRU at 2×`max_quic_connections`
   (200k default); NO idle sweep. Each flow pins a backend UDP socket fd + 2
-  pump tasks. Under churn flows/fds/RSS grow monotonically (isolated run:
-  0→56k flows, 11→28k fds, 8→330 MB RSS, evicted=0) and SATURATE the gateway's
-  CPU on unreclaimed-flow recv-timeout wakeups BELOW the cap → effective
-  connection-acceptance DoS at ~56k retained flows.
+  pump tasks. Under churn flows/fds/RSS grow monotonically and NEVER shrink
+  (isolated run: 0→56k flows, 11→28k fds ≈ 0.5 fd/flow, 8→330 MB RSS,
+  evicted=0). The curve plateaus at a saturation knee (~56k at low concurrency)
+  whose exact cause (gateway-admit saturation vs driver steady state) was NOT
+  isolated in S20 — it is NOT an LRU or OS-fd cap (evicted=0, ulimit 524288 not
+  hit). The PROVEN risk is unbounded-until-2×cap retention with a per-flow fd.
 - **Why MEDIUM-HIGH:** a sustained stream of short-lived QUIC connections (or a
-  spoofed-source flood that survives Retry) drives the table up; the gateway
-  stops accepting new connections long before the configured cap, and on a host
-  with a low fd ulimit it fd-exhausts. Bounded only by 2×cap (huge) + the
-  saturation knee.
+  spoofed-source flood that survives Retry) drives the table up with NO
+  reclamation until 2×cap; each retained flow pins a backend UDP socket, so on
+  a host with a modest fd ulimit it fd-exhausts long before the flow cap, and
+  RSS/CPU climb with the (dead-connection) table. S21 should also pin down the
+  saturation-knee mechanism while adding the idle sweep.
 - **Repro:**
   `CARGO_TARGET_DIR=/home/ubuntu/Code/eg-target QUIC_CONCURRENCY=1 eg-soak --scenario sc5_modea --label r --duration-secs 90 --out /tmp/x`
   → flows rise monotonically, evicted_total stays 0.
