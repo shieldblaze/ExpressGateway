@@ -240,9 +240,21 @@ impl QpackEncoder {
                     encode_qstring(&mut buf, value);
                 }
                 None => {
-                    // Literal with literal name (§4.5.6).
-                    buf.put_u8(0x20);
-                    encode_qstring(&mut buf, name);
+                    // Literal Field Line with Literal Name (RFC 9204
+                    // §4.5.6): first byte `001NHxxx` where xxx is the
+                    // 3-bit-prefix NAME length (N=0 not-never-indexed,
+                    // H=0 raw — the codec does not Huffman-encode). The
+                    // name bytes follow inline; the VALUE is a normal
+                    // 7-bit-prefix string.
+                    //
+                    // SESSION 22 FIX (paired with the decoder, h3spec
+                    // #14/#15): the prior code wrote `0x20` then a
+                    // SEPARATE 7-bit-prefix name string, which a conformant
+                    // QPACK decoder mis-parses. Encoder + decoder are fixed
+                    // together so the gateway interops with conformant H3
+                    // peers without breaking its own round-trips.
+                    encode_qint(&mut buf, name.len(), 3, 0x20);
+                    buf.put_slice(name.as_bytes());
                     encode_qstring(&mut buf, value);
                 }
             }
@@ -330,11 +342,34 @@ impl QpackDecoder {
                     "post-base name references not supported".to_string(),
                 ));
             } else if first & 0xE0 == 0x20 {
-                // Literal with literal name.
-                pos += 1;
-                let name_slice = buf.get(pos..).ok_or(H3Error::Incomplete)?;
-                let (name, nc) = decode_qstring(name_slice)?;
-                pos += nc;
+                // Literal Field Line with Literal Name (RFC 9204 §4.5.6):
+                //   0 0 1 N H | Name Length (3+) |
+                // The NAME length is the 3-bit prefix of THIS first byte
+                // (with the standard varint continuation) — NOT a separate
+                // length byte. `N` (0x10, never-indexed) is ignored; `H`
+                // (0x08, Huffman) is left raw, mirroring `decode_qstring`'s
+                // raw-only posture (the codec does not Huffman-encode —
+                // SESSION 22: a conformant peer that Huffman-encodes a
+                // literal NAME is a carry-forward, CF-S22-QPACK-HUFFMAN).
+                //
+                // SESSION 22 FIX (h3spec #14/#15): the prior code did
+                // `pos += 1` then read a fresh 7-bit-prefix length byte,
+                // which mis-parsed every RFC-conformant peer's
+                // literal-literal-name field (e.g. a prohibited `:foo`
+                // pseudo-header or a `foo` field before a late pseudo).
+                // Decoder + encoder are fixed together so the gateway's own
+                // H3 round-trips stay consistent AND interop with conformant
+                // peers. See `audit/h3spec/s22-findings.md`.
+                let slice = buf.get(pos..).ok_or(H3Error::Incomplete)?;
+                let (name_len, consumed) = decode_qint(slice, 3)?;
+                pos += consumed;
+                let name_bytes = buf
+                    .get(pos..pos.checked_add(name_len).ok_or(H3Error::Incomplete)?)
+                    .ok_or(H3Error::Incomplete)?;
+                let name = core::str::from_utf8(name_bytes)
+                    .map_err(|_| H3Error::QpackError("non-utf8 qpack name".to_string()))?
+                    .to_string();
+                pos += name_len;
 
                 let val_slice = buf.get(pos..).ok_or(H3Error::Incomplete)?;
                 let (value, vc) = decode_qstring(val_slice)?;
@@ -406,5 +441,75 @@ mod tests {
         let result = dec.decode(&wire).unwrap();
 
         assert_eq!(result, headers);
+    }
+
+    // ── SESSION 22 (h3spec #14/#15): RFC 9204 §4.5.6 literal-literal-name ──
+
+    /// Decode a hand-built **conformant** (externally produced) header
+    /// block whose literal-literal-name fields put the NAME length in the
+    /// first byte's 3-bit prefix — exactly the encoding h3spec sends. The
+    /// pre-fix decoder mis-parsed this (it skipped the first byte then read
+    /// a fresh 7-bit length), so a prohibited `:foo` / late pseudo was never
+    /// surfaced to the validator. This is the regression lock for the
+    /// interop direction (conformant peer → gateway).
+    #[test]
+    fn decode_conformant_literal_literal_name() {
+        // 00 00            RIC=0, Base=0
+        // d1               indexed static 17  -> (:method, GET)
+        // d7               indexed static 23  -> (:scheme, https)
+        // 24 3a 66 6f 6f   literal-literal-name, namelen=4 -> ":foo"
+        // 03 62 61 72      value len 3 -> "bar"
+        // c1               indexed static 1   -> (:path, /)
+        let wire = [
+            0x00, 0x00, 0xd1, 0xd7, 0x24, 0x3a, 0x66, 0x6f, 0x6f, 0x03, 0x62, 0x61, 0x72, 0xc1,
+        ];
+        let got = QpackDecoder::new().decode(&wire).unwrap();
+        assert_eq!(
+            got,
+            vec![
+                (":method".to_string(), "GET".to_string()),
+                (":scheme".to_string(), "https".to_string()),
+                (":foo".to_string(), "bar".to_string()),
+                (":path".to_string(), "/".to_string()),
+            ]
+        );
+    }
+
+    /// The 3-bit name-length prefix must use varint continuation for names
+    /// of length >= 7 (h3spec encodes a 9-byte name as `27 02`).
+    #[test]
+    fn decode_literal_literal_name_length_continuation() {
+        // 00 00  ric/base
+        // 27 02  literal-literal-name, namelen prefix=7 -> +2 -> 9
+        // ":autority" (9 bytes — h3spec's deliberately-unregistered pseudo)
+        // 09 + "127.0.0.1"
+        let mut wire = vec![0x00, 0x00, 0x27, 0x02];
+        wire.extend_from_slice(b":autority");
+        wire.push(0x09);
+        wire.extend_from_slice(b"127.0.0.1");
+        let got = QpackDecoder::new().decode(&wire).unwrap();
+        assert_eq!(
+            got,
+            vec![(":autority".to_string(), "127.0.0.1".to_string())]
+        );
+    }
+
+    /// Round-trip a literal-literal-name field through the FIXED encoder
+    /// and decoder (self-consistency after the §4.5.6 fix). A long name
+    /// exercises the encoder's 3-bit-prefix continuation too.
+    #[test]
+    fn roundtrip_literal_literal_name_fixed_format() {
+        let headers = vec![
+            ("x-a".to_string(), "1".to_string()),
+            (
+                "x-very-long-header-name-exceeding-seven".to_string(),
+                "v".to_string(),
+            ),
+        ];
+        let wire = QpackEncoder::new().encode(&headers).unwrap();
+        // The encoder must emit the §4.5.6 first-byte form (0x20-masked),
+        // NOT the old `0x20` + separate-length form.
+        let decoded = QpackDecoder::new().decode(&wire).unwrap();
+        assert_eq!(decoded, headers);
     }
 }

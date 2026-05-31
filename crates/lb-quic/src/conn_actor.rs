@@ -39,7 +39,7 @@ use crate::raw_proxy::{RawBackend, run_raw_proxy_actor};
 use crate::h3_bridge::{
     BodyItem, H3_RESP_CHANNEL_DEPTH, H3Request, MAX_REQUEST_BODY_BYTES, MAX_RESPONSE_BODY_BYTES,
     ReqBodyEvent, RespEvent, StreamRxBuf, encode_h3_response, h3_to_h1_stream_resp,
-    h3_to_h2_stream_resp, h3_to_h3_stream_resp,
+    h3_to_h2_stream_resp, h3_to_h3_stream_resp, validate_request_pseudo_headers,
 };
 
 /// SESSION 2 / P1-A: depth of the per-stream bounded request-body
@@ -79,6 +79,16 @@ pub const H3_NO_ERROR: u64 = 0x0100;
 /// pre-existing reusable cancel/internal-error constant, so this is
 /// the RFC-registered codepoint, not an invented value.
 pub const H3_INTERNAL_ERROR: u64 = 0x0102;
+
+/// SESSION 22 (h3spec #12–15) — RFC 9114 §8.1 `H3_MESSAGE_ERROR`
+/// (`0x010e`): "a malformed request or response was received". Used to
+/// **reset the request stream** when inbound HEADERS fail
+/// [`crate::h3_bridge::validate_request_pseudo_headers`] (duplicate /
+/// missing-mandatory / prohibited / mis-ordered pseudo-header). RFC 9114
+/// §4.1.3 classifies a malformed message as a *stream* error, so this is
+/// emitted via `stream_shutdown` (RESET_STREAM + STOP_SENDING), not a
+/// connection close — the connection survives and other streams proceed.
+pub const H3_MESSAGE_ERROR: u64 = 0x010e;
 
 /// Upper bound on how long [`graceful_h3_shutdown`] will pump the
 /// connection after issuing `close()` before giving up. Quiche enters
@@ -711,6 +721,27 @@ pub async fn graceful_h3_shutdown(
 /// rather than carrying a byte-identical private copy. The low-level
 /// send loop has no H3/Mode-A coupling — it is purely "flush quiche's
 /// outbound packets to this socket until `Done`".
+/// SESSION 22 — reset an H3 request stream with an application error
+/// `code` (a STREAM error per RFC 9114 §4.1.3, e.g. `H3_MESSAGE_ERROR`).
+/// Shuts the stream down in BOTH directions: `Write` emits `RESET_STREAM`
+/// (we will send no response) and `Read` emits `STOP_SENDING` (we want no
+/// more request bytes). Both frames are queued on `conn`; the actor loop's
+/// next `drain_conn_send` pumps them to the peer (a queued reset is inert
+/// until `conn.send()` runs — see the `quiche-reset-needs-a-flush-pump`
+/// lesson). This works at H3-frame time because the connection is already
+/// established (`recv_count > 0`), unlike the suppressed first-packet
+/// transport close documented in `audit/h3spec/s22-findings.md` (#1–8).
+fn reset_h3_stream(conn: &mut quiche::Connection, sid: u64, code: u64) {
+    match conn.stream_shutdown(sid, quiche::Shutdown::Write, code) {
+        Ok(()) | Err(quiche::Error::Done) => {}
+        Err(e) => tracing::debug!(error = %e, stream_id = sid, "reset_h3_stream (RESET_STREAM)"),
+    }
+    match conn.stream_shutdown(sid, quiche::Shutdown::Read, code) {
+        Ok(()) | Err(quiche::Error::Done) => {}
+        Err(e) => tracing::debug!(error = %e, stream_id = sid, "reset_h3_stream (STOP_SENDING)"),
+    }
+}
+
 pub(crate) async fn drain_conn_send(
     socket: &UdpSocket,
     conn: &mut quiche::Connection,
@@ -794,6 +825,27 @@ fn poll_h3(
                     let rx = rx_by_stream.entry(sid).or_default();
                     match rx.feed(buf.get(..n).unwrap_or(&[])) {
                         Ok(Some(headers)) => {
+                            // SESSION 22 (h3spec #12–15): RFC 9114 §4.3
+                            // request pseudo-header validation BEFORE
+                            // building the request or dialling any
+                            // upstream. A malformed request is a STREAM
+                            // error of type H3_MESSAGE_ERROR (§4.1.3): reset
+                            // the stream and forward NOTHING upstream
+                            // (request integrity — a smuggling/desync
+                            // guard). Single ingress site ⇒ covers all
+                            // H3-front cells (R12). The reset frames are
+                            // pumped by the loop's next `drain_conn_send`.
+                            if let Err(reason) = validate_request_pseudo_headers(&headers) {
+                                tracing::warn!(
+                                    stream_id = sid,
+                                    reason,
+                                    "SESSION 22: malformed H3 request rejected \
+                                     (H3_MESSAGE_ERROR, RFC 9114 §4.1.3)"
+                                );
+                                reset_h3_stream(conn, sid, H3_MESSAGE_ERROR);
+                                rx_by_stream.remove(&sid);
+                                break;
+                            }
                             let req = H3Request::from_headers(headers);
                             // ROUND8-L7-16: authority value sanitisation
                             // choke point — the H3 leg of L7-09

@@ -784,6 +784,115 @@ impl H3Request {
     }
 }
 
+/// SESSION 22 (h3spec #12–15) — RFC 9114 §4.3 + §4.3.1 request
+/// pseudo-header validation. Returns `Err(reason)` on the FIRST
+/// violation; the caller (the single H3 ingress site in
+/// [`crate::conn_actor::poll_h3`]) resets the request stream with
+/// `H3_MESSAGE_ERROR`.
+///
+/// A malformed request is a **stream** error of type `H3_MESSAGE_ERROR`
+/// (RFC 9114 §4.1.3), not a connection error — so the offending stream
+/// is reset and the rest of the connection survives. Crucially this runs
+/// BEFORE [`H3Request::from_headers`] (which silently defaults missing
+/// pseudo-headers) and BEFORE any upstream is dialled, so a malformed
+/// request is never forwarded to a backend (request integrity — a
+/// smuggling / desync guard; the H3 analogue of the H2-path checks that
+/// pass h2spec 146/147).
+///
+/// Single-sourced: validating here at the sole ingress covers every
+/// H3-front cell (H3→H1, H3→H2, H3→H3), which all share this decode path
+/// (R12). Mode B (raw QUIC relay) never parses H3 frames, so it is N/A.
+///
+/// Enforces, per `audit/h3spec/s22-findings.md`:
+/// * **#12** no request pseudo-header is duplicated (§4.3.1)
+/// * **#13** the mandatory pseudo-headers are present — `:method`,
+///   `:scheme`, `:path` for a normal request; `:authority` for CONNECT
+///   (§4.3.1 / §4.4)
+/// * **#14** no prohibited or unknown request pseudo-header is present —
+///   e.g. the response-only `:status`, or any unregistered `:`-prefixed
+///   name (§4.3)
+/// * **#15** no pseudo-header appears after a regular field (§4.3)
+///
+/// # Errors
+/// Returns a static reason string naming the RFC clause violated.
+pub fn validate_request_pseudo_headers(headers: &[(String, String)]) -> Result<(), &'static str> {
+    let mut method: Option<&str> = None;
+    let mut seen_scheme = false;
+    let mut seen_path = false;
+    let mut seen_authority = false;
+    let mut seen_regular = false;
+
+    for (name, value) in headers {
+        if let Some(_pseudo) = name.strip_prefix(':') {
+            // #15 — all pseudo-header fields MUST precede the regular
+            // fields (RFC 9114 §4.3).
+            if seen_regular {
+                return Err("h3 pseudo-header after regular field (RFC 9114 §4.3)");
+            }
+            match name.as_str() {
+                ":method" => {
+                    if method.is_some() {
+                        return Err("h3 duplicate :method pseudo-header (RFC 9114 §4.3.1)");
+                    }
+                    method = Some(value);
+                }
+                ":scheme" => {
+                    if seen_scheme {
+                        return Err("h3 duplicate :scheme pseudo-header (RFC 9114 §4.3.1)");
+                    }
+                    seen_scheme = true;
+                }
+                ":path" => {
+                    if seen_path {
+                        return Err("h3 duplicate :path pseudo-header (RFC 9114 §4.3.1)");
+                    }
+                    seen_path = true;
+                }
+                ":authority" => {
+                    if seen_authority {
+                        return Err("h3 duplicate :authority pseudo-header (RFC 9114 §4.3.1)");
+                    }
+                    seen_authority = true;
+                }
+                // #14 — any other `:`-prefixed name (the response-only
+                // `:status`, or an unregistered pseudo-header) is
+                // prohibited in a request (RFC 9114 §4.3).
+                _ => {
+                    return Err("h3 prohibited/unknown request pseudo-header (RFC 9114 §4.3)");
+                }
+            }
+        } else {
+            seen_regular = true;
+        }
+    }
+
+    // #13 — mandatory pseudo-headers. RFC 9114 §4.3.1: a normal request
+    // MUST include exactly one each of :method, :scheme and :path. §4.4:
+    // a CONNECT request omits :scheme and :path and MUST include
+    // :authority. (CONNECT is not otherwise supported by the gateway, but
+    // the validation is kept RFC-correct so a future CONNECT path is not
+    // pre-broken here.)
+    match method {
+        None => Err("h3 missing mandatory :method pseudo-header (RFC 9114 §4.3.1)"),
+        Some("CONNECT") => {
+            if seen_scheme || seen_path {
+                Err("h3 CONNECT request must omit :scheme/:path (RFC 9114 §4.4)")
+            } else if !seen_authority {
+                Err("h3 CONNECT request missing :authority (RFC 9114 §4.4)")
+            } else {
+                Ok(())
+            }
+        }
+        Some(_) => {
+            if seen_scheme && seen_path {
+                Ok(())
+            } else {
+                Err("h3 missing mandatory :scheme/:path pseudo-header (RFC 9114 §4.3.1)")
+            }
+        }
+    }
+}
+
 /// Build a minimal HTTP/1.1 request line + headers.
 ///
 /// S1-B seam (SESSION 1): `body` threads an OPTIONAL request payload so
@@ -4218,6 +4327,110 @@ fn parse_frame_header(hdr: &[u8]) -> Option<Result<(u64, u64), String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── SESSION 22 (h3spec #12–15): request pseudo-header validation ──
+    // Helper: build a (name, value) field list.
+    fn h(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(n, v)| ((*n).to_string(), (*v).to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn pseudo_valid_request_accepted_negative_control() {
+        // The load-bearing negative control: a well-formed request MUST
+        // pass (so the validator does not reject legitimate traffic — R8
+        // rejects only malformed input).
+        let ok = h(&[
+            (":method", "GET"),
+            (":scheme", "https"),
+            (":path", "/"),
+            (":authority", "example.com"),
+            ("user-agent", "h3spec"),
+        ]);
+        assert!(validate_request_pseudo_headers(&ok).is_ok());
+        // Minimal valid request (no :authority, no regular fields).
+        let min = h(&[(":method", "GET"), (":scheme", "https"), (":path", "/")]);
+        assert!(validate_request_pseudo_headers(&min).is_ok());
+    }
+
+    #[test]
+    fn pseudo_12_duplicate_rejected() {
+        // #12 — duplicated request pseudo-header (RFC 9114 §4.3.1).
+        let dup_method = h(&[
+            (":method", "GET"),
+            (":method", "POST"),
+            (":scheme", "https"),
+            (":path", "/"),
+        ]);
+        assert!(validate_request_pseudo_headers(&dup_method).is_err());
+        let dup_path = h(&[
+            (":method", "GET"),
+            (":scheme", "https"),
+            (":path", "/"),
+            (":path", "/x"),
+        ]);
+        assert!(validate_request_pseudo_headers(&dup_path).is_err());
+    }
+
+    #[test]
+    fn pseudo_13_missing_mandatory_rejected() {
+        // #13 — mandatory pseudo-headers absent (RFC 9114 §4.3.1).
+        let no_method = h(&[(":scheme", "https"), (":path", "/")]);
+        assert!(validate_request_pseudo_headers(&no_method).is_err());
+        let no_path = h(&[(":method", "GET"), (":scheme", "https")]);
+        assert!(validate_request_pseudo_headers(&no_path).is_err());
+        let no_scheme = h(&[(":method", "GET"), (":path", "/")]);
+        assert!(validate_request_pseudo_headers(&no_scheme).is_err());
+    }
+
+    #[test]
+    fn pseudo_14_prohibited_or_unknown_rejected() {
+        // #14 — response-only :status and any unknown :-prefixed name are
+        // prohibited in a request (RFC 9114 §4.3).
+        let status_in_req = h(&[
+            (":method", "GET"),
+            (":scheme", "https"),
+            (":path", "/"),
+            (":status", "200"),
+        ]);
+        assert!(validate_request_pseudo_headers(&status_in_req).is_err());
+        let unknown = h(&[
+            (":method", "GET"),
+            (":scheme", "https"),
+            (":path", "/"),
+            (":madeup", "x"),
+        ]);
+        assert!(validate_request_pseudo_headers(&unknown).is_err());
+    }
+
+    #[test]
+    fn pseudo_15_after_regular_field_rejected() {
+        // #15 — a pseudo-header after a regular field (RFC 9114 §4.3).
+        let after = h(&[
+            (":method", "GET"),
+            (":scheme", "https"),
+            ("user-agent", "h3spec"),
+            (":path", "/"),
+        ]);
+        assert!(validate_request_pseudo_headers(&after).is_err());
+    }
+
+    #[test]
+    fn pseudo_connect_request_rules() {
+        // RFC 9114 §4.4: CONNECT omits :scheme/:path and needs :authority.
+        let ok = h(&[(":method", "CONNECT"), (":authority", "example.com:443")]);
+        assert!(validate_request_pseudo_headers(&ok).is_ok());
+        let bad_has_path = h(&[
+            (":method", "CONNECT"),
+            (":authority", "example.com:443"),
+            (":path", "/"),
+        ]);
+        assert!(validate_request_pseudo_headers(&bad_has_path).is_err());
+        let bad_no_authority = h(&[(":method", "CONNECT")]);
+        assert!(validate_request_pseudo_headers(&bad_no_authority).is_err());
+    }
 
     #[test]
     fn encode_h3_response_includes_status_and_body() {
