@@ -428,7 +428,22 @@ async fn quic_session(
     let relay_deadline = tokio::time::Instant::now() + Duration::from_secs(12);
     while !expecting.is_empty() {
         if tokio::time::Instant::now() > relay_deadline || conn.is_closed() {
-            anyhow::bail!("relay timeout / closed (streams left: {})", expecting.len());
+            // Diagnostic detail (F-S20-1): report WHICH sids stalled and how
+            // many bytes each received vs the payload. A stalled sid with
+            // got==want means the DATA arrived but the FIN did not (FIN-loss,
+            // S18 RELAY-STALL lineage); got<want means the tail was lost.
+            let mut left: Vec<(u64, usize)> = expecting.iter().map(|(k, v)| (*k, *v)).collect();
+            left.sort_unstable();
+            let detail: Vec<String> = left
+                .iter()
+                .map(|(sid, got)| format!("sid{sid}={got}/{payload_len}"))
+                .collect();
+            anyhow::bail!(
+                "relay timeout / closed (streams left: {} [{}]); closed={}",
+                expecting.len(),
+                detail.join(" "),
+                conn.is_closed()
+            );
         }
         recv_one(
             &mut conn,
