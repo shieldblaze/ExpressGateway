@@ -653,6 +653,38 @@ fn sweep_idle_flows(ctx: &RouterCtx, idle_ms: u64) -> usize {
     n
 }
 
+/// F-S20-2 — the periodic idle-flow reaper task body. Ticks every `period`
+/// and reclaims flows idle past `idle_ms` via [`sweep_idle_flows`], until
+/// `shutdown` fires. Extracted from [`PassthroughListener::spawn`] so the loop
+/// is directly testable (a `tokio::spawn`'d closure is invisible to unit-test
+/// coverage). The first `interval` tick fires immediately; `Skip` missed-tick
+/// behaviour avoids a burst if a sweep ran long.
+async fn run_idle_sweeper(
+    ctx: Arc<RouterCtx>,
+    idle_ms: u64,
+    period: Duration,
+    shutdown: CancellationToken,
+) {
+    let mut tick = tokio::time::interval(period);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            biased;
+            () = shutdown.cancelled() => break,
+            _ = tick.tick() => {
+                let reaped = sweep_idle_flows(&ctx, idle_ms);
+                if reaped > 0 {
+                    tracing::debug!(
+                        reaped,
+                        idle_ms,
+                        "passthrough idle-flow sweep reclaimed flows"
+                    );
+                }
+            }
+        }
+    }
+}
+
 /// Handle one inbound datagram from the client.
 async fn handle_inbound(ctx: Arc<RouterCtx>, data: Vec<u8>, from: SocketAddr) {
     let parsed = match parse_public_header(&data, default_short_dcid_len(&ctx)) {
@@ -1160,26 +1192,7 @@ impl PassthroughListener {
             // timeout without busy-spinning on a tiny table.
             let period = Duration::from_millis((idle_ms / 4).max(1))
                 .clamp(Duration::from_secs(1), Duration::from_secs(10));
-            tokio::spawn(async move {
-                let mut tick = tokio::time::interval(period);
-                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                loop {
-                    tokio::select! {
-                        biased;
-                        () = sweep_shutdown.cancelled() => break,
-                        _ = tick.tick() => {
-                            let reaped = sweep_idle_flows(&sweep_ctx, idle_ms);
-                            if reaped > 0 {
-                                tracing::debug!(
-                                    reaped,
-                                    idle_ms,
-                                    "passthrough idle-flow sweep reclaimed flows"
-                                );
-                            }
-                        }
-                    }
-                }
-            });
+            tokio::spawn(run_idle_sweeper(sweep_ctx, idle_ms, period, sweep_shutdown));
         }
 
         let shutdown_for_loop = shutdown.clone();
@@ -1771,6 +1784,65 @@ mod tests {
                 );
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
+        });
+    }
+
+    // --- (5c) F-S20-2 the PERIODIC reaper task (run_idle_sweeper) ---------
+
+    #[test]
+    fn idle_sweeper_task_reaps_periodically_and_stops_on_shutdown() {
+        rt().block_on(async {
+            let (ctx, m, _b) = test_ctx(|p| p.mint_retry = false).await;
+            for i in 0u8..3 {
+                let dcid = vec![0x90 + i; 8];
+                handle_initial(
+                    Arc::clone(&ctx),
+                    vec![0u8; 8],
+                    loopback(46000 + u16::from(i)),
+                    1,
+                    &dcid,
+                    &[],
+                    None,
+                )
+                .await;
+            }
+            assert_eq!(ctx.table.len(), 3, "3 flows resident");
+            // Mark them idle so the FIRST sweep tick reaps them.
+            for kv in ctx.table.iter() {
+                kv.value().last_seen_ms.store(0, Ordering::Relaxed);
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+
+            // Drive the REAL periodic reaper task (idle_ms=1, period=20ms).
+            let shutdown = CancellationToken::new();
+            let task = tokio::spawn(run_idle_sweeper(
+                Arc::clone(&ctx),
+                1,
+                Duration::from_millis(20),
+                shutdown.clone(),
+            ));
+
+            // The periodic task (not a direct call) must reclaim all flows.
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            while !ctx.table.is_empty() {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "the periodic run_idle_sweeper task must reap idle flows"
+                );
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            assert!(
+                m.flows_evicted_total.get() >= 3,
+                "periodic sweep bumped the eviction counter"
+            );
+
+            // Shutdown arm: the task must EXIT promptly on cancel (no leak of
+            // the reaper task itself).
+            shutdown.cancel();
+            tokio::time::timeout(Duration::from_secs(2), task)
+                .await
+                .expect("run_idle_sweeper must exit on shutdown.cancel()")
+                .expect("reaper task joined cleanly");
         });
     }
 

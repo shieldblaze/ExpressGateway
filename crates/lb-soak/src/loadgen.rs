@@ -601,4 +601,40 @@ mod tests {
         assert_eq!(s.ok_count(), 2);
         assert_eq!(s.err_count(), 1);
     }
+
+    /// F-S20-1: drive the REAL `quic_session` client (the partial-write fix)
+    /// against a QUIC echo backend. 4 streams × 4096 B > the ~13.5 KB initial
+    /// congestion window, so the 4th stream's first `stream_send` is a PARTIAL
+    /// write — the exact condition the pre-fix single-shot client mishandled.
+    /// `quic_session` must complete (echo every stream incl. FIN), proving the
+    /// re-send loop sends each full payload. Covers the rewritten send loop.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn quic_session_full_send_multistream_echoes() {
+        let dir = std::env::temp_dir().join(format!(
+            "lb-soak-loadgen-qs-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let certs = crate::config_gen::generate_certs(&dir, "echo-backend.test").unwrap();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let backend = crate::backends::spawn_quic_echo_backend(
+            certs.cert.clone(),
+            certs.key.clone(),
+            Arc::clone(&stop),
+        )
+        .unwrap();
+        // Let the echo backend's service loop start.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        // 4 streams × 4096 B (> initial cwnd) + a couple datagrams.
+        let r = quic_session(backend, "echo-backend.test", &certs.ca, 4, 4096, 2).await;
+
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let _ = std::fs::remove_dir_all(&dir);
+        r.expect("4 concurrent streams must echo end-to-end via the partial-write re-send loop");
+    }
 }
