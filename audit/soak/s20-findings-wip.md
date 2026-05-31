@@ -44,17 +44,31 @@ class S16→S18 fought, now surfacing under multi-stream concurrency that the
 deterministic s16_b2_multistream test did not exercise in this
 all-streams-open-with-immediate-FIN pattern.
 
-**Still to prove (Phase 3, post-soak):** WHICH stream stalls (likely the
-highest sid) and whether the stalled stream's DATA fully arrived but the FIN
-did not (FIN-loss → S18 lineage) vs partial data (tail-loss). Method: an
-enhanced diagnostic client reporting per-sid received-bytes + fin-seen. Do NOT
-rebuild the soak's binaries mid-run.
+**Mechanism PROVEN (Phase 3 diagnostic, clean release box):**
+- Threshold is EXACTLY 4 concurrent client bidi streams: 3 streams →
+  `ok=20533 err=0` (works); 4 streams → `ok=0 err=6` (100% stall).
+- The stalled stream is **sid12** (the 4th/highest client bidi stream
+  0/4/8/12). Per-stream diagnostic: `streams left: 1 [sid12=1212/4096];
+  closed=true` — sid12 receives only **1212 of 4096 echo bytes** then WEDGES
+  (no further data, no FIN); the connection then idle-closes.
+- ⇒ NOT pure FIN-loss (the S18 case) — a **partial-data relay stall on the 4th
+  concurrent stream**. A new RELAY-STALL variant.
+- NOT a simple config limit: the gateway FRONT grants
+  `initial_max_streams_bidi(16)` + `initial_max_data(10MB)` (listener.rs:439-443)
+  and the UPSTREAM grants `(64)` + `(10MB)` (main.rs:861-865) — both legs allow
+  far more than 4 streams / 16 KB. So the trigger is a relay-LOGIC interaction
+  at 4 concurrent streams, not flow-control exhaustion. (S21 fix-investigation
+  starting point: trace `relay_streams`/`run_dual_pump` under 4 concurrent
+  bidi streams; the 4-stream knee + highest-stream + partial-data signature is
+  the repro.)
 
-**Soak question (PENDING-COMPLETED-RUN):** sc4_modeb (4-stream) sustains this
-stall under load for the full run — does the stalled-stream state LEAK
-(quic_modeb_connections / streams_active / RSS climb) or stay BOUNDED? Smoke at
-t≤90s showed connections steady at 12, streams_active=1, RSS flat — *looks*
-bounded, but the verdict is the completed run's time-series.
+**Soak question — ANSWERED (completed run, R15):** sc4_modeb (4-stream) ran the
+full 90 min with `quic_load ok=0 err=23349` (every session stalls) YET the
+gateway state stayed PERFECTLY BOUNDED — RSS flat 17944 KB, fds flat 11,
+`quic_modeb_connections` bounded (max 4), `streams_active` bounded (max 4),
+datagrams_dropped 0, panic 0. ⇒ **F-S20-1 is a LIVENESS bug that does NOT leak
+state** (no memory/fd/connection/stream leak from the stalled streams).
+Evidence: `audit/soak/s20-soak-data/run2-clean/sc4_modeb.{csv,summary.txt}`.
 
 **Disposition:** characterize + verify (R13) this session; FIX is S21 (it is a
 relay-logic correctness fix in product code — builder-1 territory, needs a
