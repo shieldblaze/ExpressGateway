@@ -99,7 +99,11 @@ Both are in **quiche 0.28.0**, not gateway code. Options:
 1. **Document as a known v1 conformance limitation tied to quiche 0.28** (no code change). Honest; quiche *does* detect and tear down the bad connection (the client cannot proceed) — only the explicit close *frame* is missing for first-packet transport errors / reserved bits.
 2. **Evaluate a quiche upgrade** (does a newer quiche emit the close / add reserved-bit checks?). Large: touches the whole QUIC stack (Mode A/B + H3-front), needs full re-validation + re-soak. Aligns with carry-forward **CF-DEP-1**.
 3. **Fork/patch quiche** (change `close()`/`send()` guard; add reserved-bit check). Maintenance burden; not recommended for v1.
-**Recommendation:** (1) for this session + open a tracked item to evaluate (2) under CF-DEP-1 — do **not** fork. Security impact is low: these are unauthenticated/handshake-phase or robustness checks; the connection does not succeed either way.
+**Recommendation:** (1) for this session + open a tracked item to evaluate (2) — do **not** fork. Security impact is low: these are unauthenticated/handshake-phase or robustness checks; the connection does not succeed either way.
+
+**OWNER RULING (2026-05-31): Option 1 — document as a v1 limitation.** quiche DOES tear down the bad connection (the security-relevant outcome happens); only the explicit CONNECTION_CLOSE *frame* is suppressed on a first-packet error, and reserved bits are header-protected (not gateway-inspectable). A quiche-upgrade evaluation is opened as its **own** carry-forward **CF-QUICHE-UPGRADE** — kept DISTINCT from CF-DEP-1 (the separate Dependabot owner task). Do not fork. Do not bolt a foundational dep bump onto a conformance session.
+
+> **CF-QUICHE-UPGRADE** (new carry-forward, S22): evaluate a quiche bump (> 0.28.0) as its own future workstream to recover h3spec #1–10 (first-packet transport-param CONNECTION_CLOSE emission + header reserved-bit validation). Large: touches Mode A/B + H3-front + termination; requires full ×3 re-validation + re-soak. NOT CF-DEP-1.
 
 ---
 
@@ -115,7 +119,28 @@ Both are in **quiche 0.28.0**, not gateway code. Options:
 
 ## Phase 2 plan (gateway fixes; single-sourced per R12)
 
-**Enabler E0** — H3 protocol-error close helper: `close_h3(conn, code, reason)` (calls `conn.close(false, code, …)`, relies on the loop's `drain_conn_send` pump; verified emitted because the H3 conn is established). Single source for every G finding.
+## Phase 2 RESULTS — security tier (#12–15) CLOSED
+
+All four pseudo-header findings now pass h3spec (`4 examples, 0 failures`), independently verified (verifier-e1 AGREE; `audit/h3spec/s22-verify-e1.md`):
+
+| # | Result | How |
+|---|---|---|
+| 12 | ✅ PASS | `validate_request_pseudo_headers` rejects duplicate pseudo → stream reset H3_MESSAGE_ERROR |
+| 13 | ✅ PASS | **owner-ruled STRICT** — reject http/https request missing `:authority`/`Host` (RFC 9114 §4.3.1). Prior SNI-substitution tolerance was coverage-only lenience (S7 `absent_authority_substitutes_sni`, added for +15 cov lines), NOT a deployment feature → made conformant; the one `omit_authority` e2e test was converted to assert the rejection. Upstream SNI fallback retained for H1→H3/H2→H3 (different ingress). |
+| 14 | ✅ PASS | prohibited/unknown pseudo (`:autority`/`:foo`) rejected — unblocked by the QPACK fix below |
+| 15 | ✅ PASS | pseudo-after-field (rejected at the unknown-pseudo `:autority` in h3spec's vector; the §4.3 ordering arm is separately unit-tested + proven load-bearing) |
+
+### New finding discovered: F-S22-QPACK — non-conformant QPACK Literal-Literal-Name (RFC 9204 §4.5.6)
+NOT one of the original 25 (h3spec is a client, doesn't test the server's response QPACK encoding), but found while fixing #14/#15. The lb-h3 codec wrote/read a **separate 7-bit length byte** for the literal NAME instead of the **first-byte 3-bit name-length prefix**. Encoder and decoder were **self-consistent** (so internal round-trips + h2spec passed) but **both non-conformant** — every conformant peer (h3spec, browsers) mis-decodes the gateway's literal-named response headers, and the gateway mis-decodes theirs. **Fixed both directions together** (so internal round-trips stay consistent AND interop is correct); 3 lb-h3 regression tests incl. a hand-built conformant-block decode. **Severity: real interop defect** (response-header corruption against conformant clients) — the most valuable thing this pass found.
+
+### Carry-forward opened
+- **CF-S22-QPACK-HUFFMAN** — the codec is raw-only (no Huffman name/value coding); a conformant peer that Huffman-encodes a literal name/value is unsupported (pre-existing codec limitation, surfaced here). Browsers Huffman-encode → needed before real-browser H3. Tier: correctness, own workstream.
+
+Committed: `1409eb76` (#12/#14/#15 + QPACK) and the #13 increment (this commit). Below: the original Phase-2 plan (E0/E1 done; E2–E4 per the adaptive budget).
+
+---
+
+**Enabler E0** — H3 protocol-error close helper: `reset_h3_stream(conn, sid, code)` (RESET_STREAM + STOP_SENDING; pumped by `drain_conn_send`; emitted because the H3 conn is established). Single source for every G finding.
 
 1. **SEC (E1):** strict pseudo-header validation in the request HEADERS path — reject duplicate / missing-mandatory / prohibited / mis-ordered pseudo-headers → `H3_MESSAGE_ERROR` via E0 (#12–15). Negative control: a valid request still succeeds.
 2. **COR (E2):** request-stream frame sequencing — DATA-before-HEADERS, CANCEL_PUSH on request stream → `H3_FRAME_UNEXPECTED` (#11, #21).

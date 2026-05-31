@@ -807,7 +807,11 @@ impl H3Request {
 /// * **#12** no request pseudo-header is duplicated (§4.3.1)
 /// * **#13** the mandatory pseudo-headers are present — `:method`,
 ///   `:scheme`, `:path` for a normal request; `:authority` for CONNECT
-///   (§4.3.1 / §4.4)
+///   (§4.3.1 / §4.4); and for a scheme with a mandatory authority
+///   component (`http`/`https`) the request MUST carry `:authority` or a
+///   `Host` field (§4.3.1). The owner ruled this STRICT (the prior
+///   absent-`:authority` SNI-substitution was coverage-only lenience, not
+///   a deployment feature — see the findings doc).
 /// * **#14** no prohibited or unknown request pseudo-header is present —
 ///   e.g. the response-only `:status`, or any unregistered `:`-prefixed
 ///   name (§4.3)
@@ -817,13 +821,14 @@ impl H3Request {
 /// Returns a static reason string naming the RFC clause violated.
 pub fn validate_request_pseudo_headers(headers: &[(String, String)]) -> Result<(), &'static str> {
     let mut method: Option<&str> = None;
-    let mut seen_scheme = false;
+    let mut scheme: Option<&str> = None;
     let mut seen_path = false;
     let mut seen_authority = false;
+    let mut seen_host = false;
     let mut seen_regular = false;
 
     for (name, value) in headers {
-        if let Some(_pseudo) = name.strip_prefix(':') {
+        if name.starts_with(':') {
             // #15 — all pseudo-header fields MUST precede the regular
             // fields (RFC 9114 §4.3).
             if seen_regular {
@@ -837,10 +842,10 @@ pub fn validate_request_pseudo_headers(headers: &[(String, String)]) -> Result<(
                     method = Some(value);
                 }
                 ":scheme" => {
-                    if seen_scheme {
+                    if scheme.is_some() {
                         return Err("h3 duplicate :scheme pseudo-header (RFC 9114 §4.3.1)");
                     }
-                    seen_scheme = true;
+                    scheme = Some(value);
                 }
                 ":path" => {
                     if seen_path {
@@ -863,6 +868,11 @@ pub fn validate_request_pseudo_headers(headers: &[(String, String)]) -> Result<(
             }
         } else {
             seen_regular = true;
+            // Track a `Host` field (case-insensitive) as the §4.3.1
+            // alternative to `:authority`.
+            if name.eq_ignore_ascii_case("host") {
+                seen_host = true;
+            }
         }
     }
 
@@ -875,7 +885,7 @@ pub fn validate_request_pseudo_headers(headers: &[(String, String)]) -> Result<(
     match method {
         None => Err("h3 missing mandatory :method pseudo-header (RFC 9114 §4.3.1)"),
         Some("CONNECT") => {
-            if seen_scheme || seen_path {
+            if scheme.is_some() || seen_path {
                 Err("h3 CONNECT request must omit :scheme/:path (RFC 9114 §4.4)")
             } else if !seen_authority {
                 Err("h3 CONNECT request missing :authority (RFC 9114 §4.4)")
@@ -884,11 +894,21 @@ pub fn validate_request_pseudo_headers(headers: &[(String, String)]) -> Result<(
             }
         }
         Some(_) => {
-            if seen_scheme && seen_path {
-                Ok(())
-            } else {
-                Err("h3 missing mandatory :scheme/:path pseudo-header (RFC 9114 §4.3.1)")
+            let Some(scheme) = scheme else {
+                return Err("h3 missing mandatory :scheme pseudo-header (RFC 9114 §4.3.1)");
+            };
+            if !seen_path {
+                return Err("h3 missing mandatory :path pseudo-header (RFC 9114 §4.3.1)");
             }
+            // §4.3.1: for a scheme with a mandatory authority component
+            // (http/https) the request MUST carry :authority OR a Host
+            // field. SESSION 22 #13 (owner ruling: strict).
+            let mandatory_authority =
+                scheme.eq_ignore_ascii_case("https") || scheme.eq_ignore_ascii_case("http");
+            if mandatory_authority && !seen_authority && !seen_host {
+                return Err("h3 http/https request missing :authority or Host (RFC 9114 §4.3.1)");
+            }
+            Ok(())
         }
     }
 }
@@ -4350,9 +4370,37 @@ mod tests {
             ("user-agent", "h3spec"),
         ]);
         assert!(validate_request_pseudo_headers(&ok).is_ok());
-        // Minimal valid request (no :authority, no regular fields).
-        let min = h(&[(":method", "GET"), (":scheme", "https"), (":path", "/")]);
+        // Minimal valid https request: :method/:scheme/:path + :authority
+        // (§4.3.1 makes :authority-or-Host mandatory for http/https).
+        let min = h(&[
+            (":method", "GET"),
+            (":scheme", "https"),
+            (":path", "/"),
+            (":authority", "h"),
+        ]);
         assert!(validate_request_pseudo_headers(&min).is_ok());
+    }
+
+    #[test]
+    fn pseudo_13_absent_authority_rejected_for_http_scheme() {
+        // #13 (owner ruling: strict) — an http/https request with neither
+        // :authority nor Host is malformed (RFC 9114 §4.3.1).
+        let neither = h(&[(":method", "GET"), (":scheme", "https"), (":path", "/")]);
+        assert!(
+            validate_request_pseudo_headers(&neither).is_err(),
+            "https request with no :authority and no Host must be rejected"
+        );
+        // The Host field is the §4.3.1 alternative to :authority.
+        let with_host = h(&[
+            (":method", "GET"),
+            (":scheme", "https"),
+            (":path", "/"),
+            ("host", "example.com"),
+        ]);
+        assert!(
+            validate_request_pseudo_headers(&with_host).is_ok(),
+            "Host is a valid alternative to :authority (§4.3.1)"
+        );
     }
 
     #[test]

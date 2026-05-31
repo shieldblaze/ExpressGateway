@@ -2418,14 +2418,20 @@ async fn h3h3_e2e_client_stop_sending_response_maps_client_gone() {
 }
 
 /// Cluster 4 / CASE 13 — the H3 client omits the `:authority`
-/// pseudo-header entirely. The gateway's `req.authority` is then empty,
-/// so `h3_to_h3_stream_resp` substitutes the configured SNI for the
-/// upstream request `:authority` (h3_bridge.rs :2876-2877 — the
-/// `if req.authority.is_empty()` TRUE branch). The request must still
-/// succeed end-to-end: 200, clean FIN, body byte-identical at the
-/// backend (an absent authority is a legitimate handled case here).
+/// pseudo-header entirely (and sends no `Host`). For the `https` scheme,
+/// RFC 9114 §4.3.1 makes `:authority`-or-`Host` MANDATORY, so this is a
+/// malformed request: the gateway MUST reset the request stream with
+/// `H3_MESSAGE_ERROR` and forward NOTHING upstream.
+///
+/// SESSION 22 (h3spec #13): this was previously a "succeeds via SNI
+/// substitution" case — coverage-only lenience (S7), not a deployment
+/// feature. The owner ruled it STRICT; this test now LOCKS the conformant
+/// rejection. (The upstream SNI fallback in `h3_to_h3_stream_resp` remains
+/// for the H1→H3 / H2→H3 paths, which build the upstream request from a
+/// different ingress and are NOT subject to this H3-client validation.)
+/// See `audit/h3spec/s22-findings.md`.
 #[tokio::test]
-async fn h3h3_e2e_absent_authority_substitutes_sni() {
+async fn h3h3_e2e_absent_authority_rejected_message_error() {
     let certs = generate_loopback_certs();
     let seen = BackendSeen::default();
     let (backend, bh) = spawn_h3_upstream(&certs, UpstreamMode::Echo, seen.clone()).await;
@@ -2457,20 +2463,32 @@ async fn h3h3_e2e_absent_authority_substitutes_sni() {
     let got = seen.body.lock().unwrap().clone();
     bh.abort();
 
-    assert_eq!(
+    // SESSION 22 #13 (RFC 9114 §4.3.1, owner-ruled strict): the malformed
+    // (no :authority, no Host) https request is rejected at the H3 ingress —
+    // the gateway resets the request stream (H3_MESSAGE_ERROR) and never
+    // dials the upstream, so the client sees NO :status and the backend
+    // receives NOTHING.
+    assert_ne!(
         out.status,
         Some(200),
-        "an absent :authority must still succeed (SNI substituted \
-         upstream); status={:?}",
+        "absent :authority (https) is malformed — must NOT yield 200"
+    );
+    assert!(
+        out.status.is_none(),
+        "no :status expected (the gateway resets the stream, not responds); got {:?}",
         out.status
     );
-    assert!(out.fin, "clean FIN expected for the absent-authority case");
     assert!(
-        got == payload,
-        "request body byte-identical at the backend even with the \
-         SNI-substituted authority"
+        out.reset || !out.fin,
+        "the request stream must be reset (H3_MESSAGE_ERROR), not cleanly completed (reset={}, fin={})",
+        out.reset,
+        out.fin
     );
-    assert_eq!(out.body, payload, "echoed response body byte-identical");
+    assert!(
+        got.is_empty(),
+        "a malformed request must NOT be forwarded upstream — backend saw {} body bytes",
+        got.len()
+    );
 }
 
 /// Cluster 4 / CASE 14 — the upstream emits a ZERO-LENGTH DATA frame
