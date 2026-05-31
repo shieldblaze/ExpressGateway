@@ -371,17 +371,22 @@ pub struct StreamRxBuf {
 ///   reason.
 #[derive(Debug)]
 pub enum FeedError {
-    /// Malformed frame or QPACK decode failure — reset the stream.
+    /// Malformed H3 frame structure — reset the stream.
     Decode(String),
     /// RFC 9114 §4.1/§7.2 connection-fatal framing violation on a request
     /// stream → the caller closes the connection with `H3_FRAME_UNEXPECTED`.
     FrameUnexpected(&'static str),
+    /// SESSION 22 (h3spec #22) — a QPACK field-section decode failure
+    /// (invalid static index, unsupported dynamic-table reference, …). RFC
+    /// 9204 §2.2 makes this a CONNECTION error → the caller closes with
+    /// `QPACK_DECOMPRESSION_FAILED`.
+    QpackDecompressionFailed(String),
 }
 
 impl std::fmt::Display for FeedError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            FeedError::Decode(s) => write!(f, "{s}"),
+            FeedError::Decode(s) | FeedError::QpackDecompressionFailed(s) => write!(f, "{s}"),
             FeedError::FrameUnexpected(r) => write!(f, "{r}"),
         }
     }
@@ -425,9 +430,13 @@ impl StreamRxBuf {
                     self.buf.drain(..consumed);
                     self.phase = RxPhase::Body;
                     let decoder = QpackDecoder::new();
-                    let headers = decoder
-                        .decode(&header_block)
-                        .map_err(|e| FeedError::Decode(format!("qpack decode: {e}")))?;
+                    let headers = decoder.decode(&header_block).map_err(|e| {
+                        // #22 — a QPACK field-section decode failure is a
+                        // CONNECTION error QPACK_DECOMPRESSION_FAILED (RFC
+                        // 9204 §2.2), distinct from a malformed H3 frame
+                        // (stream-level) above.
+                        FeedError::QpackDecompressionFailed(format!("qpack decode: {e}"))
+                    })?;
                     return Ok(Some(headers));
                 }
                 // #11 — DATA before HEADERS on a request stream is
@@ -4566,6 +4575,25 @@ mod tests {
                 matches!(rx.feed(&bytes), Err(FeedError::FrameUnexpected(_))),
                 "{f:?} on a request stream must be FrameUnexpected"
             );
+        }
+    }
+
+    #[test]
+    fn feed_22_invalid_qpack_static_index_is_decompression_failed() {
+        // #22 — a HEADERS frame whose QPACK block indexes an out-of-range
+        // static-table entry (200 ≫ table size) is QPACK_DECOMPRESSION_FAILED
+        // (a connection error, RFC 9204 §2.2), NOT a stream-level decode.
+        // Block: prefix 00 00, then indexed-static field line for index 200
+        // (0xFF = 0xC0|0x3F, then varint continuation 0x89 0x01 = +137 = 200).
+        let block = Bytes::from(vec![0x00, 0x00, 0xFF, 0x89, 0x01]);
+        let headers_frame = encode_frame(&H3Frame::Headers {
+            header_block: block,
+        })
+        .unwrap();
+        let mut rx = StreamRxBuf::default();
+        match rx.feed(&headers_frame) {
+            Err(FeedError::QpackDecompressionFailed(_)) => {}
+            other => panic!("expected QpackDecompressionFailed, got {other:?}"),
         }
     }
 

@@ -99,6 +99,14 @@ pub const H3_MESSAGE_ERROR: u64 = 0x010e;
 /// on a request stream (#21 + §7.2).
 pub const H3_FRAME_UNEXPECTED: u64 = 0x0105;
 
+/// SESSION 22 (h3spec #22) — RFC 9204 §8.3 `QPACK_DECOMPRESSION_FAILED`
+/// (`0x0200`): the decoder failed to interpret an encoded field section
+/// (e.g. an invalid static-table index, or a dynamic-table reference the
+/// static-only decoder cannot satisfy). RFC 9204 §2.2 mandates this be a
+/// **connection** error — emitted via `conn.close(true, …)` (an HTTP/3
+/// application close).
+pub const QPACK_DECOMPRESSION_FAILED: u64 = 0x0200;
+
 /// Upper bound on how long [`graceful_h3_shutdown`] will pump the
 /// connection after issuing `close()` before giving up. Quiche enters
 /// the draining state for `3 * PTO` (RFC 9000 §10.1); 500 ms is
@@ -827,6 +835,24 @@ fn poll_h3(
             drain_body_stream(conn, sid, rx_by_stream, body_tx_by_stream, body_pending);
             continue;
         }
+        // SESSION 22 — the HTTP/3 request decoder (incl. the §4.1/§7.2
+        // frame-sequencing guards in `StreamRxBuf::feed`) applies ONLY to
+        // client-initiated BIDIRECTIONAL streams (request streams, id % 4 ==
+        // 0). Client UNIDIRECTIONAL streams (id % 4 == 2 — the H3 control
+        // stream and the QPACK encoder/decoder streams) begin with a
+        // stream-TYPE varint + control frames, NOT a request: feeding them
+        // through the request decoder would mis-read the control-stream type
+        // byte (0x00) as a DATA frame and wrongly close the connection with
+        // H3_FRAME_UNEXPECTED. The gateway does not yet enforce client
+        // control-stream rules (h3spec #16–20/#24 — carried to S23); until
+        // then it DRAINS + discards client uni streams so they neither block
+        // flow control nor trip the request-stream guards. (Server-initiated
+        // streams never appear here — the gateway writes those.)
+        if sid % 4 != 0 {
+            let mut sink = [0u8; 4096];
+            while let Ok((_n, _fin)) = conn.stream_recv(sid, &mut sink) {}
+            continue;
+        }
         let mut buf = [0u8; 8192];
         loop {
             match conn.stream_recv(sid, &mut buf) {
@@ -1148,6 +1174,26 @@ fn poll_h3(
                                 Ok(()) | Err(quiche::Error::Done) => {}
                                 Err(e) => {
                                     tracing::debug!(error = %e, "conn.close (H3_FRAME_UNEXPECTED)");
+                                }
+                            }
+                            rx_by_stream.remove(&sid);
+                            break;
+                        }
+                        // SESSION 22 (h3spec #22): a QPACK field-section
+                        // decode failure is a CONNECTION error
+                        // QPACK_DECOMPRESSION_FAILED (RFC 9204 §2.2).
+                        // app=true (application close — see the
+                        // FrameUnexpected arm above).
+                        Err(FeedError::QpackDecompressionFailed(e)) => {
+                            tracing::warn!(
+                                error = %e,
+                                stream_id = sid,
+                                "SESSION 22: QPACK_DECOMPRESSION_FAILED — closing connection (RFC 9204 §2.2)"
+                            );
+                            match conn.close(true, QPACK_DECOMPRESSION_FAILED, b"qpack decompression failed") {
+                                Ok(()) | Err(quiche::Error::Done) => {}
+                                Err(e) => {
+                                    tracing::debug!(error = %e, "conn.close (QPACK_DECOMPRESSION_FAILED)");
                                 }
                             }
                             rx_by_stream.remove(&sid);
