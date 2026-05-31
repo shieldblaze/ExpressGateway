@@ -859,3 +859,211 @@ async fn inc1_interop_handrolled_lbh3_client_vs_quiche_server() {
          resp :status 200 + body decoded by lb_h3). 69 wire tests stay green across INC-2."
     );
 }
+
+// ----------------------------------------------------------------------
+// EXPERIMENT 4 — INC-2 SHAPE: can the EXISTING hand-rolled egress (raw
+// `conn.stream_send` of lb_h3-encoded HEADERS+DATA on the request bidi
+// stream) coexist with quiche::h3 OWNING the ingress (poll/recv_body +
+// its own server control/QPACK uni streams) on the SAME connection?
+//
+// If YES → INC-2 can migrate ONLY the ingress (poll_h3 recv/feed →
+// quiche::h3 poll/recv_body), leaving the entire RespEvent/StreamTx/
+// drain_streams_to_conn egress UNTOUCHED → a small, standalone, gate-
+// green increment, with the egress restructure deferred to INC-3.
+// If NO → INC-2 must fuse with INC-3 (migrate egress to send_response/
+// send_body too) — a much larger single step.
+//
+// This mirrors the INC-2-ingress-only design EXACTLY: server quiche::h3
+// for ingress, raw lb_h3 stream_send for egress, hand-rolled lb_h3
+// client (the production-relevant existing test client).
+// ----------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn inc1_hybrid_quiche_ingress_handrolled_egress() {
+    use lb_h3::{H3Frame, QpackDecoder, QpackEncoder, decode_frame, encode_frame};
+    use quiche::h3::NameValue;
+
+    let certs = gen_certs();
+    let mut s_cfg = server_cfg(&certs);
+    let mut c_cfg = client_cfg();
+
+    let s_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let c_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let s_addr = s_sock.local_addr().unwrap();
+    let c_addr = c_sock.local_addr().unwrap();
+
+    let s_scid = scid();
+    let c_scid = scid();
+    let mut server = quiche::accept(&s_scid, None, s_addr, c_addr, &mut s_cfg).unwrap();
+    let mut client =
+        quiche::connect(Some("inc1.test"), &c_scid, c_addr, s_addr, &mut c_cfg).unwrap();
+
+    let mut s_h3: Option<h3::Connection> = None;
+    let h3_cfg = lb_quic::h3_config::build_server_h3_config().unwrap();
+
+    // Pre-build the hand-rolled response via the PRODUCTION egress
+    // encoder (h3_bridge::encode_h3_response → HEADERS(:status 200) +
+    // DATA) — exactly what the existing StreamTx egress emits, sent raw
+    // via conn.stream_send (NOT quiche::h3 send_response).
+    const RESP_BODY: &[u8] = b"hybrid-egress-ok";
+    let resp_bytes: Vec<u8> = lb_quic::h3_bridge::encode_h3_response(200, RESP_BODY).unwrap();
+
+    const STREAM_ID: u64 = 0;
+    let mut request_sent = false;
+    let mut rx_tail: Vec<u8> = Vec::new();
+    let mut decoded_status: Option<u16> = None;
+    let mut decoded_body: Vec<u8> = Vec::new();
+    let mut server_saw_path = false;
+    let mut egress_done = false;
+
+    let mut s_out = vec![0u8; 65535];
+    let mut c_out = vec![0u8; 65535];
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+
+    loop {
+        if tokio::time::Instant::now() > deadline {
+            panic!(
+                "hybrid timed out: saw_path={server_saw_path}, status={decoded_status:?}, \
+                 body={}, client_closed={}",
+                decoded_body.len(),
+                client.is_closed()
+            );
+        }
+        flush(&mut server, &s_sock, &mut s_out);
+        flush(&mut client, &c_sock, &mut c_out);
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        drain_into(&mut server, &s_sock, s_addr);
+        drain_into(&mut client, &c_sock, c_addr);
+        if client.is_closed() {
+            panic!(
+                "client closed by server during hybrid egress: {:?}",
+                client.peer_error()
+            );
+        }
+
+        // hand-rolled lb_h3 client: send GET, decode response.
+        if !request_sent && client.is_established() {
+            let hb = QpackEncoder::new()
+                .encode(&[
+                    (":method".to_string(), "GET".to_string()),
+                    (":scheme".to_string(), "https".to_string()),
+                    (":authority".to_string(), "inc1.test".to_string()),
+                    (":path".to_string(), "/hybrid".to_string()),
+                ])
+                .unwrap();
+            let frame = encode_frame(&H3Frame::Headers { header_block: hb }).unwrap();
+            let mut pos = 0;
+            while pos < frame.len() {
+                match client.stream_send(STREAM_ID, &frame[pos..], true) {
+                    Ok(n) => pos += n,
+                    Err(quiche::Error::Done) => break,
+                    Err(e) => panic!("client stream_send: {e}"),
+                }
+            }
+            request_sent = true;
+        }
+        if client.is_established() {
+            for sid in client.readable().collect::<Vec<u64>>() {
+                if sid != STREAM_ID {
+                    let mut sink = [0u8; 4096];
+                    while client.stream_recv(sid, &mut sink).is_ok() {}
+                    continue;
+                }
+                let mut chunk = [0u8; 8192];
+                while let Ok((n, _fin)) = client.stream_recv(sid, &mut chunk) {
+                    rx_tail.extend_from_slice(&chunk[..n]);
+                }
+            }
+            loop {
+                match decode_frame(&rx_tail, 1 << 20) {
+                    Ok((H3Frame::Headers { header_block }, consumed)) => {
+                        rx_tail.drain(..consumed);
+                        for (n, v) in QpackDecoder::new().decode(&header_block).unwrap() {
+                            if n == ":status" {
+                                decoded_status = Some(v.parse().unwrap());
+                            }
+                        }
+                    }
+                    Ok((H3Frame::Data { payload }, consumed)) => {
+                        rx_tail.drain(..consumed);
+                        decoded_body.extend_from_slice(&payload);
+                    }
+                    Ok((_o, consumed)) => {
+                        rx_tail.drain(..consumed);
+                    }
+                    Err(lb_h3::H3Error::Incomplete) => break,
+                    Err(e) => panic!("client decode_frame: {e}"),
+                }
+            }
+        }
+
+        // SERVER: quiche::h3 ingress + RAW lb_h3 egress on the same conn.
+        if s_h3.is_none() && server.is_established() {
+            s_h3 = Some(h3::Connection::with_transport(&mut server, &h3_cfg).unwrap());
+        }
+        let mut respond_to: Option<u64> = None;
+        if let Some(h) = s_h3.as_mut() {
+            loop {
+                match h.poll(&mut server) {
+                    Ok((sid, h3::Event::Headers { list, .. })) => {
+                        if list
+                            .iter()
+                            .any(|hd| hd.name() == b":path" && hd.value() == b"/hybrid")
+                        {
+                            server_saw_path = true;
+                        }
+                        respond_to = Some(sid);
+                    }
+                    Ok(_) => {}
+                    Err(h3::Error::Done) => break,
+                    Err(e) => panic!("server poll: {e:?}"),
+                }
+            }
+        }
+        // RAW egress: write the hand-rolled response bytes directly on the
+        // request stream via conn.stream_send (bypassing quiche::h3's
+        // send_response/send_body). This is the hybrid under test.
+        if let Some(sid) = respond_to {
+            if !egress_done {
+                let mut pos = 0;
+                while pos < resp_bytes.len() {
+                    let fin = true;
+                    match server.stream_send(sid, &resp_bytes[pos..], fin) {
+                        Ok(n) => pos += n,
+                        Err(quiche::Error::Done) => break,
+                        Err(e) => panic!("server RAW stream_send (hybrid egress): {e}"),
+                    }
+                }
+                if pos >= resp_bytes.len() {
+                    egress_done = true;
+                }
+            }
+        }
+
+        server.on_timeout();
+        client.on_timeout();
+
+        if decoded_status.is_some() && decoded_body.len() >= RESP_BODY.len() {
+            break;
+        }
+    }
+
+    // ANSWER: quiche::h3 ingress + raw hand-rolled stream_send egress
+    // COEXIST on one connection. INC-2 can migrate ingress only.
+    assert!(
+        server_saw_path,
+        "quiche::h3 ingress did not surface the request"
+    );
+    assert_eq!(
+        decoded_status,
+        Some(200),
+        "hand-rolled raw egress response not decoded by the client — hybrid FAILED"
+    );
+    assert_eq!(decoded_body, RESP_BODY, "hybrid egress body corrupted");
+    eprintln!(
+        "INC-1 HYBRID EVIDENCE: quiche::h3 ingress (poll/recv_body + its own \
+         control/QPACK streams) COEXISTS with raw lb_h3 conn.stream_send egress \
+         on the same connection → INC-2 = ingress-only (small, standalone), \
+         egress restructure deferred to INC-3."
+    );
+}
