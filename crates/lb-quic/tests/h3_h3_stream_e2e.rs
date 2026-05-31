@@ -2546,12 +2546,11 @@ async fn drive_raw_request_close(
             let _ = conn.stream_send(0, request_on_stream0, true);
             sent = true;
         }
-        match tokio::time::timeout(Duration::from_millis(100), sock.recv_from(&mut in_buf)).await {
-            Ok(Ok((n, from))) => {
-                let info = quiche::RecvInfo { from, to: local };
-                let _ = conn.recv(&mut in_buf[..n], info);
-            }
-            _ => {}
+        if let Ok(Ok((n, from))) =
+            tokio::time::timeout(Duration::from_millis(100), sock.recv_from(&mut in_buf)).await
+        {
+            let info = quiche::RecvInfo { from, to: local };
+            let _ = conn.recv(&mut in_buf[..n], info);
         }
     }
     conn.peer_error().map(|e| (e.error_code, e.is_app))
