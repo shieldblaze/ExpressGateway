@@ -44,7 +44,7 @@ Deleting `lb-h3` requires migrating **both** ⇒ realistically **2–3 sessions*
 
 ## 5. Gate / hygiene
 
-Branch changes are **additive** (INC-0 infra not wired to the live path; INC-1 tests) — the live H3 path is byte-identical to the 1454/0 baseline (R3 no-regression by construction). A full-workspace `--all-features` no-regression gate is run as the confirming evidence (`s23-noregress-gate.log`; result read only from the completed run per R15 — expected ≈ 1454 baseline + INC-0 unit (+1) + INC-1 experiments (+4)). clippy `--all-features -D warnings` + fmt clean throughout. **Not promoted** (R11 — PARTIAL): main keeps the S22-hardened hand-rolled stack.
+Branch changes are **additive** (INC-0 infra not wired to the live path; INC-1 tests) — the live H3 path is byte-identical to the 1454/0 baseline (R3 no-regression by construction). The full-workspace `--all-features` no-regression gate confirms it: **1459 passed / 0 failed** (completed log `s23-noregress-gate.log`, exit 0, R15) = the 1454 baseline + INC-0 unit (+1) + INC-1 experiments (+4), exactly accounting for the additions with **zero regressions**. clippy `--all-features -D warnings` + fmt clean throughout. **Not promoted** (R11 — PARTIAL): main keeps the S22-hardened hand-rolled stack.
 
 ---
 
