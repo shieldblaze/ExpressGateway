@@ -136,7 +136,15 @@ this injector. NOT cleared — my injector likely doesn't hit the exact
 contention window. S21: a more targeted trigger (concurrent TLS renegotiation /
 precise mid-413-flush abort). Stated, not asterisked.
 
-## 6. R1 ×3 regression gate — `PENDING-GATE` (running; fmt ✓, clippy ✓; test ×3 in progress)
+## 6. R1 ×3 regression gate — GREEN
+
+`fmt --all --check` clean; `clippy --workspace --all-targets --all-features -D
+warnings` exit 0; `cargo test --workspace --all-features` ×3 ALL-PASS (exit 0
+each, **0 failed** across all suites): **1432 passed / 0 failed / 18 ignored**
+per pass = baseline 1392 + the 40 new `lb-soak` harness unit tests (ADDITIVE,
+zero regression to the prior 1392). The suite is gate-clean and does not weaken
+any existing gate (R3). (Passes 1–2 from the first gate run — both read to
+completion, exit 0, 0 failures — + a fresh pass 3 confirming.)
 
 ## 7. Independent verification (R13) — author ≠ verifier
 
@@ -161,7 +169,19 @@ A separate agent independently reproduced both findings with its OWN runs
 
 ## VERDICT
 **SESSION 20 COMPLETE — suite built, soak run, 2 findings characterized (0
-fixed, 2 carried to S21).** (Both findings are STABILITY-tier, fully
-mechanism-proven; per R6 the default is characterize+carry — neither is a
-cheap one-line fix that lands safely without its own design + R13 regression
-proof, which is S21's job.) `PENDING` final gate + verifier confirmation.
+fixed, 2 carried to S21).**
+- The chaos/soak suite now EXISTS (`crates/lb-soak`, permanent infra), is
+  self-tested (40 unit tests in the ×3 gate), and ran the first full-system
+  soak to completion (run2: 7 scenarios × 90 min × 361 samples).
+- The system upholds its R8 bounded-state invariants under sustained hostile
+  load: all clean scenarios BOUNDED, panic_total=0, CVE-2023-44487 defense held
+  under 227M rapid-resets, slowloris/conn-flood/stream-flood all bounded.
+- 2 real defects found, both mechanism-proven + independently reproduced (R13)
+  + tiered, carried to S21 with repro + fix shape: F-S20-1 (Mode B 4-concurrent-
+  stream relay stall — liveness, no state leak) and F-S20-2 (Mode A passthrough
+  flow/fd retention, no idle reclaim). Per R6 the default for soak findings is
+  characterize+carry; neither is a one-line fix that lands safely without its
+  own design + R13 regression proof (S21's job).
+- R1 ×3 gate GREEN (§6); no regression (R3). Promoted to main `--no-ff` (R11).
+- Native QUIC complete + soak-suite-exists ≠ production-ready until S21 fixes
+  the findings and a clean re-soak passes.
