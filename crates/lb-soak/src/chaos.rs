@@ -199,18 +199,38 @@ pub async fn run_oversize_teardown(
     // ~80 KiB of header bytes — exceeds the default 64 KiB max_header_list_size.
     let big_value = "a".repeat(80 * 1024);
     let mut workers = Vec::new();
-    for _ in 0..concurrency {
+    for w in 0..concurrency {
         let stats = Arc::clone(&stats);
         let cancel = cancel.clone();
         let connector = connector.clone();
         let sni = sni.clone();
         let big_value = big_value.clone();
         workers.push(tokio::spawn(async move {
+            // CF-S19 (S21): SHARPER teardown-vs-error-head race. The error head
+            // for every `error_response` (4xx/413/502) flows through the SAME
+            // buffered `Bytes` body returned to hyper (h2_proxy.rs::error_response),
+            // so a cheap oversize-HEADER 4xx exercises the identical
+            // response-flush-vs-teardown window the 413 would (the 413-only code
+            // is the >64 MiB body buffering BEFORE the flush, unrelated to
+            // teardown timing — and flooding 64 MiB bodies would saturate the
+            // box, the S20 anti-pattern). We sweep the abort delay across the
+            // sub-millisecond..few-ms window where the gateway is mid-flush, to
+            // maximise the chance of catching any teardown race.
+            let mut iter = w as u64;
             while !cancel.is_cancelled() {
-                let r = oversize_once(&connector, target, &sni, &big_value).await;
-                match r {
+                iter = iter.wrapping_add(1);
+                // 0,1,2,4,8 ms cycle — 0ms = drop the instant send_request is
+                // issued (head not yet read), the tightest race.
+                let abort_after = match iter % 5 {
+                    0 => Duration::from_millis(0),
+                    1 => Duration::from_millis(1),
+                    2 => Duration::from_millis(2),
+                    3 => Duration::from_millis(4),
+                    _ => Duration::from_millis(8),
+                };
+                match oversize_once(&connector, target, &sni, &big_value, abort_after).await {
                     Ok(true) => stats.ok(),   // saw a clean 4xx head
-                    Ok(false) => stats.err(), // teardown raced the head
+                    Ok(false) => stats.err(), // teardown raced the head (expected, bounded)
                     Err(_) => stats.err(),
                 }
             }
@@ -226,6 +246,7 @@ async fn oversize_once(
     target: SocketAddr,
     sni: &str,
     big_value: &str,
+    abort_after: Duration,
 ) -> anyhow::Result<bool> {
     let tcp = tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(target)).await??;
     let server_name = rustls_pki_types::ServerName::try_from(sni.to_string())?;
@@ -239,12 +260,14 @@ async fn oversize_once(
         .uri(format!("https://{sni}/"))
         .header("x-oversize", big_value)
         .body(Full::new(Bytes::new()))?;
-    // Race the (likely 4xx) response against an immediate teardown: a very
-    // short budget then drop everything. Returns whether we observed a head.
-    let saw_head = matches!(
-        tokio::time::timeout(Duration::from_millis(80), sender.send_request(req)).await,
-        Ok(Ok(_resp))
-    );
+    // Race the (likely 4xx) error head against a TIGHT teardown: issue the
+    // request, then abort the connection after `abort_after` (0ms = drop while
+    // the head is still in flight). Returns whether we observed a clean head.
+    let saw_head = tokio::select! {
+        biased;
+        () = tokio::time::sleep(abort_after) => false,
+        r = sender.send_request(req) => r.is_ok(),
+    };
     drop(sender);
     driver.abort();
     Ok(saw_head)
