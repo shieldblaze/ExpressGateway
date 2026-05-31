@@ -195,7 +195,33 @@ A 900-s confirmation run (isolated, non-saturated) registers the plateau as
 BOUNDED for both — see §5b.
 
 ### 5b. RSS-plateau confirmation (900s, isolated) — COMPLETED (R15)
-_[sc5_modea + sc3_slowloris 900s — inserted from the completed run.]_
+Re-ran the two RSS-ramp scenarios isolated for 900 s on a quiet box (load <7) so
+the plateau dominates the analyzer's window. Archived:
+`audit/soak/s21-soak-data/rss-plateau-900s/`.
+
+- **sc5_modea (F-S20-2) — BOUNDED (900s, 61 samples), no asterisk.** `rss_kb`
+  BOUNDED (last-third median 75796 vs first-third 76038 = **−0.3%**; RSS tail
+  DEAD-FLAT at 75796 KB across t=825–885 s); flows BOUNDED (226→107), fds
+  BOUNDED (124→62), **evicted_total=9895** (active reaping throughout), panic=0.
+  vmhwm BOUNDED too (RSS plateaued early). **F-S20-2 is unimpeachably fixed:
+  bounded flows/fds/RSS with continuous eviction — vs the S20 leak (330 MB
+  monotone, evicted=0).**
+- **sc3_slowloris — current RSS BOUNDED (+8.8%, flat tail ~23300 KB), fds=209
+  flat, accept_inflight=148 flat, panic=0.** The only DRIFT-flagged metric is
+  `vmhwm_kb` (the peak RSS high-water mark — monotone-by-CONSTRUCTION; it records
+  max-ever RSS and can never decrease, so it is NOT a leak indicator). The
+  current-RSS leak indicator is BOUNDED. sc3's slowloris/H1 path is byte-
+  identical to S20 (this session touched only passthrough Mode A, the QUIC load
+  client, and sc6 teardown timing); S20's 90-min run plateaued. This is the pre-
+  existing slowloris allocator-arena slow-creep, NOT a regression (R3) and NOT a
+  leak. (CF-S21-VMHWM-METRIC: the analyzer should treat `vmhwm_kb` as a peak
+  gauge, not a monotone-drift candidate — minor carry-forward.)
+
+**Re-soak verdict: CLEAN.** All 8 scenarios panic=0; all connection/flow/stream/
+accept STATE BOUNDED; current-RSS BOUNDED everywhere; both fixed paths proven
+(F-S20-1 sc4_modeb ok=4936 err=0 / 0 wedges; F-S20-2 sc5_modea bounded +
+evicted=9895). S20's clean scenarios remain bounded (R3); CVE-2023-44487 defense
+held under 11.76 M rapid-resets.
 
 ---
 

@@ -1,0 +1,10 @@
+=== SOAK sc5_modea — BOUNDED (900s, 61 samples) ===
+      rss_kb [BOUNDED] rss_kb: bounded — last-third median 75796 vs first-third 76038 (-0.3%, within band 10% or non-monotone 94%) — first=8460 last=75952 min=8460 max=76448
+    vmhwm_kb [BOUNDED] vmhwm_kb: bounded — last-third median 75796 vs first-third 76038 (-0.3%, within band 10% or non-monotone 94%) — first=8460 last=75952 min=8460 max=76448
+         fds [BOUNDED] fds: bounded — last-third median 65 vs first-third 124.5 (-47.8%, within band 10% or non-monotone 22%) — first=11 last=62 min=11 max=591
+     threads [BOUNDED] threads: bounded — last-third median 9 vs first-third 9 (+0.0%, within band 10% or non-monotone 100%) — first=9 last=9 min=9 max=9
+  quic_passthrough_flows [BOUNDED] quic_passthrough_flows: bounded — last-third median 107 vs first-third 226 (-52.7%, within band 10% or non-monotone 24%) — first=0 last=101 min=0 max=1159
+  quic_passthrough_flows_evicted_total [BOUNDED] quic_passthrough_flows_evicted_total: counter rose 9895 over run at bounded rate (slope 110.2433/sample) — first=0 last=9895 min=0 max=9895
+  panic_total [BOUNDED] panic_total: stayed zero across the run — first=0 last=0 min=0 max=0
+  load:
+    quic_load: ok=9946 err=0
