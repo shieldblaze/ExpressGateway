@@ -164,6 +164,15 @@ pub fn quic_mode_b(
 
 /// Mode A QUIC passthrough — a top-level `[passthrough]` block routing flows to
 /// `backend`. TLS is end-to-end client↔backend; the gateway never decrypts.
+///
+/// `mint_retry = false` is emitted unconditionally: the soak drives REAL
+/// application streams end-to-end through Mode A, and with `mint_retry = true`
+/// the LB-minted Retry triggers CF-S15-PASSTHROUGH-RETRY-ODCID (the backend
+/// rejects the post-Retry `original_destination_connection_id`, so the client
+/// is granted 0 streams). `false` forwards the Initial verbatim so the
+/// end-to-end handshake completes and streams flow. `flow_idle_timeout_ms` is
+/// the F-S20-2 idle-flow reaper window (short for the soak so reclamation is
+/// visible within the run; the product default is 60 s).
 #[must_use]
 pub fn passthrough_mode_a(
     bind: SocketAddr,
@@ -171,16 +180,20 @@ pub fn passthrough_mode_a(
     metrics: SocketAddr,
     retry_secret: &Path,
     max_quic_connections: usize,
+    flow_idle_timeout_ms: u64,
 ) -> String {
     format!(
         "{rt}[passthrough]\n\
          bind_addr = \"{bind}\"\n\
          backends = [\"{backend}\"]\n\
          retry_secret_path = \"{retry}\"\n\
-         max_quic_connections = {max_quic_connections}\n\n\
+         max_quic_connections = {max_quic_connections}\n\
+         mint_retry = false\n\
+         flow_idle_timeout_ms = {idle_ms}\n\n\
          {obs}",
         rt = runtime_block(),
         retry = retry_secret.display(),
+        idle_ms = flow_idle_timeout_ms,
         obs = observability_block(metrics),
     )
 }
@@ -269,9 +282,12 @@ mod tests {
             addr(9090),
             Path::new("/tmp/r"),
             100_000,
+            10_000,
         );
         assert!(toml.contains("[passthrough]"));
         assert!(toml.contains("bind_addr = \"127.0.0.1:8444\""));
+        assert!(toml.contains("mint_retry = false"));
+        assert!(toml.contains("flow_idle_timeout_ms = 10000"));
         assert!(
             !toml.contains("[[listeners]]"),
             "Mode A needs no listener block"

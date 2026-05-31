@@ -468,9 +468,13 @@ async fn setup_quic(
         client_sni = "soak-front".to_string();
         (modeb_gauges(), modeb_kinds())
     } else {
-        // Mode A: end-to-end; client trusts the BACKEND cert.
+        // Mode A: end-to-end; client trusts the BACKEND cert. F-S20-2: a
+        // short idle-flow reaper window (overridable) so reclamation is
+        // visible within a bounded soak; the product default is 60s.
         let retry = workdir.join("retry.bin");
-        let toml = config_gen::passthrough_mode_a(listen, backend, metrics, &retry, 100_000);
+        let idle_ms = env_usize("QUIC_FLOW_IDLE_MS", 10_000) as u64;
+        let toml =
+            config_gen::passthrough_mode_a(listen, backend, metrics, &retry, 100_000, idle_ms);
         std::fs::write(&cfg, toml)?;
         client_ca = backend_certs.ca.clone();
         client_sni = "soak-backend".to_string();
