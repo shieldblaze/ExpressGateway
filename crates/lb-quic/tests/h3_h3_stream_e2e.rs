@@ -2418,14 +2418,20 @@ async fn h3h3_e2e_client_stop_sending_response_maps_client_gone() {
 }
 
 /// Cluster 4 / CASE 13 — the H3 client omits the `:authority`
-/// pseudo-header entirely. The gateway's `req.authority` is then empty,
-/// so `h3_to_h3_stream_resp` substitutes the configured SNI for the
-/// upstream request `:authority` (h3_bridge.rs :2876-2877 — the
-/// `if req.authority.is_empty()` TRUE branch). The request must still
-/// succeed end-to-end: 200, clean FIN, body byte-identical at the
-/// backend (an absent authority is a legitimate handled case here).
+/// pseudo-header entirely (and sends no `Host`). For the `https` scheme,
+/// RFC 9114 §4.3.1 makes `:authority`-or-`Host` MANDATORY, so this is a
+/// malformed request: the gateway MUST reset the request stream with
+/// `H3_MESSAGE_ERROR` and forward NOTHING upstream.
+///
+/// SESSION 22 (h3spec #13): this was previously a "succeeds via SNI
+/// substitution" case — coverage-only lenience (S7), not a deployment
+/// feature. The owner ruled it STRICT; this test now LOCKS the conformant
+/// rejection. (The upstream SNI fallback in `h3_to_h3_stream_resp` remains
+/// for the H1→H3 / H2→H3 paths, which build the upstream request from a
+/// different ingress and are NOT subject to this H3-client validation.)
+/// See `audit/h3spec/s22-findings.md`.
 #[tokio::test]
-async fn h3h3_e2e_absent_authority_substitutes_sni() {
+async fn h3h3_e2e_absent_authority_rejected_message_error() {
     let certs = generate_loopback_certs();
     let seen = BackendSeen::default();
     let (backend, bh) = spawn_h3_upstream(&certs, UpstreamMode::Echo, seen.clone()).await;
@@ -2457,20 +2463,153 @@ async fn h3h3_e2e_absent_authority_substitutes_sni() {
     let got = seen.body.lock().unwrap().clone();
     bh.abort();
 
-    assert_eq!(
+    // SESSION 22 #13 (RFC 9114 §4.3.1, owner-ruled strict): the malformed
+    // (no :authority, no Host) https request is rejected at the H3 ingress —
+    // the gateway resets the request stream (H3_MESSAGE_ERROR) and never
+    // dials the upstream, so the client sees NO :status and the backend
+    // receives NOTHING.
+    assert_ne!(
         out.status,
         Some(200),
-        "an absent :authority must still succeed (SNI substituted \
-         upstream); status={:?}",
+        "absent :authority (https) is malformed — must NOT yield 200"
+    );
+    assert!(
+        out.status.is_none(),
+        "no :status expected (the gateway resets the stream, not responds); got {:?}",
         out.status
     );
-    assert!(out.fin, "clean FIN expected for the absent-authority case");
     assert!(
-        got == payload,
-        "request body byte-identical at the backend even with the \
-         SNI-substituted authority"
+        out.reset || !out.fin,
+        "the request stream must be reset (H3_MESSAGE_ERROR), not cleanly completed (reset={}, fin={})",
+        out.reset,
+        out.fin
     );
-    assert_eq!(out.body, payload, "echoed response body byte-identical");
+    assert!(
+        got.is_empty(),
+        "a malformed request must NOT be forwarded upstream — backend saw {} body bytes",
+        got.len()
+    );
+}
+
+/// SESSION 22 — drive a RAW (hand-crafted) request stream through the real
+/// H3 listener and return the gateway-initiated connection-close as
+/// `(error_code, is_app)` from `conn.peer_error()`, or `None` if it never
+/// closed. Reuses this file's quiche-client plumbing. When `open_control`
+/// is set the client ALSO opens a unidirectional control stream (type
+/// `0x00` + a SETTINGS frame) so the gateway's uni-stream drain gate in
+/// `poll_h3` is exercised (the request decoder must NOT trip on it).
+async fn drive_raw_request_close(
+    gateway: SocketAddr,
+    ca: &std::path::Path,
+    request_on_stream0: &[u8],
+    open_control: bool,
+    overall: Duration,
+) -> Option<(u64, bool)> {
+    let sock = UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
+        .await
+        .unwrap();
+    let local = sock.local_addr().unwrap();
+    let mut ccfg = build_client_config(ca);
+    let scid = random_scid();
+    let scid_ref = quiche::ConnectionId::from_ref(&scid);
+    let mut conn = quiche::connect(Some(TEST_SNI), &scid_ref, local, gateway, &mut ccfg).unwrap();
+    let mut in_buf = vec![0u8; MAX_UDP];
+    let mut out_buf = vec![0u8; MAX_UDP];
+    let mut sent = false;
+    let deadline = tokio::time::Instant::now() + overall;
+    while tokio::time::Instant::now() < deadline {
+        loop {
+            match conn.send(&mut out_buf) {
+                Ok((n, info)) => {
+                    let _ = sock.send_to(out_buf.get(..n).unwrap_or(&[]), info.to).await;
+                }
+                Err(quiche::Error::Done) => break,
+                Err(_) => break,
+            }
+        }
+        if let Some(e) = conn.peer_error() {
+            return Some((e.error_code, e.is_app));
+        }
+        if conn.is_closed() {
+            break;
+        }
+        if conn.is_established() && !sent {
+            if open_control {
+                // client-initiated unidirectional control stream (id 2):
+                // stream-type 0x00 then a SETTINGS frame.
+                let mut ctrl = vec![0x00u8];
+                ctrl.extend_from_slice(
+                    &encode_frame(&H3Frame::Settings { params: vec![] }).unwrap(),
+                );
+                let _ = conn.stream_send(2, &ctrl, false);
+            }
+            let _ = conn.stream_send(0, request_on_stream0, true);
+            sent = true;
+        }
+        if let Ok(Ok((n, from))) =
+            tokio::time::timeout(Duration::from_millis(100), sock.recv_from(&mut in_buf)).await
+        {
+            let info = quiche::RecvInfo { from, to: local };
+            let _ = conn.recv(&mut in_buf[..n], info);
+        }
+    }
+    conn.peer_error().map(|e| (e.error_code, e.is_app))
+}
+
+/// SESSION 22 (h3spec #11) — a DATA frame before HEADERS on a request
+/// stream is a CONNECTION error H3_FRAME_UNEXPECTED (0x0105), an APPLICATION
+/// close (RFC 9114 §4.1/§8.1). Also opens a client control stream so the
+/// uni-stream drain gate is exercised (it must NOT be mis-read as a request).
+#[tokio::test]
+async fn h3h3_e2e_data_before_headers_closes_h3_frame_unexpected() {
+    let certs = generate_loopback_certs();
+    let seen = BackendSeen::default();
+    let (backend, bh) = spawn_h3_upstream(&certs, UpstreamMode::Echo, seen.clone()).await;
+    let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
+
+    let data_first = encode_frame(&H3Frame::Data {
+        payload: Bytes::from_static(b"early"),
+    })
+    .unwrap();
+    let close =
+        drive_raw_request_close(gw, &certs.ca, &data_first, true, Duration::from_secs(10)).await;
+
+    let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+    sd.cancel();
+    bh.abort();
+    assert_eq!(
+        close,
+        Some((0x0105, true)),
+        "DATA-before-HEADERS must close with H3_FRAME_UNEXPECTED (0x0105) as an APPLICATION close"
+    );
+}
+
+/// SESSION 22 (h3spec #22) — a HEADERS field section that QPACK-decodes to
+/// an invalid static-table index is a CONNECTION error
+/// QPACK_DECOMPRESSION_FAILED (0x0200), an APPLICATION close (RFC 9204 §2.2).
+#[tokio::test]
+async fn h3h3_e2e_invalid_qpack_static_index_closes_decompression_failed() {
+    let certs = generate_loopback_certs();
+    let seen = BackendSeen::default();
+    let (backend, bh) = spawn_h3_upstream(&certs, UpstreamMode::Echo, seen.clone()).await;
+    let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
+
+    // HEADERS frame whose QPACK block indexes static entry 200 (invalid):
+    // prefix 00 00, then 0xFF (0xC0|0x3F) + varint continuation 0x89 0x01.
+    let bad = encode_frame(&H3Frame::Headers {
+        header_block: Bytes::from(vec![0x00, 0x00, 0xFF, 0x89, 0x01]),
+    })
+    .unwrap();
+    let close = drive_raw_request_close(gw, &certs.ca, &bad, false, Duration::from_secs(10)).await;
+
+    let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+    sd.cancel();
+    bh.abort();
+    assert_eq!(
+        close,
+        Some((0x0200, true)),
+        "invalid QPACK static index must close with QPACK_DECOMPRESSION_FAILED (0x0200) as an APPLICATION close"
+    );
 }
 
 /// Cluster 4 / CASE 14 — the upstream emits a ZERO-LENGTH DATA frame

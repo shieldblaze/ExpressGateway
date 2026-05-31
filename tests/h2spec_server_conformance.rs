@@ -1,48 +1,213 @@
-//! PROTO-2-06 (Wave-2b-2 skeleton) — h2spec server-conformance
-//! harness.
+//! PROTO-2-06 — h2spec server-conformance harness (STRICT mode).
 //!
-//! `h2spec` (<https://github.com/summerwind/h2spec>) is the
-//! canonical RFC 9113 / RFC 7541 conformance suite for HTTP/2
-//! servers. A real run shells out to the binary against a live
-//! ExpressGateway listener on `127.0.0.1:0` and asserts every case
-//! reported by `h2spec -p <port> --strict` exits 0.
+//! SESSION 22 (CF-IGN-1): this test was a Wave-2b-2 `#[ignore]`d skeleton
+//! whose ignore reason ("h2spec binary not provisioned") is doubly stale —
+//! (1) `h2spec` is now on `PATH`, and (2) the GENERIC h2spec gate already
+//! ships live in `tests/h2spec.rs` (Pillar 3b.3b-2, not `#[ignore]`d). So
+//! rather than duplicate the generic run, this is now the **strict**
+//! complement: it invokes `h2spec -S` (every case, including the strict
+//! ones) and asserts exit 0. That is the additive value over the generic
+//! gate and discharges the CF-IGN-1 disposition (re-enable, not leave a
+//! dead placeholder).
 //!
-//! Wave-2b-2 lands ONLY the skeleton: the binary is not in the CI
-//! image yet (CI image work is in Wave-2c, see `audit/deferred.md`
-//! "PROTO-2-04 / PROTO-2-05"). Until the binary is provisioned,
-//! this test prints a deferred-to-CI message and passes.
+//! Convention (matches `tests/h2spec.rs`): a graceful **skip** with an
+//! explicit `eprintln!` when `h2spec` is not on `PATH` — NOT `#[ignore]`
+//! (which would hide it) and NOT a silent pass. The runner dependency
+//! (`h2spec` on `PATH`) is documented in DEPLOYMENT.md / RUNBOOK.md.
 //!
-//! ## Wave-2c TODO
-//!
-//! Replace the `#[ignore]` + the explicit `eprintln!` below with:
-//!
-//! ```rust,ignore
-//! let listener_port = spawn_h2_listener().await;
-//! let status = std::process::Command::new("h2spec")
-//!     .args(["-p", &listener_port.to_string(), "--strict", "--tls"])
-//!     .status()
-//!     .expect("h2spec on PATH");
-//! assert!(status.success(), "h2spec server-conformance failed");
-//! ```
+//! Note on the "146 passed, 1 skipped, 0 failed" result (VERIFIED, S22):
+//! the single skip is h2spec §6.9.2 case 2, "Sends a SETTINGS frame for
+//! window size to be negative". This is h2spec's OWN applicability skip —
+//! the case needs an open stream carrying flow-controlled data that the
+//! window reduction drives negative, which this minimal 2-byte-echo
+//! backend does not sustain; and RFC 9113 §6.9.2 explicitly PERMITS a
+//! negative flow-control window (the sender just stops until it recovers),
+//! so it is not an error condition. It is NOT a gateway failure: h2spec's
+//! exit code stays 0 for skips; only a FAILED case yields non-zero. This
+//! test asserts on exit status, so any real (failed, non-zero) regression
+//! panics — a skip cannot mask it.
 
-#[test]
-#[ignore = "h2spec binary not provisioned until Wave-2c CI image; see audit/deferred.md PROTO-2-04/05"]
-fn h2spec_server_conformance_passes() {
-    // Skeleton placeholder. Wave-2c implements the real shell-out.
-    eprintln!(
-        "PROTO-2-06 (Wave-2b-2 skeleton): h2spec server-conformance \
-         test deferred to CI image work in Wave-2c. See \
-         audit/deferred.md."
-    );
+use std::net::SocketAddr;
+use std::process::{Command, Stdio};
+use std::sync::Arc;
+use std::time::Duration;
+
+use http_body_util::Full;
+use hyper::body::{Bytes, Incoming};
+use hyper::server::conn::http1 as srv_h1;
+use hyper::service::service_fn;
+use hyper::{Request, Response, StatusCode};
+use hyper_util::rt::TokioIo;
+use lb_io::Runtime;
+use lb_io::pool::{PoolConfig, TcpPool};
+use lb_io::sockopts::BackendSockOpts;
+use lb_l7::h1_proxy::{H1Proxy, HttpTimeouts, RoundRobinAddrs};
+use lb_l7::h2_proxy::H2Proxy;
+use lb_security::{TicketRotator, build_server_config};
+use parking_lot::Mutex;
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use std::convert::Infallible;
+use tokio::net::TcpListener;
+use tokio_rustls::TlsAcceptor;
+
+const SAN_HOST: &str = "expressgateway.test";
+
+fn h2spec_on_path() -> Option<std::path::PathBuf> {
+    let out = Command::new("which").arg("h2spec").output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let path = String::from_utf8(out.stdout).ok()?.trim().to_owned();
+    if path.is_empty() {
+        None
+    } else {
+        Some(std::path::PathBuf::from(path))
+    }
 }
 
-#[test]
-fn h2spec_binary_path_documented() {
-    // Sanity test that always runs (no `#[ignore]`): confirms the
-    // expected binary name is consistent with the Wave-2c CI image
-    // contract. If a future commit changes `h2spec` → `h2spec-rs` or
-    // similar, this test reminds the author to update the CI image
-    // playbook accordingly.
-    const EXPECTED_BINARY: &str = "h2spec";
-    assert_eq!(EXPECTED_BINARY, "h2spec");
+fn make_cert_for(san: &str) -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>) {
+    let generated = rcgen::generate_simple_self_signed(vec![san.to_string()]).unwrap();
+    let cert_der = generated.cert.der().to_vec();
+    let key_der = generated.key_pair.serialize_der();
+    (
+        vec![CertificateDer::from(cert_der)],
+        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_der)),
+    )
+}
+
+async fn spawn_static_backend() -> SocketAddr {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let local = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((sock, _)) = listener.accept().await else {
+                return;
+            };
+            tokio::spawn(async move {
+                let svc = service_fn(|_req: Request<Incoming>| async move {
+                    Ok::<_, Infallible>(
+                        Response::builder()
+                            .status(StatusCode::OK)
+                            .body(Full::new(Bytes::from_static(b"ok")))
+                            .unwrap(),
+                    )
+                });
+                let _ = srv_h1::Builder::new()
+                    .serve_connection(TokioIo::new(sock), svc)
+                    .await;
+            });
+        }
+    });
+    local
+}
+
+// Multi-thread runtime is mandatory: the blocking `Command::output()`
+// parks a worker while the listener/backend run on `tokio::spawn`. Same
+// reasoning as `tests/h2spec.rs`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn h2spec_server_conformance_strict_passes() {
+    let Some(h2spec_bin) = h2spec_on_path() else {
+        eprintln!(
+            "h2spec not installed; skipping STRICT conformance test. \
+             Install per DEPLOYMENT.md / RUNBOOK.md to enable. (NOT a pass: \
+             this is an explicit skip-with-reason, not #[ignore].)"
+        );
+        return;
+    };
+
+    let backend_addr = spawn_static_backend().await;
+    let pool = TcpPool::new(
+        PoolConfig::default(),
+        BackendSockOpts {
+            nodelay: true,
+            keepalive: false,
+            rcvbuf: None,
+            sndbuf: None,
+            quickack: false,
+            tcp_fastopen_connect: false,
+        },
+        Runtime::new(),
+    );
+    let picker = Arc::new(RoundRobinAddrs::new(vec![backend_addr]).unwrap());
+    let h1_proxy = Arc::new(H1Proxy::new(
+        pool.clone(),
+        Arc::clone(&picker) as _,
+        None,
+        HttpTimeouts::default(),
+        true,
+    ));
+    let h2_proxy = Arc::new(H2Proxy::new(
+        pool,
+        picker as _,
+        None,
+        HttpTimeouts::default(),
+        true,
+    ));
+
+    let (cert_chain, key) = make_cert_for(SAN_HOST);
+    let rot = TicketRotator::new(Duration::from_secs(86_400), Duration::from_secs(3_600)).unwrap();
+    let rot_arc = Arc::new(Mutex::new(rot));
+    let alpn: &[&[u8]] = &[b"h2", b"http/1.1"];
+    let server_cfg = build_server_config(rot_arc, cert_chain, key, alpn).unwrap();
+    let acceptor = TlsAcceptor::from(server_cfg);
+
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    tokio::spawn(async move {
+        loop {
+            let Ok((sock, peer)) = listener.accept().await else {
+                return;
+            };
+            let acceptor = acceptor.clone();
+            let h1 = Arc::clone(&h1_proxy);
+            let h2 = Arc::clone(&h2_proxy);
+            tokio::spawn(async move {
+                let Ok(tls) = acceptor.accept(sock).await else {
+                    return;
+                };
+                let alpn = tls.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
+                if alpn.as_deref() == Some(b"h2".as_ref()) {
+                    let _ = h2.serve_connection(tls, peer).await;
+                } else {
+                    let _ = h1.serve_connection(tls, peer).await;
+                }
+            });
+        }
+    });
+
+    // `-S` runs ALL cases including the strict ones (the additive value
+    // over the generic gate in tests/h2spec.rs). `-t -k` = TLS + skip
+    // cert validation (self-signed).
+    let output = Command::new(&h2spec_bin)
+        .args([
+            "-h",
+            "127.0.0.1",
+            "-p",
+            &port.to_string(),
+            "-t",
+            "-k",
+            "-S",
+            "--timeout",
+            "3",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output();
+
+    let Ok(out) = output else {
+        eprintln!("h2spec spawn failed; skipping");
+        return;
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    if !out.status.success() {
+        eprintln!("h2spec (strict) stdout:\n{stdout}");
+        eprintln!("h2spec (strict) stderr:\n{stderr}");
+        panic!(
+            "h2spec STRICT conformance failed with exit status: {:?}. See stderr above.",
+            out.status.code()
+        );
+    }
+    eprintln!("h2spec STRICT passed ({} bytes stdout)", stdout.len());
 }

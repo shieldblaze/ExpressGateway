@@ -37,9 +37,10 @@ use bytes::Bytes;
 use crate::raw_proxy::{RawBackend, run_raw_proxy_actor};
 
 use crate::h3_bridge::{
-    BodyItem, H3_RESP_CHANNEL_DEPTH, H3Request, MAX_REQUEST_BODY_BYTES, MAX_RESPONSE_BODY_BYTES,
-    ReqBodyEvent, RespEvent, StreamRxBuf, encode_h3_response, h3_to_h1_stream_resp,
-    h3_to_h2_stream_resp, h3_to_h3_stream_resp,
+    BodyItem, FeedError, H3_RESP_CHANNEL_DEPTH, H3Request, MAX_REQUEST_BODY_BYTES,
+    MAX_RESPONSE_BODY_BYTES, ReqBodyEvent, RespEvent, StreamRxBuf, encode_h3_response,
+    h3_to_h1_stream_resp, h3_to_h2_stream_resp, h3_to_h3_stream_resp,
+    validate_request_pseudo_headers,
 };
 
 /// SESSION 2 / P1-A: depth of the per-stream bounded request-body
@@ -79,6 +80,33 @@ pub const H3_NO_ERROR: u64 = 0x0100;
 /// pre-existing reusable cancel/internal-error constant, so this is
 /// the RFC-registered codepoint, not an invented value.
 pub const H3_INTERNAL_ERROR: u64 = 0x0102;
+
+/// SESSION 22 (h3spec #12–15) — RFC 9114 §8.1 `H3_MESSAGE_ERROR`
+/// (`0x010e`): "a malformed request or response was received". Used to
+/// **reset the request stream** when inbound HEADERS fail
+/// [`crate::h3_bridge::validate_request_pseudo_headers`] (duplicate /
+/// missing-mandatory / prohibited / mis-ordered pseudo-header). RFC 9114
+/// §4.1.3 classifies a malformed message as a *stream* error, so this is
+/// emitted via `stream_shutdown` (RESET_STREAM + STOP_SENDING), not a
+/// connection close — the connection survives and other streams proceed.
+pub const H3_MESSAGE_ERROR: u64 = 0x010e;
+
+/// SESSION 22 (h3spec #11/#21) — RFC 9114 §8.1 `H3_FRAME_UNEXPECTED`
+/// (`0x0105`): "a frame was received in a context where it is not
+/// permitted". Emitted as a **connection** close (RFC 9114 §7.2 classifies
+/// these as connection errors) when a request stream carries a
+/// control-stream-only or out-of-sequence frame — DATA before HEADERS
+/// (#11), or CANCEL_PUSH / SETTINGS / GOAWAY / MAX_PUSH_ID / PUSH_PROMISE
+/// on a request stream (#21 + §7.2).
+pub const H3_FRAME_UNEXPECTED: u64 = 0x0105;
+
+/// SESSION 22 (h3spec #22) — RFC 9204 §8.3 `QPACK_DECOMPRESSION_FAILED`
+/// (`0x0200`): the decoder failed to interpret an encoded field section
+/// (e.g. an invalid static-table index, or a dynamic-table reference the
+/// static-only decoder cannot satisfy). RFC 9204 §2.2 mandates this be a
+/// **connection** error — emitted via `conn.close(true, …)` (an HTTP/3
+/// application close).
+pub const QPACK_DECOMPRESSION_FAILED: u64 = 0x0200;
 
 /// Upper bound on how long [`graceful_h3_shutdown`] will pump the
 /// connection after issuing `close()` before giving up. Quiche enters
@@ -711,6 +739,27 @@ pub async fn graceful_h3_shutdown(
 /// rather than carrying a byte-identical private copy. The low-level
 /// send loop has no H3/Mode-A coupling — it is purely "flush quiche's
 /// outbound packets to this socket until `Done`".
+/// SESSION 22 — reset an H3 request stream with an application error
+/// `code` (a STREAM error per RFC 9114 §4.1.3, e.g. `H3_MESSAGE_ERROR`).
+/// Shuts the stream down in BOTH directions: `Write` emits `RESET_STREAM`
+/// (we will send no response) and `Read` emits `STOP_SENDING` (we want no
+/// more request bytes). Both frames are queued on `conn`; the actor loop's
+/// next `drain_conn_send` pumps them to the peer (a queued reset is inert
+/// until `conn.send()` runs — see the `quiche-reset-needs-a-flush-pump`
+/// lesson). This works at H3-frame time because the connection is already
+/// established (`recv_count > 0`), unlike the suppressed first-packet
+/// transport close documented in `audit/h3spec/s22-findings.md` (#1–8).
+fn reset_h3_stream(conn: &mut quiche::Connection, sid: u64, code: u64) {
+    match conn.stream_shutdown(sid, quiche::Shutdown::Write, code) {
+        Ok(()) | Err(quiche::Error::Done) => {}
+        Err(e) => tracing::debug!(error = %e, stream_id = sid, "reset_h3_stream (RESET_STREAM)"),
+    }
+    match conn.stream_shutdown(sid, quiche::Shutdown::Read, code) {
+        Ok(()) | Err(quiche::Error::Done) => {}
+        Err(e) => tracing::debug!(error = %e, stream_id = sid, "reset_h3_stream (STOP_SENDING)"),
+    }
+}
+
 pub(crate) async fn drain_conn_send(
     socket: &UdpSocket,
     conn: &mut quiche::Connection,
@@ -787,6 +836,24 @@ fn poll_h3(
             drain_body_stream(conn, sid, rx_by_stream, body_tx_by_stream, body_pending);
             continue;
         }
+        // SESSION 22 — the HTTP/3 request decoder (incl. the §4.1/§7.2
+        // frame-sequencing guards in `StreamRxBuf::feed`) applies ONLY to
+        // client-initiated BIDIRECTIONAL streams (request streams, id % 4 ==
+        // 0). Client UNIDIRECTIONAL streams (id % 4 == 2 — the H3 control
+        // stream and the QPACK encoder/decoder streams) begin with a
+        // stream-TYPE varint + control frames, NOT a request: feeding them
+        // through the request decoder would mis-read the control-stream type
+        // byte (0x00) as a DATA frame and wrongly close the connection with
+        // H3_FRAME_UNEXPECTED. The gateway does not yet enforce client
+        // control-stream rules (h3spec #16–20/#24 — carried to S23); until
+        // then it DRAINS + discards client uni streams so they neither block
+        // flow control nor trip the request-stream guards. (Server-initiated
+        // streams never appear here — the gateway writes those.)
+        if sid % 4 != 0 {
+            let mut sink = [0u8; 4096];
+            while let Ok((_n, _fin)) = conn.stream_recv(sid, &mut sink) {}
+            continue;
+        }
         let mut buf = [0u8; 8192];
         loop {
             match conn.stream_recv(sid, &mut buf) {
@@ -794,6 +861,27 @@ fn poll_h3(
                     let rx = rx_by_stream.entry(sid).or_default();
                     match rx.feed(buf.get(..n).unwrap_or(&[])) {
                         Ok(Some(headers)) => {
+                            // SESSION 22 (h3spec #12–15): RFC 9114 §4.3
+                            // request pseudo-header validation BEFORE
+                            // building the request or dialling any
+                            // upstream. A malformed request is a STREAM
+                            // error of type H3_MESSAGE_ERROR (§4.1.3): reset
+                            // the stream and forward NOTHING upstream
+                            // (request integrity — a smuggling/desync
+                            // guard). Single ingress site ⇒ covers all
+                            // H3-front cells (R12). The reset frames are
+                            // pumped by the loop's next `drain_conn_send`.
+                            if let Err(reason) = validate_request_pseudo_headers(&headers) {
+                                tracing::warn!(
+                                    stream_id = sid,
+                                    reason,
+                                    "SESSION 22: malformed H3 request rejected \
+                                     (H3_MESSAGE_ERROR, RFC 9114 §4.1.3)"
+                                );
+                                reset_h3_stream(conn, sid, H3_MESSAGE_ERROR);
+                                rx_by_stream.remove(&sid);
+                                break;
+                            }
                             let req = H3Request::from_headers(headers);
                             // ROUND8-L7-16: authority value sanitisation
                             // choke point — the H3 leg of L7-09
@@ -1061,7 +1149,62 @@ fn poll_h3(
                                 break;
                             }
                         }
-                        Err(e) => {
+                        // SESSION 22 (h3spec #11/#21): a control-only or
+                        // out-of-sequence frame on a request stream is a
+                        // CONNECTION error of type H3_FRAME_UNEXPECTED
+                        // (RFC 9114 §7.2). Close the whole connection; the
+                        // loop's next `drain_conn_send` emits the
+                        // CONNECTION_CLOSE and `is_closed()` then breaks the
+                        // actor (the H3 conn is established, so the close is
+                        // not suppressed — cf. the transport #1-8 case).
+                        Err(FeedError::FrameUnexpected(reason)) => {
+                            tracing::warn!(
+                                stream_id = sid,
+                                reason,
+                                "SESSION 22: H3_FRAME_UNEXPECTED — closing connection (RFC 9114 §7.2)"
+                            );
+                            // `app = true`: H3_FRAME_UNEXPECTED is an HTTP/3
+                            // APPLICATION error code (RFC 9114 §8.1), so it
+                            // must ride an application CONNECTION_CLOSE
+                            // (frame 0x1d), not a transport one (0x1c) — a
+                            // transport close would carry the code in the
+                            // wrong error space and h3spec would not see the
+                            // expected H3 error. (Mirrors graceful_h3_shutdown's
+                            // `conn.close(true, H3_NO_ERROR, …)`.)
+                            match conn.close(true, H3_FRAME_UNEXPECTED, reason.as_bytes()) {
+                                Ok(()) | Err(quiche::Error::Done) => {}
+                                Err(e) => {
+                                    tracing::debug!(error = %e, "conn.close (H3_FRAME_UNEXPECTED)");
+                                }
+                            }
+                            rx_by_stream.remove(&sid);
+                            break;
+                        }
+                        // SESSION 22 (h3spec #22): a QPACK field-section
+                        // decode failure is a CONNECTION error
+                        // QPACK_DECOMPRESSION_FAILED (RFC 9204 §2.2).
+                        // app=true (application close — see the
+                        // FrameUnexpected arm above).
+                        Err(FeedError::QpackDecompressionFailed(e)) => {
+                            tracing::warn!(
+                                error = %e,
+                                stream_id = sid,
+                                "SESSION 22: QPACK_DECOMPRESSION_FAILED — closing connection (RFC 9204 §2.2)"
+                            );
+                            match conn.close(
+                                true,
+                                QPACK_DECOMPRESSION_FAILED,
+                                b"qpack decompression failed",
+                            ) {
+                                Ok(()) | Err(quiche::Error::Done) => {}
+                                Err(e) => {
+                                    tracing::debug!(error = %e, "conn.close (QPACK_DECOMPRESSION_FAILED)");
+                                }
+                            }
+                            rx_by_stream.remove(&sid);
+                            break;
+                        }
+                        Err(FeedError::Decode(e)) => {
                             tracing::warn!(error = %e, stream_id = sid, "h3 decode");
                         }
                     }
