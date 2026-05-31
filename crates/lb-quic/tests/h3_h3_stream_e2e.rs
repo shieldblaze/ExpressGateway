@@ -2491,6 +2491,128 @@ async fn h3h3_e2e_absent_authority_rejected_message_error() {
     );
 }
 
+/// SESSION 22 — drive a RAW (hand-crafted) request stream through the real
+/// H3 listener and return the gateway-initiated connection-close as
+/// `(error_code, is_app)` from `conn.peer_error()`, or `None` if it never
+/// closed. Reuses this file's quiche-client plumbing. When `open_control`
+/// is set the client ALSO opens a unidirectional control stream (type
+/// `0x00` + a SETTINGS frame) so the gateway's uni-stream drain gate in
+/// `poll_h3` is exercised (the request decoder must NOT trip on it).
+async fn drive_raw_request_close(
+    gateway: SocketAddr,
+    ca: &std::path::Path,
+    request_on_stream0: &[u8],
+    open_control: bool,
+    overall: Duration,
+) -> Option<(u64, bool)> {
+    let sock = UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
+        .await
+        .unwrap();
+    let local = sock.local_addr().unwrap();
+    let mut ccfg = build_client_config(ca);
+    let scid = random_scid();
+    let scid_ref = quiche::ConnectionId::from_ref(&scid);
+    let mut conn = quiche::connect(Some(TEST_SNI), &scid_ref, local, gateway, &mut ccfg).unwrap();
+    let mut in_buf = vec![0u8; MAX_UDP];
+    let mut out_buf = vec![0u8; MAX_UDP];
+    let mut sent = false;
+    let deadline = tokio::time::Instant::now() + overall;
+    while tokio::time::Instant::now() < deadline {
+        loop {
+            match conn.send(&mut out_buf) {
+                Ok((n, info)) => {
+                    let _ = sock.send_to(out_buf.get(..n).unwrap_or(&[]), info.to).await;
+                }
+                Err(quiche::Error::Done) => break,
+                Err(_) => break,
+            }
+        }
+        if let Some(e) = conn.peer_error() {
+            return Some((e.error_code, e.is_app));
+        }
+        if conn.is_closed() {
+            break;
+        }
+        if conn.is_established() && !sent {
+            if open_control {
+                // client-initiated unidirectional control stream (id 2):
+                // stream-type 0x00 then a SETTINGS frame.
+                let mut ctrl = vec![0x00u8];
+                ctrl.extend_from_slice(
+                    &encode_frame(&H3Frame::Settings { params: vec![] }).unwrap(),
+                );
+                let _ = conn.stream_send(2, &ctrl, false);
+            }
+            let _ = conn.stream_send(0, request_on_stream0, true);
+            sent = true;
+        }
+        match tokio::time::timeout(Duration::from_millis(100), sock.recv_from(&mut in_buf)).await {
+            Ok(Ok((n, from))) => {
+                let info = quiche::RecvInfo { from, to: local };
+                let _ = conn.recv(&mut in_buf[..n], info);
+            }
+            _ => {}
+        }
+    }
+    conn.peer_error().map(|e| (e.error_code, e.is_app))
+}
+
+/// SESSION 22 (h3spec #11) — a DATA frame before HEADERS on a request
+/// stream is a CONNECTION error H3_FRAME_UNEXPECTED (0x0105), an APPLICATION
+/// close (RFC 9114 §4.1/§8.1). Also opens a client control stream so the
+/// uni-stream drain gate is exercised (it must NOT be mis-read as a request).
+#[tokio::test]
+async fn h3h3_e2e_data_before_headers_closes_h3_frame_unexpected() {
+    let certs = generate_loopback_certs();
+    let seen = BackendSeen::default();
+    let (backend, bh) = spawn_h3_upstream(&certs, UpstreamMode::Echo, seen.clone()).await;
+    let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
+
+    let data_first = encode_frame(&H3Frame::Data {
+        payload: Bytes::from_static(b"early"),
+    })
+    .unwrap();
+    let close =
+        drive_raw_request_close(gw, &certs.ca, &data_first, true, Duration::from_secs(10)).await;
+
+    let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+    sd.cancel();
+    bh.abort();
+    assert_eq!(
+        close,
+        Some((0x0105, true)),
+        "DATA-before-HEADERS must close with H3_FRAME_UNEXPECTED (0x0105) as an APPLICATION close"
+    );
+}
+
+/// SESSION 22 (h3spec #22) — a HEADERS field section that QPACK-decodes to
+/// an invalid static-table index is a CONNECTION error
+/// QPACK_DECOMPRESSION_FAILED (0x0200), an APPLICATION close (RFC 9204 §2.2).
+#[tokio::test]
+async fn h3h3_e2e_invalid_qpack_static_index_closes_decompression_failed() {
+    let certs = generate_loopback_certs();
+    let seen = BackendSeen::default();
+    let (backend, bh) = spawn_h3_upstream(&certs, UpstreamMode::Echo, seen.clone()).await;
+    let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
+
+    // HEADERS frame whose QPACK block indexes static entry 200 (invalid):
+    // prefix 00 00, then 0xFF (0xC0|0x3F) + varint continuation 0x89 0x01.
+    let bad = encode_frame(&H3Frame::Headers {
+        header_block: Bytes::from(vec![0x00, 0x00, 0xFF, 0x89, 0x01]),
+    })
+    .unwrap();
+    let close = drive_raw_request_close(gw, &certs.ca, &bad, false, Duration::from_secs(10)).await;
+
+    let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+    sd.cancel();
+    bh.abort();
+    assert_eq!(
+        close,
+        Some((0x0200, true)),
+        "invalid QPACK static index must close with QPACK_DECOMPRESSION_FAILED (0x0200) as an APPLICATION close"
+    );
+}
+
 /// Cluster 4 / CASE 14 — the upstream emits a ZERO-LENGTH DATA frame
 /// (`0x00 0x00`) BEFORE the real body, then the body + a clean FIN.
 /// Drives the gateway's empty-DATA fast-path (h3_bridge.rs :3214-3217:
