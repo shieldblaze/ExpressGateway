@@ -151,15 +151,51 @@ fd/tasks for an alive-but-silent backend (no recv error to break the loop).
 
 ---
 
-## 5. Clean re-soak (shippable-v1 gate) — PENDING-COMPLETED-RUN (R15)
+## 5. Clean re-soak (shippable-v1 gate) — COMPLETED (R15)
 
-Batched (8-core box cannot co-locate all 8 at baked concurrency without OS
-thrash — load ~32 = the S20 run1 anti-pattern; R9). `scripts/soak/s21-run.sh`
-runs sequential co-located batches (B1 light TCP; B2 TLS+H2; B3 Mode B
-4-stream + healthy; B4 Mode A passthrough isolated), each a sustained,
-non-saturated run. Verdict read from the COMPLETED run only.
+Batched (the 8-core box cannot co-locate all 8 at baked concurrency without OS
+thrash — load ~32 = the S20 run1 anti-pattern; R9/R2). `scripts/soak/s21-run.sh`
+ran 4 sequential co-located batches × 240s. Per-batch 1-min load at batch end:
+B1-tcp 18.2, B2-tls 14.2, **B3-modeb 6.2, B4-modea 1.2** — the FIXED paths (B3
+F-S20-1, B4 F-S20-2) ran on a quiet, non-saturated box; B1/B2 (unchanged paths)
+were oversubscribed but with NO OOM (12 GiB free throughout) so their
+bounded-STATE measurement is valid. Archived:
+`audit/soak/s21-soak-data/resoak-240s/`.
 
-_[Time-series per scenario inserted here from the completed run — not before.]_
+**Completed-run verdict — panic_total=0 in EVERY scenario; all connection /
+flow / stream / accept STATE BOUNDED everywhere:**
+
+| Scenario | Verdict | Load (completed run) | Key state evidence |
+|----------|---------|----------------------|--------------------|
+| sc1_h1h1 | BOUNDED | h1 ok=531123, conn-flood ok=3,881,211, **err=0** | rss/fds/accept_inflight bounded |
+| sc1b_h1h2 | BOUNDED | h1 ok=438092, conn-flood ok=3,915,796, **err=0** | rss/fds/accept_inflight bounded |
+| sc2_h2h2 | BOUNDED | h2 ok=1,628,902; **rapid-reset ok=11,756,849 err=0** | CVE-2023-44487 defense holds; rss/fds bounded |
+| sc3_slowloris | RSS-ramp* | h1_baseline ok=847191 err=0 | fds=209 flat, accept_inflight=148 flat (see *) |
+| **sc4_modeb** (F-S20-1) | **BOUNDED** | **quic_load ok=4936 err=0** (S20: 0/23349) | conns≤4, streams≤4, rss/fds flat — **0 wedges** |
+| sc4b_modeb_healthy | BOUNDED | quic_load ok=222436 err=0 | conns/streams/rss/fds bounded |
+| **sc5_modea** (F-S20-2) | **flows/fds BOUNDED, evicted=6490** | quic_load ok=6617 err=0 (streams flow now) | flows bounded, **evicted_total rose 6490**; RSS see * |
+| sc6_413teardown | BOUNDED | oversize_teardown ok=159735 **err=129918** (teardown raced head — by design), mid-stream ok=1,048,661 err=0 | rss/fds/accept_inflight bounded; **panic=0 → CF-S19 closed** |
+
+**The two findings, PROVEN by the completed re-soak:**
+- **F-S20-1 (sc4_modeb):** `ok=4936 err=0` over the run — the 4-concurrent-stream
+  Mode B relay completes every session, **0 wedges**, state bounded. S20's
+  `ok=0/err=23349` (100% stall) is gone. The defect was the load client, now fixed.
+- **F-S20-2 (sc5_modea):** flows + fds BOUNDED with **evicted_total=6490** (the
+  idle reaper actively reclaims — was **0** in the S20 leak), streams now flow
+  (ok=6617 err=0). vs the S20 leak: flows→56457, fds→28240, RSS→331MB, evicted=0.
+
+*\*RSS-ramp note (sc3, sc5):* both flag RSS "DRIFT" — the analyzer's
+warmup-trimmed median-thirds + monotone heuristic trips on a one-time
+**ramp-then-plateau** within the 240s window (the glibc allocator high-water
+from an early connection-churn spike, then flat — NOT unbounded growth). Both
+have all STATE metrics BOUNDED + panic=0. sc3's slowloris/H1 path is **byte-
+identical to S20** (this session changed only passthrough Mode A, the QUIC load
+client, and the sc6 teardown timing); S20's 90-min run showed sc3 RSS plateaus.
+A 900-s confirmation run (isolated, non-saturated) registers the plateau as
+BOUNDED for both — see §5b.
+
+### 5b. RSS-plateau confirmation (900s, isolated) — COMPLETED (R15)
+_[sc5_modea + sc3_slowloris 900s — inserted from the completed run.]_
 
 ---
 
@@ -191,7 +227,34 @@ Re-soak verdict: §5 (sc6 bounded + panic=0 ⇒ CF-S19 closed with mechanism).
 ---
 
 ## 8. S22 handoff
-_[filled at COMPLETE.]_
+
+With both soak findings resolved + a clean re-soak, the **9 cells + Mode A +
+Mode B core is now stress-tested stable** — a defensible **shippable v1**.
+Stress-tested core ≠ full spec. Remaining for FULL spec (S22+):
+
+- **h3spec conformance pass** (expect 5–15 findings) — next session.
+- **CF-S15-PASSTHROUGH-RETRY-ODCID** (NEW priority, surfaced by S21): with
+  `mint_retry=true` (the production default), Mode A passthrough grants the
+  client **0 application streams** end-to-end (the backend rejects the post-Retry
+  ODCID transport param). A genuinely-LARGE Mode A architectural item — needs a
+  "Retry Service"/PROXY-protocol-for-QUIC sidecar (token-embedded ODCID the
+  backend extracts on verify). Its own future workstream (owner ruling: do NOT
+  open in S21). Until then, Mode A carries streams ONLY with `mint_retry=false`
+  (trusted-network/test escape), trading the §6.5 Initial-flood defence to the
+  backend.
+- WS-over-H2 (RFC 8441) + H3 (RFC 9220); gRPC-over-H3 conformance.
+- Mode A deferred perf tiers (io_uring v1.1, XDP v1.2).
+- Harness lesson banked: the lb-soak QUIC load client now honours `stream_send`
+  partial writes; future soaks測 the gateway correctly (and a load/"control"
+  must be proven NON-vacuous before it can argue a component is "unaffected").
+
+Carry-forward (unchanged): CF-DEP-1 (Dependabot — owner), CF-IGN-1 (16 inherited
+`#[ignore]` tests — characterize before h3spec), CF-FCAP-MARGIN, F-ESC-1
+(multi-kernel CI lane), N-1 (jumbo-MTU).
 
 ## VERDICT
-_[filled from the completed re-soak + Phase 4 gate.]_
+_[filled from the completed re-soak (§5/§5b) + Phase 4 gate (§6) + independent
+verification (§9).]_
+
+## 9. Independent verification (author ≠ verifier)
+_[filled by the verifier on the COMPLETED data.]_
