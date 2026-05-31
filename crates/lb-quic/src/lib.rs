@@ -146,6 +146,12 @@ mod cleanup_guard;
 pub mod conn_actor;
 #[cfg(feature = "quic-terminate")]
 pub mod h3_bridge;
+// SESSION 23 / INC-0 — `quiche::h3::Config` builder for the H3-front
+// migration. Infra only (no live-path change); same gate as the rest of
+// the termination tree. `pub` so the INC-1 go/no-go experiment
+// (`tests/inc1_quiche_h3_experiment.rs`) can construct it.
+#[cfg(feature = "quic-terminate")]
+pub mod h3_config;
 #[cfg(feature = "quic-terminate")]
 mod listener;
 // SESSION 16 / Mode B (terminate-and-re-originate). Same gate as the H3
