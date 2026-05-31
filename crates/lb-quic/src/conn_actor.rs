@@ -37,9 +37,10 @@ use bytes::Bytes;
 use crate::raw_proxy::{RawBackend, run_raw_proxy_actor};
 
 use crate::h3_bridge::{
-    BodyItem, H3_RESP_CHANNEL_DEPTH, H3Request, MAX_REQUEST_BODY_BYTES, MAX_RESPONSE_BODY_BYTES,
-    FeedError, ReqBodyEvent, RespEvent, StreamRxBuf, encode_h3_response, h3_to_h1_stream_resp,
-    h3_to_h2_stream_resp, h3_to_h3_stream_resp, validate_request_pseudo_headers,
+    BodyItem, FeedError, H3_RESP_CHANNEL_DEPTH, H3Request, MAX_REQUEST_BODY_BYTES,
+    MAX_RESPONSE_BODY_BYTES, ReqBodyEvent, RespEvent, StreamRxBuf, encode_h3_response,
+    h3_to_h1_stream_resp, h3_to_h2_stream_resp, h3_to_h3_stream_resp,
+    validate_request_pseudo_headers,
 };
 
 /// SESSION 2 / P1-A: depth of the per-stream bounded request-body
@@ -1190,7 +1191,11 @@ fn poll_h3(
                                 stream_id = sid,
                                 "SESSION 22: QPACK_DECOMPRESSION_FAILED — closing connection (RFC 9204 §2.2)"
                             );
-                            match conn.close(true, QPACK_DECOMPRESSION_FAILED, b"qpack decompression failed") {
+                            match conn.close(
+                                true,
+                                QPACK_DECOMPRESSION_FAILED,
+                                b"qpack decompression failed",
+                            ) {
                                 Ok(()) | Err(quiche::Error::Done) => {}
                                 Err(e) => {
                                     tracing::debug!(error = %e, "conn.close (QPACK_DECOMPRESSION_FAILED)");
