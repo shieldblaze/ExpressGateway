@@ -1,0 +1,52 @@
+[package]
+name = "lb-soak"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# S20 — chaos/soak suite (permanent infrastructure). This crate is the
+# external-process soak apparatus: it launches the real `expressgateway`
+# binary as a child, drives co-located in-process load + chaos at it, and
+# samples the child's /proc (RSS/fd/threads) + /metrics (state-table gauges)
+# into a per-scenario time-series, then computes a BOUNDED/DRIFT verdict.
+#
+# The crate is BOTH a library (reusable, single-sourced harness modules with
+# their own unit tests — the tooling is itself tested) AND a binary
+# (`eg-soak`, the scenario orchestrator). It links NO product crates — it is
+# a black-box driver against the real binary + its metrics endpoint.
+
+[lib]
+name = "lb_soak"
+path = "src/lib.rs"
+
+[[bin]]
+name = "eg-soak"
+path = "src/bin/eg-soak.rs"
+
+[dependencies]
+tokio = { workspace = true }
+tokio-util = { workspace = true }
+bytes = { workspace = true }
+http = { workspace = true }
+hyper = { workspace = true }
+hyper-util = { workspace = true }
+http-body-util = { workspace = true }
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+# QUIC client + backend for the Mode A / Mode B scenarios.
+quiche = { workspace = true }
+# ring + rcgen are declared directly (not workspace-inherited) to match the
+# lb-quic convention — they are not in [workspace.dependencies].
+ring = "0.17"
+rcgen = { version = "0.13", features = ["pem"] }
+# TLS client for the h1s/h2 (ALPN) front scenarios.
+tokio-rustls = { workspace = true }
+rustls = { workspace = true }
+rustls-pki-types = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["full", "test-util"] }

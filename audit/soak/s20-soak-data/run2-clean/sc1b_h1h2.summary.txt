@@ -1,0 +1,10 @@
+=== SOAK sc1b_h1h2 — BOUNDED (5400s, 361 samples) ===
+      rss_kb [BOUNDED] rss_kb: bounded — last-third median 26928 vs first-third 26828 (+0.4%, within band 10% or non-monotone 53%) — first=7248 last=26396 min=7248 max=33520
+    vmhwm_kb [BOUNDED] vmhwm_kb: bounded — last-third median 37524 vs first-third 37524 (+0.0%, within band 10% or non-monotone 100%) — first=7248 last=37524 min=7248 max=37524
+         fds [BOUNDED] fds: bounded — last-third median 45.5 vs first-third 33.5 (+35.8%, within band 10% or non-monotone 53%) — first=14 last=70 min=14 max=425
+     threads [BOUNDED] threads: bounded — last-third median 9 vs first-third 9 (+0.0%, within band 10% or non-monotone 100%) — first=10 last=9 min=9 max=10
+  accept_inflight [BOUNDED] accept_inflight: bounded — last-third median 17 vs first-third 14 (+21.4%, within band 10% or non-monotone 51%) — first=10 last=7 min=2 max=411
+  panic_total [BOUNDED] panic_total: stayed zero across the run — first=0 last=0 min=0 max=0
+  load:
+    h1_load: ok=6094909 err=0
+    conn_flood: ok=94945898 err=0
