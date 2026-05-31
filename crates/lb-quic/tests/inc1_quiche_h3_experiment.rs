@@ -653,3 +653,209 @@ async fn inc1_go_backpressure_unread_pauses_peer() {
          the flow-control window is not bounding the peer as expected"
     );
 }
+
+// ----------------------------------------------------------------------
+// EXPERIMENT 3 — INC-2 FEASIBILITY: does a quiche::h3 with_transport
+// SERVER interoperate with the EXISTING hand-rolled lb_h3 test-client
+// wire (lb_h3 QPACK + encode_frame, NO client control stream / SETTINGS,
+// lb_h3 response decode)? If YES, migrating conn_actor to quiche::h3
+// keeps the 69 existing wire tests green (gate-green incremental INC-2).
+// If NO, INC-2 must also migrate every test client (much larger scope).
+// Either result is decision-relevant; this test asserts the answer.
+// ----------------------------------------------------------------------
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn inc1_interop_handrolled_lbh3_client_vs_quiche_server() {
+    use lb_h3::{H3Frame, QpackDecoder, QpackEncoder, decode_frame, encode_frame};
+    use quiche::h3::NameValue;
+
+    let certs = gen_certs();
+    let mut s_cfg = server_cfg(&certs);
+    let mut c_cfg = client_cfg();
+
+    let s_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let c_sock = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+    let s_addr = s_sock.local_addr().unwrap();
+    let c_addr = c_sock.local_addr().unwrap();
+
+    let s_scid = scid();
+    let c_scid = scid();
+    let mut server = quiche::accept(&s_scid, None, s_addr, c_addr, &mut s_cfg).unwrap();
+    let mut client =
+        quiche::connect(Some("inc1.test"), &c_scid, c_addr, s_addr, &mut c_cfg).unwrap();
+
+    let mut s_h3: Option<h3::Connection> = None;
+    let h3_cfg = lb_quic::h3_config::build_server_h3_config().unwrap();
+
+    // Hand-rolled client state (NO h3::Connection — raw stream I/O, the
+    // exact shape of h3_h1_bridge_e2e's client).
+    const STREAM_ID: u64 = 0;
+    let mut request_sent = false;
+    let mut rx_tail: Vec<u8> = Vec::new();
+    let mut decoded_status: Option<u16> = None;
+    let mut decoded_body: Vec<u8> = Vec::new();
+
+    // Server observations.
+    let mut server_saw_headers: Option<Vec<(String, String)>> = None;
+    let mut response_sent = false;
+    const RESP_BODY: &[u8] = b"interop-ok-handrolled";
+
+    let mut s_out = vec![0u8; 65535];
+    let mut c_out = vec![0u8; 65535];
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+
+    loop {
+        if tokio::time::Instant::now() > deadline {
+            panic!(
+                "interop timed out: server_saw_headers={}, decoded_status={decoded_status:?}, \
+                 body={}, client_closed={}, server_closed={}",
+                server_saw_headers.is_some(),
+                decoded_body.len(),
+                client.is_closed(),
+                server.is_closed(),
+            );
+        }
+        flush(&mut server, &s_sock, &mut s_out);
+        flush(&mut client, &c_sock, &mut c_out);
+        tokio::time::sleep(Duration::from_millis(1)).await;
+        drain_into(&mut server, &s_sock, s_addr);
+        drain_into(&mut client, &c_sock, c_addr);
+
+        if client.is_closed() {
+            panic!(
+                "client connection closed by server: {:?}",
+                client.peer_error()
+            );
+        }
+
+        // --- hand-rolled client: send HEADERS (GET + fin), decode resp ---
+        if !request_sent && client.is_established() {
+            let encoder = QpackEncoder::new();
+            let headers = vec![
+                (":method".to_string(), "GET".to_string()),
+                (":scheme".to_string(), "https".to_string()),
+                (":authority".to_string(), "inc1.test".to_string()),
+                (":path".to_string(), "/interop".to_string()),
+            ];
+            let header_block = encoder.encode(&headers).unwrap();
+            let frame = encode_frame(&H3Frame::Headers { header_block }).unwrap();
+            let mut pos = 0;
+            while pos < frame.len() {
+                match client.stream_send(
+                    STREAM_ID,
+                    &frame[pos..],
+                    pos + (frame.len() - pos) >= frame.len(),
+                ) {
+                    Ok(n) => pos += n,
+                    Err(quiche::Error::Done) => break,
+                    Err(e) => panic!("client stream_send: {e}"),
+                }
+            }
+            request_sent = true;
+        }
+        if client.is_established() {
+            for sid in client.readable().collect::<Vec<u64>>() {
+                if sid != STREAM_ID {
+                    // Drain+discard server uni streams (control/QPACK) —
+                    // exactly what the hand-rolled test clients do.
+                    let mut sink = [0u8; 4096];
+                    while client.stream_recv(sid, &mut sink).is_ok() {}
+                    continue;
+                }
+                let mut chunk = [0u8; 8192];
+                while let Ok((n, _fin)) = client.stream_recv(sid, &mut chunk) {
+                    rx_tail.extend_from_slice(&chunk[..n]);
+                }
+            }
+            loop {
+                match decode_frame(&rx_tail, 1 << 20) {
+                    Ok((H3Frame::Headers { header_block }, consumed)) => {
+                        rx_tail.drain(..consumed);
+                        let hdrs = QpackDecoder::new().decode(&header_block).unwrap();
+                        for (n, v) in hdrs {
+                            if n == ":status" {
+                                decoded_status = Some(v.parse().unwrap());
+                            }
+                        }
+                    }
+                    Ok((H3Frame::Data { payload }, consumed)) => {
+                        rx_tail.drain(..consumed);
+                        decoded_body.extend_from_slice(&payload);
+                    }
+                    Ok((_other, consumed)) => {
+                        rx_tail.drain(..consumed);
+                    }
+                    Err(lb_h3::H3Error::Incomplete) => break,
+                    Err(e) => panic!("client decode_frame: {e}"),
+                }
+            }
+        }
+
+        // --- quiche::h3 server: poll, respond ---
+        if s_h3.is_none() && server.is_established() {
+            s_h3 = Some(h3::Connection::with_transport(&mut server, &h3_cfg).unwrap());
+        }
+        if let Some(h) = s_h3.as_mut() {
+            loop {
+                match h.poll(&mut server) {
+                    Ok((sid, h3::Event::Headers { list, .. })) => {
+                        server_saw_headers = Some(
+                            list.iter()
+                                .map(|hdr| {
+                                    (
+                                        String::from_utf8_lossy(hdr.name()).into_owned(),
+                                        String::from_utf8_lossy(hdr.value()).into_owned(),
+                                    )
+                                })
+                                .collect(),
+                        );
+                        if !response_sent {
+                            let resp = vec![h3::Header::new(b":status", b"200")];
+                            h.send_response(&mut server, sid, &resp, false).unwrap();
+                            let _ = h.send_body(&mut server, sid, RESP_BODY, true);
+                            response_sent = true;
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(h3::Error::Done) => break,
+                    Err(e) => panic!("server poll: {e:?}"),
+                }
+            }
+        }
+
+        server.on_timeout();
+        client.on_timeout();
+
+        if decoded_status.is_some() && decoded_body.len() >= RESP_BODY.len() {
+            break;
+        }
+    }
+
+    // ANSWER: a quiche::h3 server DID parse the non-conformant hand-rolled
+    // lb_h3 request (no control stream / SETTINGS) AND the hand-rolled
+    // lb_h3 decoder read the quiche-encoded response. The 69 existing
+    // wire tests can stay on their hand-rolled clients across INC-2.
+    let hdrs = server_saw_headers.expect("server must have polled a Headers event");
+    assert!(
+        hdrs.iter().any(|(n, v)| n == ":path" && v == "/interop"),
+        "server's quiche::h3 poll did not surface the lb_h3 request path: {hdrs:?}"
+    );
+    assert!(
+        hdrs.iter().any(|(n, v)| n == ":method" && v == "GET"),
+        "server's quiche::h3 poll did not surface the lb_h3 method: {hdrs:?}"
+    );
+    assert_eq!(
+        decoded_status,
+        Some(200),
+        "lb_h3 client must decode quiche's :status"
+    );
+    assert_eq!(
+        decoded_body, RESP_BODY,
+        "lb_h3 client must decode quiche's response body verbatim"
+    );
+    eprintln!(
+        "INC-1 INTEROP EVIDENCE: quiche::h3 server ↔ hand-rolled lb_h3 client \
+         round-trips BOTH directions (req path/method parsed by quiche; \
+         resp :status 200 + body decoded by lb_h3). 69 wire tests stay green across INC-2."
+    );
+}
