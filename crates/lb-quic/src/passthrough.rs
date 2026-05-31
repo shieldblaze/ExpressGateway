@@ -130,6 +130,13 @@ pub struct PassthroughParams {
     /// BACKEND's responsibility. Documented test/trusted-network
     /// escape; production leaves this `true`.
     pub mint_retry: bool,
+    /// F-S20-2: idle-flow reaper threshold. A flow with no inbound packet
+    /// for longer than this is reclaimed by the periodic idle sweep (its
+    /// backend UDP socket fd + both pump tasks freed), bounding the table by
+    /// the LIVE connection count rather than the LRU cap at
+    /// `2 * max_quic_connections`. Default 60 s. `Duration::ZERO` disables
+    /// the sweep (LRU-only — the pre-S21 behaviour).
+    pub flow_idle_timeout: Duration,
     /// `quic_passthrough_*` observability handles (S15 A3). `None` when
     /// the listener is spawned without a metrics registry (unit tests,
     /// or a build that doesn't wire observability) — every event-site
@@ -158,6 +165,7 @@ impl PassthroughParams {
             audit_throttle_window: Duration::from_secs(60),
             max_dcid_len_routed: MAX_CID_LEN,
             mint_retry: true,
+            flow_idle_timeout: Duration::from_secs(60),
             metrics: None,
         }
     }
@@ -216,6 +224,15 @@ pub(crate) struct FlowEntry {
     /// Bounded mpsc queue feeding the per-flow forward task. Full →
     /// drop-newest (design §5.1).
     pub(crate) backlog_tx: mpsc::Sender<Vec<u8>>,
+    /// F-S20-2: per-flow shutdown signal. Cancelled by [`reclaim_flows`]
+    /// (LRU eviction or the idle sweep) so the reverse pump — which
+    /// otherwise blocks indefinitely on `backend_sock.recv()` — exits and
+    /// releases its `Arc<FlowEntry>`. Only then does the entry's strong
+    /// count reach zero, dropping the backend UDP socket fd and closing the
+    /// forward task's channel. Without this signal, removing the dispatch
+    /// keys alone could not reclaim the fd/tasks for a flow whose backend is
+    /// alive-but-silent (no recv error to break the loop). Not key material.
+    pub(crate) closed: CancellationToken,
     /// LRU-eviction observed-flag (R13(b) gauge). Set by [`Drop`] when
     /// the entry's `Arc` reference count drops to zero (i.e. evicted
     /// from the dispatch table AND the per-flow forward task has
@@ -272,6 +289,7 @@ fn _flow_entry_field_audit(e: &FlowEntry) {
         peer,
         backend_sock,
         backlog_tx,
+        closed,
         #[cfg(any(test, feature = "test-gauges"))]
         dropped,
     } = e;
@@ -283,6 +301,7 @@ fn _flow_entry_field_audit(e: &FlowEntry) {
     let _: &PlMutex<SocketAddr> = peer;
     let _: &Arc<UdpSocket> = backend_sock;
     let _: &mpsc::Sender<Vec<u8>> = backlog_tx;
+    let _: &CancellationToken = closed;
     #[cfg(any(test, feature = "test-gauges"))]
     let _: &Arc<AtomicBool> = dropped;
     // None of the above types are key material (AEAD::Key,
@@ -535,47 +554,135 @@ fn set_flows_gauge(ctx: &RouterCtx) {
 /// eviction lives in A3. Returns the number of dispatch-table entries
 /// removed (typically 1 or 2 — flow may have two keys).
 fn evict_oldest(ctx: &RouterCtx) -> usize {
-    let mut oldest: Option<(Vec<u8>, u64)> = None;
-    let mut victim_flow: Option<Arc<FlowEntry>> = None;
+    let mut oldest_last = u64::MAX;
+    let mut victim: Option<Arc<FlowEntry>> = None;
     for entry in ctx.table.iter() {
         let last = entry.value().last_seen_ms.load(Ordering::Relaxed);
-        if oldest.as_ref().is_none_or(|(_, prev)| last < *prev) {
-            oldest = Some((entry.key().clone(), last));
-            victim_flow = Some(Arc::clone(entry.value()));
+        if victim.is_none() || last < oldest_last {
+            oldest_last = last;
+            victim = Some(Arc::clone(entry.value()));
         }
     }
-    let Some(victim) = victim_flow else {
+    match victim {
+        Some(v) => reclaim_flows(ctx, std::slice::from_ref(&v)),
+        None => 0,
+    }
+}
+
+/// F-S20-2 — reclaim a set of flows. SINGLE-SOURCED reclamation (R12) for
+/// both LRU eviction ([`evict_oldest`]) and the periodic idle sweep
+/// ([`sweep_idle_flows`]). For each victim:
+///
+/// 1. **Cancel its `closed` token** so the per-flow reverse pump exits its
+///    otherwise-indefinite blocking `backend_sock.recv()` and releases its
+///    `Arc<FlowEntry>`. This is the load-bearing step — without it, removing
+///    the dispatch keys alone cannot reclaim a flow whose backend is
+///    alive-but-silent (no recv error to break the loop), so the fd + tasks
+///    would leak (the F-S20-2 mechanism).
+/// 2. **Remove every dispatch-table key** pointing at the victim (Arc
+///    identity; a migrated flow may hold 2 keys). Borrow-and-collect to
+///    avoid an iterator/remove deadlock in DashMap.
+///
+/// Once the reverse task exits and the keys are gone the entry's strong
+/// count reaches zero: its `Drop` closes the backend UDP socket fd and the
+/// forward task's channel (or the forward task's own `closed` select fires).
+/// Bumps `flows_evicted_total` ONCE per flow actually reclaimed (owner ruling
+/// Q1 — not per removed CID key, which would double-count 2-key flows).
+/// Returns the number of dispatch-table entries removed (so the LRU caller
+/// can detect "nothing evicted" and avoid spinning).
+fn reclaim_flows(ctx: &RouterCtx, victims: &[Arc<FlowEntry>]) -> usize {
+    if victims.is_empty() {
         return 0;
-    };
-    // Remove every key in the dispatch table that points to this
-    // FlowEntry (Arc identity match). Borrow-and-collect to avoid
-    // iterator/remove deadlock in DashMap.
-    let keys: Vec<Vec<u8>> = ctx
+    }
+    // Signal each victim's pumps to stop (idempotent; `CancellationToken`).
+    for v in victims {
+        v.closed.cancel();
+    }
+    let mut per_victim_removed = vec![0usize; victims.len()];
+    let keys: Vec<(usize, Vec<u8>)> = ctx
         .table
         .iter()
-        .filter(|kv| Arc::ptr_eq(kv.value(), &victim))
-        .map(|kv| kv.key().clone())
+        .filter_map(|kv| {
+            victims
+                .iter()
+                .position(|v| Arc::ptr_eq(kv.value(), v))
+                .map(|i| (i, kv.key().clone()))
+        })
         .collect();
-    let mut removed = 0;
-    for k in keys {
+    let mut removed = 0usize;
+    for (i, k) in keys {
         if ctx.table.remove(&k).is_some() {
             removed += 1;
+            if let Some(c) = per_victim_removed.get_mut(i) {
+                *c += 1;
+            }
         }
     }
-    if removed > 0 {
-        // One eviction event per FLOW (owner ruling Q1) — not per
-        // removed CID key, which would double-count 2-key flows.
+    let flows_reclaimed = per_victim_removed.iter().filter(|&&c| c > 0).count();
+    if flows_reclaimed > 0 {
         if let Some(m) = &ctx.params.metrics {
-            m.flows_evicted_total.inc();
+            m.flows_evicted_total
+                .inc_by(u64::try_from(flows_reclaimed).unwrap_or(u64::MAX));
         }
         // Self-correcting gauge: re-read the post-removal table size.
         set_flows_gauge(ctx);
     }
-    // Dropping `victim` here decrements the Arc strong count; once the
-    // forward task exits (channel close on backlog_tx drop) the entry's
-    // own `Drop` fires and sets `dropped` (test-gauges).
-    drop(victim);
     removed
+}
+
+/// F-S20-2 — periodic idle-flow reaper. Reclaims every flow whose
+/// `last_seen_ms` is older than `idle_ms`, bounding the table by the LIVE
+/// connection count instead of the LRU cap at `2 * max_quic_connections`.
+/// Passthrough cannot observe the encrypted CONNECTION_CLOSE, so a flow for
+/// a closed connection would otherwise persist (pinning a backend UDP socket
+/// fd + 2 pump tasks) until the cap — the S20 leak. Returns the number of
+/// flows reclaimed this sweep.
+fn sweep_idle_flows(ctx: &RouterCtx, idle_ms: u64) -> usize {
+    let now_ms = elapsed_ms(Instant::now(), ctx.epoch);
+    let mut victims: Vec<Arc<FlowEntry>> = Vec::new();
+    for entry in ctx.table.iter() {
+        let last = entry.value().last_seen_ms.load(Ordering::Relaxed);
+        if now_ms.saturating_sub(last) >= idle_ms
+            && !victims.iter().any(|v| Arc::ptr_eq(v, entry.value()))
+        {
+            victims.push(Arc::clone(entry.value()));
+        }
+    }
+    let n = victims.len();
+    reclaim_flows(ctx, &victims);
+    n
+}
+
+/// F-S20-2 — the periodic idle-flow reaper task body. Ticks every `period`
+/// and reclaims flows idle past `idle_ms` via [`sweep_idle_flows`], until
+/// `shutdown` fires. Extracted from [`PassthroughListener::spawn`] so the loop
+/// is directly testable (a `tokio::spawn`'d closure is invisible to unit-test
+/// coverage). The first `interval` tick fires immediately; `Skip` missed-tick
+/// behaviour avoids a burst if a sweep ran long.
+async fn run_idle_sweeper(
+    ctx: Arc<RouterCtx>,
+    idle_ms: u64,
+    period: Duration,
+    shutdown: CancellationToken,
+) {
+    let mut tick = tokio::time::interval(period);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            biased;
+            () = shutdown.cancelled() => break,
+            _ = tick.tick() => {
+                let reaped = sweep_idle_flows(&ctx, idle_ms);
+                if reaped > 0 {
+                    tracing::debug!(
+                        reaped,
+                        idle_ms,
+                        "passthrough idle-flow sweep reclaimed flows"
+                    );
+                }
+            }
+        }
+    }
 }
 
 /// Handle one inbound datagram from the client.
@@ -780,6 +887,7 @@ async fn handle_initial(
         peer: PlMutex::new(from),
         backend_sock: Arc::clone(&backend_sock),
         backlog_tx: backlog_tx.clone(),
+        closed: CancellationToken::new(),
         #[cfg(any(test, feature = "test-gauges"))]
         dropped: Arc::clone(&dropped),
     });
@@ -798,12 +906,24 @@ async fn handle_initial(
     // Forward the inbound packet first.
     let _ = backlog_tx.try_send(pkt);
 
-    // Spawn per-flow forward pump (client→backend).
+    // Spawn per-flow forward pump (client→backend). Exits when the backlog
+    // channel closes (all `backlog_tx` senders dropped — i.e. the FlowEntry
+    // dropped) OR the flow's `closed` token fires (F-S20-2 reclaim), so a
+    // reaped flow's forward task tears down promptly rather than lingering.
     let backend_sock_fwd = Arc::clone(&backend_sock);
     let ctx_fwd = Arc::clone(&ctx);
+    let closed_fwd = flow.closed.clone();
     tokio::spawn(async move {
         let mut rx = backlog_rx;
-        while let Some(buf) = rx.recv().await {
+        loop {
+            let buf = tokio::select! {
+                biased;
+                () = closed_fwd.cancelled() => break,
+                maybe = rx.recv() => match maybe {
+                    Some(buf) => buf,
+                    None => break,
+                },
+            };
             if let Err(e) = backend_sock_fwd.send(&buf).await {
                 if let Some(m) = &ctx_fwd.params.metrics {
                     m.backend_socket_errors_total.inc();
@@ -824,15 +944,24 @@ async fn handle_initial(
 async fn reverse_pump(ctx: Arc<RouterCtx>, flow: Arc<FlowEntry>) {
     let mut buf = vec![0u8; MAX_UDP_DATAGRAM_SIZE];
     loop {
-        let n = match flow.backend_sock.recv(&mut buf).await {
-            Ok(n) => n,
-            Err(e) => {
-                if let Some(m) = &ctx.params.metrics {
-                    m.backend_socket_errors_total.inc();
+        // F-S20-2: race the blocking backend recv against the per-flow
+        // `closed` signal so an LRU-evicted / idle-reaped flow exits here,
+        // releasing this task's `Arc<FlowEntry>` (→ fd + forward task freed).
+        // Without this, a flow whose backend is alive-but-silent would block
+        // on `recv()` forever and never be reclaimed.
+        let n = tokio::select! {
+            biased;
+            () = flow.closed.cancelled() => break,
+            r = flow.backend_sock.recv(&mut buf) => match r {
+                Ok(n) => n,
+                Err(e) => {
+                    if let Some(m) = &ctx.params.metrics {
+                        m.backend_socket_errors_total.inc();
+                    }
+                    tracing::trace!(error = %e, "backend recv");
+                    break;
                 }
-                tracing::trace!(error = %e, "backend recv");
-                break;
-            }
+            },
         };
         let slice = buf.get(..n).unwrap_or(&[]);
 
@@ -1048,6 +1177,24 @@ impl PassthroughListener {
             "QUIC passthrough listener bound"
         );
 
+        // F-S20-2: periodic idle-flow reaper. Bounds the flow table by the
+        // LIVE connection count (a flow idle past `flow_idle_timeout` is
+        // reclaimed — backend UDP socket fd + both pump tasks freed) rather
+        // than waiting for the LRU cap at `2 * max_quic_connections`.
+        // `Duration::ZERO` disables it (LRU-only, pre-S21 behaviour).
+        let idle = ctx.params.flow_idle_timeout;
+        if !idle.is_zero() {
+            let sweep_ctx = Arc::clone(&ctx);
+            let sweep_shutdown = shutdown.clone();
+            let idle_ms = u64::try_from(idle.as_millis()).unwrap_or(u64::MAX);
+            // Sweep cadence = a quarter of the idle window, clamped to
+            // [1s, 10s], so a reaped flow is freed within ~1.25× the idle
+            // timeout without busy-spinning on a tiny table.
+            let period = Duration::from_millis((idle_ms / 4).max(1))
+                .clamp(Duration::from_secs(1), Duration::from_secs(10));
+            tokio::spawn(run_idle_sweeper(sweep_ctx, idle_ms, period, sweep_shutdown));
+        }
+
         let shutdown_for_loop = shutdown.clone();
         let dataplane_for_loop = Arc::clone(&dataplane);
         let handle = tokio::spawn(async move {
@@ -1196,6 +1343,7 @@ mod tests {
             )),
             backend_sock: Arc::new(sock),
             backlog_tx: tx,
+            closed: CancellationToken::new(),
             #[cfg(any(test, feature = "test-gauges"))]
             dropped: Arc::new(AtomicBool::new(false)),
         };
@@ -1560,6 +1708,144 @@ mod tests {
         });
     }
 
+    // --- (5b) F-S20-2 idle sweep + reclamation proof + negative control ---
+
+    #[test]
+    fn idle_sweep_reclaims_idle_flows_and_frees_them() {
+        rt().block_on(async {
+            let (ctx, m, _b) = test_ctx(|p| p.mint_retry = false).await;
+            // Open 3 flows (one client-DCID key each). Each spawns a forward
+            // + reverse pump and pins a backend UDP socket fd.
+            for i in 0u8..3 {
+                let dcid = vec![0x80 + i; 8];
+                handle_initial(
+                    Arc::clone(&ctx),
+                    vec![0u8; 8],
+                    loopback(45000 + u16::from(i)),
+                    1,
+                    &dcid,
+                    &[],
+                    None,
+                )
+                .await;
+            }
+            assert_eq!(ctx.table.len(), 3, "3 flows resident");
+
+            // Capture each flow's Drop-gauge WITHOUT holding the FlowEntry Arc
+            // (holding it would prevent reclamation), so we can prove the
+            // entries are actually freed (fd + tasks) after the sweep.
+            let dropped_flags: Vec<Arc<AtomicBool>> = ctx
+                .table
+                .iter()
+                .map(|kv| Arc::clone(&kv.value().dropped))
+                .collect();
+
+            // Negative control: a generous idle window leaves freshly-touched
+            // flows resident (their last_seen is ~now).
+            assert_eq!(
+                sweep_idle_flows(&ctx, 10_000),
+                0,
+                "fresh flows must NOT be reaped under a 10s idle window"
+            );
+            assert_eq!(ctx.table.len(), 3, "negative control: all resident");
+            assert_eq!(m.flows_evicted_total.get(), 0, "no eviction yet");
+
+            // Make every flow look idle (last_seen far in the past), let a
+            // couple ms elapse so the epoch-relative now is non-zero, then
+            // sweep with a 1ms idle window.
+            for kv in ctx.table.iter() {
+                kv.value().last_seen_ms.store(0, Ordering::Relaxed);
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            let reaped = sweep_idle_flows(&ctx, 1);
+            assert_eq!(reaped, 3, "all 3 idle flows reaped");
+            assert!(ctx.table.is_empty(), "table empty after idle sweep");
+            assert_eq!(
+                m.flows_evicted_total.get(),
+                3,
+                "one eviction event per reclaimed flow"
+            );
+            assert_eq!(m.flows.get(), 0, "gauge reflects empty table");
+
+            // Reclamation proof (the load-bearing part of F-S20-2): the
+            // per-flow reverse pump must EXIT on the cancel so the FlowEntry's
+            // strong count reaches zero — its Drop fires (closing the backend
+            // UDP socket fd + the forward task's channel). Poll the Drop gauge.
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            loop {
+                let all = dropped_flags.iter().all(|d| d.load(Ordering::Acquire));
+                if all {
+                    break;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "idle-swept flows must be FREED (Drop fires) — a lingering \
+                     reverse pump would leak the fd (the F-S20-2 mechanism)"
+                );
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        });
+    }
+
+    // --- (5c) F-S20-2 the PERIODIC reaper task (run_idle_sweeper) ---------
+
+    #[test]
+    fn idle_sweeper_task_reaps_periodically_and_stops_on_shutdown() {
+        rt().block_on(async {
+            let (ctx, m, _b) = test_ctx(|p| p.mint_retry = false).await;
+            for i in 0u8..3 {
+                let dcid = vec![0x90 + i; 8];
+                handle_initial(
+                    Arc::clone(&ctx),
+                    vec![0u8; 8],
+                    loopback(46000 + u16::from(i)),
+                    1,
+                    &dcid,
+                    &[],
+                    None,
+                )
+                .await;
+            }
+            assert_eq!(ctx.table.len(), 3, "3 flows resident");
+            // Mark them idle so the FIRST sweep tick reaps them.
+            for kv in ctx.table.iter() {
+                kv.value().last_seen_ms.store(0, Ordering::Relaxed);
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+
+            // Drive the REAL periodic reaper task (idle_ms=1, period=20ms).
+            let shutdown = CancellationToken::new();
+            let task = tokio::spawn(run_idle_sweeper(
+                Arc::clone(&ctx),
+                1,
+                Duration::from_millis(20),
+                shutdown.clone(),
+            ));
+
+            // The periodic task (not a direct call) must reclaim all flows.
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+            while !ctx.table.is_empty() {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "the periodic run_idle_sweeper task must reap idle flows"
+                );
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+            assert!(
+                m.flows_evicted_total.get() >= 3,
+                "periodic sweep bumped the eviction counter"
+            );
+
+            // Shutdown arm: the task must EXIT promptly on cancel (no leak of
+            // the reaper task itself).
+            shutdown.cancel();
+            tokio::time::timeout(Duration::from_secs(2), task)
+                .await
+                .expect("run_idle_sweeper must exit on shutdown.cancel()")
+                .expect("reaper task joined cleanly");
+        });
+    }
+
     // --- (6) forward_short multi-length fallback + strict-source -----
 
     #[test]
@@ -1588,6 +1874,7 @@ mod tests {
                     peer: PlMutex::new(recorded),
                     backend_sock: Arc::new(UdpSocket::bind(loopback(0)).await.expect("bind")),
                     backlog_tx: tx,
+                    closed: CancellationToken::new(),
                     dropped: Arc::new(AtomicBool::new(false)),
                 };
                 assert_eq!(
@@ -1615,6 +1902,7 @@ mod tests {
                 peer: PlMutex::new(loopback(44000)),
                 backend_sock: Arc::new(UdpSocket::bind(loopback(0)).await.expect("bind")),
                 backlog_tx: tx,
+                closed: CancellationToken::new(),
                 dropped: Arc::new(AtomicBool::new(false)),
             });
             ctx.table.insert(dcid10.clone(), Arc::clone(&flow));

@@ -1,0 +1,11 @@
+=== SOAK sc4_modeb — BOUNDED (240s, 17 samples) ===
+      rss_kb [BOUNDED] rss_kb: bounded — last-third median 24564 vs first-third 24084 (+2.0%, within band 10% or non-monotone 60%) — first=7564 last=24564 min=7564 max=24780
+    vmhwm_kb [BOUNDED] vmhwm_kb: bounded — last-third median 24644 vs first-third 24240 (+1.7%, within band 10% or non-monotone 93%) — first=7564 last=25020 min=7564 max=25020
+         fds [BOUNDED] fds: bounded — last-third median 19 vs first-third 20 (-5.0%, within band 10% or non-monotone 80%) — first=11 last=19 min=11 max=21
+     threads [BOUNDED] threads: bounded — last-third median 9 vs first-third 9 (+0.0%, within band 10% or non-monotone 100%) — first=9 last=9 min=9 max=9
+  quic_modeb_connections [BOUNDED] quic_modeb_connections: bounded — last-third median 7 vs first-third 8 (-12.5%, within band 10% or non-monotone 60%) — first=0 last=6 min=0 max=9
+  quic_modeb_streams_active [BOUNDED] quic_modeb_streams_active: bounded — last-third median 4 vs first-third 4 (+0.0%, within band 10% or non-monotone 87%) — first=0 last=4 min=0 max=4
+  quic_modeb_datagrams_dropped_total [BOUNDED] quic_modeb_datagrams_dropped_total: counter rose 0 over run at bounded rate (slope 0.0000/sample) — first=0 last=0 min=0 max=0
+  panic_total [BOUNDED] panic_total: stayed zero across the run — first=0 last=0 min=0 max=0
+  load:
+    quic_load: ok=4936 err=0

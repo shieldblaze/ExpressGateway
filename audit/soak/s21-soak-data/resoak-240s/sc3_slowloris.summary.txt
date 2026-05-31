@@ -1,0 +1,9 @@
+=== SOAK sc3_slowloris — DRIFT (finding) (240s, 17 samples) ===
+      rss_kb [ DRIFT] rss_kb: drift — last-third median 25016 vs first-third 17372 (+44.0%), monotone 80% , slope 595.5412/sample — first=7232 last=25044 min=7232 max=25044
+    vmhwm_kb [ DRIFT] vmhwm_kb: drift — last-third median 25640 vs first-third 17804 (+44.0%), monotone 100% , slope 610.1412/sample — first=7232 last=25640 min=7232 max=25640
+         fds [BOUNDED] fds: bounded — last-third median 209 vs first-third 209 (+0.0%, within band 10% or non-monotone 53%) — first=12 last=206 min=12 max=211
+     threads [BOUNDED] threads: bounded — last-third median 9 vs first-third 9 (+0.0%, within band 10% or non-monotone 100%) — first=10 last=9 min=9 max=10
+  accept_inflight [BOUNDED] accept_inflight: bounded — last-third median 148 vs first-third 148 (+0.0%, within band 10% or non-monotone 87%) — first=32 last=146 min=32 max=148
+  panic_total [BOUNDED] panic_total: stayed zero across the run — first=0 last=0 min=0 max=0
+  load:
+    h1_baseline: ok=847191 err=0

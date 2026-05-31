@@ -1,0 +1,10 @@
+=== SOAK sc5_modea — DRIFT (finding) (240s, 17 samples) ===
+      rss_kb [ DRIFT] rss_kb: drift — last-third median 88520 vs first-third 79792 (+10.9%), monotone 100% , slope 1549.6353/sample — first=8220 last=88520 min=8220 max=88520
+    vmhwm_kb [ DRIFT] vmhwm_kb: drift — last-third median 88520 vs first-third 79792 (+10.9%), monotone 100% , slope 1549.6353/sample — first=8220 last=88520 min=8220 max=88520
+         fds [BOUNDED] fds: bounded — last-third median 146 vs first-third 318 (-54.1%, within band 10% or non-monotone 0%) — first=11 last=138 min=11 max=810
+     threads [BOUNDED] threads: bounded — last-third median 9 vs first-third 9 (+0.0%, within band 10% or non-monotone 100%) — first=9 last=9 min=9 max=9
+  quic_passthrough_flows [BOUNDED] quic_passthrough_flows: bounded — last-third median 269 vs first-third 613 (-56.1%, within band 10% or non-monotone 0%) — first=0 last=253 min=0 max=1597
+  quic_passthrough_flows_evicted_total [BOUNDED] quic_passthrough_flows_evicted_total: counter rose 6490 over run at bounded rate (slope 299.0529/sample) — first=0 last=6490 min=0 max=6490
+  panic_total [BOUNDED] panic_total: stayed zero across the run — first=0 last=0 min=0 max=0
+  load:
+    quic_load: ok=6617 err=0

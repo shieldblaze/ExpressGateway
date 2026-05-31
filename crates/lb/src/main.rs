@@ -1175,6 +1175,7 @@ async fn spawn_passthrough(
     params.audit_throttle_window = Duration::from_secs(cfg.audit_throttle_window_secs);
     params.max_dcid_len_routed = cfg.max_dcid_len_routed;
     params.mint_retry = cfg.mint_retry;
+    params.flow_idle_timeout = Duration::from_millis(cfg.flow_idle_timeout_ms);
     // S15 A3: register the quic_passthrough_* metric family off the
     // shared registry and thread the handles into the listener.
     params.metrics = Some(
