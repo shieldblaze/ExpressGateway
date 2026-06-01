@@ -142,4 +142,90 @@ tolerates unknown frames (`h3_h3_stream_e2e.rs:834` `Ok((_other,c)) => rx_tail.d
 which is why h3h3 passed 26/26 without the fix. **Verdict: AGREE.** Two independent verifies
 AGREE on the R8 + F-MD-4 + CL-guard surface (S24 two-verifier pattern + owner requirement).
 
-*(report continues — INC-4 final gate result, INC-5, Phase-3 — below.)*
+### INC-4 final full-workspace gate (R3 no-regression)
+First full gate caught the proto + `quic_listener_e2e` H3-backend GREASE flakiness (3
+hand-rolled H3-backend harnesses lacked the RFC 9114 §9 unknown-frame skip; fixed —
+`quic_listener_e2e` 6/6 ×3 + proto 5/5 deterministic). With those fixed the only
+failures workspace-wide were resolved; the binding ×3 determinism gate runs in INC-5.
+
+## INC-5 (PRODUCTION-ONLY, owner Option 3) — production is now 100% on quiche::h3
+
+Owner ruled (Option 3): do the BOUNDED production half now; defer the ~20 hand-rolled
+wire-test-harness rewrite + the lb-h3 CRATE deletion + Phase-3 to S26 (so the expensive
+test rewrite is done carefully, not rushed; main never sees a half-migration; R11 — lb-h3
+crate not fully deleted ⇒ NO promote).
+
+**INC-5a (`b6eb93cc`) — inline-400 → decoded egress + legacy raw-byte path deleted.**
+The H3 `:authority`-reject inline 400 now emits a DECODED `Head{400}+Body("bad request")
++End` onto the bounded `RespEvent` channel + a `Progressive` `StreamTx` — the SAME
+`quiche::h3` `send_response`/`send_body` egress every cell uses since INC-3 (same 400 +
+body, byte-for-byte). With its sole producer migrated, the legacy raw-byte path is gone:
+`request_tasks` + the `task_wait` future + the `finished` select arm + `StreamTx::Buffered`
++ `StreamTx::new` + the Buffered drain/finished arms. `Progressive` is the SOLE egress.
+
+**INC-5b (`5174a018`) — delete dead lb_h3 framing (~2461 LOC); lb-h3 → dev-dependency.**
+With the data path on `quiche::h3`, the hand-rolled `lb_h3` framing is dead in production
+and deleted: the 5 `encode_h3_*` encoders, `request_h3_upstream` + `H3UpstreamResponse`,
+the dead H1-response read chain (`read_h1_response*`/`H1Response`), `build_h1_request`,
+`h3_to_h1_roundtrip`, `h3_to_h1_stream`, the top-level `use lb_h3` import, all moot unit
+tests (h3_bridge −950 LOC); whole files `inc1_quiche_h3_experiment.rs` (S23 throwaway) +
+`h3_h1_binary_body_e2e.rs`; the `h3_to_h1_stream` cases in `h3_h1_stream_body{,_errors}_e2e`;
+the `lib.rs` re-exports; the `H3UpstreamResponse` half of `lb-l7 trailer_passthrough`.
+`crates/lb-quic/Cargo.toml`: `lb-h3` `[dependencies](optional)` → `[dev-dependencies]`,
+`dep:lb-h3` removed from `quic-terminate`. **`grep 'use lb_h3|lb_h3::' crates/lb-quic/src`
+(non-comment) = EMPTY — PRODUCTION IS lb_h3-FREE.** Cargo.lock unchanged; workspace
+clippy `-D` + fmt clean.
+
+**Two independent verifiers — SAFE DELETION, no coverage lost.** (1) No dangling code
+reference to any of 13 deleted symbols; (2) all deleted fns had zero production caller;
+(3) EVERY deleted test's behaviour is covered by a NAMED surviving live-path test (each
+*stronger*, real-wire vs synthetic): F-CAP-1 → `h1h3/h2h3_fcap1_over_cap_upload_never_
+complete` (real 66 MiB upload → live `conn_actor::drain_request_body`); `stream_h2_response`
+framing → `g5_stream_h2_response_over_cap_arms_reset` (h3_h2_stream_e2e); binary-body
+byte-identity → `t1_multi_data_frame_binary_body_forwarded_byte_identical` + h3_h1_resp_stream;
+inc1 = throwaway (no replacement needed); trailer_passthrough kept the live `H3Request`
+assertions; (4) production lb_h3-free + dev-dep correct.
+
+---
+
+## VERDICT: SESSION 25 PARTIAL — H3 data path FULLY migrated to quiche::h3 + production
+## lb_h3-free; full lb-h3 crate deletion + Phase-3 + PROMOTE → S26
+
+**Landed (verified):**
+- **E2 (H3→H3 upstream client) migrated to `quiche::h3`** — with the S24 E1 server front,
+  BOTH H3 endpoints + all three →H3 cells (H1/H2/H3→H3) now ride `quiche::h3::Connection`.
+  Two independent verifiers AGREE; R8 (both directions, no buffering trap), F-MD-4 mirror
+  (single-shot + R13 b/c burst), backpressure, byte-identity all green.
+- **The quiche-0.28 RFC 9114 §7.1 frame-completeness gap** handled per owner ruling: a
+  content-length truncation guard (mutation-proven load-bearing), the one no-CL test
+  re-scoped (documented, not weakened) + `CF-QUICHE-FRAME-COMPLETENESS` carry-forward.
+- **PRODUCTION is 100% on `quiche::h3`** — the inline-400 modernised, the legacy raw-byte
+  egress deleted, ~2461 LOC of dead `lb_h3` framing deleted, `lb-h3` demoted to dev-dep.
+- 3 test-harness RFC 9114 §9 GREASE-conformance regressions fixed + deterministic.
+- Wire safety net green: h3h3 26/26, h1h3+h2h3 25/25, proto 5/5, quic_listener ×3, lib 84/84.
+
+**NOT done → S26 (honest PARTIAL; NOT promoted, R11; main keeps the S22-hardened stack):**
+1. **Rewrite the ~20 hand-rolled wire-test harnesses off `lb_h3`'s frame codec** (quiche
+   exposes `quiche::h3::qpack::{Encoder,Decoder}` but NO standalone H3 *frame* codec, so
+   the harnesses that hand-build/parse DATA/HEADERS frames + varints need a replacement).
+   **Recommendation (lighter of the two):** add a small shared `tests/h3_test_codec` support
+   module (move `lb_h3`'s `frame.rs` + `varint.rs`, ~480 LOC, there) + switch QPACK to
+   `quiche::h3::qpack`; re-point the ~20 imports. Avoid the full quiche::h3 rewrite of each
+   harness unless interop fidelity demands it.
+2. **Delete the `crates/lb-h3` crate** + drop the dev-dependency once (1) is done.
+3. **Phase-3 full re-validation:** ×3 deterministic; R8 E1+E2 + R13 F-MD-4 E1+E2 re-proven;
+   the **FRESH h3spec run** proving the 9 carried findings #16-21/#23-25 PASS by construction
+   (#11-15/#22 still pass) — the headline payoff still unproven by external reference;
+   **re-soak with a NEW H3-terminate scenario** (lb-soak lacks one; this workstream
+   re-pointed exactly that path); scoped llvm-cov ≥80%.
+4. **PROMOTE** (`--no-ff`) — only when (1)-(3) are all green and `lb-h3` is actually deleted.
+
+CF-S22-QPACK-HUFFMAN: the migrated egress/ingress QPACK-Huffman-encode via `quiche::h3`
+(the hand-rolled `lb_h3::qpack` was raw-only) — gained in production; confirm the wire
+bit on the fresh h3spec run.
+
+**Carry-forwards (new this session):** `CF-QUICHE-FRAME-COMPLETENESS` (re-tighten the no-CL
+truncation test when a quiche ≥ version enforces RFC 9114 §7.1; tied to CF-QUICHE-UPGRADE)
+— documented alongside #1-10 + a v1 release-note item (no-content-length backend mid-frame-
+FIN truncation is relayed as complete; low severity: needs a malformed backend, H3 streams
+are isolated so no desync/smuggling, content-length + reset-based truncation ARE caught).
