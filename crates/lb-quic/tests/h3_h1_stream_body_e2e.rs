@@ -637,51 +637,23 @@ async fn t3_zero_length_data_frame_then_fin_no_spurious_chunk() {
 }
 
 // ---------------------------------------------------------------------
-// T4 — oversized vs tiny max_body ⇒ H3 413, upstream not completed.
+// T4 — oversized request body ⇒ H3 413, upstream not completed.
 //
-// The production const is 64 MiB. To exercise the cap with a tiny
-// limit we drive the listener whose `poll_h3` passes
-// `MAX_REQUEST_BODY_BYTES`; instead of plumbing a config knob (S3
-// work) we assert the *contract* against the real implementation by
-// sending a body that exceeds a deliberately small client-declared
-// content-length AND triggers the cap. Since the production cap is 64
-// MiB, a true >64 MiB e2e is impractical on the 2-CPU/7 GB box, so we
-// assert the cap path via a focused unit on `StreamRxBuf::feed_body`
-// with a tiny cap (the exact code poll_h3 calls) PLUS an e2e that the
-// 413 wire path is reachable. See `t4_oversized_*` below.
+// SESSION 24 / INC-2: the cumulative-body cap that previously lived
+// inside `StreamRxBuf::feed_body` (and was unit-tested here against that
+// now-deleted decoder) moved into `conn_actor::drain_request_body`,
+// which tracks `body_seen` per stream off `quiche::h3::recv_body` and
+// emits `ReqBodyEvent::Reset` once it exceeds `MAX_REQUEST_BODY_BYTES`.
+// The old `feed_body`-tiny-cap unit test was deleted WITH its decoder
+// (R5: it tested the deleted implementation, not behavior). The
+// behavioral cap → 413 mapping (the consumer side: a `Reset` body event
+// becomes a client-facing 413 and the upstream is left non-completed) is
+// still covered by `t4_oversized_*` below, which reproduces the exact
+// `Chunk` → `Reset` signal sequence `drain_request_body` emits on cap
+// breach. A dedicated regression that drives the new `body_seen > cap`
+// branch end-to-end is impractical at the 64 MiB production cap without a
+// config knob (S3) and is tracked as CF-INC2-CAP-TEST.
 // ---------------------------------------------------------------------
-#[test]
-fn t4_feed_body_tiny_cap_emits_toolarge_and_latches() {
-    use lb_quic::h3_bridge::{BodyItem, StreamRxBuf};
-
-    // Decode a HEADERS frame first so the buffer is in Body phase.
-    let hb = QpackEncoder::new()
-        .encode(&[(":method".to_string(), "POST".to_string())])
-        .unwrap();
-    let hf = encode_frame(&H3Frame::Headers { header_block: hb }).unwrap();
-    let mut rx = StreamRxBuf::default();
-    assert!(rx.feed(&hf).unwrap().is_some());
-
-    // Body with the non-UTF-8 marker, far larger than the 16-byte cap.
-    let mut payload = vec![0u8; 64];
-    payload[..3].copy_from_slice(NON_UTF8);
-    let df = encode_frame(&H3Frame::Data {
-        payload: bytes::Bytes::from(payload),
-    })
-    .unwrap();
-
-    let items = rx.feed_body(&df, 16).unwrap();
-    assert_eq!(
-        items,
-        vec![BodyItem::TooLarge],
-        "cumulative body over the cap must emit exactly TooLarge"
-    );
-    assert!(rx.is_too_large(), "TooLarge must latch");
-    // Latched: further feeds keep reporting TooLarge, never data.
-    let again = rx.feed_body(b"more", 16).unwrap();
-    assert_eq!(again, vec![BodyItem::TooLarge]);
-}
-
 #[tokio::test]
 async fn t4_oversized_body_yields_413_and_upstream_not_completed() {
     // P1-A oversized contract, exercised against the REAL streaming

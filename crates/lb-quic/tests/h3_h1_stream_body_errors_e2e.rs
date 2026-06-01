@@ -267,6 +267,22 @@ impl ClientPump {
             let readable: Vec<u64> = conn.readable().collect();
             for sid in readable {
                 let mut c = [0u8; 8192];
+                // SESSION 24 / INC-2: the migrated gateway terminates H3 via
+                // `quiche::h3::Connection`, which (per RFC 9114) opens
+                // server-initiated control + QPACK encoder/decoder
+                // UNIDIRECTIONAL streams. This hand-rolled lb_h3 client only
+                // understands response frames on the request BIDI stream
+                // (id 0); it drains-and-discards every other stream (as the
+                // `drive_h3_get`/`drive_h3_body_request` clients in the
+                // sibling suites and INC-1 Exp 3's interop client already
+                // do). Feeding a uni-stream's stream-type/QPACK bytes into
+                // `decode_frame` would mis-read them as a malformed HEADERS
+                // frame ("qpack decode: incomplete input" — the pre-fix
+                // failure on these two tests).
+                if sid != 0 {
+                    while conn.stream_recv(sid, &mut c).is_ok() {}
+                    continue;
+                }
                 loop {
                     match conn.stream_recv(sid, &mut c) {
                         Ok((n, _)) => self.rx_tail.extend_from_slice(&c[..n]),
