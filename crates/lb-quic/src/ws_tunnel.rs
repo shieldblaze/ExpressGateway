@@ -322,7 +322,7 @@ mod tests {
             if n == 0 {
                 break;
             }
-            got.extend_from_slice(&small[..n]);
+            got.extend_from_slice(small.get(..n).unwrap_or_default());
         }
         assert_eq!(got, payload.to_vec(), "read bytes must be byte-identical");
     }
@@ -370,7 +370,7 @@ mod tests {
         ep.to_reader.send(TunnelInbound::Reset).await.unwrap();
         let mut buf = [0u8; 16];
         let n = tunnel.read(&mut buf).await.unwrap();
-        assert_eq!(&buf[..n], b"hello");
+        assert_eq!(buf.get(..n).unwrap_or_default(), b"hello");
         let err = tunnel.read(&mut buf).await.unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::ConnectionReset);
     }
@@ -502,7 +502,7 @@ mod tests {
             if n == 0 {
                 break;
             }
-            got.extend_from_slice(&buf[..n]);
+            got.extend_from_slice(buf.get(..n).unwrap_or_default());
         }
         assert_eq!(
             got, b"after-empty",
