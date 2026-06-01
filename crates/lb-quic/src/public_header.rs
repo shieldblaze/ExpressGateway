@@ -126,8 +126,7 @@ pub enum VarintError {
     },
 }
 
-// SHARED-V — RFC 9000 §16 varint. Mirror of lb_h3::decode_varint by
-// intent; consolidate into lb-quic-codec in S16 (CF-S15-VARINT-SINGLESOURCE).
+// SHARED-V — RFC 9000 §16 varint, used by the QUIC public-header parser.
 //
 // Returns `(value, bytes_consumed)`. The 2-bit prefix of the first
 // byte encodes a length of 1/2/4/8; the remaining 6 bits are the

@@ -217,7 +217,7 @@ async fn spawn_capturing_h1_backend() -> (
 /// SESSION 24 / INC-3: decode a RESPONSE QPACK field block emitted by
 /// the migrated egress (the actor's `quiche::h3` encoder, which
 /// Huffman-encodes values). Uses quiche's Huffman-capable QPACK decoder
-/// — the hand-rolled `lb_h3::QpackDecoder` is raw-only. Returns the
+/// — the hand-rolled `lb_h3_testcodec::QpackDecoder` is raw-only. Returns the
 /// `(name, value)` pairs as UTF-8 strings.
 fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, String> {
     use quiche::h3::NameValue;
@@ -317,7 +317,7 @@ async fn drive_h3_get(
                         // SESSION 24 / INC-3: the server (actor) now
                         // encodes the response field section with
                         // quiche::h3's QPACK, which Huffman-encodes
-                        // values. The hand-rolled `lb_h3::QpackDecoder`
+                        // values. The hand-rolled `lb_h3_testcodec::QpackDecoder`
                         // has no Huffman support, so this client decodes
                         // the RESPONSE head with quiche's decoder (same
                         // adaptation as INC-2's ingress client swap).

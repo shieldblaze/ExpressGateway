@@ -16,33 +16,31 @@
 //!
 //! * **`set_max_field_section_size(MAX_FIELD_SECTION_SIZE)`** — the
 //!   largest *uncompressed* header list the server will accept before
-//!   raising `H3_EXCESSIVE_LOAD`. The hand-rolled decoder accepts a
-//!   HEADERS frame whose payload is up to `1 << 20` bytes
-//!   (`StreamRxBuf::feed` → `lb_h3::decode_frame(&buf, 1 << 20)`), so
-//!   `1 << 20` (1 MiB) keeps the acceptance envelope identical. This is
-//!   well above any sane request-header set (browsers cap far lower) and
-//!   below an unbounded-growth DoS — i.e. industry-safe.
-//! * **`set_qpack_max_table_capacity(0)`** — the gateway's QPACK is
-//!   **static-table only** (no dynamic table); `lb_h3::qpack` never
-//!   inserts. Advertising a `0` dynamic-table capacity tells peers not
-//!   to use dynamic insertions against us, matching exactly what the
-//!   hand-rolled decoder can satisfy (RFC 9204 §3.2.2). Same simplifying
+//!   raising `H3_EXCESSIVE_LOAD`. `1 << 20` (1 MiB) is well above any
+//!   sane request-header set (browsers cap far lower) and below an
+//!   unbounded-growth DoS — i.e. industry-safe. (This preserves the
+//!   1-MiB HEADERS acceptance envelope the gateway used before the
+//!   migration to `quiche::h3`.)
+//! * **`set_qpack_max_table_capacity(0)`** — the gateway's QPACK stays
+//!   **static-table only** (no dynamic table; quiche::h3 never inserts).
+//!   Advertising a `0` dynamic-table capacity tells peers not to use
+//!   dynamic insertions against us (RFC 9204 §3.2.2). Same simplifying
 //!   choice quiche itself makes (static-only in 0.28).
 //! * **`set_qpack_blocked_streams(0)`** — with a `0`-capacity dynamic
 //!   table there can be no blocked streams; `0` is the only consistent
-//!   value and matches current behaviour (the hand-rolled decoder never
-//!   blocks on dynamic-table references).
+//!   value (no stream ever blocks on a dynamic-table reference).
 //!
 //! These are pre-authorized "sane defaults matching current behaviour"
 //! per S23 R7; any future tuning is documented, not silent.
 
 /// Largest uncompressed header list the migrated server front will
-/// accept — see the module rationale. Matches the hand-rolled
-/// `decode_frame` HEADERS payload cap (`1 << 20`).
+/// accept — see the module rationale. `1 << 20` (1 MiB) preserves the
+/// HEADERS payload acceptance envelope used before the `quiche::h3`
+/// migration.
 pub const MAX_FIELD_SECTION_SIZE: u64 = 1 << 20;
 
 /// Build the [`quiche::h3::Config`] for the **server** termination
-/// front, with defaults matching the current hand-rolled behaviour.
+/// front, with industry-safe static-table-only QPACK defaults.
 ///
 /// # Errors
 ///
@@ -52,15 +50,15 @@ pub const MAX_FIELD_SECTION_SIZE: u64 = 1 << 20;
 pub fn build_server_h3_config() -> Result<quiche::h3::Config, quiche::h3::Error> {
     let mut cfg = quiche::h3::Config::new()?;
     cfg.set_max_field_section_size(MAX_FIELD_SECTION_SIZE);
-    // Static-table-only QPACK: no dynamic table, no blocked streams —
-    // matches the hand-rolled `lb_h3::qpack` codec exactly.
+    // Static-table-only QPACK: no dynamic table, no blocked streams (the
+    // gateway never inserts into the dynamic table).
     cfg.set_qpack_max_table_capacity(0);
     cfg.set_qpack_blocked_streams(0);
     Ok(cfg)
 }
 
 /// Build the [`quiche::h3::Config`] for the **client** (upstream) front,
-/// with defaults matching the current hand-rolled behaviour.
+/// symmetric with the server config (static-table-only QPACK both ways).
 ///
 /// SESSION 25 / INC-4: the migrated H3→H3 upstream connector
 /// (`h3_bridge::stream_request_to_h3_upstream`) wraps the pooled,
@@ -68,9 +66,9 @@ pub fn build_server_h3_config() -> Result<quiche::h3::Config, quiche::h3::Error>
 /// `quiche::h3::Connection::with_transport(qconn, &cfg)` in CLIENT mode.
 /// The config is **symmetric** with [`build_server_h3_config`]: the
 /// gateway's QPACK is static-table only in BOTH directions and the
-/// field-section acceptance envelope is the same 1 MiB the hand-rolled
-/// `lb_h3` decoder accepted. H3 has no client-only knob the gateway needs
-/// today (extended-CONNECT / WebSockets-over-H3 is an S26 item). Kept as a
+/// field-section acceptance envelope is the same 1 MiB. H3 has no
+/// client-only knob the gateway needs today (extended-CONNECT /
+/// WebSockets-over-H3 is an S26 item). Kept as a
 /// distinct constructor (not a shared `build_server_h3_config` reuse) so
 /// the client/server intents read explicitly at each call site and either
 /// can be tuned independently later without a silent coupling.
@@ -83,9 +81,8 @@ pub fn build_server_h3_config() -> Result<quiche::h3::Config, quiche::h3::Error>
 pub fn build_client_h3_config() -> Result<quiche::h3::Config, quiche::h3::Error> {
     let mut cfg = quiche::h3::Config::new()?;
     cfg.set_max_field_section_size(MAX_FIELD_SECTION_SIZE);
-    // Static-table-only QPACK: no dynamic table, no blocked streams —
-    // matches the hand-rolled `lb_h3::qpack` codec exactly (same as the
-    // server front; the gateway never inserts into the dynamic table).
+    // Static-table-only QPACK: no dynamic table, no blocked streams (same
+    // as the server front; the gateway never inserts into the dynamic table).
     cfg.set_qpack_max_table_capacity(0);
     cfg.set_qpack_blocked_streams(0);
     Ok(cfg)

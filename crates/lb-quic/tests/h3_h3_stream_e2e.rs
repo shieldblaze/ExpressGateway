@@ -4,7 +4,7 @@
 //! → `router` → `conn_actor::poll_h3` (the LIVE J3 `h3_backend`
 //! branch) → `h3_to_h3_stream_resp` → a REAL quiche `accept` H3
 //! upstream (genuine QUIC endpoint over a real `UdpSocket` speaking
-//! the `lb_h3` codec — NOT an in-process stub, NOTHING below quiche
+//! the `lb_h3_testcodec` codec — NOT an in-process stub, NOTHING below quiche
 //! hand-rolled; the real-quiche-accept pump pattern is extended from
 //! `round8_h3_authority_enforced.rs` / `h3_graceful_close.rs`).
 //!
@@ -66,7 +66,7 @@ const H3_ALPN: &[u8] = b"h3";
 
 /// SESSION 24 / INC-3: decode a RESPONSE QPACK field block emitted by
 /// the migrated egress (quiche::h3 encoder Huffman-encodes values); the
-/// hand-rolled `lb_h3::QpackDecoder` is raw-only.
+/// hand-rolled `lb_h3_testcodec::QpackDecoder` is raw-only.
 #[allow(dead_code)]
 fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, String> {
     use quiche::h3::NameValue;
@@ -578,7 +578,7 @@ async fn drive_h3(
 
 // ─────────────────────────────────────────────────────────────────────
 // §2  Real quiche::accept H3 upstream (genuine endpoint, real socket,
-//     lb_h3 codec — extends the round8 / h3_graceful_close pattern).
+//     lb_h3_testcodec codec — extends the round8 / h3_graceful_close pattern).
 // ─────────────────────────────────────────────────────────────────────
 
 /// What the upstream observed about the request it received.
@@ -695,7 +695,7 @@ enum TrailerKind {
 /// Spawn a genuine quiche `accept` H3 upstream on a real `UdpSocket`.
 /// One accepted connection per pooled dial (the gateway pool dials a
 /// fresh conn per request and `set_reusable(false)`s it — S-2). Per
-/// request stream: decode the HEADERS + DATA frames via `lb_h3`,
+/// request stream: decode the HEADERS + DATA frames via `lb_h3_testcodec`,
 /// capture the body + whether it FIN'd cleanly + the HEADERS-frame
 /// count, then emit the configured response. NOTHING below quiche is
 /// hand-rolled.

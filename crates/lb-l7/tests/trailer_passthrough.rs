@@ -363,10 +363,10 @@ async fn test_h3_h1_trailers_emitted_on_wire() {
 /// only documented; this is the positive pin replacing that prose.
 ///
 /// (The buffering `H3UpstreamResponse` carrier that previously mirrored
-/// this on the response side was deleted with the hand-rolled `lb_h3`
-/// framing once the H3 data path migrated to `quiche::h3`; the live
-/// response trailers are now carried by the streaming `H3RespEvent`
-/// sink, exercised by the `lb-quic` `h3_*_resp_stream` e2e suites.)
+/// this on the response side was deleted with the hand-rolled H3 framing
+/// once the H3 data path migrated to `quiche::h3`; the live response
+/// trailers are now carried by the streaming `H3RespEvent` sink,
+/// exercised by the `lb-quic` `h3_*_resp_stream` e2e suites.)
 #[test]
 fn lb_quic_h3_surfaces_carry_trailers() {
     // `H3Request` carries trailers and `Default` yields an empty list

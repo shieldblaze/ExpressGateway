@@ -61,12 +61,10 @@ lb-io = { path = "../lb-io", optional = true }
 
 [dev-dependencies]
 # S25 INC-5: the H3 data path migrated to `quiche::h3`; production
-# `crates/lb-quic/src` no longer links the hand-rolled `lb-h3` frame
-# codec / QPACK static-table encoder/decoder. It survives ONLY as a
-# dev-dependency for the H3 e2e test rigs that still hand-roll wire
-# bytes (`h3_h1_stream_body*_e2e.rs`, etc.).
-lb-h3 = { path = "../lb-h3" }
-# S26 INC-A: test-only codec for the H3 e2e wire-test rigs (dev-dep only).
+# `crates/lb-quic/src` no longer links a hand-rolled frame codec / QPACK
+# static-table encoder-decoder. The hand-rolled codec survives ONLY as the
+# test-only `lb-h3-testcodec` dev-dependency, used by the H3 e2e test rigs
+# that still hand-roll wire bytes (`h3_h1_stream_body*_e2e.rs`, etc.).
 lb-h3-testcodec = { path = "../lb-h3-testcodec" }
 rcgen = { version = "0.13", features = ["pem"] }
 tokio = { workspace = true, features = ["full", "test-util"] }

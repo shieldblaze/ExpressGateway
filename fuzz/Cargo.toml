@@ -22,9 +22,8 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 lb-h1 = { path = "../crates/lb-h1" }
 lb-h2 = { path = "../crates/lb-h2" }
-lb-h3 = { path = "../crates/lb-h3" }
-# S26 INC-A: test-only codec for the H3 fuzz targets (fuzz crate is not a
-# workspace member, so this must be a normal [dependencies] entry).
+# S26: test-only codec for the H3 fuzz targets (fuzz crate is not a workspace
+# member, so this must be a normal [dependencies] entry).
 lb-h3-testcodec = { path = "../crates/lb-h3-testcodec" }
 quiche = "0.28"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }

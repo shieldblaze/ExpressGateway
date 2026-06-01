@@ -116,8 +116,8 @@ pub use passthrough::{PassthroughListener, PassthroughParams};
 //
 // S15 A2 (a1) — CF-S15-PASSTHROUGH-FEATURE-GATING. Everything below is
 // the existing H3 termination router/actor/bridge/listener tree. It
-// requires `quiche`, `tokio-quiche`, `lb-io`, `lb-h3`, `lb-core`,
-// `hyper`, `http-body-util`. Building with
+// requires `quiche`, `tokio-quiche`, `lb-io`, `lb-core`, `hyper`,
+// `http-body-util`. Building with
 // `--no-default-features --features quic-passthrough-only` excludes
 // all of it, so `cargo bloat --filter quiche` shows ZERO
 // quiche::Connection / BoringSSL symbols on the Mode A binary segment

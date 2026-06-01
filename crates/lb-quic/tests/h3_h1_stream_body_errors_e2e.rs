@@ -56,7 +56,7 @@ const REQUEST_AUTHORITY: &str = "h3-stream-err.test:4433";
 
 /// SESSION 24 / INC-3: decode a RESPONSE QPACK field block emitted by
 /// the migrated wire egress (quiche::h3 encoder Huffman-encodes values);
-/// the hand-rolled `lb_h3::QpackDecoder` is raw-only.
+/// the hand-rolled `lb_h3_testcodec::QpackDecoder` is raw-only.
 #[allow(dead_code)]
 fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, String> {
     use quiche::h3::NameValue;
@@ -290,7 +290,7 @@ impl ClientPump {
                 // SESSION 24 / INC-2: the migrated gateway terminates H3 via
                 // `quiche::h3::Connection`, which (per RFC 9114) opens
                 // server-initiated control + QPACK encoder/decoder
-                // UNIDIRECTIONAL streams. This hand-rolled lb_h3 client only
+                // UNIDIRECTIONAL streams. This hand-rolled lb_h3_testcodec client only
                 // understands response frames on the request BIDI stream
                 // (id 0); it drains-and-discards every other stream (as the
                 // `drive_h3_get`/`drive_h3_body_request` clients in the
@@ -320,7 +320,7 @@ impl ClientPump {
                         // SESSION 24 / INC-3: Huffman-capable QPACK
                         // decode of the quiche-encoded wire response head
                         // (the buffered `h3_to_h1_stream` 413 check below
-                        // still uses the raw lb_h3 decoder).
+                        // still uses the raw lb_h3_testcodec decoder).
                         let hdrs = decode_resp_qpack(&header_block)?;
                         for (n, v) in hdrs {
                             if n == ":status" {

@@ -13,7 +13,7 @@
 //!
 //! This test drives a REAL loopback QUIC handshake, runs the REAL
 //! [`lb_quic::run_actor`] with a REAL accept-counting TCP probe
-//! backend, and sends a REAL lb-h3 HEADERS frame on a client bidi
+//! backend, and sends a REAL lb-h3-testcodec HEADERS frame on a client bidi
 //! stream, asserting:
 //!   * comma-in-`:authority` → H3 `:status 400` AND the probe backend
 //!     records ZERO connections (the validator tripped BEFORE

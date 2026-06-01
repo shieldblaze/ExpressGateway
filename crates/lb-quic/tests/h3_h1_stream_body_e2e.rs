@@ -55,7 +55,7 @@ const REQUEST_PATH: &str = "/p1a/echo";
 
 /// SESSION 24 / INC-3: decode a RESPONSE QPACK field block emitted by
 /// the migrated wire egress (quiche::h3 encoder Huffman-encodes values);
-/// the hand-rolled `lb_h3::QpackDecoder` is raw-only.
+/// the hand-rolled `lb_h3_testcodec::QpackDecoder` is raw-only.
 #[allow(dead_code)]
 fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, String> {
     use quiche::h3::NameValue;
@@ -438,7 +438,7 @@ async fn drive_h3_body_request(
                         // quiche-encoded response head with a
                         // Huffman-capable QPACK decoder (see helper). The
                         // buffered `h3_to_h1_stream` 413 path below still
-                        // uses the raw lb_h3 decoder (hand-rolled encode).
+                        // uses the raw lb_h3_testcodec decoder (hand-rolled encode).
                         let hdrs = decode_resp_qpack(&header_block)?;
                         for (n, v) in hdrs {
                             if n == ":status" {

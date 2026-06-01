@@ -545,9 +545,10 @@ async fn quic_session(
 // onto `quiche::h3`). `with_transport` opens the client control + QPACK
 // encoder/decoder uni streams and sends SETTINGS, so this drives the migrated
 // ingress as a conformant peer would — NOT raw opaque bytes (which would never
-// reach the H3 layer). It intentionally does NOT depend on `lb_h3` (that codec
-// crate is being deleted this session); it mirrors the gateway's own
-// `h3_bridge` client surface (`send_request`/`poll`/`recv_body`).
+// reach the H3 layer). It intentionally rolls its own quiche::h3 client rather
+// than reaching for any hand-rolled H3 codec (the former one was removed in
+// S26); it mirrors the gateway's own `h3_bridge` client surface
+// (`send_request`/`poll`/`recv_body`).
 //
 // F-S26-1: the production front is backend-less, so there are exactly two
 // observable request outcomes, and BOTH are asserted (non-vacuous):

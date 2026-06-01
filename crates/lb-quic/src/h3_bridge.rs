@@ -1,24 +1,20 @@
-//! Minimal H3 ↔ H1 bridge for Pillar 3b.3c-2.
+//! H3 → {H1, H2, H3} request/response bridge.
 //!
-//! This module takes a single established [`quiche::Connection`] and
-//! drives HTTP/3 request/response termination for each readable
-//! bidi-stream: decode request HEADERS via lb-h3's
-//! [`QpackDecoder::decode`] + [`decode_frame`], forward to a plain
-//! HTTP/1.1 backend through [`lb_io::TcpPool`], and write the response
-//! HEADERS + DATA back via [`lb_h3::QpackEncoder::encode`] +
-//! [`encode_frame`].
+//! The H3 ingress + egress are owned by `quiche::h3` (the S24/S25
+//! migration): the per-connection actor ([`crate::conn_actor`]) decodes
+//! request HEADERS/DATA/trailers via `quiche::h3::Connection::poll` /
+//! `recv_body` and re-encodes the response via `send_response` /
+//! `send_body` / `send_additional_headers`. This module is the per-cell
+//! relay between that decoded H3 stream and the chosen upstream:
+//! * H3→H1 over [`lb_io::TcpPool`],
+//! * H3→H2 over [`lb_io::Http2Pool`],
+//! * H3→H3 over a pooled upstream `quiche::Connection` wrapped as a
+//!   `quiche::h3` CLIENT (`with_transport` → `send_request`).
 //!
-//! Scope: only headers that are present in the RFC 9204 QPACK static
-//! table (directly or by name reference) — this sidesteps lb-h3's
-//! literal-with-literal-name encoding path, which differs from quiche's
-//! wire format. The e2e test exercises exactly `:method GET`, `:scheme
-//! https`, `:path /`, `:authority <dns_name>` → `:status 200`,
-//! `content-length N` — all static-table names or indexed entries.
-//!
-//! Non-goals for 3b.3c-2: request bodies (POST with payload), trailers,
-//! header-value coercion, content-length negotiation beyond echoing
-//! what the backend returns. Those land in 3b.3b when the real hyper/
-//! tonic servers arrive.
+//! Full request/response bodies (streamed under the R8 bounded-channel
+//! backpressure gate), trailers (RFC 9114 §4.1), the `MAX_REQUEST_BODY`
+//! 413 cap (F-CAP-1), and the F-MD-4 reset-mapping + §7.1 content-length
+//! truncation guard are all in scope and exercised by the H3 e2e rigs.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -2318,31 +2314,23 @@ pub async fn h3_to_h3_stream_resp(
 ///   (BINDING case-7: the upstream never sees a truncated-as-complete
 ///   request).
 ///
-/// ### M-C recv half (the R8 core — replaces `decoded_body`)
-/// Drives the pooled `quiche::Connection` send/recv/timeout loop (the
-/// same proven pooled-quiche-conn driver shape [`request_h3_upstream`]
-/// uses) but with the
-/// whole-response `Vec<u8>` accumulation **deleted**. Because
-/// [`lb_h3::decode_frame`] only yields a frame once its ENTIRE
-/// payload is buffered (it would force buffering a multi-MiB DATA
-/// frame — the R8 trap), this path parses the H3 frame **header
-/// only** (frame-type + payload-length varints) via the already-
-/// public [`lb_h3::decode_varint`] — the SAME discipline as the
-/// R8-verified M-A ingress parser ([`StreamRxBuf::try_parse_frame_header`]
-/// / its [`MAX_FRAME_HEADER_BYTES`] partial-header bound) — then:
-/// * HEADERS / trailing-HEADERS / control frames: small; the declared
-///   `payload_len` is bounded by `DEFAULT_MAX_PAYLOAD_SIZE` (the SAME
-///   limit [`decode_frame`] enforced on the old buffered path — G1
-///   DoS-rejection parity) BEFORE buffering exactly that payload for
-///   QPACK.
-/// * DATA frames: the declared `payload_len` is **never** used to
-///   size a buffer (binding condition 3); the payload is streamed in
-///   `≤ H3_RESP_CHUNK_MAX` slices through the per-front [`H3RespOut`]
-///   sink (`Wire`: re-encoded via [`encode_h3_data_frame`];
-///   `Decoded`: forwarded as [`H3RespEvent::Body`]) and dropped — with
-///   the cumulative response total `cap`-tracked IN THE SINK ⇒
-///   `Err(RespAbort::OverCap)` past the sink's `cap`, identical to
-///   [`stream_h2_response`].
+/// ### recv half (the R8 core)
+/// Wraps the pooled, established upstream `quiche::Connection` as a
+/// `quiche::h3` CLIENT (`with_transport` → `send_request`) and drives its
+/// send/recv/timeout loop with NO whole-response accumulation. The
+/// response is consumed event-by-event via `quiche::h3::poll`:
+/// * `Event::Headers`: the response head (then trailing field section);
+///   the field-section size is bounded by the h3::Config
+///   `set_max_field_section_size` ([`crate::h3_config::MAX_FIELD_SECTION_SIZE`]),
+///   so QPACK never decodes an unbounded header set.
+/// * `Event::Data`: the body is read via `recv_body` into a FIXED
+///   scratch and streamed in `≤ H3_RESP_CHUNK_MAX` slices through the
+///   per-front [`H3RespOut`] sink (`Wire`: re-encoded via
+///   [`encode_h3_data_frame`]; `Decoded`: forwarded as
+///   [`H3RespEvent::Body`]) and dropped — the body is **never**
+///   whole-buffered (binding condition 3). The cumulative response total
+///   is `cap`-tracked IN THE SINK ⇒ `Err(RespAbort::OverCap)` past the
+///   sink's `cap`, identical to [`stream_h2_response`].
 ///
 /// The sink's `send(..).await` is the response-direction backpressure
 /// gate (native quiche, no hyper): a stalled client ⇒ the actor / L7

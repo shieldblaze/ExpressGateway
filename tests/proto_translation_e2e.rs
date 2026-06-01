@@ -56,7 +56,7 @@ use lb_h3_testcodec::{H3Frame, QpackEncoder, decode_frame, encode_frame};
 /// SESSION 24 / INC-3: decode a RESPONSE QPACK field block emitted by the
 /// migrated wire egress. The gateway now terminates H3 via
 /// `quiche::h3::Connection`, whose QPACK encoder Huffman-encodes field
-/// values; the hand-rolled `lb_h3::QpackDecoder` is raw-only and would
+/// values; the hand-rolled `lb_h3_testcodec::QpackDecoder` is raw-only and would
 /// mis-read the Huffman bytes ("non-utf8 qpack name"). Same client-decode
 /// adaptation as the lb-quic wire-test clients (the gateway is conformant;
 /// only the test client must speak the conformant encoding).

@@ -66,7 +66,7 @@ const MAX_UDP: usize = 65_535;
 /// SESSION 24 / INC-3: decode a RESPONSE QPACK field block emitted by
 /// the migrated egress (the actor's `quiche::h3` encoder, which
 /// Huffman-encodes values). Uses quiche's Huffman-capable QPACK decoder
-/// — the hand-rolled `lb_h3::QpackDecoder` is raw-only.
+/// — the hand-rolled `lb_h3_testcodec::QpackDecoder` is raw-only.
 #[allow(dead_code)]
 fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, String> {
     use quiche::h3::NameValue;
@@ -479,7 +479,7 @@ async fn drive_h3(
                         // section with quiche's Huffman-capable QPACK
                         // decoder (the migrated egress encodes via
                         // quiche::h3, which Huffman-encodes values; the
-                        // hand-rolled lb_h3 decoder is raw-only).
+                        // hand-rolled lb_h3_testcodec decoder is raw-only).
                         if let Ok(h) = decode_resp_qpack(&header_block) {
                             for (n, v) in h {
                                 if n == ":status" {
