@@ -3179,7 +3179,56 @@ pub async fn stream_request_to_h3_upstream(
     let mut response_complete = false;
     let mut outcome: Result<(), RespAbort> = Ok(());
 
+    // SESSION 25 / INC-4: drain the response body for `stream_id` into the
+    // bounded sink, ≤`H3_RESP_CHUNK_MAX` per slice. `sink.on_data().await` is
+    // the R8 RESPONSE backpressure point (blocks when the downstream channel is
+    // full ⇒ we stop `recv_body` ⇒ quiche stops extending the response-stream
+    // flow-control window ⇒ the backend pauses). The scratch is fixed; the body
+    // is NEVER whole-buffered. A mid-body `recv_body` error (peer RESET_STREAM /
+    // final-size — F-MD-4) maps to an upstream reset, NEVER a clean EOF.
+    //
+    // Used on a `Data` event AND unconditionally after the poll loop (PASS-3):
+    // quiche-0.28 does not re-arm the `Data` event after a 0-length DATA frame
+    // while the stream stays readable (`stream.rs` `try_consume_data` only
+    // `reset_data_event`s when `!stream_readable`), so `poll` can advance the
+    // NEXT DATA frame into `State::Data` WITHOUT emitting a fresh `Data` event;
+    // the unconditional drain relays that body (server `poll_h3` PASS-1 analogue).
+    // The outer-loop label is passed in (`$evloop`) because macro-hygienic
+    // labels cannot otherwise break a label defined at the call site.
+    macro_rules! drain_resp_body {
+        ($evloop:lifetime, $progressed:ident) => {{
+            loop {
+                match h3.recv_body(qconn, stream_id, &mut scratch) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        let slice = scratch.get(..n).unwrap_or(&[]);
+                        match sink.on_data(slice).await {
+                            Ok(()) => {
+                                $progressed = true;
+                                idle_deadline =
+                                    tokio::time::Instant::now() + H3_RESP_IDLE_TIMEOUT;
+                            }
+                            Err(a) => {
+                                outcome = Err(a);
+                                break $evloop;
+                            }
+                        }
+                    }
+                    Err(quiche::h3::Error::Done) => break,
+                    Err(e) => {
+                        tracing::warn!(error = %e, "INC-4: h3 recv_body (genuine reset)");
+                        outcome = Err(RespAbort::UpstreamReset);
+                        break $evloop;
+                    }
+                }
+            }
+        }};
+    }
+
     'evloop: while tokio::time::Instant::now() < idle_deadline {
+        // Set by `drain_resp_body!` on any relayed body this tick; drives the
+        // post-poll "re-poll instead of park" decision (below).
+        let mut progressed = false;
         // (a) request-DATA egress — send_body is flow-control-gated: Done ⇒ the
         // window is closed, keep the chunk in hand and do NOT pull body_rx, so
         // the depth-8 channel fills and the M-A pump pauses the downstream
@@ -3265,38 +3314,7 @@ pub async fn stream_request_to_h3_upstream(
                     }
                 }
                 Ok((sid, quiche::h3::Event::Data)) if sid == stream_id => {
-                    // Drain to Done in ≤H3_RESP_CHUNK_MAX slices; on_data().await
-                    // is the R8 RESPONSE backpressure point (blocks when the
-                    // downstream channel is full ⇒ stop recv_body ⇒ quiche stops
-                    // extending the response-stream window ⇒ backend pauses). The
-                    // scratch is fixed; NO whole-response buffer.
-                    loop {
-                        match h3.recv_body(qconn, stream_id, &mut scratch) {
-                            Ok(0) => break,
-                            Ok(n) => {
-                                let slice = scratch.get(..n).unwrap_or(&[]);
-                                match sink.on_data(slice).await {
-                                    Ok(()) => {
-                                        idle_deadline =
-                                            tokio::time::Instant::now() + H3_RESP_IDLE_TIMEOUT;
-                                    }
-                                    Err(a) => {
-                                        outcome = Err(a);
-                                        break 'evloop;
-                                    }
-                                }
-                            }
-                            Err(quiche::h3::Error::Done) => break,
-                            Err(e) => {
-                                // F-MD-4: a mid-body upstream stream error (peer
-                                // RESET_STREAM / final-size violation) MUST relay
-                                // as a reset, never a clean EOF.
-                                tracing::warn!(error = %e, "INC-4: h3 recv_body (genuine reset)");
-                                outcome = Err(RespAbort::UpstreamReset);
-                                break 'evloop;
-                            }
-                        }
-                    }
+                    drain_resp_body!('evloop, progressed);
                 }
                 Ok((sid, quiche::h3::Event::Finished)) if sid == stream_id => {
                     // F-MD-4 MIRROR (E2's highest-risk property). quiche delivers
@@ -3353,8 +3371,26 @@ pub async fn stream_request_to_h3_upstream(
             }
         }
 
+        // PASS-3 (edge-trigger safety): poll may have advanced the next DATA
+        // frame into `State::Data` WITHOUT emitting a `Data` event (the
+        // quiche-0.28 0-length-DATA re-arm gap above). Relay any such body now,
+        // every tick, so it is never stranded behind an empty DATA frame.
+        if sent_head && !response_complete {
+            drain_resp_body!('evloop, progressed);
+        }
+
         if response_complete {
             break 'evloop;
+        }
+
+        // If a drain made forward progress this tick, the next event(s) (more
+        // body, trailing HEADERS, or `Finished`) are ALREADY queued in quiche
+        // and need NO socket I/O — re-poll immediately rather than parking on
+        // the socket (the park would wait out the full quiche timeout while the
+        // `Finished`/trailer event sits ready, stalling the response). Bounded:
+        // `progressed` requires ≥1 relayed body byte, so this cannot spin.
+        if progressed {
+            continue 'evloop;
         }
 
         // (d) the SINGLE park point — one await on {upstream socket readable |
