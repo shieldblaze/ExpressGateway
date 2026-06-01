@@ -152,8 +152,17 @@ pub mod h3_bridge;
 // (`tests/inc1_quiche_h3_experiment.rs`) can construct it.
 #[cfg(feature = "quic-terminate")]
 pub mod h3_config;
+// SESSION 27 / WS-over-H3 (RFC 9220) Stage B — bounded
+// `AsyncRead + AsyncWrite` tunnel adapter over one H3 bidi stream. The
+// SEAM that lets the single-sourced `lb_l7::ws_proxy::proxy_frames` relay
+// run on the H3 datapath without `lb-quic` depending on `lb-l7` (which
+// would cycle). Standalone + unit-tested; gated like the rest of the H3
+// tree. `pub` so the binary (which depends on both crates) can construct
+// it. No `quiche` dependency of its own.
 #[cfg(feature = "quic-terminate")]
 mod listener;
+#[cfg(feature = "quic-terminate")]
+pub mod ws_tunnel;
 // SESSION 16 / Mode B (terminate-and-re-originate). Same gate as the H3
 // termination tree: it reuses the client-facing termination machinery
 // (`conn_actor::ActorParams`/`InboundPacket`) and the `lb-io` QUIC dial
