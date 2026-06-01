@@ -635,6 +635,8 @@ async fn s16_b2_multistream_byte_identical_round_trip() {
         h2_backend: None,
         raw_quic_backend: Some(raw_backend),
         quic_modeb_metrics: None,
+        // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
+        ws_enabled: false,
     };
 
     // 9) Run the actor; wait for all echoed payloads, then cancel.

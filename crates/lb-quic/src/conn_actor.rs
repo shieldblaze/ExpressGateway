@@ -172,6 +172,16 @@ pub struct ActorParams {
     /// the relay bumps the handles at its actor-lifetime + per-pass
     /// aggregate sites; the B4/B5 relay helpers are unaware of it.
     pub quic_modeb_metrics: Option<lb_observability::QuicModeBMetrics>,
+    /// SESSION 27 / WS-over-H3 (RFC 9220) Stage A: whether this listener
+    /// opted into WebSocket (a `[listeners.websocket]` block was present).
+    /// Threaded from [`crate::listener::QuicListenerParams::ws_enabled`]
+    /// via [`crate::router::RouterParams::ws_enabled`]. Gates BOTH the
+    /// `SETTINGS_ENABLE_CONNECT_PROTOCOL` advertisement (in
+    /// [`crate::h3_config::build_server_h3_config`]) AND the
+    /// `:protocol` Extended-CONNECT accept path in
+    /// [`crate::h3_bridge::validate_request_pseudo_headers`]. `false`
+    /// (every pre-S27 caller) keeps the H3 front byte-identical (R3).
+    pub ws_enabled: bool,
 }
 
 /// Drive one `quiche::Connection` to completion, terminating H3 and
@@ -292,7 +302,7 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
                 // matching defaults) then wrap the established transport.
                 // Both fallible steps fail safe: log + app-close so the
                 // actor loop's next `is_closed()` breaks cleanly.
-                match crate::h3_config::build_server_h3_config()
+                match crate::h3_config::build_server_h3_config(params.ws_enabled)
                     .and_then(|cfg| quiche::h3::Connection::with_transport(&mut params.conn, &cfg))
                 {
                     Ok(c) => h3 = Some(c),
@@ -319,6 +329,7 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
                     &params.backends,
                     params.h3_backend.as_ref(),
                     params.h2_backend.as_ref(),
+                    params.ws_enabled,
                 );
             }
         }
@@ -960,6 +971,9 @@ fn poll_h3(
     backends: &Arc<Vec<SocketAddr>>,
     h3_backend: Option<&(QuicUpstreamPool, SocketAddr, String)>,
     h2_backend: Option<&(Http2Pool, SocketAddr)>,
+    // SESSION 27 / WS-over-H3 Stage A: gates `:protocol` Extended-CONNECT
+    // acceptance in `validate_request_pseudo_headers`. `false` ⇒ unchanged.
+    ws_enabled: bool,
 ) {
     // PASS 1 — re-arm / backpressure drain (see fn doc): every body-phase
     // stream gets a capacity-gated `recv_body` drain this tick, regardless
@@ -1016,7 +1030,7 @@ fn poll_h3(
                 // validation FIRST — before building the request or
                 // dialling any upstream (smuggling / desync guard, R12:
                 // single ingress ⇒ covers all H3-front cells).
-                if let Err(reason) = validate_request_pseudo_headers(&headers) {
+                if let Err(reason) = validate_request_pseudo_headers(&headers, ws_enabled) {
                     tracing::warn!(
                         stream_id = sid,
                         reason,

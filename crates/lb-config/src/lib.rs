@@ -723,6 +723,17 @@ pub struct WebsocketConfig {
     /// future WS-over-HTTP/3 are UNAFFECTED by this gate.
     #[serde(default)]
     pub h2_extended_connect: bool,
+    /// SESSION 27 — RFC 9220 WebSocket-over-HTTP/3 (extended CONNECT).
+    /// OFF by default, mirroring [`Self::h2_extended_connect`]: when
+    /// `false` the QUIC/H3 listener neither advertises
+    /// `SETTINGS_ENABLE_CONNECT_PROTOCOL` nor accepts a `:protocol`
+    /// extended CONNECT (the `:protocol` pseudo-header is rejected exactly
+    /// as today — R3). Distinct from the H2 gate because the H3 datapath
+    /// is a separate listener type with its own backpressure story;
+    /// opting one in does not opt the other in. WS-over-HTTP/1.1 (RFC
+    /// 6455) is unaffected.
+    #[serde(default)]
+    pub h3_extended_connect: bool,
 }
 
 impl Default for WebsocketConfig {
@@ -736,6 +747,8 @@ impl Default for WebsocketConfig {
             read_frame_timeout_seconds: default_ws_read_frame_timeout_seconds(),
             // OFF by default — H2-only DoS gate (CF-S27-2).
             h2_extended_connect: false,
+            // OFF by default — H3 WS opt-in (S27, separate from H2's gate).
+            h3_extended_connect: false,
         }
     }
 }
@@ -1509,10 +1522,14 @@ fn validate_websocket_block(
     protocol: &str,
     listener: &ListenerConfig,
 ) -> Result<(), ConfigError> {
-    if listener.websocket.is_some() && !matches!(protocol, "h1" | "h1s") {
+    // WS-over-H1/H1s (RFC 6455) + WS-over-H2 (RFC 8441, on h1s via ALPN)
+    // are H1/H1s listeners; WS-over-H3 (RFC 9220, SESSION 27) rides the
+    // `quic` listener via H3 extended CONNECT. Any other protocol with a
+    // websocket block is a misconfig.
+    if listener.websocket.is_some() && !matches!(protocol, "h1" | "h1s" | "quic") {
         return Err(ConfigError::Validation(format!(
             "listener {i} has [listeners.websocket] but protocol is {protocol:?}; \
-             WebSocket requires protocol=\"h1\" or \"h1s\""
+             WebSocket requires protocol=\"h1\", \"h1s\", or \"quic\""
         )));
     }
     if let Some(ws) = listener.websocket.as_ref() {
@@ -2793,6 +2810,66 @@ address = "127.0.0.1:3000"
             passthrough: None,
         };
         assert!(validate_config(&config).is_err());
+    }
+
+    // SESSION 27 / WS-over-H3 (RFC 9220): a `quic` listener may now carry
+    // a `[listeners.websocket]` block (it was previously rejected — only
+    // h1/h1s were allowed). h3_extended_connect defaults OFF.
+    #[test]
+    fn validate_websocket_on_quic_listener_ok() {
+        let input = r#"
+[[listeners]]
+address = "0.0.0.0:443"
+protocol = "quic"
+
+[listeners.quic]
+cert_path = "/c"
+key_path = "/k"
+retry_secret_path = "/r"
+
+[listeners.websocket]
+"#;
+        let config = parse_config(input).unwrap();
+        let ws = config.listeners[0]
+            .websocket
+            .as_ref()
+            .expect("websocket block present on quic listener");
+        assert!(
+            !ws.h3_extended_connect,
+            "h3_extended_connect must default OFF (S27 gate, like h2_extended_connect)"
+        );
+        validate_config(&config)
+            .expect("a quic listener with a websocket block must validate (WS-over-H3)");
+    }
+
+    // SESSION 27: `h3_extended_connect = true` round-trips as the opt-in
+    // and the config validates.
+    #[test]
+    fn parse_websocket_h3_extended_connect_opt_in() {
+        let input = r#"
+[[listeners]]
+address = "0.0.0.0:443"
+protocol = "quic"
+
+[listeners.quic]
+cert_path = "/c"
+key_path = "/k"
+retry_secret_path = "/r"
+
+[listeners.websocket]
+h3_extended_connect = true
+"#;
+        let config = parse_config(input).unwrap();
+        let ws = config.listeners[0].websocket.as_ref().unwrap();
+        assert!(
+            ws.h3_extended_connect,
+            "h3_extended_connect = true must parse as the opt-in"
+        );
+        assert!(
+            !ws.h2_extended_connect,
+            "the H2 gate is independent and stays OFF"
+        );
+        validate_config(&config).unwrap();
     }
 
     #[test]

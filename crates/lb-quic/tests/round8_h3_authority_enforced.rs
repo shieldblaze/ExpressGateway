@@ -328,6 +328,8 @@ async fn run_case(authority: &str) -> (Option<u16>, u32) {
         // S16 Mode B seam: None keeps this on the H3 termination path.
         raw_quic_backend: None,
         quic_modeb_metrics: None,
+        // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
+        ws_enabled: false,
     };
     let actor = tokio::spawn(run_actor(params));
 

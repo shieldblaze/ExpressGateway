@@ -1137,6 +1137,21 @@ async fn spawn_quic(
     let mut params =
         quic_listener_params_from_config(bind_addr, quic_cfg, raw_backend, modeb_metrics);
 
+    // SESSION 27 / WS-over-H3 (RFC 9220) Stage A: opt this listener into
+    // WebSocket extended CONNECT ONLY when a `[listeners.websocket]` block
+    // is present, enabled, AND `h3_extended_connect = true`. OFF by
+    // default (mirrors the H2 `h2_extended_connect` gate, CF-S27-2): the
+    // H3 settings frame + `:protocol` rejection stay byte-identical (R3).
+    // Never on Mode B (raw_proxy never H3-terminates).
+    let ws_enabled = !mode_b
+        && listener_cfg
+            .websocket
+            .as_ref()
+            .is_some_and(|w| w.enabled && w.h3_extended_connect);
+    if ws_enabled {
+        params = params.with_websocket(true);
+    }
+
     // F-S26-1: wire the H3-terminate → backend relay. ONLY on the
     // H3-terminate path (no raw_proxy ⇒ not Mode B; the config validator
     // rejects raw_proxy + backends together). A QUIC listener with no

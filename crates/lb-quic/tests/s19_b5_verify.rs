@@ -623,6 +623,8 @@ async fn s19_b5_verify_eviction_bounds_table_across_total_streams() {
         h2_backend: None,
         raw_quic_backend: Some(raw_backend),
         quic_modeb_metrics: None,
+        // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
+        ws_enabled: false,
     };
 
     // 8) Run the actor; wait for every stream to complete, then cancel.
