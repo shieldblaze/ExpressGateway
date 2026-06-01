@@ -1,5 +1,37 @@
 # INC-2V Task E — R8 bounded-memory + backpressure proof for the WS relay
 
+> **CORRECTION (INC-5V, supersedes parts of this document).** Two claims in
+> the original INC-2V text below were SUPERSEDED by the `1a308ac3`
+> reconciliation and independently re-confirmed at INC-5V:
+>
+> 1. **"affects H1 + H2" / "R12 sibling on H1" is a FALSE POSITIVE.**
+>    WS-over-**H1 is BOUNDED and DOES backpressure.** The relay's
+>    `send().await` parks on the raw TCP socket's `WouldBlock`
+>    (tokio-tungstenite `Sink` → `poll_flush` Pending), so a non-reading
+>    client stalls the producer. Independently re-proven at INC-5V:
+>    `tests/ws_r8_backpressure_plateau.rs::h1_backend_flood_plateaus_against_nonreading_client`
+>    — a 2048-msg (~512 MiB) flood at a non-reading H1 client PLATEAUS at
+>    **17–18 messages** (x3). The original INC-2V "H1 identical" was asserted
+>    by code-similarity, NOT measured on H1; it was wrong.
+> 2. **Root cause is NOT `WsConfig::max_write_buffer_size = usize::MAX`.**
+>    That is one contributing layer, but the true unbounded sink for the H2
+>    tunnel is BELOW tungstenite: hyper's `H2Upgraded::poll_write`
+>    (hyper-1.9.0 proto/h2/upgrade.rs) feeds an `mpsc::channel(1)` →
+>    `UpgradedSendStreamTask` → `h2::SendStream::send_data`, which BUFFERS
+>    until window capacity is available (h2-0.4.13 share.rs:49-57) and is NOT
+>    bounded by hyper's `max_send_buf_size` for upgraded streams. So the
+>    relay's `send().await` never parks on the H2 tunnel → unbounded gateway
+>    memory. The bounded `max_write_buffer_size` added in INC-3 (`bd3f991d`)
+>    is a defensive hardening, not the fix.
+>
+> NET (INC-5V): F-S27-2 is **H2-ONLY**, carried as **CF-S27-2** (genuinely
+> large fix), and WS-over-H2 is **gated OFF by default** as the owner
+> disposition. WS-over-H1 is SAFE/bounded and ships on. The (i) bounded-peak
+> result below stands (it was always correct, for the drained case). Read
+> this banner as authoritative where it conflicts with the INC-2V body.
+
+---
+
 Independent verifier, SESSION 27 INC-2V. Subject: the shared WS relay core
 `crates/lb-l7/src/ws_proxy.rs::proxy_frames` (ws_proxy.rs:217-355), exercised
 real-wire over WS-over-H2 (RFC 8441) through `H2Proxy(with_websocket)`.
@@ -126,9 +158,16 @@ post-fix it must show `pushed` PLATEAU far below the flood and RSS bounded;
 the A/B control should then show the TINY-window run throttled well below the
 HUGE-window run. Verify on BOTH H1 and H2.
 
-## Summary
+## Summary (CORRECTED at INC-5V — see top banner)
 
 - (i) bounded peak memory: **PASS** (volume-independent, x3, growth ~0.2 MiB).
-- (ii) bidirectional backpressure: **FAIL — F-S27-2 BLOCKER** (gateway buffers
-  a stalled-consumer stream unbounded; attributed to the gateway, not the
-  client; root cause `max_write_buffer_size = usize::MAX`; affects H1 + H2).
+  Unchanged.
+- (ii) bidirectional backpressure:
+  - WS-over-**H1**: **PASS / BOUNDED** — relay parks on TCP `WouldBlock`;
+    re-proven (plateau 17–18 / 2048, x3). The INC-2V "FAIL on H1" was a false
+    positive (code-similarity, not measured).
+  - WS-over-**H2**: **FAIL → CF-S27-2** (carried). Unbounded gateway buffering
+    in hyper's `H2Upgraded` → `h2::SendStream` (NOT `WsConfig`). Owner
+    disposition: WS-over-H2 **gated OFF by default**; not a ship blocker for
+    S27. INC-3 added a bounded `max_write_buffer_size` + an anti-hang
+    `timeout(read_frame, send)`→Close-1008 guard as defense-in-depth.
