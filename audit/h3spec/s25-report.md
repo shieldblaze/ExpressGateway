@@ -203,6 +203,13 @@ assertions; (4) production lb_h3-free + dev-dep correct.
   egress deleted, ~2461 LOC of dead `lb_h3` framing deleted, `lb-h3` demoted to dev-dep.
 - 3 test-harness RFC 9114 §9 GREASE-conformance regressions fixed + deterministic.
 - Wire safety net green: h3h3 26/26, h1h3+h2h3 25/25, proto 5/5, quic_listener ×3, lib 84/84.
+- **Binding full-workspace ×3 NO-REGRESSION gate (R1/R15): `1438/0 / 1438/0 / 1438/0`,
+  all exit 0, deterministic allpass** (completed logs `audit/s25-logs/inc5-gate/inc5-run{1,2,3}.log`).
+  Count 1451→1438 = the deleted dead-code tests (verifier-confirmed SAFE, no coverage lost)
+  net of the added CL-guard/F-MD-4-mirror-burst/client-config tests. The 9 cells / Mode B /
+  Mode A / H1/H2 / the S22 security fixes all intact. (First ×3 attempt hit a 100%-disk
+  ENOSPC link-fail mid-gate — environmental, NOT a regression, R15; re-run clean after
+  `cargo clean` + a `gate.sh` `2>&1` redirect-order fix.)
 
 **NOT done → S26 (honest PARTIAL; NOT promoted, R11; main keeps the S22-hardened stack):**
 1. **Rewrite the ~20 hand-rolled wire-test harnesses off `lb_h3`'s frame codec** (quiche
