@@ -651,7 +651,22 @@ enum UpstreamMode {
     /// lands, so it is NOT between frames ⇒ a premature EOF
     /// (h3_bridge.rs :3375-3383: `else { outcome = PrematureEof }`).
     /// The client MUST NOT receive a clean complete 200+FIN.
+    ///
+    /// SESSION 25 / INC-4 (quiche::h3 migration): this NO-content-length
+    /// case is the documented quiche-0.28 §7.1 frame-completeness gap —
+    /// quiche delivers the truncated frame as a clean `Finished` with no
+    /// public API to detect the mid-frame finish, so the migrated E2
+    /// relays it as complete (see `..._no_cl_truncated_data_delivered_*`).
     HeadThenTruncatedData,
+    /// SESSION 25 / INC-4 (content-length truncation guard) — 200 WITH
+    /// `content-length: 4096` but only 16 body bytes written, then a clean
+    /// QUIC FIN. quiche-0.28 delivers this as a clean `Finished` (no §7.1
+    /// frame-completeness check), so the gateway's content-length
+    /// truncation guard MUST catch the under-run (`body_relayed <
+    /// content-length`) and RESET downstream — the client never gets a
+    /// clean complete 200+FIN. This is the defense-in-depth the owner ruled
+    /// MUST be verified to actually fire.
+    HeadCLThenTruncatedData,
     /// CF-H3H3-HEAD — 200 + a response HEAD carrying REGULAR headers
     /// (content-type + a custom `x-eg-resp` header) ALONGSIDE
     /// `content-length`, then a small DATA body + clean FIN. Drives the
@@ -889,6 +904,7 @@ async fn spawn_h3_upstream(
                         | UpstreamMode::OversizedBlock { .. }
                         | UpstreamMode::EmptyDataThenResp
                         | UpstreamMode::HeadThenTruncatedData
+                        | UpstreamMode::HeadCLThenTruncatedData
                         | UpstreamMode::RespWithHeaders => req_fin,
                     };
                     if ready {
@@ -1005,6 +1021,15 @@ async fn spawn_h3_upstream(
                             // (remaining > 0) ⇒ PrematureEof.
                             UpstreamMode::HeadThenTruncatedData => {
                                 resp_wire = response_head(200, None);
+                                resp_wire.extend_from_slice(&truncated_data_frame(4096, 16));
+                                resp_fin_on_drain = true;
+                            }
+                            // SESSION 25 / INC-4 — content-length truncation
+                            // guard: declare content-length: 4096 but write only
+                            // 16 body bytes, then a clean FIN. The gateway's CL
+                            // guard MUST reset (under-run), never a clean 200+FIN.
+                            UpstreamMode::HeadCLThenTruncatedData => {
+                                resp_wire = response_head(200, Some(4096));
                                 resp_wire.extend_from_slice(&truncated_data_frame(4096, 16));
                                 resp_fin_on_drain = true;
                             }
@@ -2687,16 +2712,36 @@ async fn h3h3_e2e_empty_data_frame_skipped_then_body() {
     );
 }
 
-/// Cluster 4 / CASE 15 — the upstream sends 200, then a DATA frame
-/// header declaring 4096 bytes but only 16 bytes of payload, then a
-/// clean QUIC FIN. The gateway sees the upstream stream end while still
-/// mid-`InData` (`remaining > 0`), i.e. NOT between frames, so it is a
-/// premature EOF (h3_bridge.rs :3375-3383: the `else { outcome =
-/// PrematureEof }` branch — never FIN a partial body, the response-
-/// splitting / smuggling guard). The client MUST NOT receive a clean
-/// complete 200+FIN.
+/// Cluster 4 / CASE 15 — RE-SCOPED in SESSION 25 / INC-4 (quiche::h3
+/// migration; owner-ruled documented behaviour change, NOT a silent
+/// weakening).
+///
+/// The upstream sends 200 (NO content-length), then a DATA frame header
+/// declaring 4096 bytes but only 16 bytes of payload, then a clean QUIC
+/// FIN. The PRE-MIGRATION hand-rolled E2 tracked DATA-frame boundaries
+/// and detected the mid-frame FIN as a premature EOF (reset, never a
+/// clean complete). The MIGRATED E2 delegates HTTP/3 framing to
+/// `quiche::h3`, and **quiche-0.28 does NOT enforce DATA-frame
+/// completeness at FIN (RFC 9114 §7.1)**: it delivers a clean
+/// `Event::Finished` and exposes NO public API to observe that the
+/// stream finished mid-frame (`recv_body` discards the `fin` flag;
+/// `process_finished_stream` collapses the incomplete `State::Data`).
+/// So with NO content-length to cross-check, the gateway relays the
+/// truncated response to the client as a complete 200+FIN.
+///
+/// THREAT MODEL (why this is LOW severity, owner-assessed): the gap
+/// requires a malformed/buggy BACKEND (a trusted upstream, not an
+/// untrusted client); HTTP/3 streams are independent, so a truncated
+/// response CANNOT desync the connection or smuggle across streams (the
+/// HTTP/1-style danger does not exist here); RESET-based truncation is
+/// still caught (the F-MD-4 mirror, all three →H3 cells); and a
+/// content-length-bearing truncation IS caught by the compensating
+/// guard below — see `h3h3_e2e_content_length_truncation_resets_*`.
+/// CARRY-FORWARD CF-QUICHE-FRAME-COMPLETENESS (tied to CF-QUICHE-UPGRADE):
+/// a quiche version that enforces §7.1 restores the strict frame-level
+/// guard; RE-TIGHTEN this assertion to `!(200 && fin)` then.
 #[tokio::test]
-async fn h3h3_e2e_upstream_premature_eof_mid_data_no_clean_fin() {
+async fn h3h3_e2e_no_cl_truncated_data_delivered_quiche_028_frame_completeness_gap() {
     let certs = generate_loopback_certs();
     let seen = BackendSeen::default();
     let (backend, bh) = spawn_h3_upstream(&certs, UpstreamMode::HeadThenTruncatedData, seen).await;
@@ -2707,7 +2752,7 @@ async fn h3h3_e2e_upstream_premature_eof_mid_data_no_clean_fin() {
         &certs.ca,
         DriveCfg {
             method: "GET",
-            path: "/premature-eof",
+            path: "/no-cl-truncated",
             req_body: vec![],
             req_trailers: vec![],
             stall_after: None,
@@ -2724,12 +2769,79 @@ async fn h3h3_e2e_upstream_premature_eof_mid_data_no_clean_fin() {
     sd.cancel();
     bh.abort();
 
-    // An upstream FIN mid-DATA (declared 4096, only 16 sent) must NEVER
-    // be presented to the client as a clean complete 200+FIN.
+    // DOCUMENTED quiche-0.28 §7.1 gap: with NO content-length the gateway
+    // relays the (16-byte) truncated body + the upstream's clean FIN. This
+    // asserts the migrated, compensated behaviour — the client receives the
+    // head + whatever DATA arrived + FIN; H3 stream isolation means no
+    // desync. (RE-TIGHTEN to `!(200 && fin)` once quiche enforces §7.1.)
+    assert_eq!(
+        out.status,
+        Some(200),
+        "head relayed before the truncated body"
+    );
+    assert!(
+        out.fin,
+        "quiche-0.28 §7.1 gap (no content-length): the truncated frame's clean \
+         FIN is relayed as a clean complete response (documented residual)"
+    );
+    assert!(
+        out.body.len() <= 16,
+        "only the 16 truncated body bytes (declared 4096) were available; \
+         got body_len={}",
+        out.body.len()
+    );
+}
+
+/// SESSION 25 / INC-4 — the content-length TRUNCATION GUARD (defense-in-
+/// depth, owner-ruled it MUST be verified to actually fire). The upstream
+/// sends 200 WITH `content-length: 4096` but only 16 body bytes, then a
+/// clean QUIC FIN. quiche-0.28 delivers this as a clean `Finished` (no
+/// §7.1 frame-completeness check), but the migrated E2 cross-checks the
+/// relayed body against the declared content-length: `body_relayed (16) <
+/// content-length (4096)` ⇒ a truncated upstream response ⇒ RESET
+/// downstream. The client MUST NOT receive a clean complete 200+FIN. This
+/// is the COMMON real-world truncation case (content-length is near-
+/// universal on real responses) and the compensation for the no-content-
+/// length residual gap documented above.
+#[tokio::test]
+async fn h3h3_e2e_content_length_truncation_resets_no_clean_complete() {
+    let certs = generate_loopback_certs();
+    let seen = BackendSeen::default();
+    let (backend, bh) =
+        spawn_h3_upstream(&certs, UpstreamMode::HeadCLThenTruncatedData, seen).await;
+    let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
+
+    let out = drive_h3(
+        gw,
+        &certs.ca,
+        DriveCfg {
+            method: "GET",
+            path: "/cl-truncated",
+            req_body: vec![],
+            req_trailers: vec![],
+            stall_after: None,
+            stall_for: Duration::ZERO,
+            reset_after_req_bytes: None,
+            omit_authority: false,
+            stop_reading_resp_after: None,
+        },
+        Duration::from_secs(25),
+    )
+    .await;
+
+    let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+    sd.cancel();
+    bh.abort();
+
+    // The content-length guard MUST fire: a declared-4096 / sent-16 + clean
+    // FIN response is a truncation ⇒ the client never gets a clean complete
+    // 200+FIN. (Load-bearing: if the guard is removed, quiche's clean
+    // `Finished` would deliver `200 + 16 bytes + FIN` and this fails.)
     assert!(
         !(out.status == Some(200) && out.fin),
-        "a premature upstream EOF mid-DATA must NOT yield a clean \
-         complete 200+FIN (status={:?} fin={} body_len={})",
+        "content-length under-run (declared 4096, sent 16, clean FIN) MUST NOT \
+         yield a clean complete 200+FIN — the truncation guard did not fire \
+         (status={:?} fin={} body_len={})",
         out.status,
         out.fin,
         out.body.len()

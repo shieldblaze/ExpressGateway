@@ -3179,6 +3179,28 @@ pub async fn stream_request_to_h3_upstream(
     let mut response_complete = false;
     let mut outcome: Result<(), RespAbort> = Ok(());
 
+    // SESSION 25 / INC-4 — content-length truncation guard (defense-in-depth,
+    // owner-ruled). quiche-0.28 does NOT enforce HTTP/3 DATA-frame completeness
+    // at FIN (RFC 9114 §7.1): a backend that declares an N-byte body but cleanly
+    // FINs after M<N bytes is delivered as `Event::Finished` with no error and
+    // no public API to detect the mid-frame finish (CF-QUICHE-FRAME-COMPLETENESS,
+    // tied to CF-QUICHE-UPGRADE). The hand-rolled E2 caught this via frame-length
+    // tracking; here we recover the COMMON case via the response `content-length`:
+    // a clean FIN with `body_relayed < declared content-length` is a truncated
+    // response ⇒ RESET downstream, never a clean End. (A no-content-length
+    // mid-frame-FIN truncation is the documented residual gap — low severity:
+    // needs a malformed BACKEND, H3 streams are isolated so there is no
+    // cross-stream desync/smuggling, and reset-based truncation is still caught
+    // by the F-MD-4 mirror.) The guard is skipped for bodiless responses
+    // (HEAD request, 1xx/204/304) where `content-length` describes a would-be
+    // body that is legitimately absent.
+    let req_is_head = headers
+        .iter()
+        .any(|(n, v)| n == ":method" && v.eq_ignore_ascii_case("HEAD"));
+    let mut declared_cl: Option<u64> = None;
+    let mut resp_status: Option<u16> = None;
+    let mut body_relayed: u64 = 0;
+
     // SESSION 25 / INC-4: drain the response body for `stream_id` into the
     // bounded sink, ≤`H3_RESP_CHUNK_MAX` per slice. `sink.on_data().await` is
     // the R8 RESPONSE backpressure point (blocks when the downstream channel is
@@ -3196,7 +3218,7 @@ pub async fn stream_request_to_h3_upstream(
     // The outer-loop label is passed in (`$evloop`) because macro-hygienic
     // labels cannot otherwise break a label defined at the call site.
     macro_rules! drain_resp_body {
-        ($evloop:lifetime, $progressed:ident) => {{
+        ($evloop:lifetime, $progressed:ident, $relayed:ident) => {{
             loop {
                 match h3.recv_body(qconn, stream_id, &mut scratch) {
                     Ok(0) => break,
@@ -3205,6 +3227,7 @@ pub async fn stream_request_to_h3_upstream(
                         match sink.on_data(slice).await {
                             Ok(()) => {
                                 $progressed = true;
+                                $relayed = $relayed.saturating_add(n as u64);
                                 idle_deadline =
                                     tokio::time::Instant::now() + H3_RESP_IDLE_TIMEOUT;
                             }
@@ -3284,6 +3307,15 @@ pub async fn stream_request_to_h3_upstream(
                     if !sent_head {
                         // First HEADERS ⇒ response head. The sink owns
                         // :status parse + hop-by-hop strip + cap accounting.
+                        // Capture `:status` + `content-length` for the
+                        // truncation guard (the sink consumes `fields`).
+                        for (n, v) in &fields {
+                            if n == ":status" {
+                                resp_status = v.parse::<u16>().ok();
+                            } else if n.eq_ignore_ascii_case("content-length") {
+                                declared_cl = v.trim().parse::<u64>().ok();
+                            }
+                        }
                         send_progress!(sink.on_head(&fields).await);
                         sent_head = true;
                     } else {
@@ -3314,7 +3346,7 @@ pub async fn stream_request_to_h3_upstream(
                     }
                 }
                 Ok((sid, quiche::h3::Event::Data)) if sid == stream_id => {
-                    drain_resp_body!('evloop, progressed);
+                    drain_resp_body!('evloop, progressed, body_relayed);
                 }
                 Ok((sid, quiche::h3::Event::Finished)) if sid == stream_id => {
                     // F-MD-4 MIRROR (E2's highest-risk property). quiche delivers
@@ -3332,6 +3364,22 @@ pub async fn stream_request_to_h3_upstream(
                         qconn.stream_recv(stream_id, &mut []),
                         Err(quiche::Error::StreamReset(_))
                     );
+                    // Content-length truncation guard (defense-in-depth,
+                    // owner-ruled): a clean FIN with fewer body bytes relayed than
+                    // the declared `content-length` is a truncated upstream
+                    // response ⇒ RESET downstream, never a clean End. Skipped for
+                    // bodiless responses (HEAD / 1xx / 204 / 304) where
+                    // `content-length` describes a legitimately-absent body.
+                    // Recovers the COMMON truncation case the quiche-0.28 §7.1
+                    // frame-completeness gap would otherwise pass through
+                    // (CF-QUICHE-FRAME-COMPLETENESS).
+                    let bodiless_status = req_is_head
+                        || matches!(
+                            resp_status,
+                            Some(s) if (100..200).contains(&s) || s == 204 || s == 304
+                        );
+                    let cl_truncated =
+                        declared_cl.is_some_and(|cl| !bodiless_status && body_relayed < cl);
                     if was_reset {
                         tracing::debug!(
                             stream_id,
@@ -3339,10 +3387,19 @@ pub async fn stream_request_to_h3_upstream(
                              Reset downstream (not a clean End)"
                         );
                         outcome = Err(RespAbort::UpstreamReset);
-                    } else if sent_head {
-                        response_complete = true;
-                    } else {
+                    } else if !sent_head {
                         outcome = Err(RespAbort::PrematureEof);
+                    } else if cl_truncated {
+                        tracing::warn!(
+                            stream_id,
+                            declared_cl = ?declared_cl,
+                            body_relayed,
+                            "INC-4: content-length under-run at clean FIN (truncated \
+                             upstream response); Reset downstream (not a clean End)"
+                        );
+                        outcome = Err(RespAbort::PrematureEof);
+                    } else {
+                        response_complete = true;
                     }
                     break 'evloop;
                 }
@@ -3376,7 +3433,7 @@ pub async fn stream_request_to_h3_upstream(
         // quiche-0.28 0-length-DATA re-arm gap above). Relay any such body now,
         // every tick, so it is never stranded behind an empty DATA frame.
         if sent_head && !response_complete {
-            drain_resp_body!('evloop, progressed);
+            drain_resp_body!('evloop, progressed, body_relayed);
         }
 
         if response_complete {
