@@ -108,4 +108,24 @@ pre-dial / 502 dial-failure, case-7 `H3_REQUEST_CANCELLED` no-FIN aborts). **No 
 where a truncated/reset upstream reaches the client as a clean complete response, and no
 whole-buffering path.** Verdict: **AGREE**.
 
-*(report continues — INC-4 full gate + mutation proofs, INC-5, Phase-3 — below.)*
+### Mutation proof — the CL guard is LOAD-BEARING (owner-required)
+With the guard disabled (`cl_truncated = false`), `h3h3_e2e_content_length_truncation_
+resets_no_clean_complete` **FAILS** (quiche's clean `Finished` delivers the declared-4096 /
+sent-16 response as a clean complete 200+FIN); with the guard, it **PASSES**. So the
+content-length defense-in-depth genuinely fires — proven, not asserted (`mutA-clguard.log`;
+tree reverted clean). The F-MD-4 mirror has defense-in-depth (Event::Reset + recv_body-error
++ Finished-`was_reset` probe + idle-timeout fallback + the CL guard), so no single mutation
+cleanly fails a test; it is verified by the verifier code-read (all 3 reset surfaces →
+never `on_end`) + the single-shot + the R13(b)/(c) mirror burst, all green.
+
+### Full-workspace regression (R3) — proto_translation H3 backend (test-harness, fixed)
+The first full-workspace gate caught `proxy_h1/h2_listener_h3_backend` → 502. Root cause
+(backend trace): the migrated quiche::h3 client correctly prepends a **GREASE** frame
+(`0x1f*N+0x21`, RFC 9114 §7.2.8) on the request stream; the minimal `spawn_h3_static_backend`
+only checked whether the FIRST frame was HEADERS, so it never responded → E2 idle-timeout →
+502. The old hand-rolled E2 sent no GREASE, masking the backend's non-conformance. **Fix
+(test-harness only, no production change):** the backend now skips leading GREASE/unknown/
+non-HEADERS frames (RFC 9114 §9) to find the request HEADERS — exactly as a conformant H3
+server does. `proto_translation_e2e` 5/5 green (commit `d26abe68`).
+
+*(report continues — INC-4 final gate + 2nd verify, INC-5, Phase-3 — below.)*
