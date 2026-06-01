@@ -11,7 +11,8 @@
 > ZERO regressions); Huffman gained; the remaining #23/#25 are documented quiche-0.28 QPACK
 > uni-stream limitations (inert, COR/low, shared by the prior main, close on CF-QUICHE-UPGRADE).
 > ~2461 LOC of dead hand-rolled framing deleted from production (S25) + the lb-h3 crate
-> (−1172 LOC) removed this session. (Merge gated on the completed scoped llvm-cov ≥80%, R11/R15.)
+> (−1172 LOC) removed this session. Scoped llvm-cov confirmed ≥80% (R11/R15) before the merge;
+> **promoted via merge commit `5be6c263`** (main `90915781` → `5be6c263`, `--no-ff`).
 >
 > **Owner-ratified rationale for promote-over-PARTIAL:** every R11 gate is green except the
 > literal "#23/#25 pass", which is unachievable without a quiche upgrade; the program already
