@@ -101,14 +101,36 @@ Phase 1 = build the missing real-wire verification to the S27 bar + harden the f
   - Landed + KEPT (`bd3f991d`, correct & in-scope, NOT the H2 fix): defensive `max_write_buffer_size`
     bound + an anti-hang guard wrapping both forwarding `send().await` in `timeout(read_frame, …)` →
     Close 1008 (reclaims a wedged write on socket transports — load-bearing on H1/raw).
-  - **Owner decision pending** (escalation): interim guard + carry CF-S27-2 vs. the large fix now vs.
-    gate WS-over-H2 conservatively.
-- **F-S27-3 (LOW, observability parity) — flagged, tracking.** H1 injects child `traceparent` on the
-  upstream WS handshake; the H2 path does not (pre-existing; not session-introduced). Optional R12
-  parity follow-up.
-- **Conformance PARTIAL (LOW):** `is_h2_extended_connect` accepts an extended CONNECT lacking
-  `:scheme`/`:path` (defaults `:path`=`/`) — lenient-accept, not a security issue; could be tightened
-  for strict RFC 8441 §4.
+  - **Owner decision: gate WS-over-H2 OFF-by-default** (INC-5 `09ab157d`). New
+    `WebsocketConfig.h2_extended_connect` (default false) → `H2Proxy.h2_extended_connect_enabled`;
+    when off, `enable_connect_protocol()` is not called (SETTINGS not advertised) and the
+    extended-CONNECT fork never fires (off-path extended CONNECT → h2-layer PROTOCOL_ERROR, backend
+    dials 0). Negative test `tests/ws_h2_gated_off.rs` (load-bearing: flip on → RED). The proper
+    window-aware fix is carried as **CF-S27-2**. Flag is documented with the DoS caveat (opt-in for
+    trusted clients only).
+- **F-S27-3 (LOW, observability parity) — FIXED** (INC-4 `bc162fb8`). The H2 upstream WS handshake now
+  injects the child `traceparent`/`tracestate` (trace context was already threaded via
+  `RequestTrace::inject_upstream`), matching H1 (R12). Test asserts same trace-id, different parent-id;
+  load-bearing.
+- **Lenient `:scheme`/`:path` accept (LOW, RFC 8441 §4) — FIXED** (INC-4 `bc162fb8`). A websocket
+  extended CONNECT missing `:scheme`/`:path` now returns **400** (was a silent `:path`=`/` default);
+  `tests/ws_h2_conformance.rs` (load-bearing: neutralize → 200).
+
+### INC-5V — FINAL independent WS-over-H2 sign-off (`a00c29b6`, audit-only)
+- Gating holds (off→no tunnel/advertise, on→works) — PASS, non-vacuous (`ws_h2_gated_off` ×3).
+- F-S27-1 still closed post-churn — PASS (`ws_h2_upgrade_defer` ×3, gate on).
+- LOW fixes correct — PASS (`ws_h2_conformance` ×3).
+- R8 corrected scope: **WS-over-H1 BOUNDED + backpressured** (plateau 17-18/2048 ×3); WS-over-H2 (i)
+  bounded-volume PASS / (ii) true-backpressure carried as CF-S27-2 (gated off). No false H2 claim.
+- R3 no-regression — PASS (`h2_proxy_e2e` 5, `ws_proxy_e2e` 7, `round8_ws_upgrade_defer` 4).
+- Audit reconciled: `s27-rfc8441-conformance.md` updated; `s27-r8-ws-proof.md` correction banner
+  (original "identical on H1"/WsConfig root-cause SUPERSEDED by the `1a308ac3` reconciliation).
+- **VERDICT: WS-over-H2 READY to ship (gated/opt-in).** No new findings.
+
+### PHASE 1 — COMPLETE
+WS relay core (pre-existing, shared, R12) + WS-over-H2 (RFC 8441) verified to the S27 bar. Findings:
+F-S27-1 FIXED, F-S27-3 FIXED, lenient-accept FIXED, F-S27-2 → WS-over-H2 gated off-by-default +
+CF-S27-2 carried. Real-wire e2e ✓, R8 (H1 bounded+backpressure) ✓, R13 burst ✓, RFC 8441 conformance ✓.
 
 ### F-S26-1 characterization (the gating dependency)
 
