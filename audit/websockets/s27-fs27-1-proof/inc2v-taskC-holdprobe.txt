@@ -1,0 +1,49 @@
+INC-2V Task C — idle-client unbounded-hold probe (verifier)
+============================================================
+Question (from brief): the success path spawns a task that .await's
+hyper::upgrade::on with NO explicit timeout, holding `backend_ws` open. Can
+a client that sends the extended CONNECT but never drives the upgrade cause
+an UNBOUNDED hold of `backend_ws` (resource/fd leak under hostile load)?
+
+Probe: real WS echo backend (upstream handshake SUCCEEDS -> gateway returns
+200 + spawns splice task). Client opens the extended CONNECT, asserts 200,
+then goes COMPLETELY IDLE (never sends a frame, never reads) while keeping
+the H2 stream open. The backend reports the wall-clock ms at which IT
+observes EOF (= the gateway dropped backend_ws / relay torn down).
+
+RUN A — read_frame_timeout = 2s, idle_timeout = 30s, observe window 6s:
+  HOLDPROBE: got status 200 OK at t=45ms
+  HOLDPROBE: backend observed EOF at t=2007ms
+  => The relay's per-direction read-frame watchdog (WS-002, ws_proxy.rs:
+     247-262 outer `timeout(idle, ...)`, inner `timeout(read_frame, ...)`)
+     RECLAIMED the idle backend connection at ~read_frame_timeout. Bounded.
+
+RUN B — read_frame_timeout = 30s (DEFAULT), idle_timeout = 60s, window 4s:
+  HOLDPROBE: got status 200 OK at t=44ms
+  HOLDPROBE: backend observed EOF at t=0ms (NOT closed within the 4s window)
+  => Consistent: with the larger default watchdog the connection is NOT
+     reclaimed within 4s, proving the reclamation deadline TRACKS the
+     configured read_frame_timeout (not a hardcode, not "never").
+
+KEY MECHANISM: for H2, hyper resolves hyper::upgrade::on as soon as the 200
+response headers are flushed by the gateway (the gateway controls that flush
+— it is NOT contingent on the client sending any DATA). The 200-built ->
+upgrade-resolved window is therefore genuinely brief (~tens of ms here,
+t=44-45ms end-to-end incl. TLS+H2+dial+upstream handshake). Once resolved,
+proxy_frames runs and its idle_timeout (60s) + read_frame_timeout (30s)
+watchdogs bound an idle/stalled relay in BOTH directions.
+
+VERDICT: NO unbounded-hold finding. The hold is bounded by WsConfig's
+read_frame_timeout / idle_timeout. Behaviour is identical to the ACCEPTED
+H1 sibling run_h1_ws_splice_task (h1_proxy.rs:2633-2652), which awaits the
+same upgrade future with no extra timeout and relies on the same relay
+watchdogs. The fix did not introduce a new resource-exhaustion divergence.
+
+RESIDUAL (LOW, pre-existing, NOT introduced by this fix, NOT H2-specific):
+between 200-built and upgrade-resolved, backend_ws is held with no explicit
+deadline of its own; it relies on hyper resolving/erroring the upgrade
+future. In practice this resolves in tens of ms because the gateway itself
+flushes the 200. A pathological H2 layer that accepts the response but
+indefinitely stalls the upgrade plumbing would hold one pooled socket per
+such stream until the connection-level teardown. Same exposure exists on H1.
+Not a blocker; noted for completeness.

@@ -1,0 +1,36 @@
+test r8_backpressure_attribution_ab ... R8(ii)-AB [TINY-64KiB]: after 2s, client NOT reading: pushed=2118/4096, RSS 11916kB -> 151380kB (delta 139464kB)
+R8(ii)-AB [HUGE-256MiB]: after 2s, client NOT reading: pushed=2089/4096, RSS 18772kB -> 168764kB (delta 149992kB)
+test r8_backpressure_slow_client_stalls_backend ... R8(ii): client NOT reading, client h2 window=64KiB | t1s pushed=1067 rss=83996kB | t3s pushed=3106 rss=215224kB | t6s pushed=4096 rss=282172kB | flood=4096
+R8(ii): VmRSS growth under stalled reader = 196632kB
+thread 'r8_backpressure_slow_client_stalls_backend' panicked at tests/ws_h2_r8_backpressure.rs:501:5:
+R8(ii) VIOLATION: RSS grew 196632kB under a stalled reader — the pipeline is buffering the backend flood instead of backpressuring
+thread 'tokio-rt-worker' panicked at /home/ubuntu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/h2-0.4.13/src/proto/streams/counts.rs:282:13:
+test r8_peak_memory_is_message_volume_independent ... R8(i): after 2000 msgs  VmHWM=282280kB  VmRSS=18316kB
+R8(i): after 20000 msgs VmHWM=282280kB  VmRSS=18316kB
+R8(i): VmHWM growth across 10x volume = 0kB
+test result: FAILED. 2 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 24.01s
+error: test failed, to rerun pass `--test ws_h2_r8_backpressure`
+=== (i) in ISOLATION x3 ===
+--- run 1 ---
+R8(i): after 2000 msgs  VmHWM=16448kB  VmRSS=16448kB
+R8(i): after 20000 msgs VmHWM=16620kB  VmRSS=16620kB
+R8(i): VmHWM growth across 10x volume = 172kB
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 13.48s
+--- run 2 ---
+R8(i): after 2000 msgs  VmHWM=16496kB  VmRSS=16500kB
+R8(i): after 20000 msgs VmHWM=16716kB  VmRSS=16716kB
+R8(i): VmHWM growth across 10x volume = 220kB
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 13.79s
+--- run 3 ---
+R8(i): after 2000 msgs  VmHWM=16396kB  VmRSS=16396kB
+R8(i): after 20000 msgs VmHWM=16628kB  VmRSS=16628kB
+R8(i): VmHWM growth across 10x volume = 232kB
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 13.46s
+
+=== R13 burst (Task F) x3, ws_h2_burst.rs ===
+R13 burst: 60 cycles, fd baseline=12 after=12
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.96s
+R13 burst: 60 cycles, fd baseline=12 after=12
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.65s
+R13 burst: 60 cycles, fd baseline=12 after=12
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.69s
