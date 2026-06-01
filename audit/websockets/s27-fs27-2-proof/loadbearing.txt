@@ -1,0 +1,49 @@
+============================================================
+F-S27-2 INC-3 — load-bearing / lever analysis
+============================================================
+
+IMPORTANT CORRECTION (vs the verifier's suggested fix): the prescribed
+`max_write_buffer_size` bound in `WsConfig::tungstenite_config` is NOT the
+lever that produces backpressure. Reverting it does NOT flip any test RED.
+Measured directly below. The honest primary artifact for this session is the
+diagnostic (inc3-STOP-diagnostic.txt) — see it for full evidence + corrected
+root cause.
+
+------------------------------------------------------------
+A. lb-l7 unit test (in-memory duplex(4096); write side surfaces WouldBlock):
+   ws_proxy::tests::backpressure_plateaus_producer_when_consumer_stalls
+
+     max_write_buffer_size BOUNDED (the fix):    backend pushed 11 / 4096  PASS
+     max_write_buffer_size UNBOUNDED (reverted): backend pushed 10 / 4096  PASS
+
+   => PASSES BOTH WAYS. The relay backpressures over a real-socket-like
+      transport regardless of the bound — tokio-tungstenite's Sink already
+      parks on the underlying WouldBlock (start_send sets ready=false;
+      poll_ready/poll_flush then return Pending). `max_write_buffer_size` only
+      decides ERROR-vs-keep-buffering at the cap; it is not what makes `send`
+      park. So this test is a valid R8(ii) regression GUARD (the relay DOES
+      propagate backpressure when the underlying write parks) but is NOT a
+      load-bearing proof of the config bound.
+
+B. e2e tests/ws_r8_backpressure_plateau.rs (FLOOD 2048 x 256 KiB, non-reading
+   client, backend bounded-write-buffer + per-frame flush):
+
+     Gateway config        H1 pushed   H2 pushed
+     BOUNDED (the fix)      17 / 2048   1474 / 2048   (H2 case #[ignore]d)
+     UNBOUNDED (reverted)   17 / 2048   1419 / 2048
+
+   => H1 plateaus (17) BOTH ways — TCP socket backpressure, not the bound.
+      H2 absorbs ~360 MiB BOTH ways — the bound is irrelevant to H2; the H2
+      buffer is in the `h2` crate's SendStream below the tungstenite layer.
+
+------------------------------------------------------------
+CONCLUSION
+- The relay's select-loop backpressure design is CORRECT and works on any
+  transport whose underlying write surfaces WouldBlock (H1/raw TCP, duplex).
+  Guarded GREEN by the lb-l7 unit test + the H1 e2e plateau test.
+- The WS-over-H2 transport is NOT bounded; WsConfig-level changes cannot fix
+  it. Escalated to the lead with options (a relay rearchitecture for the H2
+  leg, or a relay-level bounded in-flight wrapper) — both beyond the INC-3
+  single-source / no-rearchitecture scope. See inc3-STOP-diagnostic.txt.
+- STOPPING here per the INC-3 directive rather than claiming an H2 R8(ii)
+  pass that was not observed (R15).

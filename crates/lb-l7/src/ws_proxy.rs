@@ -126,12 +126,51 @@ impl WsConfig {
     /// `max_frame_size` tracks `max_message_size` because tungstenite
     /// enforces both separately — matching them keeps a single knob on
     /// the operator-facing surface.
+    ///
+    /// F-S27-2 (SEC/HIGH, R8(ii)) — bound `max_write_buffer_size` instead of
+    /// leaving it at tungstenite's `usize::MAX` default, so the gateway-side
+    /// WS out-buffer cannot grow without limit while a peer is slow.
+    ///
+    /// NOTE ON SCOPE (measured — see audit/websockets/s27-fs27-2-proof): this
+    /// bound is a defensive hardening, NOT the full F-S27-2 fix. The relay's
+    /// `send().await` already PARKS on the underlying write's `WouldBlock`
+    /// (tokio-tungstenite's `Sink` sets `ready=false`, then
+    /// `poll_ready`/`poll_flush` return Pending) — so on any transport whose
+    /// write surfaces `WouldBlock` (raw TCP = the shipped H1 path) the relay
+    /// backpressures regardless of this value. The bound only changes the
+    /// behaviour at the cap (`WriteBufferFull` error vs. unbounded growth) on
+    /// a socket that accepts SOME bytes then wedges. It does NOT bound the
+    /// WS-over-H2 tunnel, where the upgraded extended-CONNECT stream buffers
+    /// inside the `h2` crate's `SendStream` (via hyper's `H2Upgraded`) below
+    /// this layer — that fix is escalated to the lead.
+    ///
+    /// tungstenite 0.24 invariants (confirmed against the vendored source),
+    /// which the chosen value must satisfy:
+    ///   * `frame::buffer_frame` returns `Err(WriteBufferFull)` when
+    ///     `frame.len() + out_buffer.len() > max_write_buffer_size`, so a
+    ///     single legal max-size frame MUST fit — the cap must be
+    ///     `>= max_frame_size`.
+    ///   * `WebSocketConfig::assert_valid` panics unless
+    ///     `max_write_buffer_size > write_buffer_size` (default 128 KiB).
+    ///
+    /// Bound: `max_message_size + write_buffer_size` — one legal max-size
+    /// message plus the default 128 KiB headroom, VOLUME-independent. Always
+    /// `> write_buffer_size` and `>= max_frame_size`, so neither invariant is
+    /// violated for any `max_message_size >= 0` (saturating add).
     #[must_use]
     pub fn tungstenite_config(self) -> WebSocketConfig {
+        let defaults = WebSocketConfig::default();
         WebSocketConfig {
             max_message_size: Some(self.max_message_size),
             max_frame_size: Some(self.max_message_size),
-            ..WebSocketConfig::default()
+            // One in-flight message + the write-buffer headroom. Saturating
+            // so a pathological `max_message_size` near `usize::MAX` cannot
+            // wrap (it would just stay unbounded, never smaller than the
+            // default write buffer).
+            max_write_buffer_size: self
+                .max_message_size
+                .saturating_add(defaults.write_buffer_size),
+            ..defaults
         }
     }
 }
@@ -317,7 +356,21 @@ impl WsProxy {
                         }
                     }
                     let is_close = matches!(msg, Message::Close(_));
-                    backend_tx.send(msg).await?;
+                    // F-S27-2 (SEC/HIGH) — bound the FORWARDING send too.
+                    // With `max_write_buffer_size` now capped, this
+                    // `send().await` can PARK when the backend backpressures
+                    // (won't drain). Left unbounded it would hang the relay
+                    // task forever (bounded memory, but the task/connection
+                    // never reclaimed → a different DoS). Bound it by the
+                    // same per-direction `read_frame` budget that guards the
+                    // READ side: a peer that backpressures past the budget
+                    // triggers a clean Close 1008 + teardown rather than a
+                    // hang. (Idle is the both-silent envelope; this catches
+                    // the single-direction wedged-WRITE case symmetrically.)
+                    match tokio::time::timeout(read_frame, backend_tx.send(msg)).await {
+                        Ok(res) => res?,
+                        Err(_) => return close_backpressure(&mut client_tx, &mut backend_tx).await,
+                    }
                     if is_close {
                         // Half-close the other side: drain any remaining
                         // frames from the backend, then return. We rely
@@ -330,7 +383,16 @@ impl WsProxy {
                 }
                 Ok(Direction::BackendToClient(Ok(Some(msg)))) => {
                     let is_close = matches!(msg, Message::Close(_));
-                    client_tx.send(msg).await?;
+                    // F-S27-2 — symmetric bound on the client-facing forward.
+                    // This is the exact direction the verifier proved:
+                    // backend floods, client stops reading; without this the
+                    // relay would buffer (pre-config-fix) or hang here
+                    // (post-config-fix, unbounded send). The budget reclaims
+                    // a wedged client with a clean Close 1008.
+                    match tokio::time::timeout(read_frame, client_tx.send(msg)).await {
+                        Ok(res) => res?,
+                        Err(_) => return close_backpressure(&mut client_tx, &mut backend_tx).await,
+                    }
                     if is_close {
                         let _ = backend_tx.close().await;
                         return Ok(());
@@ -361,6 +423,33 @@ enum Direction<T> {
     /// Per-direction read-frame watchdog elapsed without observing a
     /// frame on whichever half it was guarding (WS-002).
     ReadFrameTimeout,
+}
+
+/// F-S27-2 (SEC/HIGH) — clean teardown when a FORWARDING `send().await`
+/// backpressures past the per-direction budget (the peer stopped draining).
+/// Emits a `Close 1008 (Policy Violation)` to the client and a clean
+/// `Close(None)` to the backend, then closes both halves. Mirrors the
+/// `ReadFrameTimeout` arm so a wedged WRITE is reclaimed exactly like a
+/// wedged READ instead of hanging the relay task. Best-effort: the very
+/// peer that backpressured may also reject this Close — the point is that we
+/// stop polling the producer and return, releasing the connection.
+async fn close_backpressure<C, B>(
+    client_tx: &mut C,
+    backend_tx: &mut B,
+) -> Result<(), tokio_tungstenite::tungstenite::Error>
+where
+    C: futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
+    B: futures_util::Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
+{
+    let frame = CloseFrame {
+        code: CloseCode::Policy,
+        reason: std::borrow::Cow::Borrowed("ws backpressure/write timeout"),
+    };
+    let _ = client_tx.send(Message::Close(Some(frame))).await;
+    let _ = client_tx.close().await;
+    let _ = backend_tx.send(Message::Close(None)).await;
+    let _ = backend_tx.close().await;
+    Ok(())
 }
 
 /// Wrap a post-upgrade IO into a server-role [`WebSocketStream`].
@@ -633,5 +722,95 @@ mod tests {
             other => panic!("expected Close(1001), got {other:?}"),
         }
         let _ = handle.await;
+    }
+
+    /// F-S27-2 (SEC/HIGH, R8(ii)) — load-bearing unit proof that the
+    /// `max_write_buffer_size` bound in `tungstenite_config` produces real
+    /// end-to-end backpressure. Over an in-memory `duplex` pipe (whose write
+    /// side surfaces `WouldBlock` to tungstenite when full — the same signal
+    /// a wedged TCP socket gives), a flooding backend pushes at a client that
+    /// NEVER reads. With the bound the relay's `client_tx.send().await` parks,
+    /// which stops the relay reading the backend, which backpressures the
+    /// backend's own send → its pushed count PLATEAUS far below the flood.
+    ///
+    /// This is the deterministic lever the e2e tests cannot isolate on the H2
+    /// transport (where an `h2`-crate send queue buffers below this layer —
+    /// see audit/websockets/s27-fs27-2-proof). Reverting the bound in
+    /// `tungstenite_config` flips this RED (backend drains the whole flood).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn backpressure_plateaus_producer_when_consumer_stalls() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        // Small messages + small pipe so the in-flight bound is a handful of
+        // messages, well below the flood. The pipe (4 KiB) fills quickly when
+        // the consumer stalls, surfacing WouldBlock to the gateway sink.
+        const MSG_BYTES: usize = 1024;
+        const FLOOD: u64 = 4_096;
+        const CEILING: u64 = 256; // decisive vs 4096; far above the true plateau.
+
+        let cfg = WsConfig {
+            idle_timeout: Duration::from_secs(30),
+            read_frame_timeout: Duration::from_secs(30),
+            max_message_size: 16 * 1024,
+            enabled: true,
+            ..WsConfig::default()
+        };
+
+        // client_proxy_io <-> client_observer_io = the "client" socket;
+        // backend_proxy_io <-> backend_observer_io = the "backend" socket.
+        let (client_proxy_io, client_observer_io): (DuplexStream, DuplexStream) = duplex(4096);
+        let (backend_proxy_io, backend_observer_io): (DuplexStream, DuplexStream) = duplex(4096);
+
+        let proxy = Arc::new(WsProxy::new(cfg));
+        let client_ws_proxy = server_ws(client_proxy_io, &cfg).await;
+        let backend_ws_proxy = client_ws(backend_proxy_io, &cfg).await;
+        // The real backend speaks Role::Server on its end.
+        let mut backend = server_ws(backend_observer_io, &cfg).await;
+        // The client observer wraps its end but NEVER reads — it just holds
+        // the socket open so the relay's client half stays writable-until-full.
+        let _client_observer = client_ws(client_observer_io, &cfg).await;
+
+        let relay = tokio::spawn(async move {
+            let _ = proxy.proxy_frames(client_ws_proxy, backend_ws_proxy).await;
+        });
+
+        let pushed = Arc::new(AtomicU64::new(0));
+        let pushed_bg = Arc::clone(&pushed);
+        let flood = tokio::spawn(async move {
+            let payload = vec![0xCDu8; MSG_BYTES];
+            for _ in 0..FLOOD {
+                if backend
+                    .feed(Message::Binary(payload.clone()))
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+                if backend.flush().await.is_err() {
+                    break;
+                }
+                pushed_bg.fetch_add(1, Ordering::Relaxed);
+            }
+        });
+
+        // Let the producer run. With an UNBOUNDED write buffer the relay would
+        // drain the whole flood into the gateway in this window; bounded, the
+        // producer stalls early.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        let n = pushed.load(Ordering::Relaxed);
+        eprintln!("F-S27-2 duplex plateau: backend pushed {n} / {FLOOD} (ceiling {CEILING})");
+        assert!(
+            n > 0,
+            "non-vacuous: the backend must have pushed at least one frame, got {n}"
+        );
+        assert!(
+            n < CEILING,
+            "R8(ii) VIOLATION: with the consumer stalled the backend pushed {n} of \
+             {FLOOD} frames — the gateway is NOT backpressuring (expected a plateau \
+             < {CEILING}). The `max_write_buffer_size` bound is not in effect."
+        );
+
+        flood.abort();
+        relay.abort();
     }
 }

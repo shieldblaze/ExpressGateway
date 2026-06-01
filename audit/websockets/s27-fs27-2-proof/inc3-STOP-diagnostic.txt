@@ -1,0 +1,132 @@
+============================================================
+INC-3 / F-S27-2 — ws-eng STOP-AND-REPORT diagnostic
+============================================================
+
+VERDICT: STOPPING per the INC-3 directive. The prescribed single-source fix
+— bound `WsConfig::tungstenite_config().max_write_buffer_size` — does NOT
+produce the claimed end-to-end backpressure, and measurement shows the
+finding's ROOT-CAUSE attribution is incorrect. A correct fix for the H2
+transport needs the lead's decision because the relevant lever is NOT in
+`WsConfig` (it is in the hyper/h2 server transport layer), and the observed
+buffer size contradicts hyper's documented default — i.e. it needs
+investigation beyond the approved scope. Not fabricating a pass (R15).
+
+------------------------------------------------------------
+WHAT THE DATA SHOWS (all reproducible)
+
+1. tests/ws_r8_backpressure_plateau.rs (e2e, FLOOD=2048 x 256 KiB, non-reading
+   client, backend = bounded-write-buffer + per-frame flush so its own send
+   parks on TCP backpressure — the verifier-validated attribution technique):
+
+     Gateway config         H1 pushed     H2 pushed
+     UNBOUNDED (pre-fix)     17 / 2048     1419 / 2048
+     BOUNDED   (the fix)     17 / 2048     1474 / 2048  (1503 another run)
+
+   - H1 plateaus at ~17 with AND without the bound.
+   - H2 absorbs ~1450 frames (~360 MiB) with AND without the bound.
+   => The `max_write_buffer_size` bound changes NOTHING observable on either
+      transport. H1 is already bounded by the raw-TCP socket; H2 is NOT
+      bounded at all.
+
+2. Client-window A/B (gateway UNBOUNDED, vary ONLY test client recv window):
+     4 KiB  -> H2 pushed 1419 / 2048
+     64 KiB -> H2 pushed 1419 / 2048
+   => Identical. Client flow-control window is irrelevant (matches the
+      verifier's A/B). The buffer is NOT the test client's advertised window.
+
+3. lb-l7 unit test ws_proxy::tests::backpressure_plateaus_... over an
+   in-memory `duplex(4096)` pipe (whose write side DOES surface WouldBlock,
+   like a real socket):
+     UNBOUNDED -> backend pushed 10 / 4096   (PLATEAUS)
+     BOUNDED   -> backend pushed 11 / 4096   (PLATEAUS)
+   => Backpressure works over a real-socket-like transport REGARDLESS of
+      `max_write_buffer_size`. The bound is NOT the lever.
+
+------------------------------------------------------------
+CORRECTED ROOT CAUSE (the verifier's premise was wrong)
+
+tungstenite's async `Sink` ALREADY backpressures without any
+`max_write_buffer_size` bound: tokio-tungstenite start_send sets `ready=false`
+when the underlying write returns `WouldBlock`, so the next poll_ready/
+poll_flush returns Pending and `send().await` PARKS. The buffer only grows
+past `write_buffer_size` (128 KiB default) while the underlying write keeps
+returning WouldBlock — and it parks the relay long before that matters.
+`max_write_buffer_size` only decides ERROR-vs-keep-buffering at the cap; it is
+NOT what makes `send` park.
+
+So the relay DOES backpressure on any transport whose write surfaces
+WouldBlock (raw TCP = the H1 path; the duplex pipe). The H2 path is the
+exception, and the reason is the H2 write IO, NOT the tungstenite config:
+
+  ws_proxy `client_tx.send()` -> hyper `Upgraded` == proto::h2::upgrade::
+  H2Upgraded (hyper-1.9.0/src/proto/h2/upgrade.rs). Its poll_write pushes
+  into an mpsc::channel(1) feeding UpgradedSendStreamTask, which calls
+  `h2::SendStream::send_data`. Per h2-0.4.13/src/share.rs:49-57, `send_data`
+  "will buffer the data until [window] capacity becomes available". So
+  H2Upgraded::poll_write returns Ready (mpsc has room because the task keeps
+  draining into h2's queue) and tungstenite NEVER sees WouldBlock -> the relay
+  `send().await` never parks -> it keeps reading the producer -> unbounded.
+
+CONTRADICTION TO RESOLVE (needs the lead / deeper dig): hyper's http2 SERVER
+builder has `max_send_buf_size` (server/conn/http2.rs:242-253), "the maximum
+write buffer size for each HTTP/2 stream", default ~400 KB. If that applied to
+the upgraded CONNECT stream, the gateway could buffer at most ~400 KB (~2
+messages) and the relay would park — but we observe ~360 MiB buffered. Either
+(a) hyper does not apply `max_send_buffer_size` to upgraded streams, or (b)
+the ~360 MiB lives elsewhere on the H2 path that the A/B did not isolate.
+This needs investigation before claiming any H2 fix works.
+
+------------------------------------------------------------
+OPTIONS FOR A REAL H2 FIX (all need lead direction; likely out of the
+WsConfig-only / no-rearchitecture INC-3 scope)
+
+A. Set `max_send_buf_size` on the H2Proxy hyper http2 server builder.
+   *** RULED OUT BY MEASUREMENT ***: H2SecurityThresholds::apply ALREADY sets
+   `builder.max_send_buf_size(64 KiB)` (h2_security.rs:88,117) and a 64 KiB
+   stream window — yet the H2 WS tunnel STILL buffered ~360 MiB. So hyper's
+   per-stream `max_send_buffer_size` is NOT applied to the upgraded extended-
+   CONNECT stream: the WS bytes go ws_proxy `send` -> hyper `Upgraded`
+   (H2Upgraded) -> mpsc(1) -> `h2::SendStream::send_data`, which buffers per
+   h2's OWN rules and bypasses hyper's send-buffer cap. This resolves the
+   400KB-vs-360MiB contradiction AND eliminates the only in-scope option.
+
+B. Bypass hyper `Upgraded`; drive the H2 WS write leg through the raw h2
+   SendStream with explicit reserve_capacity/poll_capacity gating. True
+   backpressure, but a relay rearchitecture for the H2 leg — the brief says
+   STOP before any rearchitecture.
+
+C. Relay-level bounded in-flight wrapper (semaphore / byte counter) that
+   refuses to read the next producer frame until the prior forwarded frame is
+   drained. Transport-agnostic, lives in proxy_frames, but adds a queue layer.
+
+------------------------------------------------------------
+WHAT IS IMPLEMENTED AND LEFT IN THE TREE (HARMLESS; pending lead decision)
+
+1. ws_proxy.rs `tungstenite_config`: max_write_buffer_size =
+   max_message_size + write_buffer_size. CORRECT + validated against
+   tungstenite-0.24.0 invariants (assert_valid > write_buffer_size; cap >=
+   max_frame_size). HARMLESS and a defensible hardening (bounds the tungstenite
+   out-buffer growth on a slow-but-progressing socket), but NOT a fix for the
+   F-S27-2 DoS by itself. Kept because it does no harm and matches the
+   verifier's intent; the lead may keep or drop it.
+
+2. ws_proxy.rs `proxy_frames`: the two forwarding `send().await` are wrapped
+   in `tokio::time::timeout(read_frame, ...)` + clean teardown helper
+   `close_backpressure` (Close 1008 "ws backpressure/write timeout"). This is
+   the task-2 anti-hang guard and is genuinely load-bearing on any transport
+   where `send` CAN park (H1/raw + duplex). It also bounds DWELL time on a
+   wedged write so the connection/task is reclaimed.
+
+3. Tests:
+   - lb-l7 unit test backpressure_plateaus_producer_when_consumer_stalls:
+     GREEN; proves the relay backpressures over a real-socket-like transport.
+     (Not a load-bearing proof of the config bound — it passes both ways —
+     but a true regression guard that the relay select-loop DOES propagate
+     backpressure when the underlying write parks.)
+   - tests/ws_r8_backpressure_plateau.rs: H1 case GREEN (documents the H1
+     plateau); the H2 case is marked #[ignore] with a reason pointing here,
+     because H2 is NOT yet bounded (it would be a knowingly-RED assertion).
+
+NON-REGRESSION (items 1+2 applied): ws_h2_e2e 1, ws_h2_upgrade_defer 3,
+ws_proxy_e2e 7, ws_h2_r8_backpressure (property (i) + A/B) 1, ws_h2_burst 1 —
+all PASS.
