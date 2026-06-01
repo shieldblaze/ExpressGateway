@@ -196,7 +196,7 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
     // SESSION 24 / INC-2: H3 ingress now rides `quiche::h3::Connection`
     // (built lazily via `with_transport` once established); the old
     // hand-rolled `StreamRxBuf` request decoder + uni-stream drain are
-    // gone. Egress (`RespEvent::Bytes` → raw `stream_send`) is UNTOUCHED.
+    // gone. Egress is decoded `RespEvent` → `quiche::h3::send_*` (INC-3).
     let mut h3: Option<quiche::h3::Connection> = None;
     let mut stream_response: HashMap<u64, StreamTx> = HashMap::new();
     // SESSION 2 / P1-A: per-stream bounded request-body channels. The
@@ -1043,9 +1043,9 @@ fn drain_request_body(
 /// gated drain for every body-phase stream every tick, independent of the
 /// poll events (exactly what the old `drain_body_stream` did).
 ///
-/// The response egress (`RespEvent::Bytes` → raw `stream_send` via
-/// `drain_streams_to_conn`) is UNTOUCHED by INC-2 (INC-1 Exp 4 proved the
-/// coexistence; the egress restructure is INC-3).
+/// The response egress is the decoded `RespEvent::{Head,Body,Trailers}` →
+/// `quiche::h3::send_response`/`send_body`/`send_additional_headers` path
+/// (`drain_resp_channels` + `drain_streams_to_conn`, SESSION 24 / INC-3).
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn poll_h3(
     conn: &mut quiche::Connection,

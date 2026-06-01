@@ -2683,9 +2683,9 @@ impl H3RespOut {
     /// Best-effort: a closed channel (client gone) just means nobody
     /// is listening — same as the pre-S12 `inline` helper.
     ///
-    /// `Wire`: byte-identical to the former local `inline` —
-    /// `encode_h3_response(status, body)` → one `RespEvent::Bytes` +
-    /// `End`, or `RespEvent::Reset` on encode failure.
+    /// `Wire`: emits a decoded `RespEvent::Head { status, .. }` +
+    /// `RespEvent::Body(body)` (when non-empty) + `End` (SESSION 24 / INC-3:
+    /// the actor now re-encodes via `quiche::h3::send_response`/`send_body`).
     /// `Decoded`: a synthesized `Head { status, headers: [] }` +
     /// `Body(body)` (when non-empty) + `End`.
     async fn inline(&mut self, status: u16, body: &[u8]) {
@@ -2798,8 +2798,9 @@ impl H3RespOut {
 
     /// Relay one response-body slice (≤ [`H3_RESP_CHUNK_MAX`]).
     ///
-    /// `Wire`: `encode_h3_data_frame(slice)` → `RespEvent::Bytes`,
-    /// byte-identical. `Decoded`: `H3RespEvent::Body(slice)`.
+    /// `Wire`: emits `RespEvent::Body(slice)` (SESSION 24 / INC-3 — the
+    /// actor encodes the DATA frame via `quiche::h3::send_body`).
+    /// `Decoded`: `H3RespEvent::Body(slice)`.
     async fn on_data(&mut self, slice: &[u8]) -> Result<(), RespAbort> {
         match self {
             Self::Wire { tx, total, cap } => {
@@ -2829,8 +2830,10 @@ impl H3RespOut {
 
     /// Relay the (non-empty) trailing field section.
     ///
-    /// `Wire`: `encode_h3_trailers_frame(trailers)` → `RespEvent::Bytes`,
-    /// byte-identical. `Decoded`: `H3RespEvent::Trailers(trailers)`.
+    /// `Wire`: emits `RespEvent::Trailers(trailers)` (SESSION 24 / INC-3 —
+    /// the actor encodes the trailing HEADERS via
+    /// `quiche::h3::send_additional_headers`).
+    /// `Decoded`: `H3RespEvent::Trailers(trailers)`.
     async fn on_trailers(&mut self, trailers: Vec<(String, String)>) -> Result<(), RespAbort> {
         match self {
             Self::Wire { tx, total, cap } => {
