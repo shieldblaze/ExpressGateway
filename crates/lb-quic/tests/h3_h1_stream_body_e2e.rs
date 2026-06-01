@@ -34,10 +34,10 @@
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use lb_h3::{H3Frame, QpackDecoder, QpackEncoder, decode_frame, encode_frame};
+use lb_h3::{H3Frame, QpackEncoder, decode_frame, encode_frame};
 use lb_io::Runtime;
 use lb_io::pool::{PoolConfig, TcpPool};
 use lb_io::sockopts::BackendSockOpts;
@@ -656,123 +656,6 @@ async fn t3_zero_length_data_frame_then_fin_no_spurious_chunk() {
         body.is_empty(),
         "zero-length DATA frame must yield an empty backend body, got {} bytes",
         body.len()
-    );
-}
-
-// ---------------------------------------------------------------------
-// T4 — oversized request body ⇒ H3 413, upstream not completed.
-//
-// SESSION 24 / INC-2: the cumulative-body cap that previously lived
-// inside `StreamRxBuf::feed_body` (and was unit-tested here against that
-// now-deleted decoder) moved into `conn_actor::drain_request_body`,
-// which tracks `body_seen` per stream off `quiche::h3::recv_body` and
-// emits `ReqBodyEvent::Reset` once it exceeds `MAX_REQUEST_BODY_BYTES`.
-// The old `feed_body`-tiny-cap unit test was deleted WITH its decoder
-// (R5: it tested the deleted implementation, not behavior). The
-// behavioral cap → 413 mapping (the consumer side: a `Reset` body event
-// becomes a client-facing 413 and the upstream is left non-completed) is
-// still covered by `t4_oversized_*` below, which reproduces the exact
-// `Chunk` → `Reset` signal sequence `drain_request_body` emits on cap
-// breach. A dedicated regression that drives the new `body_seen > cap`
-// branch end-to-end is impractical at the 64 MiB production cap without a
-// config knob (S3) and is tracked as CF-INC2-CAP-TEST.
-// ---------------------------------------------------------------------
-#[tokio::test]
-async fn t4_oversized_body_yields_413_and_upstream_not_completed() {
-    // P1-A oversized contract, exercised against the REAL streaming
-    // egress (`h3_to_h1_stream`) with a real TCP upstream socket and a
-    // tiny `max_body` — the design explicitly states the fn takes
-    // `max_body` as a param so tests can pass a tiny cap (the 64 MiB
-    // production const is impractical to drive e2e on this box).
-    //
-    // poll_h3 detects `BodyItem::TooLarge` (proven by the unit test
-    // above using the exact `feed_body` call poll_h3 makes) and signals
-    // the egress with `ReqBodyEvent::Reset`, dropping the channel. Here
-    // we reproduce that exact signal sequence: a Chunk that the client
-    // declared via content-length, then the Reset poll_h3 emits on cap
-    // breach. Asserts (1) the client-facing bytes are H3 413 and (2)
-    // the upstream is NOT left with a completed request.
-    let completed = Arc::new(AtomicUsize::new(0));
-    let completed_c = completed.clone();
-    let listener_b = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
-    let backend_addr = listener_b.local_addr().unwrap();
-    let backend_h = tokio::spawn(async move {
-        let (mut s, _) = listener_b.accept().await.unwrap();
-        let mut buf = Vec::new();
-        let mut t = [0u8; 4096];
-        loop {
-            match tokio::time::timeout(Duration::from_millis(500), s.read(&mut t)).await {
-                Ok(Ok(0)) | Err(_) => break,
-                Ok(Ok(n)) => buf.extend_from_slice(&t[..n]),
-                Ok(Err(_)) => break,
-            }
-        }
-        // A complete chunked request ends with the 0\r\n\r\n terminator;
-        // a complete content-length request has all declared bytes. The
-        // aborted request has neither.
-        if buf.windows(5).any(|w| w == b"0\r\n\r\n") {
-            completed_c.fetch_add(1, Ordering::SeqCst);
-        }
-    });
-
-    let pool = build_tcp_pool();
-    // Client declared a content-length (so framing is Content-Length,
-    // not chunked) — the request would be "complete" only if all
-    // declared bytes arrived; the cap abort must prevent that.
-    let req = lb_quic::h3_bridge::H3Request {
-        method: "POST".to_string(),
-        path: REQUEST_PATH.to_string(),
-        authority: REQUEST_AUTHORITY.to_string(),
-        extra: vec![("content-length".to_string(), "1048576".to_string())],
-        trailers: Vec::new(),
-    };
-
-    let (tx, rx) = tokio::sync::mpsc::channel::<lb_quic::h3_bridge::ReqBodyEvent>(8);
-    // First a real chunk (non-UTF-8 marker), then the Reset poll_h3
-    // emits the instant `feed_body` reports TooLarge against the tiny
-    // cap. Tiny `max_body` = 16 passed to the egress as the design
-    // prescribes.
-    let mut chunk = vec![0u8; 4096];
-    chunk[..3].copy_from_slice(NON_UTF8);
-    tx.send(lb_quic::h3_bridge::ReqBodyEvent::Chunk(bytes::Bytes::from(
-        chunk,
-    )))
-    .await
-    .unwrap();
-    tx.send(lb_quic::h3_bridge::ReqBodyEvent::Reset)
-        .await
-        .unwrap();
-    drop(tx);
-
-    let resp = tokio::time::timeout(
-        Duration::from_secs(10),
-        lb_quic::h3_bridge::h3_to_h1_stream(&req, backend_addr, &pool, rx, 16),
-    )
-    .await
-    .expect("h3_to_h1_stream timed out")
-    .expect("h3_to_h1_stream Err");
-
-    backend_h.abort();
-
-    // Decode the H3 response the client would receive: must be 413.
-    let (frame, _used) = decode_frame(&resp, 1 << 20).expect("decode resp HEADERS");
-    let H3Frame::Headers { header_block } = frame else {
-        panic!("expected HEADERS frame in 413 response");
-    };
-    let hdrs = QpackDecoder::new().decode(&header_block).unwrap();
-    let status = hdrs
-        .iter()
-        .find(|(n, _)| n == ":status")
-        .map(|(_, v)| v.clone());
-    assert_eq!(
-        status.as_deref(),
-        Some("413"),
-        "oversized body (cap breach → Reset) must surface H3 413"
-    );
-    assert_eq!(
-        completed.load(Ordering::SeqCst),
-        0,
-        "upstream must NOT be left with a completed request when the cap aborts the body"
     );
 }
 

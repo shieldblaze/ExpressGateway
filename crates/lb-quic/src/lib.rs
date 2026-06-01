@@ -180,10 +180,7 @@ pub use conn_actor::{H3_INTERNAL_ERROR, H3_NO_ERROR, graceful_h3_shutdown};
 pub use cleanup_guard::CidEntryGuard;
 
 #[cfg(feature = "quic-terminate")]
-pub use h3_bridge::{
-    H3Request, H3RespEvent, H3RespOut, H3UpstreamResponse, request_h3_upstream,
-    stream_request_to_h3_upstream,
-};
+pub use h3_bridge::{H3Request, H3RespEvent, H3RespOut, stream_request_to_h3_upstream};
 #[cfg(feature = "quic-terminate")]
 pub use listener::{QuicListener, QuicListenerParams};
 // SESSION 16 / Mode B: re-export the raw-proxy seam types at the crate

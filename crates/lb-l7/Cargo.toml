@@ -49,9 +49,10 @@ lb-h2 = { path = "../lb-h2" }
 # NOT added here per the round-4 brief — it's deferred to the wave-2
 # file that sec wires into.
 lb-security = { path = "../lb-security" }
-# PROTO-001: H1→H3 / H2→H3 upstream paths consume `lb_quic::request_h3_upstream`
-# and the `H3UpstreamResponse` carrier type. lb-quic stays on quiche; we
-# only consume its public API.
+# PROTO-001: H1→H3 / H2→H3 upstream paths consume the `lb-quic` public
+# H3 surface (`H3Request`, the streaming `H3RespEvent` sink, and the
+# `stream_request_to_h3_upstream` connector). lb-quic owns the quiche /
+# quiche::h3 transport; we only consume its public API.
 lb-quic = { path = "../lb-quic" }
 # Item 3: gRPC proxy path (PROMPT.md §13). `lb-grpc` ships the
 # codec-level types (GrpcDeadline, GrpcStatus, GrpcFrame, StreamingMode);
