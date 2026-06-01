@@ -13,7 +13,7 @@
 //!   eg-soak --list
 //!
 //! Scenarios: sc1_h1h1, sc1b_h1h2, sc2_h2h2, sc3_slowloris, sc4_modeb,
-//!            sc5_modea, sc6_413teardown.
+//!            sc5_modea, sc6_413teardown, sc7_h3terminate.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -42,6 +42,7 @@ const SCENARIOS: &[&str] = &[
     "sc4_modeb",
     "sc5_modea",
     "sc6_413teardown",
+    "sc7_h3terminate",
 ];
 
 struct Args {
@@ -237,6 +238,7 @@ async fn setup_scenario(
         "sc4_modeb" => setup_quic(args, bin, workdir, cancel, true).await,
         "sc5_modea" => setup_quic(args, bin, workdir, cancel, false).await,
         "sc6_413teardown" => setup_413(args, bin, workdir, cancel).await,
+        "sc7_h3terminate" => setup_h3_terminate(args, bin, workdir, cancel).await,
         other => anyhow::bail!("unknown scenario {other} (try --list)"),
     }
 }
@@ -573,6 +575,84 @@ async fn setup_413(
     })
 }
 
+/// sc7 (S26 / INC-D) — H3-terminate front (`quiche::h3` ingress, E1 — the path
+/// the S24–S26 workstream re-pointed). Sustained REAL H3 client load + an H3
+/// RST/STOP_SENDING flood against the terminating QUIC listener.
+///
+/// F-S26-1: the production binary wires NO backend onto a `protocol="quic"`
+/// listener, so this front is exercised on its INGRESS + the inline-400 decoded
+/// egress + F-MD-4 + the no-backend-drop path — NOT a live relay (which is
+/// library/harness-reachable only). The config therefore carries no backend
+/// (see `config_gen::quic_h3_terminate`), and there is no origin server to
+/// spawn. The bounded-state signal is the OS footprint (RSS/fd/threads) + the
+/// universal `panic_total=0`; the H3-terminate front exposes no dedicated
+/// Prometheus state gauge (the response-retained gauge is `test-gauges`-only
+/// and the QUIC listener does not feed `accept_inflight`).
+async fn setup_h3_terminate(
+    args: &Args,
+    bin: &std::path::Path,
+    workdir: &std::path::Path,
+    cancel: CancellationToken,
+) -> anyhow::Result<Running> {
+    let metrics = metrics_addr()?;
+    let listener = tcp_addr(gateway::ephemeral_udp_port()?);
+    // The gateway terminates with its OWN front cert; the H3 client trusts it
+    // and sends SNI `soak-front`. ALPN `h3` matches the listener's advertisement.
+    let front_certs = config_gen::generate_certs(workdir, "soak-front")?;
+    let retry = workdir.join("retry.bin");
+    let toml = config_gen::quic_h3_terminate(listener, metrics, &front_certs, &retry);
+    let cfg = workdir.join("gateway.toml");
+    std::fs::write(&cfg, toml)?;
+    let gw = spawn_gateway(bin, &cfg, metrics, workdir).await?;
+
+    let sni = "soak-front".to_string();
+    let ca = front_certs.ca.clone();
+
+    // H3 request shape — overridable for targeted repro/tuning.
+    let conc = env_usize("H3_CONCURRENCY", 4) * args.scale;
+    let reqs = env_usize("H3_REQS_PER_CONN", 8);
+    let reset_conc = env_usize("H3_RESET_CONCURRENCY", 2) * args.scale;
+
+    let mut tasks = Vec::new();
+    let mut stats = Vec::new();
+    // Sustained mixed H3 load (inline-400 round-trip + no-backend drop), both
+    // outcomes asserted in-client (non-vacuous).
+    let load = LoadStats::new();
+    stats.push(("h3_load".into(), Arc::clone(&load)));
+    tasks.push(tokio::spawn(loadgen::run_h3_load(
+        listener,
+        sni.clone(),
+        ca.clone(),
+        conc,
+        reqs,
+        Arc::clone(&load),
+        cancel.clone(),
+    )));
+    // F-MD-4 RST/STOP_SENDING flood (reset accounting + stream-table bound).
+    let flood = LoadStats::new();
+    stats.push(("h3_reset_flood".into(), Arc::clone(&flood)));
+    tasks.push(tokio::spawn(loadgen::run_h3_reset_flood(
+        listener,
+        sni,
+        ca,
+        reset_conc,
+        Arc::clone(&flood),
+        cancel.clone(),
+    )));
+
+    Ok(Running {
+        gateway: gw,
+        metrics_addr: metrics,
+        gauges: h3term_gauges(),
+        kinds: h3term_kinds(),
+        tasks,
+        backend_ctrls: vec![],
+        quic_stop: vec![],
+        stats,
+        _tmp: workdir.to_path_buf(),
+    })
+}
+
 async fn spawn_gateway(
     bin: &std::path::Path,
     cfg: &std::path::Path,
@@ -589,6 +669,17 @@ fn tcp_gauges() -> Vec<String> {
     vec!["accept_inflight".into(), "panic_total".into()]
 }
 fn tcp_kinds() -> Vec<(String, MetricKind)> {
+    vec![("panic_total".into(), MetricKind::CounterMustBeZero)]
+}
+/// H3-terminate has NO dedicated Prometheus state-table family: the
+/// response-retained R8 gauge is `test-gauges`-only and the QUIC listener does
+/// not feed `accept_inflight` (that gauge is on the TCP accept path). So the
+/// bounded-state proof is the OS footprint (rss/vmhwm/fds/threads, already the
+/// `BASE_COLUMNS`) plus the universal `panic_total` (must stay zero).
+fn h3term_gauges() -> Vec<String> {
+    vec!["panic_total".into()]
+}
+fn h3term_kinds() -> Vec<(String, MetricKind)> {
     vec![("panic_total".into(), MetricKind::CounterMustBeZero)]
 }
 fn modeb_gauges() -> Vec<String> {

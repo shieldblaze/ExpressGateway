@@ -538,6 +538,518 @@ async fn quic_session(
     Ok(())
 }
 
+// ── H3-terminate load (S26 / INC-D) ──────────────────────────────────────────
+//
+// A REAL HTTP/3 client (`quiche::h3::Connection`) against the gateway's
+// H3-terminate front (E1 ingress — the path the S24–S26 workstream re-pointed
+// onto `quiche::h3`). `with_transport` opens the client control + QPACK
+// encoder/decoder uni streams and sends SETTINGS, so this drives the migrated
+// ingress as a conformant peer would — NOT raw opaque bytes (which would never
+// reach the H3 layer). It intentionally does NOT depend on `lb_h3` (that codec
+// crate is being deleted this session); it mirrors the gateway's own
+// `h3_bridge` client surface (`send_request`/`poll`/`recv_body`).
+//
+// F-S26-1: the production front is backend-less, so there are exactly two
+// observable request outcomes, and BOTH are asserted (non-vacuous):
+//   * BAD `:authority` (comma-injected)  → the inline-400 DECODED egress runs
+//     (`send_response`/`send_body`): the client MUST read `:status 400` + the
+//     "bad request" body end-to-end. A true request→response round-trip.
+//   * VALID `:authority`                 → passes the validator, reaches the
+//     "no backends available" drop. The gateway logs the warning and `continue`s
+//     — it sends NO response and does NOT reset the request stream (measured;
+//     conn_actor.rs `if !spawned { continue; }`). The EXPECTED bounded behavior
+//     the client asserts is therefore: NO `:status`/Finished/Reset arrives within
+//     a short drop-window AND the gateway state stays bounded. A 2xx (impossible,
+//     backend-less) or a 400 (over-reject) on this class is the only failure.
+
+/// How long the bad-authority class waits for the inline-400 round-trip before
+/// declaring the ingress hung (the 400 is generated locally + arrives fast).
+const H3_RESP_BUDGET: Duration = Duration::from_secs(5);
+/// How long the valid-authority class polls for a (never-arriving) response
+/// before concluding the EXPECTED silent no-backend drop. Short — the point is
+/// to confirm "no 2xx/400 + no hang", not to wait out an idle timeout.
+const H3_DROP_WINDOW: Duration = Duration::from_millis(600);
+
+/// The per-request outcome the client verified for its class (non-vacuous).
+enum H3Outcome {
+    /// Bad-authority class: read the inline-400 (`:status 400` + body) — a true
+    /// request→response round-trip.
+    Verified400,
+    /// Valid-authority class: passed the validator then was silently dropped
+    /// (no backend) within the drop-window, with no 2xx and no 400.
+    BoundedDrop,
+}
+
+/// Sustained H3-terminate load. Each worker opens an H3 connection, issues a
+/// short mixed batch (alternating bad-/valid-authority requests with cycled
+/// body sizes), verifies each per its class, then closes — driving connection +
+/// stream + ingress churn against the `quiche::h3` front. Per-request outcomes
+/// are tallied individually (a single failed request neither aborts the batch
+/// nor masks the others): a verified request → `ok`, a class violation → `err`.
+pub async fn run_h3_load(
+    target: SocketAddr,
+    sni: String,
+    ca_path: PathBuf,
+    concurrency: usize,
+    requests_per_conn: usize,
+    stats: Arc<LoadStats>,
+    cancel: CancellationToken,
+) {
+    let mut workers = Vec::new();
+    for w in 0..concurrency {
+        let stats = Arc::clone(&stats);
+        let cancel = cancel.clone();
+        let sni = sni.clone();
+        let ca_path = ca_path.clone();
+        workers.push(tokio::spawn(async move {
+            let mut iter = w as u64;
+            while !cancel.is_cancelled() {
+                iter = iter.wrapping_add(1);
+                match h3_session(target, &sni, &ca_path, requests_per_conn, iter).await {
+                    Ok((ok, err)) => {
+                        for _ in 0..ok {
+                            stats.ok();
+                        }
+                        for _ in 0..err {
+                            stats.err();
+                        }
+                    }
+                    // A handshake/transport-level failure (the whole session
+                    // could not start) is a single err.
+                    Err(e) => {
+                        if std::env::var("H3_DEBUG").is_ok() {
+                            eprintln!("[h3_session err] {e}");
+                        }
+                        stats.err();
+                    }
+                }
+            }
+        }));
+    }
+    for w in workers {
+        let _ = w.await;
+    }
+}
+
+/// H3 RST/STOP_SENDING flood — the F-MD-4 chaos injector for the H3-terminate
+/// front. Each worker opens an H3 connection and rapidly opens request streams
+/// that it immediately tears down: alternately `RESET_STREAM` on the request
+/// stream (peer-reset of a stream the gateway is reading → the gateway's
+/// request-side `StreamReset` arm) and `STOP_SENDING` on the same stream (peer
+/// STOP_SENDING of a stream the gateway would write the response on → the
+/// `StreamStopped` arm). The bound under test (R8): the gateway's per-connection
+/// stream table + reset accounting + the response-producer tasks must stay
+/// bounded (no growth, no panic) while this churns — the H3 analogue of the H2
+/// rapid-reset (CVE-2023-44487) injector.
+///
+/// Lives in `loadgen` (not `chaos`) for the same reason datagram-flood does:
+/// it is a property of the QUIC/H3 SESSION and reuses the QUIC transport pump,
+/// not a standalone TCP injector. `stats.ok()` counts each opened-then-reset
+/// stream; a handshake/transport failure is `stats.err()`.
+pub async fn run_h3_reset_flood(
+    target: SocketAddr,
+    sni: String,
+    ca_path: PathBuf,
+    concurrency: usize,
+    stats: Arc<LoadStats>,
+    cancel: CancellationToken,
+) {
+    let mut workers = Vec::new();
+    for _ in 0..concurrency {
+        let stats = Arc::clone(&stats);
+        let cancel = cancel.clone();
+        let sni = sni.clone();
+        let ca_path = ca_path.clone();
+        workers.push(tokio::spawn(async move {
+            while !cancel.is_cancelled() {
+                match h3_reset_burst(target, &sni, &ca_path, 200, &cancel).await {
+                    Ok(n) => {
+                        for _ in 0..n {
+                            stats.ok();
+                        }
+                    }
+                    Err(_) => {
+                        stats.err();
+                        // Brief backoff so a closed port can't hot-spin.
+                        tokio::time::sleep(Duration::from_millis(100)).await;
+                    }
+                }
+            }
+        }));
+    }
+    for w in workers {
+        let _ = w.await;
+    }
+}
+
+/// One reset-flood connection: handshake → `quiche::h3` client → up to `burst`
+/// open-then-reset request streams. Returns the count of streams torn down.
+async fn h3_reset_burst(
+    target: SocketAddr,
+    sni: &str,
+    ca_path: &std::path::Path,
+    burst: usize,
+    cancel: &CancellationToken,
+) -> anyhow::Result<usize> {
+    let socket = UdpSocket::bind(("127.0.0.1", 0)).await?;
+    let local = socket.local_addr()?;
+    let mut cfg = quic_client_config(ca_path)?;
+    let scid = random_cid();
+    let scid_ref = quiche::ConnectionId::from_ref(&scid);
+    let mut conn = quiche::connect(Some(sni), &scid_ref, local, target, &mut cfg)
+        .map_err(|e| anyhow::anyhow!("connect: {e:?}"))?;
+
+    let mut out = vec![0u8; MAX_UDP];
+    let mut inb = vec![0u8; MAX_UDP];
+
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    flush(&mut conn, &socket, &mut out).await?;
+    while !conn.is_established() {
+        if tokio::time::Instant::now() > deadline {
+            anyhow::bail!("handshake timeout");
+        }
+        recv_one(
+            &mut conn,
+            &socket,
+            local,
+            &mut inb,
+            Duration::from_millis(50),
+        )
+        .await;
+        flush(&mut conn, &socket, &mut out).await?;
+        if conn.is_closed() {
+            anyhow::bail!("closed during handshake");
+        }
+    }
+
+    let h3cfg = quiche::h3::Config::new().map_err(|e| anyhow::anyhow!("h3::Config: {e:?}"))?;
+    let mut h3 = quiche::h3::Connection::with_transport(&mut conn, &h3cfg)
+        .map_err(|e| anyhow::anyhow!("h3 with_transport: {e:?}"))?;
+    flush(&mut conn, &socket, &mut out).await?;
+
+    let headers = [
+        quiche::h3::Header::new(b":method", b"POST"),
+        quiche::h3::Header::new(b":scheme", b"https"),
+        quiche::h3::Header::new(b":path", b"/soak"),
+        quiche::h3::Header::new(b":authority", b"example.test:443"),
+        quiche::h3::Header::new(b"content-length", b"65536"),
+    ];
+
+    let mut tore_down = 0usize;
+    for i in 0..burst {
+        if cancel.is_cancelled() || conn.is_closed() {
+            break;
+        }
+        // Open a request stream (no FIN — a body is promised but never sent).
+        let sid = match h3.send_request(&mut conn, &headers, false) {
+            Ok(id) => id,
+            // Stream-limit / window pressure: flush + drain so the peer's
+            // MAX_STREAMS / flow-control advances, then continue the burst.
+            Err(quiche::h3::Error::StreamBlocked) | Err(quiche::h3::Error::Done) => {
+                flush(&mut conn, &socket, &mut out).await?;
+                recv_one(
+                    &mut conn,
+                    &socket,
+                    local,
+                    &mut inb,
+                    Duration::from_millis(10),
+                )
+                .await;
+                while h3.poll(&mut conn).is_ok() {}
+                continue;
+            }
+            Err(_) => break,
+        };
+        // Alternate the F-MD-4 trigger: RESET_STREAM (peer-reset the stream the
+        // gateway is reading) vs STOP_SENDING (peer-stop the stream the gateway
+        // would write the response on). H3_REQUEST_CANCELLED = 0x10C.
+        if i % 2 == 0 {
+            let _ = conn.stream_shutdown(sid, quiche::Shutdown::Write, 0x10C);
+        } else {
+            let _ = conn.stream_shutdown(sid, quiche::Shutdown::Read, 0x10C);
+        }
+        tore_down += 1;
+        // Pump the resets out + drain anything the gateway sends back (so the
+        // frames actually reach the peer — quiche needs a send() after a
+        // stream_shutdown; see the "quiche reset needs a flush/pump" lesson).
+        flush(&mut conn, &socket, &mut out).await?;
+        if i % 16 == 0 {
+            recv_one(
+                &mut conn,
+                &socket,
+                local,
+                &mut inb,
+                Duration::from_millis(5),
+            )
+            .await;
+            while h3.poll(&mut conn).is_ok() {}
+        }
+    }
+
+    let _ = conn.close(true, 0x100, b"flood-done");
+    let _ = flush(&mut conn, &socket, &mut out).await;
+    Ok(tore_down)
+}
+
+/// One H3 connection: handshake → `quiche::h3` client → `requests` mixed
+/// requests, each verified per its class. Returns `(ok, err)` — the per-request
+/// outcome counts (non-vacuous: a hang or a wrong-status response is an `err`,
+/// never silently counted). An `Err` return is a transport-level failure (the
+/// session could not even start) and is counted as one `err` by the caller.
+async fn h3_session(
+    target: SocketAddr,
+    sni: &str,
+    ca_path: &std::path::Path,
+    requests: usize,
+    seed: u64,
+) -> anyhow::Result<(usize, usize)> {
+    let socket = UdpSocket::bind(("127.0.0.1", 0)).await?;
+    let local = socket.local_addr()?;
+    let mut cfg = quic_client_config(ca_path)?;
+    let scid = random_cid();
+    let scid_ref = quiche::ConnectionId::from_ref(&scid);
+    let mut conn = quiche::connect(Some(sni), &scid_ref, local, target, &mut cfg)
+        .map_err(|e| anyhow::anyhow!("connect: {e:?}"))?;
+
+    let mut out = vec![0u8; MAX_UDP];
+    let mut inb = vec![0u8; MAX_UDP];
+
+    // QUIC handshake.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    flush(&mut conn, &socket, &mut out).await?;
+    while !conn.is_established() {
+        if tokio::time::Instant::now() > deadline {
+            anyhow::bail!("handshake timeout");
+        }
+        recv_one(
+            &mut conn,
+            &socket,
+            local,
+            &mut inb,
+            Duration::from_millis(50),
+        )
+        .await;
+        flush(&mut conn, &socket, &mut out).await?;
+        if conn.is_closed() {
+            anyhow::bail!("closed during handshake");
+        }
+    }
+
+    // Wrap as a quiche::h3 CLIENT (opens control + QPACK uni streams, sends
+    // SETTINGS). Same surface the gateway's own h3_bridge upstream client uses.
+    let h3cfg = quiche::h3::Config::new().map_err(|e| anyhow::anyhow!("h3::Config: {e:?}"))?;
+    let mut h3 = quiche::h3::Connection::with_transport(&mut conn, &h3cfg)
+        .map_err(|e| anyhow::anyhow!("h3 with_transport: {e:?}"))?;
+    flush(&mut conn, &socket, &mut out).await?;
+
+    let mut ok = 0usize;
+    let mut err = 0usize;
+    for i in 0..requests {
+        if conn.is_closed() {
+            break;
+        }
+        // Alternate classes so every connection drives BOTH the inline-400
+        // egress and the no-backend drop. Even = bad authority (→400), odd =
+        // valid authority (→drop).
+        let bad_authority = i % 2 == 0;
+        let body_len = BODY_SIZES[((seed as usize).wrapping_add(i)) % BODY_SIZES.len()];
+        // Per-request outcome is ISOLATED: a class violation on one request is
+        // counted as `err` but does NOT abort the batch (the other class's
+        // request still runs). Only a transport-level failure propagates.
+        match h3_one_request(
+            &mut conn,
+            &mut h3,
+            &socket,
+            local,
+            &mut out,
+            &mut inb,
+            bad_authority,
+            body_len,
+        )
+        .await
+        {
+            Ok(_outcome) => ok += 1,
+            Err(e) => {
+                if std::env::var("H3_DEBUG").is_ok() {
+                    eprintln!("[h3_request err bad_authority={bad_authority}] {e}");
+                }
+                err += 1;
+            }
+        }
+    }
+
+    let _ = conn.close(true, 0x100, b"done"); // H3_NO_ERROR
+    let _ = flush(&mut conn, &socket, &mut out).await;
+    Ok((ok, err))
+}
+
+/// Issue ONE H3 request and verify the class-specific outcome end-to-end.
+///
+/// Bad-authority → MUST read the inline 400 + body (true round-trip) within
+/// `H3_RESP_BUDGET`. Valid-authority → the gateway silently drops the stream
+/// (no backend, no reset), so the client polls only `H3_DROP_WINDOW` and the
+/// EXPECTED outcome is "no response": a 2xx (impossible) or a 400 (over-reject)
+/// is the failure, and a connection-level close mid-poll is also a failure (the
+/// ingress must not tear the whole connection down for a single dropped request).
+#[allow(clippy::too_many_arguments)]
+async fn h3_one_request(
+    conn: &mut quiche::Connection,
+    h3: &mut quiche::h3::Connection,
+    socket: &UdpSocket,
+    local: SocketAddr,
+    out: &mut [u8],
+    inb: &mut [u8],
+    bad_authority: bool,
+    body_len: usize,
+) -> anyhow::Result<H3Outcome> {
+    // A comma in :authority is the canonical reject case (ROUND8-L7-16 / the
+    // HAProxy BUG/MAJOR comma class); a clean host:port is the valid case.
+    let authority = if bad_authority {
+        "victim.example,attacker.example"
+    } else {
+        "example.test:443"
+    };
+    let method = if body_len == 0 { "GET" } else { "POST" };
+    let mut headers = vec![
+        quiche::h3::Header::new(b":method", method.as_bytes()),
+        quiche::h3::Header::new(b":scheme", b"https"),
+        quiche::h3::Header::new(b":path", b"/soak"),
+        quiche::h3::Header::new(b":authority", authority.as_bytes()),
+    ];
+    let cl = body_len.to_string();
+    if body_len > 0 {
+        headers.push(quiche::h3::Header::new(b"content-length", cl.as_bytes()));
+    }
+
+    let bodyless = body_len == 0;
+    let stream_id = h3
+        .send_request(conn, &headers, bodyless)
+        .map_err(|e| anyhow::anyhow!("send_request: {e:?}"))?;
+    flush(conn, socket, out).await?;
+
+    // Send the request body (if any), re-trying on flow-control Done.
+    let mut body_sent = 0usize;
+    let body: Vec<u8> = (0..body_len).map(|i| ((i * 31 + 7) % 256) as u8).collect();
+
+    let mut status: Option<u16> = None;
+    let mut resp_body = 0usize;
+    let mut finished = false;
+    let mut scratch = [0u8; 16 * 1024];
+    // Bad-authority waits for the real round-trip; valid-authority only polls a
+    // short drop-window (no response is the expected outcome — don't burn the
+    // full budget on every request).
+    let budget = if bad_authority {
+        H3_RESP_BUDGET
+    } else {
+        H3_DROP_WINDOW
+    };
+    let req_deadline = tokio::time::Instant::now() + budget;
+
+    while !finished && tokio::time::Instant::now() < req_deadline {
+        // (a) push remaining request body + FIN as the window frees.
+        if body_sent < body.len() {
+            match h3.send_body(conn, stream_id, body.get(body_sent..).unwrap_or(&[]), true) {
+                Ok(n) => body_sent += n,
+                Err(quiche::h3::Error::Done) => {}
+                // A reset here on the no-backend drop path is an expected
+                // teardown (the stream is gone), not a client failure.
+                Err(_) => body_sent = body.len(),
+            }
+        }
+        flush(conn, socket, out).await?;
+        recv_one(conn, socket, local, inb, Duration::from_millis(20)).await;
+
+        // (b) drain H3 events.
+        loop {
+            match h3.poll(conn) {
+                Ok((sid, quiche::h3::Event::Headers { list, .. })) if sid == stream_id => {
+                    for h in &list {
+                        use quiche::h3::NameValue;
+                        if h.name() == b":status" {
+                            status = std::str::from_utf8(h.value())
+                                .ok()
+                                .and_then(|s| s.parse().ok());
+                        }
+                    }
+                }
+                Ok((sid, quiche::h3::Event::Data)) if sid == stream_id => {
+                    while let Ok(n) = h3.recv_body(conn, stream_id, &mut scratch) {
+                        if n == 0 {
+                            break;
+                        }
+                        resp_body += n;
+                    }
+                }
+                Ok((sid, quiche::h3::Event::Finished)) if sid == stream_id => {
+                    finished = true;
+                    break;
+                }
+                Ok((sid, quiche::h3::Event::Reset(_))) if sid == stream_id => {
+                    // The gateway reset our request stream — a bounded teardown.
+                    finished = true;
+                    break;
+                }
+                Ok(_) => {} // other streams / GoAway / PriorityUpdate — ignore
+                Err(quiche::h3::Error::Done) => break,
+                Err(e) => {
+                    if conn.is_closed() {
+                        finished = true;
+                        break;
+                    }
+                    anyhow::bail!("h3.poll: {e:?}");
+                }
+            }
+        }
+        if conn.is_closed() {
+            break;
+        }
+    }
+
+    // Class-specific NON-VACUOUS verdict.
+    if bad_authority {
+        // Inline-400 decoded egress: a true request→response round-trip. The
+        // client MUST read :status 400 AND the "bad request" body (11 bytes).
+        if status != Some(400) {
+            anyhow::bail!(
+                "bad-:authority must yield the inline 400 decoded egress within {budget:?}; \
+                 got status={status:?} (hang ⇒ the migrated quiche::h3 ingress stalled)"
+            );
+        }
+        if resp_body == 0 {
+            anyhow::bail!("inline-400 must carry a body (\"bad request\"); read 0 bytes");
+        }
+        Ok(H3Outcome::Verified400)
+    } else {
+        // No-backend silent drop: the request passes the validator, then the
+        // gateway logs "no backends" and `continue`s — no response, no reset
+        // (measured). The EXPECTED outcome is that NO `:status` arrived. A 2xx
+        // is impossible (backend-less); a 400 means the valid authority was
+        // wrongly rejected (over-reject regression); a connection-level close
+        // means the ingress tore down the whole conn for one dropped request.
+        if let Some(s) = status {
+            if (200..300).contains(&s) {
+                anyhow::bail!(
+                    "valid-:authority unexpectedly got a 2xx ({s}) — the front is \
+                     backend-less (F-S26-1), so no upstream response is possible"
+                );
+            }
+            if s == 400 {
+                anyhow::bail!(
+                    "valid-:authority was rejected 400 — the H3 authority validator over-rejected"
+                );
+            }
+            anyhow::bail!("valid-:authority got an unexpected status {s} on a backend-less front");
+        }
+        if conn.is_closed() {
+            anyhow::bail!(
+                "the connection closed while a valid-:authority request was dropped — the \
+                 ingress must drop the STREAM, not tear down the connection"
+            );
+        }
+        Ok(H3Outcome::BoundedDrop)
+    }
+}
+
 async fn flush(
     conn: &mut quiche::Connection,
     socket: &UdpSocket,
@@ -636,5 +1148,297 @@ mod tests {
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = std::fs::remove_dir_all(&dir);
         r.expect("4 concurrent streams must echo end-to-end via the partial-write re-send loop");
+    }
+
+    // ── H3 client self-tests (S26 / INC-D) ───────────────────────────────────
+    //
+    // The H3 load/flood drivers are exercised live against the real binary, but
+    // the per-request VERDICT logic in `h3_one_request` must be proven
+    // non-vacuous on its own: it must (a) accept a real 400+body round-trip on
+    // the bad-authority class, and (b) REJECT a 200 on that class (a wrong
+    // status must be an Err, not a silently-counted no-op). Both directions are
+    // driven against a minimal in-process `quiche::h3` server here.
+
+    /// Build a loopback client/server `quiche::h3` pair, handshaken and ready.
+    /// Returns the established client conn + h3, the client socket/local, and a
+    /// spawned server task that answers exactly one request with `status`
+    /// (+`"bad request"` body, FIN) then drains to the cancel.
+    async fn h3_pair_with_status(
+        status: u16,
+    ) -> (
+        quiche::Connection,
+        quiche::h3::Connection,
+        Arc<UdpSocket>,
+        SocketAddr,
+        tokio::task::JoinHandle<()>,
+        CancellationToken,
+        std::path::PathBuf,
+    ) {
+        h3_pair_build(Some(status)).await
+    }
+
+    /// Build a loopback client/server `quiche::h3` pair. `status = Some(s)` ⇒ the
+    /// server answers the first request with `:status s` + a `"bad request"`
+    /// body (FIN); `None` ⇒ the server drains the request but NEVER responds
+    /// (the in-process analogue of the production no-backend silent drop).
+    async fn h3_pair_build(
+        status: Option<u16>,
+    ) -> (
+        quiche::Connection,
+        quiche::h3::Connection,
+        Arc<UdpSocket>,
+        SocketAddr,
+        tokio::task::JoinHandle<()>,
+        CancellationToken,
+        std::path::PathBuf,
+    ) {
+        let dir = std::env::temp_dir().join(format!(
+            "lb-soak-h3client-{}-{}-{}",
+            std::process::id(),
+            status.map_or(0, u32::from),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let certs = crate::config_gen::generate_certs(&dir, "h3.test").unwrap();
+
+        let server_sock = Arc::new(UdpSocket::bind(("127.0.0.1", 0)).await.unwrap());
+        let server_local = server_sock.local_addr().unwrap();
+        let client_sock = Arc::new(UdpSocket::bind(("127.0.0.1", 0)).await.unwrap());
+        let client_local = client_sock.local_addr().unwrap();
+
+        // Server transport config (loads the cert; ALPN h3).
+        let mut scfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
+        scfg.set_application_protos(&[b"h3"]).unwrap();
+        scfg.load_cert_chain_from_pem_file(certs.cert.to_str().unwrap())
+            .unwrap();
+        scfg.load_priv_key_from_pem_file(certs.key.to_str().unwrap())
+            .unwrap();
+        scfg.set_max_idle_timeout(8_000);
+        scfg.set_max_recv_udp_payload_size(1_350);
+        scfg.set_max_send_udp_payload_size(1_350);
+        scfg.set_initial_max_data(1024 * 1024);
+        scfg.set_initial_max_stream_data_bidi_local(256 * 1024);
+        scfg.set_initial_max_stream_data_bidi_remote(256 * 1024);
+        scfg.set_initial_max_stream_data_uni(256 * 1024);
+        scfg.set_initial_max_streams_bidi(16);
+        scfg.set_initial_max_streams_uni(16);
+        scfg.set_disable_active_migration(true);
+
+        let scid = random_cid();
+        let scid_ref = quiche::ConnectionId::from_ref(&scid);
+        let mut server_conn =
+            quiche::accept(&scid_ref, None, server_local, client_local, &mut scfg).unwrap();
+
+        // Client transport + connect (trust the server cert).
+        let mut ccfg = quic_client_config(&certs.ca).unwrap();
+        let c_scid = random_cid();
+        let c_scid_ref = quiche::ConnectionId::from_ref(&c_scid);
+        let mut client_conn = quiche::connect(
+            Some("h3.test"),
+            &c_scid_ref,
+            client_local,
+            server_local,
+            &mut ccfg,
+        )
+        .unwrap();
+
+        // Handshake both ends inline.
+        let mut out = vec![0u8; MAX_UDP];
+        let mut inb = vec![0u8; MAX_UDP];
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !(server_conn.is_established() && client_conn.is_established()) {
+            assert!(tokio::time::Instant::now() < deadline, "handshake stalled");
+            flush(&mut client_conn, &client_sock, &mut out)
+                .await
+                .unwrap();
+            flush(&mut server_conn, &server_sock, &mut out)
+                .await
+                .unwrap();
+            recv_one(
+                &mut server_conn,
+                &server_sock,
+                server_local,
+                &mut inb,
+                Duration::from_millis(20),
+            )
+            .await;
+            recv_one(
+                &mut client_conn,
+                &client_sock,
+                client_local,
+                &mut inb,
+                Duration::from_millis(20),
+            )
+            .await;
+        }
+
+        // Client h3 (control + QPACK streams).
+        let ch3cfg = quiche::h3::Config::new().unwrap();
+        let client_h3 = quiche::h3::Connection::with_transport(&mut client_conn, &ch3cfg).unwrap();
+        flush(&mut client_conn, &client_sock, &mut out)
+            .await
+            .unwrap();
+
+        // Server pump: answer the first request with `status` + body, drain.
+        let cancel = CancellationToken::new();
+        let srv_cancel = cancel.clone();
+        let srv_sock = Arc::clone(&server_sock);
+        let server = tokio::spawn(async move {
+            let sh3cfg = quiche::h3::Config::new().unwrap();
+            let mut sh3: Option<quiche::h3::Connection> = None;
+            let mut out = vec![0u8; MAX_UDP];
+            let mut inb = vec![0u8; MAX_UDP];
+            while !srv_cancel.is_cancelled() && !server_conn.is_closed() {
+                // Establish the server h3 once the transport is ready.
+                if sh3.is_none() && server_conn.is_established() {
+                    if let Ok(h) = quiche::h3::Connection::with_transport(&mut server_conn, &sh3cfg)
+                    {
+                        sh3 = Some(h);
+                    }
+                }
+                let _ = flush(&mut server_conn, &srv_sock, &mut out).await;
+                recv_one(
+                    &mut server_conn,
+                    &srv_sock,
+                    server_local,
+                    &mut inb,
+                    Duration::from_millis(20),
+                )
+                .await;
+                if let Some(h) = sh3.as_mut() {
+                    while let Ok((sid, ev)) = h.poll(&mut server_conn) {
+                        match ev {
+                            quiche::h3::Event::Headers { .. } | quiche::h3::Event::Data => {
+                                // Drain any request body so the stream completes.
+                                let mut b = [0u8; 4096];
+                                while let Ok(n) = h.recv_body(&mut server_conn, sid, &mut b) {
+                                    if n == 0 {
+                                        break;
+                                    }
+                                }
+                                // `None` ⇒ the no-backend silent-drop analogue:
+                                // drain but never respond + never reset.
+                                if let Some(s) = status {
+                                    let st = s.to_string();
+                                    let resp = [quiche::h3::Header::new(b":status", st.as_bytes())];
+                                    if h.send_response(&mut server_conn, sid, &resp, false).is_ok()
+                                    {
+                                        let _ = h.send_body(
+                                            &mut server_conn,
+                                            sid,
+                                            b"bad request",
+                                            true,
+                                        );
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                let _ = flush(&mut server_conn, &srv_sock, &mut out).await;
+            }
+        });
+
+        (
+            client_conn,
+            client_h3,
+            client_sock,
+            client_local,
+            server,
+            cancel,
+            dir,
+        )
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn h3_one_request_accepts_real_400_roundtrip() {
+        let (mut conn, mut h3, sock, local, server, cancel, dir) = h3_pair_with_status(400).await;
+        let mut out = vec![0u8; MAX_UDP];
+        let mut inb = vec![0u8; MAX_UDP];
+        // bad-authority class: must read :status 400 + a non-empty body.
+        let r = h3_one_request(
+            &mut conn, &mut h3, &sock, local, &mut out, &mut inb, true, 0,
+        )
+        .await;
+        cancel.cancel();
+        server.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+        let outcome =
+            r.expect("client must accept a real 400 + body round-trip on the bad-authority class");
+        assert!(
+            matches!(outcome, H3Outcome::Verified400),
+            "the bad-authority round-trip must report Verified400"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn h3_one_request_rejects_wrong_status_on_bad_authority() {
+        // Load-bearing negative control: if the server (wrongly) answers 200 on
+        // the bad-authority class, the verdict MUST be an Err — never silently
+        // accepted. Proves the status check is not vacuous.
+        let (mut conn, mut h3, sock, local, server, cancel, dir) = h3_pair_with_status(200).await;
+        let mut out = vec![0u8; MAX_UDP];
+        let mut inb = vec![0u8; MAX_UDP];
+        let r = h3_one_request(
+            &mut conn, &mut h3, &sock, local, &mut out, &mut inb, true, 0,
+        )
+        .await;
+        cancel.cancel();
+        server.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            r.is_err(),
+            "a 200 on the bad-authority class must FAIL the verdict (got Ok — vacuous check)"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn h3_one_request_valid_authority_silent_drop_is_bounded() {
+        // The valid-authority class mirrors the production no-backend drop: the
+        // server (here a NON-responding peer) sends nothing. The client must
+        // poll only `H3_DROP_WINDOW`, observe NO :status, and report BoundedDrop
+        // — NOT hang and NOT mis-count a silent drop as a failure.
+        let (mut conn, mut h3, sock, local, server, cancel, dir) = h3_pair_no_response().await;
+        let mut out = vec![0u8; MAX_UDP];
+        let mut inb = vec![0u8; MAX_UDP];
+        let started = std::time::Instant::now();
+        let r = h3_one_request(
+            &mut conn, &mut h3, &sock, local, &mut out, &mut inb, false, 0,
+        )
+        .await;
+        let elapsed = started.elapsed();
+        cancel.cancel();
+        server.abort();
+        let _ = std::fs::remove_dir_all(&dir);
+        let outcome = r.expect("a silent drop on the valid-authority class must be a BoundedDrop");
+        assert!(
+            matches!(outcome, H3Outcome::BoundedDrop),
+            "valid-authority silent drop must report BoundedDrop"
+        );
+        // It must NOT have waited a long budget (the drop-window is short).
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "the drop path must not hang — bounded by the short drop-window, took {elapsed:?}"
+        );
+    }
+
+    /// A client/server H3 pair whose server task accepts + handshakes but NEVER
+    /// answers a request (drains the request, drops the stream) — the in-process
+    /// analogue of the production "no backends available" silent drop.
+    async fn h3_pair_no_response() -> (
+        quiche::Connection,
+        quiche::h3::Connection,
+        Arc<UdpSocket>,
+        SocketAddr,
+        tokio::task::JoinHandle<()>,
+        CancellationToken,
+        std::path::PathBuf,
+    ) {
+        // `u16::MAX` sentinel = "do not respond" (see h3_pair_build).
+        h3_pair_build(None).await
     }
 }
