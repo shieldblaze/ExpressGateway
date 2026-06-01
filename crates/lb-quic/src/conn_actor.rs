@@ -38,8 +38,8 @@ use crate::raw_proxy::{RawBackend, run_raw_proxy_actor};
 
 use crate::h3_bridge::{
     H3_BODY_CHUNK_MAX, H3_RESP_CHANNEL_DEPTH, H3Request, MAX_REQUEST_BODY_BYTES,
-    MAX_RESPONSE_BODY_BYTES, ReqBodyEvent, RespEvent, encode_h3_response, h3_to_h1_stream_resp,
-    h3_to_h2_stream_resp, h3_to_h3_stream_resp, validate_request_pseudo_headers,
+    MAX_RESPONSE_BODY_BYTES, ReqBodyEvent, RespEvent, h3_to_h1_stream_resp, h3_to_h2_stream_resp,
+    h3_to_h3_stream_resp, validate_request_pseudo_headers,
 };
 
 /// SESSION 2 / P1-A: depth of the per-stream bounded request-body
@@ -213,23 +213,17 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
     // a SECOND `Event::Headers` on a body-phase stream; stashed here until
     // `Finished` attaches them to `End`.
     let mut pending_trailers: HashMap<u64, Vec<(String, String)>> = HashMap::new();
-    // `request_tasks` holds the bridge's H3→H1 jobs. We push each
-    // spawned JoinHandle in, and await the first-completed inside the
-    // select! so the actor wakes as soon as a response is ready — not
-    // only on quiche's timeout or the next inbound packet.
-    let mut request_tasks: Vec<tokio::task::JoinHandle<(u64, Vec<u8>)>> = Vec::new();
-    // SESSION 4 / P1-B: per-stream bounded RESPONSE channels. The
-    // `stream_h1_response` producer task owns the SENDER (the inverse
-    // of the request side, where the actor owns the sender); the
-    // RECEIVER stays here and is drained — under the §1.4.3
-    // backpressure gate — into the stream's `Progressive` `StreamTx`.
-    // Used by the H1 spawn site ONLY; H2/H3 + inline errors stay on the
-    // legacy `request_tasks`/`task_wait` buffered path, untouched.
+    // SESSION 4 / P1-B: per-stream bounded RESPONSE channels. The cell
+    // producer task owns the SENDER (the inverse of the request side,
+    // where the actor owns the sender); the RECEIVER stays here and is
+    // drained — under the §1.4.3 backpressure gate — into the stream's
+    // `Progressive` `StreamTx`. SESSION 25 / INC-5: this DECODED Progressive
+    // path is now the SOLE response egress — the inline-400 authority reject
+    // joined it, and the legacy raw-byte `request_tasks`/`task_wait`/
+    // `Buffered` path is deleted (production is 100% on quiche::h3).
     let mut resp_rx_by_stream: HashMap<u64, mpsc::Receiver<RespEvent>> = HashMap::new();
-    // SESSION 4 / P1-B: liveness handles for the response producer
-    // tasks. NOT pushed into `request_tasks` (whose `(u64, Vec<u8>)`
-    // type + its sole consumer, the legacy `finished` arm, must stay
-    // untouched). Joined opportunistically to reap finished producers.
+    // SESSION 4 / P1-B: liveness handles for the response producer tasks.
+    // Joined opportunistically to reap finished producers.
     let mut resp_tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
     loop {
@@ -267,34 +261,6 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
             next_wait = next_wait.min(Duration::from_millis(2));
         }
 
-        // Build the "task completed" future: the first finished one
-        // among request_tasks. If none are outstanding, we push a
-        // never-completing future so the select arm is inert.
-        let task_wait = async {
-            if request_tasks.is_empty() {
-                std::future::pending::<Option<(u64, Vec<u8>)>>().await
-            } else {
-                // Poll every 5ms for any finished handle — cheap, and
-                // decouples us from waking the loop on task completion.
-                loop {
-                    tokio::time::sleep(Duration::from_millis(5)).await;
-                    if let Some(pos) = request_tasks
-                        .iter()
-                        .position(tokio::task::JoinHandle::is_finished)
-                    {
-                        let h = request_tasks.swap_remove(pos);
-                        match h.await {
-                            Ok(v) => return Some(v),
-                            Err(e) => {
-                                tracing::warn!(error = %e, "H3→H1 task join failure");
-                                return None;
-                            }
-                        }
-                    }
-                }
-            }
-        };
-
         tokio::select! {
             biased;
             () = params.cancel.cancelled() => {
@@ -309,11 +275,6 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
                     Err(e) => {
                         tracing::debug!(error = %e, "quiche recv");
                     }
-                }
-            }
-            finished = task_wait => {
-                if let Some((stream_id, response_bytes)) = finished {
-                    stream_response.insert(stream_id, StreamTx::new(response_bytes));
                 }
             }
             () = tokio::time::sleep(next_wait) => {
@@ -351,7 +312,6 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
                     &mut body_tx_by_stream,
                     &mut body_seen,
                     &mut pending_trailers,
-                    &mut request_tasks,
                     &mut resp_rx_by_stream,
                     &mut resp_tasks,
                     &mut stream_response,
@@ -455,22 +415,18 @@ fn drain_resp_channels(
 ) {
     let sids: Vec<u64> = resp_rx_by_stream.keys().copied().collect();
     for sid in sids {
-        // The H1 spawn site inserts an empty `Progressive` StreamTx
-        // alongside the receiver, so this entry exists; if a legacy
-        // `Buffered` somehow occupies the slot we leave it untouched.
-        let tx = stream_response
-            .entry(sid)
-            .or_insert_with(StreamTx::progressive);
+        // The cell spawn site inserts an empty `Progressive` StreamTx
+        // alongside the receiver, so this entry exists. INC-5: `Progressive`
+        // is the only variant.
         let StreamTx::Progressive {
             queue,
             ended,
             reset,
             fin_sent,
             ..
-        } = tx
-        else {
-            continue;
-        };
+        } = stream_response
+            .entry(sid)
+            .or_insert_with(StreamTx::progressive);
         if *fin_sent || *reset || *ended {
             // Terminal already decided; nothing more to pull. (Keep
             // the receiver until the stream is dropped by
@@ -524,16 +480,15 @@ fn drain_resp_channels(
     {
         let mut total: usize = 0;
         for tx in stream_response.values() {
-            if let StreamTx::Progressive { queue, .. } = tx {
-                for item in queue.iter() {
-                    total = total.saturating_add(match item {
-                        RespItem::Body(b) => b.len(),
-                        RespItem::Head { headers, .. } => {
-                            headers.iter().map(|(n, v)| n.len() + v.len()).sum()
-                        }
-                        RespItem::Trailers(t) => t.iter().map(|(n, v)| n.len() + v.len()).sum(),
-                    });
-                }
+            let StreamTx::Progressive { queue, .. } = tx;
+            for item in queue.iter() {
+                total = total.saturating_add(match item {
+                    RespItem::Body(b) => b.len(),
+                    RespItem::Head { headers, .. } => {
+                        headers.iter().map(|(n, v)| n.len() + v.len()).sum()
+                    }
+                    RespItem::Trailers(t) => t.iter().map(|(n, v)| n.len() + v.len()).sum(),
+                });
             }
         }
         for rx in resp_rx_by_stream.values() {
@@ -580,14 +535,11 @@ enum RespItem {
 /// the channel are the memory bound (≈ `H3_RESP_CHANNEL_DEPTH` × chunk),
 /// independent of total response size.
 enum StreamTx {
-    /// Legacy: one pre-built `Vec`, byte cursor + FIN-on-empty.
-    Buffered {
-        bytes: Vec<u8>,
-        sent: usize,
-        finished: bool,
-    },
     /// SESSION 4 / P1-B: progressive response egress (INC-3: via
-    /// `quiche::h3`).
+    /// `quiche::h3`). SESSION 25 / INC-5: the SOLE egress — the legacy
+    /// `Buffered` raw-`stream_send` cursor was deleted once the inline-400
+    /// authority reject joined this decoded path (production is 100% on
+    /// quiche::h3).
     ///
     /// `queue` holds DECODED response items not yet encoded onto the
     /// h3 connection. `head_sent` guards the one-shot `send_response`.
@@ -605,17 +557,6 @@ enum StreamTx {
 }
 
 impl StreamTx {
-    /// Construct the LEGACY buffered cursor. Unchanged signature +
-    /// behaviour so every existing caller (`conn_actor.rs:206`, the
-    /// H2/H3 + inline-error path) is bit-for-bit unaffected.
-    const fn new(bytes: Vec<u8>) -> Self {
-        Self::Buffered {
-            bytes,
-            sent: 0,
-            finished: false,
-        }
-    }
-
     /// Construct an empty SESSION 4 / P1-B progressive egress cursor.
     fn progressive() -> Self {
         Self::Progressive {
@@ -646,46 +587,8 @@ fn drain_streams_to_conn(
     let mut to_drop = Vec::new();
     for (&sid, tx) in streams.iter_mut() {
         match tx {
-            // LEGACY buffered path — byte-for-byte the pre-SESSION-4
-            // loop. H2/H3 + inline-error responses are unaffected.
-            StreamTx::Buffered {
-                bytes,
-                sent,
-                finished,
-            } => {
-                if *finished {
-                    continue;
-                }
-                loop {
-                    let remaining = bytes.get(*sent..).unwrap_or(&[]);
-                    if remaining.is_empty() {
-                        // All bytes in; send FIN separately via a
-                        // zero-length send with fin=true.
-                        match conn.stream_send(sid, &[], true) {
-                            Ok(_) | Err(quiche::Error::Done) => {
-                                *finished = true;
-                            }
-                            Err(e) => {
-                                tracing::debug!(error = %e, stream_id = sid, "stream_send FIN");
-                                *finished = true;
-                            }
-                        }
-                        to_drop.push(sid);
-                        break;
-                    }
-                    match conn.stream_send(sid, remaining, false) {
-                        Ok(0) | Err(quiche::Error::Done) => break,
-                        Ok(n) => {
-                            *sent = sent.saturating_add(n);
-                        }
-                        Err(e) => {
-                            tracing::debug!(error = %e, stream_id = sid, "stream_send");
-                            break;
-                        }
-                    }
-                }
-            }
-            // SESSION 24 / INC-3: progressive egress via quiche::h3.
+            // SESSION 24 / INC-3: progressive egress via quiche::h3 (SESSION
+            // 25 / INC-5: the SOLE egress arm).
             StreamTx::Progressive {
                 queue,
                 head_sent,
@@ -825,16 +728,13 @@ fn drain_streams_to_conn(
     for sid in to_drop {
         // Mark terminal so subsequent calls skip it; remove lazily to
         // keep the allocation low (unchanged from the legacy policy).
-        if let Some(tx) = streams.get_mut(&sid) {
-            match tx {
-                StreamTx::Buffered { finished, .. } => *finished = true,
-                StreamTx::Progressive { fin_sent, .. } => *fin_sent = true,
-            }
+        if let Some(StreamTx::Progressive { fin_sent, .. }) = streams.get_mut(&sid) {
+            *fin_sent = true;
         }
     }
-    streams.retain(|_, tx| match tx {
-        StreamTx::Buffered { finished, .. } => !*finished,
-        StreamTx::Progressive { fin_sent, .. } => !*fin_sent,
+    streams.retain(|_, tx| {
+        let StreamTx::Progressive { fin_sent, .. } = tx;
+        !*fin_sent
     });
 }
 
@@ -1053,7 +953,6 @@ fn poll_h3(
     body_tx_by_stream: &mut HashMap<u64, mpsc::Sender<ReqBodyEvent>>,
     body_seen: &mut HashMap<u64, usize>,
     pending_trailers: &mut HashMap<u64, Vec<(String, String)>>,
-    request_tasks: &mut Vec<tokio::task::JoinHandle<(u64, Vec<u8>)>>,
     resp_rx_by_stream: &mut HashMap<u64, mpsc::Receiver<RespEvent>>,
     resp_tasks: &mut Vec<tokio::task::JoinHandle<()>>,
     stream_response: &mut HashMap<u64, StreamTx>,
@@ -1138,8 +1037,27 @@ fn poll_h3(
                             stream_id = sid,
                             "ROUND8-L7-16: H3 :authority rejected before upstream selection"
                         );
-                        let resp = encode_h3_response(400, b"bad request").unwrap_or_default();
-                        request_tasks.push(tokio::spawn(async move { (sid, resp) }));
+                        // SESSION 25 / INC-5: emit the inline 400 via the
+                        // DECODED Progressive egress (quiche::h3 send_response/
+                        // send_body) — same as every cell. The legacy raw-byte
+                        // `encode_h3_response` + `request_tasks`/`Buffered` path
+                        // is gone (production is now 100% on quiche::h3). Same
+                        // 400 + "bad request" body, byte-for-byte.
+                        let (resp_tx, resp_rx) = mpsc::channel::<RespEvent>(H3_RESP_CHANNEL_DEPTH);
+                        resp_tasks.push(tokio::spawn(async move {
+                            let _ = resp_tx
+                                .send(RespEvent::Head {
+                                    status: 400,
+                                    headers: Vec::new(),
+                                })
+                                .await;
+                            let _ = resp_tx
+                                .send(RespEvent::Body(Bytes::from_static(b"bad request")))
+                                .await;
+                            let _ = resp_tx.send(RespEvent::End).await;
+                        }));
+                        resp_rx_by_stream.insert(sid, resp_rx);
+                        stream_response.insert(sid, StreamTx::progressive());
                         continue;
                     }
                 }
