@@ -1,0 +1,41 @@
+============================================================
+F-S27-1 INC-2 LOAD-BEARING PROOF — tests/ws_h2_upgrade_defer.rs
+Generated: 2026-06-01T16:44:14Z
+============================================================
+
+## STEP A — FIX REVERTED (ordering hunk replaced with premature-200)
+## Expectation: RED — client sees 200 (false success), exactly the
+## verifier's reproducer for F-S27-1.
+## Command: cargo test --test ws_h2_upgrade_defer
+------------------------------------------------------------
+test no_smuggled_data_forwarded_on_failure ... FAILED
+test client_sees_502_when_backend_rejects_ws ... FAILED
+test client_sees_504_on_handshake_timeout ... FAILED
+thread 'no_smuggled_data_forwarded_on_failure' panicked at tests/ws_h2_upgrade_defer.rs:342:5:
+assertion `left == right` failed: upstream refusal must yield 502, got 200 OK
+  left: 200
+ right: 502
+thread 'client_sees_502_when_backend_rejects_ws' panicked at tests/ws_h2_upgrade_defer.rs:273:5:
+assertion `left == right` failed: upstream non-101 must yield 502, got 200 OK (a 200 here is F-S27-1: false-success / premature 200)
+  left: 200
+ right: 502
+thread 'client_sees_504_on_handshake_timeout' panicked at tests/ws_h2_upgrade_defer.rs:295:5:
+assertion `left == right` failed: upstream that never answers within the bounded budget must yield 504, got 200 OK
+  left: 200
+ right: 504
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+------------------------------------------------------------
+
+## STEP B — FIX RESTORED (inline dial+handshake before any 200)
+## Expectation: GREEN — 502 on non-101, 504 on timeout, no smuggle.
+## Command: cargo test --test ws_h2_upgrade_defer
+------------------------------------------------------------
+test client_sees_502_when_backend_rejects_ws ... ok
+test client_sees_504_on_handshake_timeout ... ok
+test no_smuggled_data_forwarded_on_failure ... ok
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+------------------------------------------------------------
+
+## CONCLUSION: the regression test is LOAD-BEARING — it flips RED↔GREEN
+## solely on the F-S27-1 ordering fix in
+## crates/lb-l7/src/h2_proxy.rs::handle_ws_extended_connect.

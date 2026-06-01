@@ -901,6 +901,19 @@ struct ProxyService {
     glitch: Option<GlitchConnState>,
 }
 
+/// F-S27-1 — outcome of the inline upstream WS dial+handshake in
+/// `handle_ws_extended_connect`. Mirrors the H1 sibling's `ProxyErr`
+/// split so the caller can pick the right client status WITHOUT having
+/// emitted a `200` first:
+///
+///   * `Timeout`  → `504` (dial unreachable / never produced a response),
+///   * `Refused`  → `502` (upstream answered non-101, or the handshake
+///                  otherwise failed structurally).
+enum WsDialErr {
+    Timeout(String),
+    Refused(String),
+}
+
 impl hyper::service::Service<Request<IncomingBody>> for ProxyService {
     type Response = Response<ClientRespBody>;
     type Error = hyper::Error;
@@ -1000,7 +1013,7 @@ impl H2Proxy {
             .as_ref()
             .is_some_and(|w| w.config().enabled && is_h2_extended_connect(&req))
         {
-            return self.handle_ws_extended_connect(req);
+            return self.handle_ws_extended_connect(req).await;
         }
         if let Some(gp) = self
             .grpc
@@ -1280,12 +1293,29 @@ impl H2Proxy {
 
     /// Handle an RFC 8441 extended-CONNECT WebSocket bootstrap.
     ///
-    /// Returns `200 OK` with an empty body; hyper flips the inbound
-    /// stream into a bidirectional byte channel once the response
-    /// headers reach the wire. A detached task picks up the upgraded
-    /// stream, dials the backend over HTTP/1.1, drives the client-side
-    /// RFC 6455 handshake, and runs the bidirectional frame forwarder.
-    fn handle_ws_extended_connect(
+    /// F-S27-1 (SEC, HIGH) — defer the client `200` until the upstream is
+    /// proven good, exactly like the H1 sibling's ROUND8-L7-01 "defer 101"
+    /// restructure (`h1_proxy::handle_ws_upgrade`). The dial + upstream
+    /// RFC 6455 client handshake now run **inline, BEFORE** any
+    /// client-visible response, bounded by the same
+    /// [`HttpTimeouts::header`] budget H1 uses (its semantics — "time to
+    /// get the upstream's handshake response" — is exactly that budget).
+    ///
+    ///   * dial failure / handshake-budget elapsed → `504` (no 200 emitted),
+    ///   * upstream answers non-101 / handshake refused → `502` (no 200),
+    ///   * upstream `101` → build `200 OK` and spawn a SPLICE-ONLY task that
+    ///     awaits `hyper::upgrade::on` (resolves once the 200 hits the wire),
+    ///     wraps the upgraded client IO as `server_ws`, and runs
+    ///     `proxy_frames` over the ALREADY-ESTABLISHED `backend_ws`.
+    ///
+    /// Before this fix the dial + handshake lived in a detached task whose
+    /// failure arms only `tracing::debug!; return;`, so a backend that
+    /// refused the WS handshake still left the H2 client holding a `200`
+    /// (false success) — and any DATA the client pipelined behind the
+    /// extended CONNECT could be relayed toward a backend that never agreed
+    /// to the upgrade. Dialing inline closes both the false-success and the
+    /// smuggle window.
+    async fn handle_ws_extended_connect(
         &self,
         mut req: Request<IncomingBody>,
     ) -> Response<ClientRespBody> {
@@ -1303,7 +1333,6 @@ impl H2Proxy {
         }
         let backend_addr = backend.addr;
 
-        let upgrade_fut = hyper::upgrade::on(&mut req);
         let path_and_query = req
             .uri()
             .path_and_query()
@@ -1311,54 +1340,74 @@ impl H2Proxy {
         let ws_cfg = ws_proxy.config();
         let pool = self.pool.clone();
 
-        tokio::spawn(async move {
-            let upgraded = match upgrade_fut.await {
-                Ok(u) => u,
-                Err(e) => {
-                    tracing::debug!(error = %e, "ws/h2: upgrade failed");
-                    return;
-                }
-            };
-
-            // CODE-2-09 follow-on: async dial via
-            // `TcpPool::acquire_async`. Eliminates the
-            // `spawn_blocking(pool.acquire)` site so an H2 extended-
-            // CONNECT WebSocket upgrade no longer parks a blocking-pool
-            // thread for the dial.
-            let pooled = match pool.acquire_async(backend_addr).await {
-                Ok(p) => p,
-                Err(e) => {
-                    tracing::debug!(error = %e, backend = %backend_addr, "ws/h2: backend dial failed");
-                    return;
-                }
-            };
-            let Some(upstream_stream) = pooled.take_stream() else {
-                tracing::debug!("ws/h2: pooled stream missing");
-                return;
-            };
-
-            let uri = match format!("ws://{backend_addr}{path_and_query}").parse() {
-                Ok(u) => u,
-                Err(e) => {
-                    tracing::debug!(error = %e, "ws/h2: upstream uri build failed");
-                    return;
-                }
-            };
+        // ── Dial + upstream RFC 6455 handshake INLINE, before any 200. ──
+        // Bounded by the H1 header-receipt budget (mirror of H1's
+        // `self.timeouts.header`): an outer `timeout` AND the inner async
+        // both feed the same 504/502 mapping below.
+        let upstream_dial = async move {
+            let pooled = pool
+                .acquire_async(backend_addr)
+                .await
+                .map_err(|e| WsDialErr::Timeout(format!("backend dial failed: {e}")))?;
+            let upstream_stream = pooled
+                .take_stream()
+                .ok_or_else(|| WsDialErr::Refused("pooled stream missing".to_owned()))?;
+            let uri = format!("ws://{backend_addr}{path_and_query}")
+                .parse()
+                .map_err(|e| WsDialErr::Refused(format!("upstream uri build failed: {e}")))?;
             let builder = tokio_tungstenite::tungstenite::client::ClientRequestBuilder::new(uri);
-            let (backend_ws, _resp) = match tokio_tungstenite::client_async_with_config(
+            let (backend_ws, _resp) = tokio_tungstenite::client_async_with_config(
                 builder,
                 upstream_stream,
                 Some(ws_cfg.tungstenite_config()),
             )
             .await
-            {
-                Ok(pair) => pair,
+            .map_err(|e| WsDialErr::Refused(format!("upstream handshake failed: {e}")))?;
+            Ok::<_, WsDialErr>(backend_ws)
+        };
+
+        let backend_ws = match tokio::time::timeout(self.timeouts.header, upstream_dial).await {
+            Ok(Ok(ws)) => ws,
+            Ok(Err(WsDialErr::Refused(msg))) => {
+                tracing::debug!(backend = %backend_addr, error = %msg, "ws/h2: upstream handshake refused — returning 502 (no 200 emitted)");
+                return error_response(
+                    StatusCode::BAD_GATEWAY,
+                    "websocket upstream handshake failed",
+                );
+            }
+            Ok(Err(WsDialErr::Timeout(msg))) => {
+                tracing::debug!(backend = %backend_addr, error = %msg, "ws/h2: upstream dial failure — returning 504 (no 200 emitted)");
+                return error_response(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "websocket upstream dial timeout",
+                );
+            }
+            Err(_elapsed) => {
+                tracing::debug!(backend = %backend_addr, "ws/h2: upstream handshake budget elapsed — returning 504 (no 200 emitted)");
+                return error_response(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "websocket upstream handshake timeout",
+                );
+            }
+        };
+
+        // Upstream is established. ONLY NOW arm the hyper upgrade future and
+        // build the client 200. The detached task no longer dials — it
+        // splices the already-established upstream WS to the post-upgrade
+        // client stream (the upgrade future resolves after the 200 hits the
+        // wire). Holding `backend_ws` open across that brief window is
+        // intentional and mirrors the H1 sibling's `run_h1_ws_splice_task`.
+        let upgrade_fut = hyper::upgrade::on(&mut req);
+        tokio::spawn(async move {
+            let upgraded = match upgrade_fut.await {
+                Ok(u) => u,
                 Err(e) => {
-                    tracing::debug!(error = %e, backend = %backend_addr, "ws/h2: upstream handshake failed");
+                    // Dropping `backend_ws` here closes the pooled TCP
+                    // socket via its `Drop`, so we never leak it.
+                    tracing::debug!(error = %e, "ws/h2: hyper upgrade failed after upstream established");
                     return;
                 }
             };
-
             let client_ws = ws_proxy::server_ws(TokioIo::new(upgraded), &ws_cfg).await;
             if let Err(e) = ws_proxy.proxy_frames(client_ws, backend_ws).await {
                 tracing::debug!(error = %e, "ws/h2: frame proxy ended with error");
