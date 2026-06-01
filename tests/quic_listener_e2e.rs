@@ -832,8 +832,26 @@ async fn spawn_mock_h3_backend(
                         }
                     }
                 }
-                // If we have a full HEADERS frame, respond with 200.
-                if let Ok((H3Frame::Headers { .. }, _)) = decode_frame(&rx_tail, 1 << 20) {
+                // RFC 9114 §9 + §7.2.8: skip any leading GREASE / unknown /
+                // non-HEADERS frame (the migrated quiche::h3 client prepends a
+                // GREASE frame `0x1f*N + 0x21` on the request stream) and
+                // respond once a HEADERS frame is seen — as a conformant H3
+                // server does.
+                let mut scan = 0usize;
+                let mut saw_req_headers = false;
+                while let Ok((frame, consumed)) =
+                    decode_frame(rx_tail.get(scan..).unwrap_or(&[]), 1 << 20)
+                {
+                    if consumed == 0 {
+                        break;
+                    }
+                    if matches!(frame, H3Frame::Headers { .. }) {
+                        saw_req_headers = true;
+                        break;
+                    }
+                    scan += consumed;
+                }
+                if saw_req_headers {
                     let encoder = QpackEncoder::new();
                     let resp_headers: Vec<(String, String)> = vec![
                         (":status".to_string(), "200".to_string()),
