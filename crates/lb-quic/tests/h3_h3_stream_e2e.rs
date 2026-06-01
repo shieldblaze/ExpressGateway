@@ -59,7 +59,7 @@ use lb_quic::{QuicListener, QuicListenerParams};
 use tokio::net::UdpSocket;
 use tokio_util::sync::CancellationToken;
 
-use lb_h3::{H3Frame, QpackEncoder, decode_frame, encode_frame};
+use lb_h3_testcodec::{H3Frame, QpackEncoder, decode_frame, encode_frame};
 
 const TEST_SNI: &str = "expressgateway.test";
 const H3_ALPN: &[u8] = b"h3";
@@ -1175,8 +1175,8 @@ fn unknown_frame(frame_type: u64, payload: &[u8]) -> Vec<u8> {
 fn oversized_block_header(frame_type: u64, declared_len: u64) -> Vec<u8> {
     use bytes::BytesMut;
     let mut buf = BytesMut::new();
-    lb_h3::encode_varint(&mut buf, frame_type).unwrap();
-    lb_h3::encode_varint(&mut buf, declared_len).unwrap();
+    lb_h3_testcodec::encode_varint(&mut buf, frame_type).unwrap();
+    lb_h3_testcodec::encode_varint(&mut buf, declared_len).unwrap();
     buf.to_vec()
 }
 
@@ -1187,8 +1187,8 @@ fn oversized_block_header(frame_type: u64, declared_len: u64) -> Vec<u8> {
 fn empty_data_frame() -> Vec<u8> {
     use bytes::BytesMut;
     let mut buf = BytesMut::new();
-    lb_h3::encode_varint(&mut buf, 0x00).unwrap(); // FRAME_DATA
-    lb_h3::encode_varint(&mut buf, 0).unwrap(); // length 0
+    lb_h3_testcodec::encode_varint(&mut buf, 0x00).unwrap(); // FRAME_DATA
+    lb_h3_testcodec::encode_varint(&mut buf, 0).unwrap(); // length 0
     buf.to_vec()
 }
 
@@ -1199,8 +1199,8 @@ fn empty_data_frame() -> Vec<u8> {
 fn truncated_data_frame(declared_len: u64, actual_len: usize) -> Vec<u8> {
     use bytes::BytesMut;
     let mut buf = BytesMut::new();
-    lb_h3::encode_varint(&mut buf, 0x00).unwrap(); // FRAME_DATA
-    lb_h3::encode_varint(&mut buf, declared_len).unwrap();
+    lb_h3_testcodec::encode_varint(&mut buf, 0x00).unwrap(); // FRAME_DATA
+    lb_h3_testcodec::encode_varint(&mut buf, declared_len).unwrap();
     let mut out = buf.to_vec();
     out.extend(std::iter::repeat_n(0x5Au8, actual_len));
     out

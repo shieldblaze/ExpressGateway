@@ -51,7 +51,7 @@ use lb_quic::{QuicListener, QuicListenerParams};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio_util::sync::CancellationToken;
 
-use lb_h3::{H3Frame, QpackEncoder, decode_frame, encode_frame};
+use lb_h3_testcodec::{H3Frame, QpackEncoder, decode_frame, encode_frame};
 
 /// SESSION 24 / INC-3: decode a RESPONSE QPACK field block emitted by the
 /// migrated wire egress. The gateway now terminates H3 via
@@ -803,7 +803,7 @@ async fn proxy_h3_listener_h2_backend() {
                     Ok((_other, consumed)) => {
                         rx_tail.drain(..consumed);
                     }
-                    Err(lb_h3::H3Error::Incomplete) => break,
+                    Err(lb_h3_testcodec::H3Error::Incomplete) => break,
                     Err(_) => break,
                 }
             }

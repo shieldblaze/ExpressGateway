@@ -30,7 +30,7 @@ use bytes::BytesMut;
 use proptest::collection::vec;
 use proptest::prelude::*;
 
-use lb_h3::{MAX_VARINT, QpackDecoder, QpackEncoder, decode_frame, decode_varint, encode_varint};
+use lb_h3_testcodec::{MAX_VARINT, QpackDecoder, QpackEncoder, decode_frame, decode_varint, encode_varint};
 
 fn arb_headers() -> impl Strategy<Value = Vec<(String, String)>> {
     vec(

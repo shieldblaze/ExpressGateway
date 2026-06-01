@@ -5,7 +5,7 @@
 //! image work in Wave-2c per `audit/deferred.md`).
 
 use bytes::Bytes;
-use lb_h3::*;
+use lb_h3_testcodec::*;
 
 #[test]
 fn test_h3_frame_decoder() {
