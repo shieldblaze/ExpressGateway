@@ -156,13 +156,12 @@ async fn spawn_echo_backend() -> SocketAddr {
     local
 }
 
-
 async fn spawn_gateway(backend: SocketAddr) -> (SocketAddr, CertificateDer<'static>) {
     let pool = build_pool();
     let picker = Arc::new(RoundRobinAddrs::new(vec![backend]).unwrap());
     let h2 = Arc::new(
-        H2Proxy::new(pool, picker as _, None, HttpTimeouts::default(), true).with_websocket(
-            Arc::new(WsProxy::new(WsConfig {
+        H2Proxy::new(pool, picker as _, None, HttpTimeouts::default(), true)
+            .with_websocket(Arc::new(WsProxy::new(WsConfig {
                 idle_timeout: Duration::from_secs(60),
                 // Keep the per-direction watchdog generous so it does not
                 // mask backpressure as a timeout during the stall window.
@@ -170,8 +169,9 @@ async fn spawn_gateway(backend: SocketAddr) -> (SocketAddr, CertificateDer<'stat
                 max_message_size: 1024 * 1024,
                 enabled: true,
                 ..WsConfig::default()
-            })),
-        ),
+            })))
+            // CF-S27-2: WS-over-H2 is opt-in; this R8 proof needs it enabled.
+            .with_h2_extended_connect(true),
     );
     let (chain, key) = make_cert_for(SAN_HOST);
     let ta = chain[0].clone();
@@ -232,7 +232,9 @@ impl AsyncRead for H2StreamAdapter {
                 self.leftover = data;
                 Poll::Ready(Ok(()))
             }
-            Poll::Ready(Some(Err(e))) => Poll::Ready(Err(std::io::Error::other(format!("h2 recv: {e}")))),
+            Poll::Ready(Some(Err(e))) => {
+                Poll::Ready(Err(std::io::Error::other(format!("h2 recv: {e}"))))
+            }
         }
     }
 }
@@ -258,7 +260,9 @@ impl AsyncWrite for H2StreamAdapter {
                     Err(e) => Poll::Ready(Err(std::io::Error::other(format!("h2 send: {e}")))),
                 }
             }
-            Poll::Ready(Some(Err(e))) => Poll::Ready(Err(std::io::Error::other(format!("h2 cap: {e}")))),
+            Poll::Ready(Some(Err(e))) => {
+                Poll::Ready(Err(std::io::Error::other(format!("h2 cap: {e}"))))
+            }
         }
     }
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
@@ -290,7 +294,9 @@ async fn open_ws_windowed(
     let tls = connector.connect(sn, sock).await.unwrap();
     let mut builder = h2::client::Builder::new();
     if let Some(w) = client_window {
-        builder.initial_window_size(w).initial_connection_window_size(w);
+        builder
+            .initial_window_size(w)
+            .initial_connection_window_size(w);
     }
     let (h2c, conn) = builder.handshake::<_, Bytes>(tls).await.unwrap();
     tokio::spawn(async move {
@@ -313,15 +319,21 @@ async fn open_ws_windowed(
         recv: resp.into_body(),
         leftover: Bytes::new(),
     };
-    WebSocketStream::from_raw_socket(adapter, Role::Client, Some(WsConfig::default().tungstenite_config()))
-        .await
+    WebSocketStream::from_raw_socket(
+        adapter,
+        Role::Client,
+        Some(WsConfig::default().tungstenite_config()),
+    )
+    .await
 }
 
 /// Push `n` small text messages, draining each echo, so in-flight depth is
 /// O(1) at all times.
 async fn round_trip_n(ws: &mut WebSocketStream<H2StreamAdapter>, n: u64) {
     for i in 0..n {
-        ws.send(Message::Text(format!("m{i}").into())).await.unwrap();
+        ws.send(Message::Text(format!("m{i}").into()))
+            .await
+            .unwrap();
         let echo = tokio::time::timeout(Duration::from_secs(10), ws.next())
             .await
             .expect("echo timed out")
@@ -351,7 +363,10 @@ async fn r8_peak_memory_is_message_volume_independent() {
     round_trip_n(&mut ws2, 10 * N).await;
     let hwm_after_10n = vm_hwm_kb();
     let rss_after_10n = vm_rss_kb();
-    eprintln!("R8(i): after {} msgs VmHWM={hwm_after_10n}kB  VmRSS={rss_after_10n}kB", 10 * N);
+    eprintln!(
+        "R8(i): after {} msgs VmHWM={hwm_after_10n}kB  VmRSS={rss_after_10n}kB",
+        10 * N
+    );
 
     // If the relay BUFFERED the stream, 10x the messages would have pushed
     // ~10x the byte volume into resident memory. Each text msg is ~5 bytes;

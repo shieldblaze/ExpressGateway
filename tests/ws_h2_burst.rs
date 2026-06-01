@@ -116,14 +116,15 @@ async fn spawn_gateway(backend: SocketAddr) -> (SocketAddr, CertificateDer<'stat
     let pool = build_pool();
     let picker = Arc::new(RoundRobinAddrs::new(vec![backend]).unwrap());
     let h2 = Arc::new(
-        H2Proxy::new(pool, picker as _, None, HttpTimeouts::default(), true).with_websocket(
-            Arc::new(WsProxy::new(WsConfig {
+        H2Proxy::new(pool, picker as _, None, HttpTimeouts::default(), true)
+            .with_websocket(Arc::new(WsProxy::new(WsConfig {
                 idle_timeout: Duration::from_secs(30),
                 max_message_size: 1024 * 1024,
                 enabled: true,
                 ..WsConfig::default()
-            })),
-        ),
+            })))
+            // CF-S27-2: WS-over-H2 is opt-in; this R13 burst proof needs it on.
+            .with_h2_extended_connect(true),
     );
     let (chain, key) = make_cert_for(SAN_HOST);
     let ta = chain[0].clone();
@@ -182,7 +183,9 @@ impl AsyncRead for H2StreamAdapter {
                 self.leftover = data;
                 Poll::Ready(Ok(()))
             }
-            Poll::Ready(Some(Err(e))) => Poll::Ready(Err(std::io::Error::other(format!("h2 recv: {e}")))),
+            Poll::Ready(Some(Err(e))) => {
+                Poll::Ready(Err(std::io::Error::other(format!("h2 recv: {e}"))))
+            }
         }
     }
 }
@@ -208,7 +211,9 @@ impl AsyncWrite for H2StreamAdapter {
                     Err(e) => Poll::Ready(Err(std::io::Error::other(format!("h2 send: {e}")))),
                 }
             }
-            Poll::Ready(Some(Err(e))) => Poll::Ready(Err(std::io::Error::other(format!("h2 cap: {e}")))),
+            Poll::Ready(Some(Err(e))) => {
+                Poll::Ready(Err(std::io::Error::other(format!("h2 cap: {e}"))))
+            }
         }
     }
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {

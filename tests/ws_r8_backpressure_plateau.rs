@@ -187,7 +187,9 @@ async fn spawn_h2_gateway(backend: SocketAddr) -> (SocketAddr, CertificateDer<'s
     let picker = Arc::new(RoundRobinAddrs::new(vec![backend]).unwrap());
     let h2 = Arc::new(
         H2Proxy::new(pool, picker as _, None, HttpTimeouts::default(), true)
-            .with_websocket(Arc::new(WsProxy::new(ws_cfg()))),
+            .with_websocket(Arc::new(WsProxy::new(ws_cfg())))
+            // CF-S27-2: WS-over-H2 is opt-in; the H2 plateau case needs it on.
+            .with_h2_extended_connect(true),
     );
     let (chain, key) = make_cert_for(SAN_HOST);
     let ta = chain[0].clone();

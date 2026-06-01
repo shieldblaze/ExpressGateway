@@ -219,6 +219,17 @@ pub struct H2Proxy {
     /// binary; the counter logic itself runs whenever a registry is
     /// supplied (the proof test supplies its own).
     glitches_metrics: Option<Arc<lb_observability::MetricsRegistry>>,
+    /// CF-S27-2 (F-S27-2 owner disposition) — per-listener opt-in for
+    /// RFC 8441 WebSocket-over-HTTP/2 (extended CONNECT). OFF by default.
+    /// When `false` this proxy neither advertises
+    /// `SETTINGS_ENABLE_CONNECT_PROTOCOL` nor intercepts an inbound
+    /// extended CONNECT (it falls through to normal H2 handling, which
+    /// rejects a `CONNECT` with no backend tunnel). The shared `WsProxy`
+    /// relay is unchanged; this gate is purely the H2 advertise+intercept
+    /// layer. WS-over-H1 / WS-over-H3 are unaffected. The H2 upgraded-stream
+    /// write path lacks true end-to-end backpressure (memory-exhaustion DoS,
+    /// CF-S27-2) — hence default-OFF until the window-aware fix lands.
+    h2_extended_connect_enabled: bool,
 }
 
 /// F-SEC-1 (CVE-2023-44487-adjacent) — clean-close I/O wrapper that
@@ -502,6 +513,7 @@ impl H2Proxy {
             header_underscore_policy: crate::h1_proxy::HeaderUnderscorePolicy::Reject,
             glitches_threshold: None,
             glitches_metrics: None,
+            h2_extended_connect_enabled: false,
         }
     }
 
@@ -539,6 +551,7 @@ impl H2Proxy {
             header_underscore_policy: crate::h1_proxy::HeaderUnderscorePolicy::Reject,
             glitches_threshold: None,
             glitches_metrics: None,
+            h2_extended_connect_enabled: false,
         }
     }
 
@@ -654,9 +667,25 @@ impl H2Proxy {
 
     /// Enable WebSocket upgrade handling on this proxy. Fluent; returns
     /// `self` for chaining off [`Self::with_security`] or [`Self::new`].
+    ///
+    /// NOTE: enabling the relay does NOT by itself enable WS-over-H2. The
+    /// RFC 8441 extended-CONNECT advertise+intercept is gated separately by
+    /// [`Self::with_h2_extended_connect`] (default OFF; CF-S27-2). WS-over-H1
+    /// / WS-over-H3 are unaffected by that gate.
     #[must_use]
     pub fn with_websocket(mut self, ws: Arc<WsProxy>) -> Self {
         self.ws = Some(ws);
+        self
+    }
+
+    /// CF-S27-2 — per-listener opt-in for RFC 8441 WebSocket-over-HTTP/2
+    /// (extended CONNECT). Default OFF. When `false`, this proxy does not
+    /// advertise `SETTINGS_ENABLE_CONNECT_PROTOCOL` and does not intercept an
+    /// inbound extended CONNECT (it falls through to normal H2 handling).
+    /// Fluent; chain off [`Self::with_websocket`].
+    #[must_use]
+    pub fn with_h2_extended_connect(mut self, enabled: bool) -> Self {
+        self.h2_extended_connect_enabled = enabled;
         self
     }
 
@@ -799,9 +828,19 @@ impl H2Proxy {
         builder.timer(TokioTimer::new());
         self.security.apply(&mut builder);
         // RFC 8441 extended CONNECT — enables SETTINGS_ENABLE_CONNECT_PROTOCOL
-        // advertisement so clients can bootstrap WebSocket over H2. Safe
-        // to always enable: clients that do not use it pay no cost.
-        builder.enable_connect_protocol();
+        // advertisement so clients can bootstrap WebSocket over H2.
+        //
+        // CF-S27-2 — GATED OFF by default. The H2 upgraded-stream write path
+        // lacks true end-to-end backpressure (a non-reading client can force
+        // unbounded gateway memory; see CF-S27-2), so we only advertise the
+        // capability when the listener has explicitly opted in via
+        // `with_h2_extended_connect(true)`. When off, the SETTINGS bit is
+        // never sent and the intercept fork (handle_inner) is also disabled,
+        // so a hostile client that sends extended CONNECT anyway is NOT
+        // tunneled — it falls through to normal H2 handling.
+        if self.h2_extended_connect_enabled {
+            builder.enable_connect_protocol();
+        }
         // F-SEC-1: wrap `io` so connection teardown drains pending
         // inbound bytes before the FIN, guaranteeing the queued RFC
         // 9113 §6.8 GOAWAY (already written by h2 before poll_shutdown)
@@ -1006,12 +1045,18 @@ impl H2Proxy {
         }
 
         // RFC 8441 extended CONNECT intercept. Only fires when this
-        // listener was configured with a `WsProxy`; everything else
-        // continues through the regular H2 request path.
-        if self
-            .ws
-            .as_ref()
-            .is_some_and(|w| w.config().enabled && is_h2_extended_connect(&req))
+        // listener was configured with a `WsProxy` AND has explicitly opted
+        // in to WS-over-H2 (CF-S27-2; default OFF). When the gate is off, an
+        // inbound `CONNECT` + `:protocol = websocket` is NOT tunneled — it
+        // falls through to the regular H2 request path below, where a
+        // `CONNECT` selects no backend tunnel and is rejected (no 200 / no
+        // relay). The gate holds even against a hostile client that sends
+        // the pseudo-header without the (un-advertised) SETTINGS bit.
+        if self.h2_extended_connect_enabled
+            && self
+                .ws
+                .as_ref()
+                .is_some_and(|w| w.config().enabled && is_h2_extended_connect(&req))
         {
             return self.handle_ws_extended_connect(req).await;
         }

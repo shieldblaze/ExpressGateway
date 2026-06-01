@@ -1011,7 +1011,13 @@ fn build_h2_proxy(
         proxy = proxy.with_h3_upstream(h3);
     }
     if let Some(ws) = ws_cfg {
-        proxy = proxy.with_websocket(Arc::new(WsProxy::new(ws_config_to_runtime(ws))));
+        proxy = proxy
+            .with_websocket(Arc::new(WsProxy::new(ws_config_to_runtime(ws))))
+            // CF-S27-2 — WS-over-H2 (RFC 8441 extended CONNECT) is OFF by
+            // default; only advertise SETTINGS_ENABLE_CONNECT_PROTOCOL and
+            // intercept extended CONNECT when the operator opts in. WS-over-H1
+            // is wired separately in `build_h1_proxy` and is unaffected.
+            .with_h2_extended_connect(ws.h2_extended_connect);
     }
     if let Some(grpc) = grpc_cfg {
         proxy = proxy.with_grpc(GrpcProxy::new(grpc_config_to_runtime(grpc), pool.clone()));

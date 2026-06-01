@@ -109,14 +109,16 @@ async fn spawn_h2_ws_gateway(
         head: Duration::from_secs(10),
     };
     let h2_proxy = Arc::new(
-        H2Proxy::new(pool, picker as _, None, timeouts, true).with_websocket(Arc::new(
-            WsProxy::new(WsConfig {
+        H2Proxy::new(pool, picker as _, None, timeouts, true)
+            .with_websocket(Arc::new(WsProxy::new(WsConfig {
                 idle_timeout: Duration::from_secs(30),
                 max_message_size: 1024 * 1024,
                 enabled: true,
                 ..WsConfig::default()
-            }),
-        )),
+            })))
+            // CF-S27-2: WS-over-H2 is opt-in; this test exercises the enabled
+            // path's failure ordering, so flip the gate ON.
+            .with_h2_extended_connect(true),
     );
 
     let (cert_chain, key) = make_cert_for(SAN_HOST);

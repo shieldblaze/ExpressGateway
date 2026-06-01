@@ -713,6 +713,16 @@ pub struct WebsocketConfig {
     /// when *both* directions are silent. Defaults to 30 seconds.
     #[serde(default = "default_ws_read_frame_timeout_seconds")]
     pub read_frame_timeout_seconds: u64,
+    /// RFC 8441 WebSocket-over-HTTP/2 (extended CONNECT). OFF by default:
+    /// the H2 upgraded-stream write path lacks true end-to-end backpressure
+    /// (a non-reading client can force unbounded gateway memory; see
+    /// CF-S27-2). Enable only for trusted client populations until the
+    /// window-aware fix lands. When `false` (the default) the H2 listener
+    /// neither advertises `SETTINGS_ENABLE_CONNECT_PROTOCOL` nor intercepts
+    /// an inbound extended CONNECT. WS-over-HTTP/1.1 (RFC 6455) and the
+    /// future WS-over-HTTP/3 are UNAFFECTED by this gate.
+    #[serde(default)]
+    pub h2_extended_connect: bool,
 }
 
 impl Default for WebsocketConfig {
@@ -724,6 +734,8 @@ impl Default for WebsocketConfig {
             ping_rate_limit_per_window: default_ws_ping_rate_limit_per_window(),
             ping_rate_limit_window_seconds: default_ws_ping_rate_limit_window_seconds(),
             read_frame_timeout_seconds: default_ws_read_frame_timeout_seconds(),
+            // OFF by default — H2-only DoS gate (CF-S27-2).
+            h2_extended_connect: false,
         }
     }
 }
@@ -2524,6 +2536,36 @@ address = "127.0.0.1:3000"
         assert!(ws.enabled);
         assert_eq!(ws.idle_timeout_seconds, 30);
         assert_eq!(ws.max_message_size_bytes, 1_048_576);
+        // CF-S27-2: WS-over-H2 (RFC 8441 extended CONNECT) is OFF unless the
+        // operator explicitly sets `h2_extended_connect = true`. Omitting it
+        // (as above) must default to `false`.
+        assert!(
+            !ws.h2_extended_connect,
+            "h2_extended_connect must default to false (CF-S27-2: WS-over-H2 opt-in)"
+        );
+        validate_config(&config).unwrap();
+    }
+
+    #[test]
+    fn parse_websocket_h2_extended_connect_opt_in() {
+        // When the operator opts in, the flag round-trips as `true`.
+        let input = r#"
+[[listeners]]
+address = "0.0.0.0:80"
+protocol = "h1"
+
+[listeners.websocket]
+h2_extended_connect = true
+
+[[listeners.backends]]
+address = "127.0.0.1:3000"
+"#;
+        let config = parse_config(input).unwrap();
+        let ws = config.listeners[0].websocket.as_ref().unwrap();
+        assert!(
+            ws.h2_extended_connect,
+            "h2_extended_connect = true must parse as the opt-in"
+        );
         validate_config(&config).unwrap();
     }
 
