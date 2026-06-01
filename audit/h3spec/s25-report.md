@@ -37,34 +37,57 @@ request-leg F-MD-4 (`_client_reset_midrequest_*`), and ALL malformed-backend cas
 **quiche-owned** (`_data_before_headers`, `_invalid_qpack`, `_oversized_*`,
 `_unknown_response_frame_skipped`) — PASS.
 
-Two failures, both rooted in **quiche-0.28 recv-path capability gaps** (NOT bugs in the
-migration; confirmed from quiche source). NEITHER backend mode sends `content-length`.
+Two initial failures, both rooted in **quiche-0.28 recv-path capability gaps** (NOT bugs
+in the migration; confirmed from quiche source + a ground-truth event trace). NEITHER
+backend mode sends `content-length`.
 
 1. **`_empty_data_frame_skipped_then_body`** (backend: head + empty DATA(0) + real body
    + FIN). quiche-0.28 does **not re-arm** the `Data` event after a 0-length DATA frame
    while the stream stays readable (`stream.rs::try_consume_data` only `reset_data_event`s
-   when `!stream_readable`), so `poll` advances the real DATA frame into `State::Data`
-   WITHOUT emitting a fresh `Data` event ⇒ the real body would be stranded.
-   **FIXED** (this session): an unconditional post-poll **PASS-3** `recv_body` drain (the
-   server `poll_h3` PASS-1 analogue) relays a body that `poll` advanced into `State::Data`
-   without a `Data` event. *(re-verify pending the next h3h3 run.)*
+   when `!stream_readable`); `poll` advances the real DATA frame into `State::Data` WITHOUT
+   emitting a fresh `Data` event, and — the actual stall — after a post-poll drain relays
+   that body and finishes the stream, the `Finished` event sits queued needing no socket
+   I/O while the loop **parks on the socket** → 25 s timeout. **FIXED:** (a) an
+   unconditional post-poll **PASS-3** `recv_body` drain (server `poll_h3` PASS-1 analogue)
+   relays the stranded body; (b) a per-tick `progressed` flag → `continue 'evloop`
+   (re-poll instead of park) so the queued `Finished`/trailer event is collected without a
+   timeout. **PASSES** (run5/run6).
 
-2. **`_upstream_premature_eof_mid_data_no_clean_fin`** (backend: head + DATA frame header
-   declaring 4096 bytes but only 16 bytes of payload, then a clean QUIC FIN — a truncated
-   DATA frame). The hand-rolled parser caught this via H3-frame-completeness
-   (`InData{remaining>0}` at FIN ⇒ PrematureEof ⇒ never a clean complete response — the
-   response-splitting / truncation guard). **quiche-0.28 does NOT enforce DATA-frame
-   completeness at FIN**: `process_finished_stream` (`mod.rs:2845`) pushes the stream to
-   `finished_streams` regardless of an incomplete `State::Data`, and `poll` returns a clean
-   `Event::Finished` (both `finished_streams` pops re-check only for *reset*, never for an
-   incomplete frame). `recv_body` discards the `fin` flag (returns only `usize`), and there
-   is **no public quiche API** to observe "stream finished mid-frame". So the gateway
-   relays a truncated upstream response to the downstream client as a clean complete
-   200+FIN. **This is a genuine `quiche::h3`-client cannot-express-a-KEEP-surface-need
-   (R7 / exit-d).** Scope: only the clean-FIN-mid-frame, no-content-length case — the
-   common RESET-based truncation IS still caught (the H1/H2→H3 reset-based truncation
-   tests pass) and H3 streams are isolated (no H1-style connection desync), so the
-   real-world severity is low, but the property is bound by a case-7 test that R5 forbids
-   weakening unilaterally. **Escalated to owner before deleting hand-rolled code.**
+2. **`_upstream_premature_eof_mid_data_no_clean_fin`** (backend: head, NO content-length, +
+   a DATA frame header declaring 4096 bytes but only 16 bytes of payload, then a clean QUIC
+   FIN). The hand-rolled parser caught this via H3-frame-completeness (`InData{remaining>0}`
+   at FIN ⇒ PrematureEof). **quiche-0.28 does NOT enforce DATA-frame completeness at FIN
+   (RFC 9114 §7.1)**: `process_finished_stream` (`mod.rs:2845`) pushes the stream to
+   `finished_streams` regardless of an incomplete `State::Data`, `poll` returns a clean
+   `Event::Finished` (both pops re-check only for *reset*), `recv_body` discards the `fin`
+   flag, and there is **no public quiche API** to observe "finished mid-frame". This is a
+   genuine `quiche::h3`-client cannot-express-a-KEEP-surface-need → **ESCALATED (R7/exit-d)
+   before deleting hand-rolled code.** Otherwise green: h3h3 23/24, h1h3+h2h3 25/25, R8 (both
+   directions), F-MD-4 mirror, backpressure all pass.
 
-*(report continues — INC-4 re-verify, INC-5, Phase-3 — after the owner ruling)*
+### OWNER RULING — Option 1 (accept + content-length defense-in-depth + re-scope) — DONE
+The gap requires a malformed/buggy BACKEND (trusted upstream, not an untrusted client);
+HTTP/3 streams are isolated so truncation CANNOT desync/smuggle (the structural reason the
+S22 #12-15 findings were security-critical does NOT exist here); RESET-based truncation is
+still caught (F-MD-4 mirror, all 3 →H3 cells); content-length responses self-detect. ⇒ a
+LOW-severity RFC 9114 §7.1 robustness gap, not a security hole. Implemented:
+- **Content-length truncation guard** (`h3_bridge.rs`, migrated E2): on a clean `Finished`,
+  if a declared `content-length` is present and `body_relayed < content-length` (and the
+  response is not bodiless — HEAD / 1xx / 204 / 304), RESET downstream (`PrematureEof`),
+  never a clean End. Recovers the COMMON truncation case. **Proven load-bearing** by a NEW
+  test `h3h3_e2e_content_length_truncation_resets_no_clean_complete` (+ `HeadCLThen
+  TruncatedData` backend: declares 4096, sends 16, clean FIN → gateway resets).
+- **Re-scoped** the ONE no-content-length test →
+  `_no_cl_truncated_data_delivered_quiche_028_frame_completeness_gap`: asserts the migrated
+  documented behaviour, with the §7.1 gap + threat model + compensating guard + the
+  **CF-QUICHE-FRAME-COMPLETENESS** carry-forward (tied to CF-QUICHE-UPGRADE: re-tighten when
+  a quiche version enforces §7.1) named in the doc. A documented, compensated re-scope —
+  NOT a silent weakening.
+- The §7.1 gap is documented as a known quiche-0.28 limitation alongside #1-10 + the v1
+  release-note item (see §Carry-forward / release notes), and the CL guard is independently
+  verifier-confirmed to FIRE (author ≠ verifier).
+
+**INC-4 wire state:** h3h3 **26/26** (incl. the re-scope, the CL-guard test, the empty-DATA
+fix, the F-MD-4 mirror burst R13 b+c); h1h3+h2h3 verify **25/25**; lb-quic lib **84/84**;
+clippy `-D` + fmt clean. *(report continues — INC-4 full gate + independent verify, INC-5,
+Phase-3 — below.)*

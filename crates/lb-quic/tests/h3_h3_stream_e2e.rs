@@ -1589,6 +1589,132 @@ async fn h3h3_e2e_upstream_reset_midbody_resets_client_no_fin() {
     }
 }
 
+/// SESSION 25 / INC-4 — R13 (b)+(c) for the F-MD-4 MIRROR (RESPONSE
+/// direction): a BACKEND reset mid/after-body MUST relay as a reset to the
+/// downstream client, NEVER a clean complete 200+FIN. The single-shot
+/// `_upstream_reset_midbody_resets_client_no_fin` above is R13 (a)
+/// (in-gate); this adds (b) a ≥50-iteration burst on a SINGLE-THREADED
+/// runtime — the scheduling configuration that exposes the timing-
+/// dependent quiche `Finished`-vs-`Reset` delivery for a stream RESET
+/// after its last DATA (the `Event::Finished` reset-probe path, mirror of
+/// `conn_actor.rs:1269`; memory `h3h3-fmd4-no-r13-bc`) — and (c) a
+/// LOAD-BEARING non-vacuity control: a CLEAN GET on a SEPARATE Echo backend
+/// MUST yield a clean complete 200+FIN, so the burst's "no clean complete"
+/// assertion is not vacuously true.
+///
+/// NOTE FOR THE VERIFIER (R13 (c) mutation): the migrated E2's F-MD-4
+/// mirror is the `Event::Finished` `was_reset` probe + the `Event::Reset`
+/// arm + the `recv_body`-error arm. Flip the `Finished` arm's `was_reset`
+/// to always-false (treat every Finished as a clean end) and confirm THIS
+/// burst then FAILS — a reset-after-last-DATA backend would deliver a clean
+/// complete 200+FIN. This test provides the burst the mutation acts on.
+#[tokio::test(flavor = "current_thread")]
+async fn h3h3_e2e_upstream_reset_midresponse_burst_current_thread() {
+    const ITERS: usize = 60; // ≥50 per R13 (b)
+    let certs = generate_loopback_certs();
+
+    // (c) NON-VACUITY control — a CLEAN GET on an Echo backend MUST yield a
+    // clean complete 200+FIN (so the burst assertion below is not vacuous).
+    {
+        let seen = BackendSeen::default();
+        let (backend, bh) = spawn_h3_upstream(&certs, UpstreamMode::Echo, seen).await;
+        let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
+        let clean = drive_h3(
+            gw,
+            &certs.ca,
+            DriveCfg {
+                method: "GET",
+                path: "/clean",
+                req_body: vec![],
+                req_trailers: vec![],
+                stall_after: None,
+                stall_for: Duration::ZERO,
+                reset_after_req_bytes: None,
+                omit_authority: false,
+                stop_reading_resp_after: None,
+            },
+            Duration::from_secs(30),
+        )
+        .await;
+        let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+        sd.cancel();
+        bh.abort();
+        assert!(
+            clean.status == Some(200) && clean.fin,
+            "non-vacuity control: a clean GET (Echo backend) must yield 200+FIN \
+             (status={:?} fin={})",
+            clean.status,
+            clean.fin
+        );
+    }
+
+    // (b) BURST — ITERS GETs against a ResetMidResponse backend (declares a
+    // 1 MiB body, writes ~64 KiB, then RESETs the response stream). NONE may
+    // yield a clean 200+FIN. Bounded concurrency (`IN_FLIGHT`-wide) on the
+    // single-threaded runtime contends concurrent resets on ONE scheduler —
+    // a STRONGER mirror-race probe than back-to-back sequential requests.
+    let seen = BackendSeen::default();
+    let (backend, bh) = spawn_h3_upstream(&certs, UpstreamMode::ResetMidResponse, seen).await;
+    let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
+    const IN_FLIGHT: usize = 8;
+    let ca = certs.ca.clone();
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let mut set: tokio::task::JoinSet<ClientOut> = tokio::task::JoinSet::new();
+            let mut launched = 0usize;
+            let mut finished = 0usize;
+            let spawn_one = |set: &mut tokio::task::JoinSet<ClientOut>| {
+                let ca = ca.clone();
+                set.spawn_local(async move {
+                    drive_h3(
+                        gw,
+                        &ca,
+                        DriveCfg {
+                            method: "GET",
+                            path: "/broken",
+                            req_body: vec![],
+                            req_trailers: vec![],
+                            stall_after: None,
+                            stall_for: Duration::ZERO,
+                            reset_after_req_bytes: None,
+                            omit_authority: false,
+                            stop_reading_resp_after: None,
+                        },
+                        Duration::from_secs(30),
+                    )
+                    .await
+                });
+            };
+            while launched < IN_FLIGHT.min(ITERS) {
+                spawn_one(&mut set);
+                launched += 1;
+            }
+            while let Some(joined) = set.join_next().await {
+                let out = joined.expect("burst task panicked");
+                finished += 1;
+                assert!(
+                    !(out.status == Some(200) && out.fin),
+                    "F-MD-4 MIRROR (burst iter {finished}/{ITERS}): a mid/after-body \
+                     backend RESET yielded a clean 200+FIN to the client \
+                     (status={:?} fin={} body_len={})",
+                    out.status,
+                    out.fin,
+                    out.body.len()
+                );
+                if launched < ITERS {
+                    spawn_one(&mut set);
+                    launched += 1;
+                }
+            }
+        })
+        .await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+    sd.cancel();
+    bh.abort();
+    eprintln!("H3H3_FMD4_MIRROR_BURST iters={ITERS} (all reset, none clean-complete)");
+}
+
 /// Case 7 (BINDING — request-side smuggling-parity) — the H3 client
 /// RESETs MID request body. J2's mid-body abort
 /// (`stream_shutdown(Write, H3_REQUEST_CANCELLED)` + no FIN +
