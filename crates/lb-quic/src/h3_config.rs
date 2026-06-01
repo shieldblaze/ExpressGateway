@@ -59,6 +59,38 @@ pub fn build_server_h3_config() -> Result<quiche::h3::Config, quiche::h3::Error>
     Ok(cfg)
 }
 
+/// Build the [`quiche::h3::Config`] for the **client** (upstream) front,
+/// with defaults matching the current hand-rolled behaviour.
+///
+/// SESSION 25 / INC-4: the migrated H3→H3 upstream connector
+/// (`h3_bridge::stream_request_to_h3_upstream`) wraps the pooled,
+/// established upstream `quiche::Connection` via
+/// `quiche::h3::Connection::with_transport(qconn, &cfg)` in CLIENT mode.
+/// The config is **symmetric** with [`build_server_h3_config`]: the
+/// gateway's QPACK is static-table only in BOTH directions and the
+/// field-section acceptance envelope is the same 1 MiB the hand-rolled
+/// `lb_h3` decoder accepted. H3 has no client-only knob the gateway needs
+/// today (extended-CONNECT / WebSockets-over-H3 is an S26 item). Kept as a
+/// distinct constructor (not a shared `build_server_h3_config` reuse) so
+/// the client/server intents read explicitly at each call site and either
+/// can be tuned independently later without a silent coupling.
+///
+/// # Errors
+///
+/// Propagates [`quiche::h3::Error`] from `quiche::h3::Config::new`
+/// (allocation / internal init failure — never expected on a healthy
+/// host, but surfaced rather than panicked so the caller decides).
+pub fn build_client_h3_config() -> Result<quiche::h3::Config, quiche::h3::Error> {
+    let mut cfg = quiche::h3::Config::new()?;
+    cfg.set_max_field_section_size(MAX_FIELD_SECTION_SIZE);
+    // Static-table-only QPACK: no dynamic table, no blocked streams —
+    // matches the hand-rolled `lb_h3::qpack` codec exactly (same as the
+    // server front; the gateway never inserts into the dynamic table).
+    cfg.set_qpack_max_table_capacity(0);
+    cfg.set_qpack_blocked_streams(0);
+    Ok(cfg)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -74,6 +106,16 @@ mod tests {
         // `quiche::h3::Config` exposes no getters, so the assertion is
         // construction-success + the documented constants; the INC-1
         // wire experiment is what proves the values interoperate.
+        assert_eq!(MAX_FIELD_SECTION_SIZE, 1 << 20);
+    }
+
+    /// INC-4: the CLIENT (upstream) H3 config builds with the same
+    /// static-only, behaviour-matching defaults as the server front.
+    /// Construction-success is the assertion (no getters); the H3→H3 wire
+    /// suite is what proves the migrated client interoperates end-to-end.
+    #[test]
+    fn client_h3_config_builds_with_static_only_defaults() {
+        let _cfg = build_client_h3_config().expect("client h3::Config must build");
         assert_eq!(MAX_FIELD_SECTION_SIZE, 1 << 20);
     }
 }

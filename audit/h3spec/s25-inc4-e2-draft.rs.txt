@@ -1,0 +1,460 @@
+// ============================================================================
+// DRAFT (not compiled) — the migrated stream_request_to_h3_upstream + the new
+// build_client_h3_config. Applied to source after the baseline ×3 completes.
+// Mirrors the S24 server-side pattern (conn_actor poll_h3 / Progressive egress).
+// ============================================================================
+
+// --- h3_config.rs: add alongside build_server_h3_config -------------------
+/// Build the [`quiche::h3::Config`] for the **client** (upstream) front,
+/// with defaults matching the current hand-rolled behaviour. Symmetric to
+/// [`build_server_h3_config`] — the gateway's QPACK is static-table only in
+/// BOTH directions and the field-section cap is the same envelope; H3 has no
+/// client-only knob the gateway needs today (extended-CONNECT is S26).
+pub fn build_client_h3_config() -> Result<quiche::h3::Config, quiche::h3::Error> {
+    let mut cfg = quiche::h3::Config::new()?;
+    cfg.set_max_field_section_size(MAX_FIELD_SECTION_SIZE);
+    cfg.set_qpack_max_table_capacity(0);
+    cfg.set_qpack_blocked_streams(0);
+    Ok(cfg)
+}
+
+// --- h3_bridge.rs: replace stream_request_to_h3_upstream (3037-3858) -------
+
+pub async fn stream_request_to_h3_upstream(
+    headers: Vec<(String, String)>,
+    forward_req_trailers: bool,
+    addr: SocketAddr,
+    sni: &str,
+    pool: &QuicUpstreamPool,
+    mut body_rx: tokio::sync::mpsc::Receiver<ReqBodyEvent>,
+    mut sink: H3RespOut,
+) -> Result<(), RespAbort> {
+    // F-S7-6 no-forward-progress idle deadline (UNCHANGED): reset on every
+    // bidirectional application-data progress event only (send_body n>0,
+    // recv_body n>0, a successful sink relay); NEVER on keepalive/timer/0-byte.
+    let mut idle_deadline = tokio::time::Instant::now() + H3_RESP_IDLE_TIMEOUT;
+    macro_rules! send_progress {
+        ($call:expr) => {{
+            $call?;
+            idle_deadline = tokio::time::Instant::now() + H3_RESP_IDLE_TIMEOUT;
+        }};
+    }
+
+    // --- peek the FIRST request body event (UNCHANGED) ---
+    let mut req_streaming: bool = false;
+    let mut first_chunk: Option<Bytes> = None;
+    let mut bodyless_trailers: Vec<(String, String)> = Vec::new();
+    match body_rx.recv().await {
+        None => {}
+        Some(ReqBodyEvent::End { trailers }) if forward_req_trailers => {
+            bodyless_trailers = trailers;
+        }
+        Some(ReqBodyEvent::End { .. }) => {}
+        Some(ReqBodyEvent::Reset) => {
+            sink.inline(413, b"payload too large").await;
+            return Ok(());
+        }
+        Some(ReqBodyEvent::Chunk(b0)) => {
+            req_streaming = true;
+            first_chunk = Some(b0);
+        }
+    }
+
+    // --- acquire the pooled upstream H3 conn (UNCHANGED) ---
+    let mut pooled = match pool.acquire(addr, sni).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, %addr, "H3 upstream stream pool acquire failed");
+            sink.inline(502, b"bad gateway").await;
+            return Ok(());
+        }
+    };
+    let Some(upstream) = pooled.get_mut() else {
+        tracing::warn!("H3 upstream stream pool returned empty handle");
+        sink.inline(502, b"bad gateway").await;
+        return Ok(());
+    };
+
+    let socket_clone = Arc::clone(upstream.socket());
+    let local = upstream.local();
+    let peer = upstream.peer();
+    let qconn: &mut quiche::Connection = match upstream.connection_mut() {
+        Some(c) => c,
+        None => {
+            pooled.set_reusable(false);
+            sink.inline(502, b"bad gateway").await;
+            return Ok(());
+        }
+    };
+
+    // SESSION 25 / INC-4: wrap the established pooled QUIC conn as a quiche::h3
+    // CLIENT (with_transport sends SETTINGS + opens the client control + QPACK
+    // enc/dec uni streams — the hand-rolled `encode_frame(Headers)` /
+    // `QpackEncoder` / control setup are GONE). The conn is established (the
+    // pool guarantees it) + used once (set_reusable(false) every exit).
+    let mut h3 = match crate::h3_config::build_client_h3_config()
+        .and_then(|cfg| quiche::h3::Connection::with_transport(qconn, &cfg))
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, "INC-4: client h3 init (config/with_transport) failed");
+            pooled.set_reusable(false);
+            sink.inline(502, b"bad gateway").await;
+            return Ok(());
+        }
+    };
+
+    // Build the upstream request HEADERS from the caller-supplied field list
+    // (verbatim; pseudo-headers included). quiche QPACK-encodes (Huffman) +
+    // frames the HEADERS internally — `headers_fin` matches the former path:
+    // FIN here ONLY for a bodyless request with NO trailers to forward.
+    let headers_fin = !req_streaming && bodyless_trailers.is_empty();
+    let h3_headers: Vec<quiche::h3::Header> = headers
+        .iter()
+        .map(|(n, v)| quiche::h3::Header::new(n.as_bytes(), v.as_bytes()))
+        .collect();
+    let stream_id = match h3.send_request(qconn, &h3_headers, headers_fin) {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::warn!(error = %e, "INC-4: h3 send_request (upstream HEADERS)");
+            pooled.set_reusable(false);
+            sink.inline(502, b"bad gateway").await;
+            return Ok(());
+        }
+    };
+    drop(h3_headers);
+
+    // Bodyless request WITH forwarded trailers (L7 fronts only): a trailing
+    // field section + FIN, no DATA (RFC 9114 §4.1). Clients may only send
+    // trailer headers (quiche enforces is_trailer_section). On encode/limit
+    // error: abort WITHOUT FIN (case-7 — never a truncated-as-complete req).
+    let ship_bodyless_trailers = !req_streaming && !bodyless_trailers.is_empty();
+    if ship_bodyless_trailers {
+        let tr: Vec<quiche::h3::Header> = bodyless_trailers
+            .iter()
+            .map(|(n, v)| quiche::h3::Header::new(n.as_bytes(), v.as_bytes()))
+            .collect();
+        if let Err(e) = h3.send_additional_headers(qconn, stream_id, &tr, true, true) {
+            tracing::warn!(error = %e, "INC-4: h3 send_additional_headers (req trailers)");
+            let _ = qconn.stream_shutdown(stream_id, quiche::Shutdown::Write, H3_REQUEST_CANCELLED);
+            pooled.set_reusable(false);
+            sink.on_reset().await;
+            return Err(RespAbort::UpstreamReset);
+        }
+    }
+
+    // --- request-DATA send state. send_body frames the DATA internally, so
+    // ReqSend::InHand holds RAW chunk bytes (no encode_h3_data_frame). The
+    // real memory bound is the depth-8 body_rx (request-size INDEPENDENT). ---
+    enum ReqSend {
+        /// Raw chunk bytes; `sent` already written via send_body (partial retry).
+        InHand { bytes: Bytes, sent: usize },
+        /// Previous chunk fully sent; pull the next ReqBodyEvent at the park.
+        AwaitNext,
+        /// Clean end-of-request: a FIN (send_body(.., true)) has been written.
+        Ended,
+    }
+    let mut req_send = if req_streaming {
+        match first_chunk.take() {
+            Some(b0) => ReqSend::InHand { bytes: b0, sent: 0 },
+            None => ReqSend::AwaitNext,
+        }
+    } else {
+        // Bodyless: HEADERS already FIN'd (headers_fin) OR the trailing field
+        // section FIN'd it above. Nothing more to send.
+        ReqSend::Ended
+    };
+
+    let mut scratch = [0u8; H3_RESP_CHUNK_MAX];
+    let mut out_buf = vec![0u8; 65_535];
+    let mut in_buf = vec![0u8; 65_535];
+    let mut sent_head = false;
+    let mut response_complete = false;
+    let mut outcome: Result<(), RespAbort> = Ok(());
+
+    'evloop: while tokio::time::Instant::now() < idle_deadline {
+        // (a) request-DATA egress — send_body is flow-control-gated: Done ⇒ the
+        // window is closed, keep the chunk in hand and do NOT pull body_rx, so
+        // the depth-8 channel fills and the M-A pump pauses the downstream
+        // client's upload (request-direction backpressure, native quiche).
+        if let ReqSend::InHand { bytes, sent } = &mut req_send {
+            let rest = bytes.get(*sent..).unwrap_or(&[]);
+            match h3.send_body(qconn, stream_id, rest, false) {
+                Ok(n) => {
+                    *sent = sent.saturating_add(n);
+                    if n > 0 {
+                        idle_deadline = tokio::time::Instant::now() + H3_RESP_IDLE_TIMEOUT;
+                    }
+                    if *sent >= bytes.len() {
+                        req_send = ReqSend::AwaitNext;
+                    }
+                }
+                Err(quiche::h3::Error::Done) => { /* window closed — retain, no pull */ }
+                Err(e) => {
+                    tracing::warn!(error = %e, "INC-4: h3 send_body (request DATA)");
+                    let _ = qconn.stream_shutdown(
+                        stream_id,
+                        quiche::Shutdown::Write,
+                        H3_REQUEST_CANCELLED,
+                    );
+                    outcome = Err(RespAbort::UpstreamReset);
+                    break 'evloop;
+                }
+            }
+        }
+
+        // (b) flush egress to the wire.
+        while let Ok((n, info)) = qconn.send(&mut out_buf) {
+            let bytes = out_buf.get(..n).unwrap_or(&[]);
+            if socket_clone.send_to(bytes, info.to).await.is_err() {
+                break;
+            }
+        }
+
+        // (c) response ingress — one event per poll until Done.
+        'poll: loop {
+            match h3.poll(qconn) {
+                Ok((sid, quiche::h3::Event::Headers { list, .. })) if sid == stream_id => {
+                    let fields: Vec<(String, String)> = list
+                        .iter()
+                        .map(|h| {
+                            use quiche::h3::NameValue;
+                            (
+                                String::from_utf8_lossy(h.name()).into_owned(),
+                                String::from_utf8_lossy(h.value()).into_owned(),
+                            )
+                        })
+                        .collect();
+                    if !sent_head {
+                        // First HEADERS ⇒ response head. The sink owns
+                        // :status parse + hop-by-hop strip + cap accounting.
+                        send_progress!(sink.on_head(&fields).await);
+                        sent_head = true;
+                    } else {
+                        // RFC 9114 §4.3: a pseudo-header in the trailing field
+                        // section is malformed ⇒ Reset, never forwarded.
+                        if fields.iter().any(|(n, _)| n.starts_with(':')) {
+                            sink.on_reset().await;
+                            outcome = Err(RespAbort::BadHead);
+                            break 'evloop;
+                        }
+                        if !fields.is_empty() {
+                            // Faithful to the original: explicit match→break
+                            // (NOT send_progress!'s `?`), so the post-loop
+                            // on_reset runs on a relay error. (on_head DOES use
+                            // send_progress! `?` — the sink already Reset on its
+                            // OverCap/ClientGone error paths.)
+                            match sink.on_trailers(fields).await {
+                                Ok(()) => {
+                                    idle_deadline =
+                                        tokio::time::Instant::now() + H3_RESP_IDLE_TIMEOUT;
+                                }
+                                Err(a) => {
+                                    outcome = Err(a);
+                                    break 'evloop;
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok((sid, quiche::h3::Event::Data)) if sid == stream_id => {
+                    // Drain to Done in ≤H3_RESP_CHUNK_MAX slices; on_data().await
+                    // is the R8 RESPONSE backpressure point (blocks when the
+                    // downstream channel is full ⇒ stop recv_body ⇒ quiche stops
+                    // extending the response-stream window ⇒ backend pauses). The
+                    // scratch is fixed; NO whole-response buffer.
+                    loop {
+                        match h3.recv_body(qconn, stream_id, &mut scratch) {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                let slice = scratch.get(..n).unwrap_or(&[]);
+                                match sink.on_data(slice).await {
+                                    Ok(()) => {
+                                        idle_deadline =
+                                            tokio::time::Instant::now() + H3_RESP_IDLE_TIMEOUT;
+                                    }
+                                    Err(a) => {
+                                        outcome = Err(a);
+                                        break 'evloop;
+                                    }
+                                }
+                            }
+                            Err(quiche::h3::Error::Done) => break,
+                            Err(e) => {
+                                // F-MD-4: a mid-body upstream stream error (peer
+                                // RESET_STREAM / final-size violation) MUST relay
+                                // as a reset, never a clean EOF.
+                                tracing::warn!(error = %e, "INC-4: h3 recv_body (genuine reset)");
+                                outcome = Err(RespAbort::UpstreamReset);
+                                break 'evloop;
+                            }
+                        }
+                    }
+                }
+                Ok((sid, quiche::h3::Event::Finished)) if sid == stream_id => {
+                    // F-MD-4 MIRROR (E2's highest-risk property). quiche delivers
+                    // Finished (NOT Reset) for a response stream the BACKEND RESET
+                    // *after* its last DATA frame (quiche-0.28 mod.rs:2072 first
+                    // finished_streams pop lacks the reset re-check the :2106 second
+                    // pop has). Treating that as a clean end would FIN the
+                    // DOWNSTREAM client on a truncated response (response-splitting,
+                    // reversed). Probe the transport exactly as quiche's own guard
+                    // does — a zero-length stream_recv returns StreamReset for a
+                    // reset stream — and map it to on_reset, never on_end. A
+                    // headerless Finished is a premature EOF (also never a clean
+                    // end). Mirror of conn_actor.rs:1269.
+                    let was_reset = matches!(
+                        qconn.stream_recv(stream_id, &mut []),
+                        Err(quiche::Error::StreamReset(_))
+                    );
+                    if was_reset {
+                        tracing::debug!(
+                            stream_id,
+                            "INC-4 F-MD-4: Finished on a RESET response stream; \
+                             Reset downstream (not a clean End)"
+                        );
+                        outcome = Err(RespAbort::UpstreamReset);
+                    } else if sent_head {
+                        response_complete = true;
+                    } else {
+                        outcome = Err(RespAbort::PrematureEof);
+                    }
+                    break 'evloop;
+                }
+                Ok((sid, quiche::h3::Event::Reset(code))) if sid == stream_id => {
+                    // Genuine backend reset before/without Finished ⇒ never End.
+                    tracing::debug!(stream_id, code, "INC-4 F-MD-4: upstream reset response stream");
+                    outcome = Err(RespAbort::UpstreamReset);
+                    break 'evloop;
+                }
+                // Other streams / GoAway / PriorityUpdate — nothing to do.
+                Ok(_) => {}
+                Err(quiche::h3::Error::Done) => break 'poll,
+                Err(e) => {
+                    // quiche enforces #11/#16-22/#24 itself: on a control / QPACK /
+                    // frame-sequence violation it has already closed the conn. Map
+                    // to an upstream reset (never a forwarded / false-complete
+                    // response). The downstream client is RESET post-loop.
+                    tracing::warn!(error = %e, "INC-4: h3 poll (upstream protocol error)");
+                    outcome = Err(RespAbort::UpstreamReset);
+                    break 'evloop;
+                }
+            }
+        }
+
+        if response_complete {
+            break 'evloop;
+        }
+
+        // (d) the SINGLE park point — one await on {upstream socket readable |
+        // next request-body event (ONLY while AwaitNext) | quiche timeout}.
+        let timeout = qconn
+            .timeout()
+            .unwrap_or(std::time::Duration::from_millis(50));
+        let want_next = matches!(req_send, ReqSend::AwaitNext);
+        tokio::select! {
+            biased;
+            r = tokio::time::timeout(timeout, socket_clone.recv_from(&mut in_buf)) => {
+                match r {
+                    Ok(Ok((n, from))) => {
+                        let slice = in_buf.get_mut(..n).unwrap_or(&mut []);
+                        let info = quiche::RecvInfo { from, to: local };
+                        match qconn.recv(slice, info) {
+                            Ok(_) | Err(quiche::Error::Done) => {}
+                            Err(e) => {
+                                tracing::warn!(error = %e, "INC-4: upstream recv");
+                                outcome = Err(RespAbort::UpstreamReset);
+                                break 'evloop;
+                            }
+                        }
+                    }
+                    Ok(Err(_)) | Err(_) => {
+                        qconn.on_timeout();
+                    }
+                }
+            }
+            ev = body_rx.recv(), if want_next => {
+                match j2_req_event_action(ev, forward_req_trailers) {
+                    J2ReqAction::SendData(bytes) => {
+                        req_send = ReqSend::InHand { bytes, sent: 0 };
+                    }
+                    J2ReqAction::FinWithTrailers(trailers) => {
+                        let tr: Vec<quiche::h3::Header> = trailers
+                            .iter()
+                            .map(|(n, v)| quiche::h3::Header::new(n.as_bytes(), v.as_bytes()))
+                            .collect();
+                        match h3.send_additional_headers(qconn, stream_id, &tr, true, true) {
+                            Ok(()) => {
+                                idle_deadline =
+                                    tokio::time::Instant::now() + H3_RESP_IDLE_TIMEOUT;
+                                req_send = ReqSend::Ended;
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "INC-4: h3 send_additional_headers (req trailers, streaming)");
+                                let _ = qconn.stream_shutdown(
+                                    stream_id,
+                                    quiche::Shutdown::Write,
+                                    H3_REQUEST_CANCELLED,
+                                );
+                                outcome = Err(RespAbort::UpstreamReset);
+                                break 'evloop;
+                            }
+                        }
+                    }
+                    J2ReqAction::FinNoTrailers => {
+                        match h3.send_body(qconn, stream_id, &[], true) {
+                            Ok(_) | Err(quiche::h3::Error::Done) => {
+                                idle_deadline =
+                                    tokio::time::Instant::now() + H3_RESP_IDLE_TIMEOUT;
+                            }
+                            Err(e) => {
+                                tracing::warn!(error = %e, "INC-4: h3 send_body FIN (request)");
+                                outcome = Err(RespAbort::UpstreamReset);
+                                break 'evloop;
+                            }
+                        }
+                        req_send = ReqSend::Ended;
+                    }
+                    J2ReqAction::AbortNoFin => {
+                        // Mid-body client RESET / producer dropped before End ⇒ the
+                        // upstream must NEVER see a completable (truncated-as-
+                        // complete) request (BINDING case-7). No FIN; RESET the
+                        // request stream with H3_REQUEST_CANCELLED.
+                        let _ = qconn.stream_shutdown(
+                            stream_id,
+                            quiche::Shutdown::Write,
+                            H3_REQUEST_CANCELLED,
+                        );
+                        outcome = Err(RespAbort::UpstreamReset);
+                        break 'evloop;
+                    }
+                }
+            }
+        }
+        let _ = peer;
+    }
+
+    // One request per pooled upstream conn — non-reusable on EVERY exit.
+    pooled.set_reusable(false);
+
+    if response_complete {
+        sink.on_end().await?;
+        return Ok(());
+    }
+    if outcome.is_ok() {
+        // Idle deadline fell through without a clean end — premature EOF;
+        // NEVER End a partial response.
+        sink.on_reset().await;
+        return Err(RespAbort::PrematureEof);
+    }
+    // Aborted mid-response — ensure a Reset is sent (never End).
+    sink.on_reset().await;
+    outcome
+}
+
+// j2_req_event_action: SendData now carries RAW chunk bytes (send_body frames).
+//   J2ReqAction::SendData(Bytes)  // was the encoded DATA frame; now raw chunk
+//   Chunk(b)               => SendData(b)            // raw bytes
+//   End{trailers} + fwd    => FinWithTrailers(tr) (if non-empty) else FinNoTrailers
+//   End{..}                => FinNoTrailers
+//   Reset / None           => AbortNoFin

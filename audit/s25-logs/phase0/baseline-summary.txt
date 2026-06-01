@@ -1,0 +1,4 @@
+RUN1_SUMMARY exit=0 aggregate_ok=1451/0 failed_suites=none
+RUN2_SUMMARY exit=0 aggregate_ok=1451/0 failed_suites=none
+RUN3_SUMMARY exit=0 aggregate_ok=1451/0 failed_suites=none
+ALL_RUNS_DONE 07:23:20
