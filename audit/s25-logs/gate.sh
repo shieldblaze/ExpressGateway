@@ -9,7 +9,7 @@ mkdir -p "$LOGDIR"
 for i in 1 2 3; do
   LOG="$LOGDIR/${LABEL}-run${i}.log"
   echo "=== RUN $i START $(date -u +%H:%M:%S) ===" > "$LOG"
-  cargo test --workspace --all-features 2>&1 >> "$LOG"
+  cargo test --workspace --all-features >> "$LOG" 2>&1
   ec=$?
   echo "=== RUN $i EXIT=$ec $(date -u +%H:%M:%S) ===" >> "$LOG"
   # summarize pass/fail counts
