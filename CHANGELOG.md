@@ -24,6 +24,22 @@ This section aggregates the Round-4 audit-driven work landing on
 
 ### Protocol
 
+- **CF-S22-QUICHE-H3-MIGRATION (S23–S26)** — the HTTP/3 termination front
+  (server ingress+egress + the H3 upstream client) now rides
+  `quiche::h3::Connection`; the hand-rolled H3 frame/QPACK layer is removed
+  from production and the `lb-h3` crate deleted (wire-tests use a TEST-ONLY
+  `lb-h3-testcodec`). A fresh `h3spec` run proves **7 of 9 carried conformance
+  findings closed by construction** (control-stream state machine + critical-
+  stream + CANCEL_PUSH; #16–21, #24) with **zero regressions**; QPACK header
+  blocks now **Huffman-encode**. **Known quiche-0.28 limitations** (documented,
+  not gateway bugs; close on a quiche upgrade — CF-QUICHE-UPGRADE): the
+  transport-layer #1–10 deviations **plus** QPACK encoder/decoder uni-stream
+  validation **#23/#25** (quiche reads-and-discards those instructions; inert
+  under the gateway's static-only QPACK — no dynamic table is ever allocated)
+  **plus** the §7.1 no-content-length truncation gap (CF-QUICHE-FRAME-
+  COMPLETENESS). Validated: `--workspace --all-features` ×3 = 1442/0,
+  clippy/fmt clean, R8 bounded-relay + F-MD-4 reset-mapping re-confirmed, a new
+  H3-terminate soak BOUNDED over 960s (panic=0). See `audit/h3spec/s26-report.md`.
 - **PROTO-2-01** (`132fc72`) — H2 requests with `:authority` ≠ `Host`
   are rejected (RFC 9113 §8.3.1).
 - **PROTO-2-06 / PROTO-2-13** (`de5a93c`) — codec rename + `h2spec`

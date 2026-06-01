@@ -1,4 +1,4 @@
-//! HTTP/3 frame-by-frame codec, QPACK, and QUIC stream handling.
+//! TEST-ONLY HTTP/3 frame-by-frame codec, QPACK, and varint helpers.
 #![deny(
     clippy::unwrap_used,
     clippy::expect_used,

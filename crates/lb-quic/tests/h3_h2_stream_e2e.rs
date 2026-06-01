@@ -57,11 +57,32 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 use tokio_util::sync::CancellationToken;
 
-use lb_h3::{H3Frame, QpackDecoder, QpackEncoder, decode_frame, encode_frame};
+use lb_h3_testcodec::{H3Frame, QpackEncoder, decode_frame, encode_frame};
 
 const TEST_SNI: &str = "expressgateway.test";
 const H3_ALPN: &[u8] = b"h3";
 const MAX_UDP: usize = 65_535;
+
+/// SESSION 24 / INC-3: decode a RESPONSE QPACK field block emitted by
+/// the migrated egress (the actor's `quiche::h3` encoder, which
+/// Huffman-encodes values). Uses quiche's Huffman-capable QPACK decoder
+/// — the hand-rolled `lb_h3_testcodec::QpackDecoder` is raw-only.
+#[allow(dead_code)]
+fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, String> {
+    use quiche::h3::NameValue;
+    let hdrs = quiche::h3::qpack::Decoder::new()
+        .decode(header_block, u64::MAX)
+        .map_err(|e| format!("qpack decode: {e:?}"))?;
+    Ok(hdrs
+        .iter()
+        .map(|h| {
+            (
+                String::from_utf8_lossy(h.name()).into_owned(),
+                String::from_utf8_lossy(h.value()).into_owned(),
+            )
+        })
+        .collect())
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // §0  Hand-rolled hyper IO adapter + executor (no hyper-util dep).
@@ -454,7 +475,12 @@ async fn drive_h3(
                         rx_tail.drain(..c);
                         out.headers_frames += 1;
                         let is_head = out.headers_frames == 1;
-                        if let Ok(h) = QpackDecoder::new().decode(&header_block) {
+                        // SESSION 24 / INC-3: decode the response field
+                        // section with quiche's Huffman-capable QPACK
+                        // decoder (the migrated egress encodes via
+                        // quiche::h3, which Huffman-encodes values; the
+                        // hand-rolled lb_h3_testcodec decoder is raw-only).
+                        if let Ok(h) = decode_resp_qpack(&header_block) {
                             for (n, v) in h {
                                 if n == ":status" {
                                     out.status = v.parse().ok();
@@ -1356,65 +1382,59 @@ async fn g5_stream_h2_response_forwards_trailers() {
     bh.abort();
     assert!(r.is_ok(), "clean trailered response must succeed: {r:?}");
 
-    // Reassemble the emitted H3 frames: HEADERS, DATA*, trailing
-    // HEADERS, then End.
-    let mut blob: Vec<u8> = Vec::new();
+    // SESSION 24 / INC-3: `stream_h2_response` now emits DECODED events
+    // (Head, Body*, Trailers, End) — the actor encodes via quiche::h3.
+    // Reassemble them directly (no wire decode); expect a Head (status),
+    // Body bytes == payload, a non-empty Trailers carrying x-checksum,
+    // then End.
+    let mut saw_head = false;
+    let mut data: Vec<u8> = Vec::new();
+    let mut saw_trailer = false;
     let mut ended = false;
     while let Ok(ev) = rx.try_recv() {
         match ev {
-            RespEvent::Bytes(b) => blob.extend_from_slice(&b),
+            RespEvent::Head { status, .. } => {
+                assert_eq!(status, 200, "response status");
+                saw_head = true;
+            }
+            RespEvent::Body(b) => data.extend_from_slice(&b),
+            RespEvent::Trailers(t) => {
+                if t.iter().any(|(n, v)| n == "x-checksum" && v == "deadbeef") {
+                    saw_trailer = true;
+                }
+            }
             RespEvent::End => ended = true,
             RespEvent::Reset => panic!("clean response must not Reset"),
         }
     }
+    assert!(saw_head, "must emit a response Head");
     assert!(ended, "must emit End");
-    // Decode all frames; expect ≥1 HEADERS (status), DATA bytes ==
-    // payload, and a SECOND HEADERS frame carrying the trailer.
-    let mut headers_frames = 0usize;
-    let mut data: Vec<u8> = Vec::new();
-    let mut saw_trailer = false;
-    let mut off = 0usize;
-    while off < blob.len() {
-        let (frame, c) = decode_frame(&blob[off..], 1 << 20).expect("decode");
-        off += c;
-        match frame {
-            H3Frame::Headers { header_block } => {
-                headers_frames += 1;
-                let hdrs = QpackDecoder::new().decode(&header_block).unwrap();
-                if hdrs
-                    .iter()
-                    .any(|(n, v)| n == "x-checksum" && v == "deadbeef")
-                {
-                    saw_trailer = true;
-                }
-            }
-            H3Frame::Data { payload } => data.extend_from_slice(&payload),
-            _ => {}
-        }
-    }
-    assert!(headers_frames >= 2, "response HEADERS + trailing HEADERS");
     assert_eq!(data, payload, "DATA must be byte-identical");
     assert!(
         saw_trailer,
-        "the upstream trailer field must be forwarded as a trailing HEADERS frame"
+        "the upstream trailer field must be forwarded as a Trailers event"
     );
 }
 
-/// G5 — the over-cap `Reset`/`OverCap` arms: a `cap` smaller than the
-/// HEADERS frame trips 1526-1528; a `cap` that admits HEADERS but not
-/// the DATA trips 1546-1548; a `cap` that admits HEADERS+DATA but not
-/// the trailer trips 1593-1595. Each must emit `Reset` and return
-/// `Err(RespAbort::OverCap)` — a partial body never FIN'd.
+/// G5 — the over-cap `Reset`/`OverCap` arms. SESSION 24 / INC-3: the
+/// `cap` is now a DoS threshold on the DECODED payload/field byte length
+/// (no longer the encoded-frame byte length), since the actor — not the
+/// producer — encodes. The backend response is status 200 with NO
+/// regular response headers (Head cost = 0 field bytes), one DATA frame
+/// (Body cost = payload bytes), then an `x-checksum: deadbeef` trailer
+/// (Trailers cost = 10 + 8 = 18 field bytes). Each arm must emit `Reset`
+/// and return `Err(RespAbort::OverCap)` — a partial body never FIN'd.
 #[tokio::test]
 async fn g5_stream_h2_response_over_cap_arms_reset() {
-    // (a) cap = 0 ⇒ even the HEADERS frame is over cap (1526-1528).
+    // (a) cap = 0 ⇒ the first non-zero-cost item (the 8-byte DATA body)
+    // trips OverCap. The empty Head (0 field bytes) passes; no End.
     {
         let (backend, bh) = spawn_h2_trailers_backend(vec![1u8; 8]).await;
         let resp = h2_client_get(backend).await;
         let (tx, mut rx) = tokio::sync::mpsc::channel::<RespEvent>(16);
         let r = stream_h2_response(resp, &tx, 0).await;
         bh.abort();
-        assert_eq!(r, Err(RespAbort::OverCap), "cap=0 ⇒ OverCap on HEADERS");
+        assert_eq!(r, Err(RespAbort::OverCap), "cap=0 ⇒ OverCap on the body");
         let mut saw_reset = false;
         while let Ok(ev) = rx.try_recv() {
             if matches!(ev, RespEvent::Reset) {
@@ -1425,16 +1445,12 @@ async fn g5_stream_h2_response_over_cap_arms_reset() {
         assert!(saw_reset, "over-cap must emit Reset");
     }
 
-    // (b) cap admits HEADERS only ⇒ the DATA frame trips OverCap
-    // (1546-1548). HEADERS frame for status 200 (no content-length,
-    // StreamBody) is small (< 64 B); pick a cap between it and the
-    // first DATA frame.
+    // (b) cap admits the Head but NOT the (16 KiB) DATA body ⇒ the body
+    // trips OverCap. cap = 64 < 16 KiB.
     {
         let (backend, bh) = spawn_h2_trailers_backend(vec![2u8; 16 * 1024]).await;
         let resp = h2_client_get(backend).await;
         let (tx, mut rx) = tokio::sync::mpsc::channel::<RespEvent>(16);
-        // 64 B is enough for the HEADERS frame but far below a
-        // 16 KiB DATA frame.
         let r = stream_h2_response(resp, &tx, 64).await;
         bh.abort();
         assert_eq!(r, Err(RespAbort::OverCap), "DATA over cap ⇒ OverCap");
@@ -1444,20 +1460,21 @@ async fn g5_stream_h2_response_over_cap_arms_reset() {
             match ev {
                 RespEvent::Reset => saw_reset = true,
                 RespEvent::End => ended = true,
-                RespEvent::Bytes(_) => {}
+                RespEvent::Head { .. } | RespEvent::Body(_) | RespEvent::Trailers(_) => {}
             }
         }
         assert!(saw_reset && !ended, "DATA over-cap ⇒ Reset, never End");
     }
 
-    // (c) cap admits HEADERS + DATA but NOT the trailing-HEADERS frame
-    // ⇒ the trailer over-cap arm (h3_bridge.rs:1593-1595). Tiny body
-    // so HEADERS+DATA are small; sweep cap upward until HEADERS+DATA
-    // fit but +trailer trips OverCap (frame sizes are deterministic;
-    // the sweep makes the test robust to exact QPACK/varint lengths).
+    // (c) cap admits Head + Body but NOT the trailer field section ⇒ the
+    // trailer over-cap arm. Body = 16 bytes; trailer field bytes
+    // (`x-checksum`+`deadbeef` = 18) push past the cap. The exact Head
+    // field-byte cost is backend-dependent, so sweep cap upward until a
+    // run forwards the Head AND the full 16-byte Body and then Resets on
+    // the trailer (never End) — robust to the Head cost.
     {
         let mut hit_trailer_overcap = false;
-        for cap in [40usize, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120] {
+        for cap in (16usize..=240).step_by(2) {
             let (backend, bh) = spawn_h2_trailers_backend(vec![3u8; 16]).await;
             let resp = h2_client_get(backend).await;
             let (tx, mut rx) = tokio::sync::mpsc::channel::<RespEvent>(16);
@@ -1466,51 +1483,32 @@ async fn g5_stream_h2_response_over_cap_arms_reset() {
             if r != Err(RespAbort::OverCap) {
                 continue;
             }
-            // Count emitted frames: a trailer-over-cap run must have
-            // forwarded HEADERS + at least one DATA byte before the
-            // Reset (distinguishing it from the HEADERS/DATA over-cap
-            // arms, which Reset earlier).
-            let mut bytes_frames = 0usize;
+            // A trailer-over-cap run must have forwarded the Head AND the
+            // full Body before the Reset (distinguishing it from the
+            // Head/Body over-cap arms, which Reset earlier).
+            let mut had_head = false;
+            let mut body_bytes = 0usize;
+            let mut saw_trailer = false;
             let mut saw_reset = false;
             let mut ended = false;
-            let mut blob: Vec<u8> = Vec::new();
             while let Ok(ev) = rx.try_recv() {
                 match ev {
-                    RespEvent::Bytes(b) => {
-                        bytes_frames += 1;
-                        blob.extend_from_slice(&b);
-                    }
+                    RespEvent::Head { .. } => had_head = true,
+                    RespEvent::Body(b) => body_bytes += b.len(),
+                    RespEvent::Trailers(_) => saw_trailer = true,
                     RespEvent::Reset => saw_reset = true,
                     RespEvent::End => ended = true,
                 }
             }
-            // Decode: must have a HEADERS frame AND a DATA frame
-            // emitted before the Reset (i.e. the trailer was the
-            // thing that tripped the cap, not the HEADERS or DATA).
-            let mut had_headers = false;
-            let mut had_data = false;
-            let mut off = 0usize;
-            while off < blob.len() {
-                if let Ok((fr, c)) = decode_frame(&blob[off..], 1 << 20) {
-                    off += c;
-                    match fr {
-                        H3Frame::Headers { .. } => had_headers = true,
-                        H3Frame::Data { .. } => had_data = true,
-                        _ => {}
-                    }
-                } else {
-                    break;
-                }
-            }
-            if saw_reset && !ended && had_headers && had_data && bytes_frames >= 2 {
+            if saw_reset && !ended && had_head && body_bytes == 16 && !saw_trailer {
                 hit_trailer_overcap = true;
                 break;
             }
         }
         assert!(
             hit_trailer_overcap,
-            "a cap between (HEADERS+DATA) and (+trailer) must trip the \
-             trailer over-cap Reset arm (HEADERS+DATA forwarded, then \
+            "a cap between (Head+Body) and (+Trailers) must trip the \
+             trailer over-cap Reset arm (Head+Body forwarded, then \
              Reset, never End)"
         );
     }

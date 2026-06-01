@@ -1,0 +1,20 @@
+[runtime]
+drain_timeout_ms = 5000
+readiness_settle_ms = 100
+
+[[listeners]]
+address = "127.0.0.1:28443"
+protocol = "quic"
+
+[listeners.quic]
+cert_path = "/home/ubuntu/h3spec-run/cert.pem"
+key_path = "/home/ubuntu/h3spec-run/key.pem"
+retry_secret_path = "/home/ubuntu/h3spec-run/retry.bin"
+
+[[listeners.backends]]
+address = "127.0.0.1:23000"
+protocol = "h1"
+weight = 1
+
+[observability]
+metrics_bind = "127.0.0.1:29090"

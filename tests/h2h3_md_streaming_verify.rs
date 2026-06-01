@@ -56,7 +56,7 @@ use lb_l7::h2_security::H2SecurityThresholds;
 use lb_l7::upstream::{RoundRobinUpstreams, UpstreamBackend};
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
 
-use lb_h3::{H3Frame, QpackEncoder, encode_frame};
+use lb_h3_testcodec::{H3Frame, QpackEncoder, encode_frame};
 
 const TEST_SNI: &str = "expressgateway.test";
 const LB_QUIC_ALPN: &[u8] = b"lb-quic";
@@ -403,7 +403,7 @@ fn drain_h3_request_frames(
     body_total: &mut usize,
     obs: &BackendObs,
 ) {
-    use lb_h3::decode_varint;
+    use lb_h3_testcodec::decode_varint;
     loop {
         let (ftype, type_len) = match decode_varint(rx_tail) {
             Ok(v) => v,

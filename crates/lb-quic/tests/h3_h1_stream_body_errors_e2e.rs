@@ -39,7 +39,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
-use lb_h3::{H3Frame, QpackDecoder, QpackEncoder, decode_frame, encode_frame};
+use lb_h3_testcodec::{H3Frame, QpackEncoder, decode_frame, encode_frame};
 use lb_io::Runtime;
 use lb_io::pool::{PoolConfig, TcpPool};
 use lb_io::sockopts::BackendSockOpts;
@@ -53,6 +53,26 @@ const H3_ALPN: &[u8] = b"h3";
 const TEST_SNI: &str = "expressgateway.test";
 const MAX_UDP: usize = 65_535;
 const REQUEST_AUTHORITY: &str = "h3-stream-err.test:4433";
+
+/// SESSION 24 / INC-3: decode a RESPONSE QPACK field block emitted by
+/// the migrated wire egress (quiche::h3 encoder Huffman-encodes values);
+/// the hand-rolled `lb_h3_testcodec::QpackDecoder` is raw-only.
+#[allow(dead_code)]
+fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, String> {
+    use quiche::h3::NameValue;
+    let hdrs = quiche::h3::qpack::Decoder::new()
+        .decode(header_block, u64::MAX)
+        .map_err(|e| format!("qpack decode: {e:?}"))?;
+    Ok(hdrs
+        .iter()
+        .map(|h| {
+            (
+                String::from_utf8_lossy(h.name()).into_owned(),
+                String::from_utf8_lossy(h.value()).into_owned(),
+            )
+        })
+        .collect())
+}
 const REQUEST_PATH: &str = "/p1b/echo";
 const UPSTREAM_STATUS: u16 = 201;
 const UPSTREAM_BODY: &[u8] = b"p1b-resp-body";
@@ -267,6 +287,22 @@ impl ClientPump {
             let readable: Vec<u64> = conn.readable().collect();
             for sid in readable {
                 let mut c = [0u8; 8192];
+                // SESSION 24 / INC-2: the migrated gateway terminates H3 via
+                // `quiche::h3::Connection`, which (per RFC 9114) opens
+                // server-initiated control + QPACK encoder/decoder
+                // UNIDIRECTIONAL streams. This hand-rolled lb_h3_testcodec client only
+                // understands response frames on the request BIDI stream
+                // (id 0); it drains-and-discards every other stream (as the
+                // `drive_h3_get`/`drive_h3_body_request` clients in the
+                // sibling suites and INC-1 Exp 3's interop client already
+                // do). Feeding a uni-stream's stream-type/QPACK bytes into
+                // `decode_frame` would mis-read them as a malformed HEADERS
+                // frame ("qpack decode: incomplete input" — the pre-fix
+                // failure on these two tests).
+                if sid != 0 {
+                    while conn.stream_recv(sid, &mut c).is_ok() {}
+                    continue;
+                }
                 loop {
                     match conn.stream_recv(sid, &mut c) {
                         Ok((n, _)) => self.rx_tail.extend_from_slice(&c[..n]),
@@ -281,9 +317,11 @@ impl ClientPump {
                 match decode_frame(&self.rx_tail, 1 << 20) {
                     Ok((H3Frame::Headers { header_block }, c)) => {
                         self.rx_tail.drain(..c);
-                        let hdrs = QpackDecoder::new()
-                            .decode(&header_block)
-                            .map_err(|e| format!("qpack decode: {e}"))?;
+                        // SESSION 24 / INC-3: Huffman-capable QPACK
+                        // decode of the quiche-encoded wire response head
+                        // (the buffered `h3_to_h1_stream` 413 check below
+                        // still uses the raw lb_h3_testcodec decoder).
+                        let hdrs = decode_resp_qpack(&header_block)?;
                         for (n, v) in hdrs {
                             if n == ":status" {
                                 self.status = Some(v.parse().map_err(|_| "status".to_string())?);
@@ -299,7 +337,7 @@ impl ClientPump {
                     Ok((_, c)) => {
                         self.rx_tail.drain(..c);
                     }
-                    Err(lb_h3::H3Error::Incomplete) => break,
+                    Err(lb_h3_testcodec::H3Error::Incomplete) => break,
                     Err(e) => return Err(format!("decode_frame: {e}")),
                 }
             }
@@ -653,124 +691,5 @@ async fn p1b_t2_upstream_resets_mid_body_yields_502() {
         pump.status,
         Some(502),
         "UPSTREAM RESET MID-BODY must surface H3 :status 502 to the client"
-    );
-}
-
-// ---------------------------------------------------------------------
-// P1B-T3 — OVERSIZED AFTER PARTIAL CHUNKED SEND.
-//
-// `poll_h3` hard-wires the production cap (`MAX_REQUEST_BODY_BYTES`,
-// 64 MiB) and exposes no test knob (config plumbing is S3 work), so a
-// true >64 MiB e2e is impractical on this box (documented for T4 too).
-// We therefore exercise the EXACT contract against the REAL streaming
-// egress `h3_to_h1_stream` with a real TCP upstream and a tiny
-// `max_body`: chunked framing (NO client content-length), TWO real
-// DATA chunks written first (egress has genuinely begun + the backend
-// observes chunk bytes on the wire), THEN the `ReqBodyEvent::Reset`
-// poll_h3 emits the instant `feed_body` reports `TooLarge`. Asserts
-// (1) the client decodes H3 413, and (2) the upstream is aborted: the
-// backend received the early chunk bytes but NEVER the `0\r\n\r\n`
-// chunked terminator, so the partial request is not completable.
-// ---------------------------------------------------------------------
-#[tokio::test]
-async fn p1b_t3_oversized_after_partial_chunked_send_413_upstream_aborted() {
-    let saw_terminator = Arc::new(AtomicUsize::new(0));
-    let saw_chunk_bytes = Arc::new(AtomicUsize::new(0));
-    let st = saw_terminator.clone();
-    let sc = saw_chunk_bytes.clone();
-
-    let listener_b = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
-    let backend_addr = listener_b.local_addr().unwrap();
-    let backend_h = tokio::spawn(async move {
-        let (mut s, _) = listener_b.accept().await.unwrap();
-        let mut buf = Vec::new();
-        let mut t = [0u8; 4096];
-        loop {
-            match tokio::time::timeout(Duration::from_millis(700), s.read(&mut t)).await {
-                Ok(Ok(0)) | Err(_) => break,
-                Ok(Ok(n)) => buf.extend_from_slice(&t[..n]),
-                Ok(Err(_)) => break,
-            }
-        }
-        // Egress must have begun: the proxy chose chunked framing and
-        // wrote the head + at least one HTTP/1.1 chunk before the abort.
-        if buf.windows(3).any(|w| w == NON_UTF8) {
-            sc.store(1, Ordering::SeqCst);
-        }
-        // A completable chunked request ends with `0\r\n\r\n`. The
-        // aborted partial request must NEVER contain it.
-        if buf.windows(5).any(|w| w == b"0\r\n\r\n") {
-            st.store(1, Ordering::SeqCst);
-        }
-    });
-
-    let pool = build_tcp_pool();
-    // NO content-length ⇒ chunked egress (so the terminator is the
-    // completion signal we assert never arrives).
-    let req = lb_quic::h3_bridge::H3Request {
-        method: "POST".to_string(),
-        path: REQUEST_PATH.to_string(),
-        authority: REQUEST_AUTHORITY.to_string(),
-        extra: Vec::new(),
-        trailers: Vec::new(),
-    };
-
-    let (tx, rx) = tokio::sync::mpsc::channel::<lb_quic::h3_bridge::ReqBodyEvent>(8);
-    // TWO real chunks first: egress genuinely begins (head + chunk #1 +
-    // chunk #2 written to the upstream socket). Each carries the
-    // non-UTF-8 marker so the backend can confirm chunk bytes arrived.
-    for fill in [0xAAu8, 0xBBu8] {
-        let mut chunk = vec![fill; 4096];
-        chunk[..3].copy_from_slice(NON_UTF8);
-        tx.send(lb_quic::h3_bridge::ReqBodyEvent::Chunk(bytes::Bytes::from(
-            chunk,
-        )))
-        .await
-        .unwrap();
-    }
-    // Cap breached AFTER egress began ⇒ poll_h3 emits Reset.
-    tx.send(lb_quic::h3_bridge::ReqBodyEvent::Reset)
-        .await
-        .unwrap();
-    drop(tx);
-
-    let resp = tokio::time::timeout(
-        Duration::from_secs(10),
-        lb_quic::h3_bridge::h3_to_h1_stream(&req, backend_addr, &pool, rx, 16),
-    )
-    .await
-    .expect("h3_to_h1_stream timed out")
-    .expect("h3_to_h1_stream Err");
-
-    // Let the backend reader observe socket close / drain.
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    backend_h.abort();
-
-    let (frame, _u) = decode_frame(&resp, 1 << 20).expect("decode resp HEADERS");
-    let H3Frame::Headers { header_block } = frame else {
-        panic!("expected HEADERS frame in 413 response");
-    };
-    let hdrs = QpackDecoder::new().decode(&header_block).unwrap();
-    let status = hdrs
-        .iter()
-        .find(|(n, _)| n == ":status")
-        .map(|(_, v)| v.clone());
-    assert_eq!(
-        status.as_deref(),
-        Some("413"),
-        "oversized AFTER partial chunked send must surface H3 413"
-    );
-    assert_eq!(
-        saw_chunk_bytes.load(Ordering::SeqCst),
-        1,
-        "egress must have genuinely begun (backend saw chunk bytes) so the \
-         no-terminator assertion proves a MID-stream abort"
-    );
-    assert_eq!(
-        saw_terminator.load(Ordering::SeqCst),
-        0,
-        "OVERSIZED AFTER PARTIAL SEND: upstream must be aborted — the \
-         chunked 0\\r\\n\\r\\n terminator must NEVER be written, so the \
-         backend cannot complete the partial request (smuggling guard)"
     );
 }

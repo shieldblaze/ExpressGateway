@@ -58,11 +58,14 @@ http-body-util = { workspace = true, optional = true }
 lb-core = { path = "../lb-core", optional = true }
 # Pillar 3b.3c-2: router needs TcpPool to forward H3 → H1 to backends.
 lb-io = { path = "../lb-io", optional = true }
-# Pillar 3b.3c-2: lb-h3 provides the RFC 9114 frame codec + QPACK static-
-# table encoder/decoder.
-lb-h3 = { path = "../lb-h3", optional = true }
 
 [dev-dependencies]
+# S25 INC-5: the H3 data path migrated to `quiche::h3`; production
+# `crates/lb-quic/src` no longer links a hand-rolled frame codec / QPACK
+# static-table encoder-decoder. The hand-rolled codec survives ONLY as the
+# test-only `lb-h3-testcodec` dev-dependency, used by the H3 e2e test rigs
+# that still hand-roll wire bytes (`h3_h1_stream_body*_e2e.rs`, etc.).
+lb-h3-testcodec = { path = "../lb-h3-testcodec" }
 rcgen = { version = "0.13", features = ["pem"] }
 tokio = { workspace = true, features = ["full", "test-util"] }
 # CODE-2-11: proptest harness for the long/short header parse path.
@@ -92,7 +95,6 @@ quic-terminate = [
     "dep:http-body-util",
     "dep:lb-core",
     "dep:lb-io",
-    "dep:lb-h3",
 ]
 # S15 A2: marker feature for the Mode A passthrough-only build. Used
 # by `cfg(feature = "quic-passthrough-only")` test rigs and by

@@ -1,0 +1,2926 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.26s
+     Running unittests src/lib.rs (/home/ubuntu/Code/eg-target/debug/deps/lb-63aa7da8f1a7c2bc)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (/home/ubuntu/Code/eg-target/debug/deps/expressgateway-f06b92619f786d62)
+
+running 21 tests
+test tests::build_h3_upstream_pool_rejects_empty_backend_list ... ok
+test tests::build_h3_upstream_pool_rejects_mismatched_ca_path ... ok
+test tests::build_h3_upstream_pool_rejects_mismatched_verify_peer ... ok
+test tests::build_h3_upstream_pool_accepts_uniform_verify_off_without_ca ... ok
+test tests::build_h3_upstream_pool_rejects_verify_without_ca ... ok
+test tests::classify_accept_error_recognises_conn_reset ... ok
+test tests::build_raw_quic_backend_rejects_unparseable_addr ... ok
+test tests::classify_accept_error_recognises_emfile ... ok
+test tests::classify_accept_error_recognises_enfile ... ok
+test tests::classify_accept_error_unknown_is_fatal ... ok
+test tests::lifecycle_signal_display_matches_canonical_names ... ok
+test tests::no_raw_proxy_keeps_h3_termination_params ... ok
+test tests::raw_proxy_present_builds_mode_b_params ... ok
+test tests::test_non_loopback_refused ... ok
+test tests::panic_total_drains_fallback_into_registry_counter ... ok
+test tests::test_per_ip_cap_enforced_at_accept ... ok
+test tests::test_emfile_no_busy_loop ... ok
+test tests::test_503_when_over_inflight_h1 ... ok
+test tests::test_typo_protocol_errors ... ok
+test tests::spawn_quic_mode_b_e2e_round_trips_through_real_listener ... ok
+test tests::test_connect_uses_async_path ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/informational_pass_through_main.rs (/home/ubuntu/Code/eg-target/debug/deps/informational_pass_through_main-065a88f1a8693b2b)
+
+running 1 test
+test test_100_continue_traverses_lb ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/panic_abort.rs (/home/ubuntu/Code/eg-target/debug/deps/panic_abort-bec76c4b1fa2e8c5)
+
+running 2 tests
+test release_profile_has_panic_abort ... ok
+test panic_in_tokio_task_aborts_release_process ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.26s
+
+     Running tests/quic_passthrough_audit_throttle_saturation.rs (/home/ubuntu/Code/eg-target/debug/deps/quic_passthrough_audit_throttle_saturation-0a118909c7e26fdd)
+
+running 2 tests
+test short_window_releases_per_window ... ok
+test ten_thousand_cap_hits_throttled_to_one_line ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.04s
+
+     Running tests/quic_passthrough_bounded_state.rs (/home/ubuntu/Code/eg-target/debug/deps/quic_passthrough_bounded_state-eb4741d8ecefa24c)
+
+running 3 tests
+test r13_c_under_cap_no_eviction ... ok
+test r13_a_burst_distinct_dcids_stays_bounded ... ok
+test r13_b_cap_plus_one_drives_eviction_repeated ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.46s
+
+     Running tests/quic_passthrough_cid_migration.rs (/home/ubuntu/Code/eg-target/debug/deps/quic_passthrough_cid_migration-0e9f9ac8cc57f9f8)
+
+running 1 test
+test nat_rebind_preserves_single_flow ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.21s
+
+     Running tests/quic_passthrough_e2e.rs (/home/ubuntu/Code/eg-target/debug/deps/quic_passthrough_e2e-afb80c09927a44bd)
+
+running 1 test
+test passthrough_e2e_real_quiche_client_handshake_and_stream ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/quic_passthrough_metrics.rs (/home/ubuntu/Code/eg-target/debug/deps/quic_passthrough_metrics-091340929db4ed0e)
+
+running 3 tests
+test header_parse_errors_counter ... ok
+test flows_evicted_counter_and_gauge_bounded ... ok
+test flows_gauge_and_retry_counters ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+
+     Running tests/quic_passthrough_spoofed_source_e2e.rs (/home/ubuntu/Code/eg-target/debug/deps/quic_passthrough_spoofed_source_e2e-6c3409f28bca8c66)
+
+running 2 tests
+test nonstrict_forwards_no_audit ... ok
+test spoofed_source_dropped_and_audited ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+
+     Running tests/quic_passthrough_strict_source_binding.rs (/home/ubuntu/Code/eg-target/debug/deps/quic_passthrough_strict_source_binding-7d85473817e6259c)
+
+running 2 tests
+test ssb_false_accepts_nat_rebind ... ok
+test ssb_true_drops_spoofed_source ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.26s
+
+     Running tests/xdp_cap_probe.rs (/home/ubuntu/Code/eg-target/debug/deps/xdp_cap_probe-a1a9daf2d696432c)
+
+running 7 tests
+test test_bpf_then_sys_admin_compensates_for_missing_net_admin ... ok
+test test_bpf_without_net_admin_rejects ... ok
+test test_cap_bpf_path ... ok
+test test_cap_bpf_probe_error_falls_through_to_sys_admin ... ok
+test test_cap_sys_admin_fallback ... ok
+test test_double_probe_error_composes_message ... ok
+test test_no_caps_rejects ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/ubuntu/Code/eg-target/debug/deps/lb_balancer-a393be4dcf33478d)
+
+running 22 tests
+test ewma::tests::test_accounts_for_load ... ok
+test ewma::tests::test_cold_start_no_thundering_herd ... ok
+test ewma::tests::test_prefers_fast ... ok
+test least_connections::tests::test_picks_minimum ... ok
+test least_request::tests::test_picks_minimum ... ok
+test least_connections::tests::test_tie_breaks_by_index ... ok
+test ring_hash::tests::test_detects_stale_identity ... ok
+test round_robin::tests::test_cycles_through_all ... ok
+test round_robin::tests::test_empty_backends ... ok
+test session_affinity::tests::test_different_keys_spread ... ok
+test p2c::tests::test_avoids_heavily_loaded ... ok
+test session_affinity::tests::test_sticky ... ok
+test weighted_round_robin::tests::test_all_zero_weight ... ok
+test weighted_round_robin::tests::test_backend_removal_resets_state ... ok
+test ring_hash::tests::test_consistent ... ok
+test weighted_round_robin::tests::test_weight_proportional ... ok
+test maglev::tests::test_consistent_mapping ... ok
+test maglev::tests::test_detects_stale_identity ... ok
+test random::tests::test_uniform_distribution ... ok
+test weighted_random::tests::test_weighted_distribution ... ok
+test ring_hash::tests::test_minimal_disruption_on_removal ... ok
+test maglev::tests::test_minimal_disruption ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/balancer_counter_sync.rs (/home/ubuntu/Code/eg-target/debug/deps/balancer_counter_sync-f86ec8e15519387f)
+
+running 2 tests
+test test_with_state_seeds_snapshot_from_atomic ... ok
+test test_no_divergence_under_concurrent_increment ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/loom_atomic_counter.rs (/home/ubuntu/Code/eg-target/debug/deps/loom_atomic_counter-2f13f795a4ceae6c)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/ubuntu/Code/eg-target/debug/deps/lb_config-5d91ba725bd4a417)
+
+running 43 tests
+test tests::ops02_listener_jitter_exceeding_inherited_budget_rejected ... ok
+test tests::ops02_gateway_jitter_exceeding_budget_rejected ... ok
+test tests::ops02_jitter_default_is_quarter_of_budget ... ok
+test tests::ops10_override_takes_precedence_over_runtime ... ok
+test tests::ops11_readiness_settle_default_is_kubelet_aligned ... ok
+test tests::parse_invalid_toml ... ok
+test tests::parse_config_with_backends ... ok
+test tests::parse_h1_listener_with_alt_svc_and_timeouts ... ok
+test tests::parse_observability_metrics_bind ... ok
+test tests::parse_h1s_listener_with_grpc ... ok
+test tests::ops10_per_listener_timeout_range_rejected ... ok
+test tests::parse_passthrough_block_round_trip ... ok
+test tests::parse_quic_listener ... ok
+test tests::parse_tls_listener ... ok
+test tests::parse_runtime_xdp_enabled ... ok
+test tests::parse_h1_listener_with_websocket ... ok
+test tests::passthrough_defaults_match_owner_rulings ... ok
+test tests::parse_valid_toml ... ok
+test tests::passthrough_empty_backends_rejected ... ok
+test tests::passthrough_min_client_dcid_below_floor_rejected ... ok
+test tests::passthrough_only_config_is_valid ... ok
+test tests::runtime_xdp_disabled_does_not_require_interface ... ok
+test tests::runtime_xdp_enabled_without_interface_rejected ... ok
+test tests::runtime_absent_keeps_parse_backward_compatible ... ok
+test tests::validate_backend_unknown_protocol_rejected ... ok
+test tests::raw_proxy_minimal_toml_defaults_caps ... ok
+test tests::validate_empty_address ... ok
+test tests::validate_empty_backend_address ... ok
+test tests::validate_grpc_on_non_h1s_listener_rejected ... ok
+test tests::validate_empty_listeners ... ok
+test tests::validate_h1_with_tls_block_rejected ... ok
+test tests::validate_h1s_with_tls_block_ok ... ok
+test tests::validate_h1s_without_tls_block_rejected ... ok
+test tests::validate_observability_bad_bind_rejected ... ok
+test tests::validate_ok ... ok
+test tests::validate_quic_small_mtu_rejected ... ok
+test tests::validate_quic_without_block_rejected ... ok
+test tests::validate_tls_block_without_tls_protocol_rejected ... ok
+test tests::validate_tls_empty_cert_path_rejected ... ok
+test tests::validate_tls_without_block_rejected ... ok
+test tests::validate_unknown_protocol_rejected ... ok
+test tests::validate_websocket_on_non_http_listener_rejected ... ok
+test tests::validate_zero_http_timeout_rejected ... ok
+
+test result: ok. 43 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/ubuntu/Code/eg-target/debug/deps/lb_controlplane-8224e41f0b9773e2)
+
+running 15 tests
+test tests::config_manager_rejects_empty_initial_config ... ok
+test tests::config_manager_rejects_invalid_initial_config ... ok
+test tests::config_manager_initial_load ... ok
+test tests::config_manager_reload_no_change ... ok
+test tests::ha_poller_no_change_returns_none ... ok
+test tests::config_manager_reload_saves_previous ... ok
+test tests::ha_poller_first_poll_returns_some ... ok
+test tests::in_memory_backend_load_store ... ok
+test tests::validate_empty_is_error ... ok
+test tests::file_backend_atomic_write ... ok
+test tests::config_manager_rollback_to_previous_none ... ok
+test tests::validate_non_empty_ok ... ok
+test tests::validate_invalid_toml_is_error ... ok
+test tests::config_manager_rollback_to_previous ... ok
+test tests::validate_valid_toml_ok ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/ubuntu/Code/eg-target/debug/deps/lb_core-11694540102b4ce6)
+
+running 19 tests
+test authority::tests::comma_rejected ... ok
+test authority::tests::control_char_rejected ... ok
+test authority::tests::empty_rejected ... ok
+test authority::tests::empty_port_after_colon_rejected ... ok
+test authority::tests::happy_path_examples ... ok
+test authority::tests::ipv6_brackets_must_balance ... ok
+test authority::tests::port_digits_only ... ok
+test authority::tests::raw_ipv6_without_brackets_accepted_today ... ok
+test authority::tests::whitespace_rejected ... ok
+test tests::test_backend_creation ... ok
+test tests::test_backend_health_default ... ok
+test tests::test_backend_state_connections ... ok
+test tests::test_backend_serde_roundtrip ... ok
+test tests::test_backend_state_latency ... ok
+test tests::test_backend_state_requests ... ok
+test tests::test_cluster_creation ... ok
+test tests::test_cluster_serde_roundtrip ... ok
+test tests::test_core_error_display ... ok
+test tests::test_lb_policy_variants ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/per_connection_drain.rs (/home/ubuntu/Code/eg-target/debug/deps/per_connection_drain-0d5745dd3e75f40b)
+
+running 3 tests
+test test_inflight_request_completes_or_cancels_on_sigterm ... ok
+test test_uncooperative_task_times_out ... ok
+test test_inflight_request_completes_when_under_budget ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests/round8_drain_coordinator.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_drain_coordinator-88a7ed232d5e7b35)
+
+running 6 tests
+test listener_token_is_child_of_root_token ... ok
+test run_drain_admin_skips_xdp_c13 ... ok
+test run_drain_phases_in_order ... ok
+test run_drain_idempotent_c10 ... ok
+test run_drain_xdp_detach_timeout_c8 ... ok
+test run_drain_inflight_timeout_c7 ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s
+
+     Running tests/shutdown.rs (/home/ubuntu/Code/eg-target/debug/deps/shutdown-1f22332843479ffe)
+
+running 4 tests
+test drain_zero_tasks_is_clean ... ok
+test test_drain_cancels_clean ... ok
+test child_shares_orchestration ... ok
+test test_drain_times_out_returns_remaining ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/ubuntu/Code/eg-target/debug/deps/lb_cp_client-57501c4884858f60)
+
+running 4 tests
+test tests::connect_with_endpoint_ok ... ok
+test tests::default_is_new ... ok
+test tests::connect_without_endpoint_errors ... ok
+test tests::new_client_disconnected ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/ubuntu/Code/eg-target/debug/deps/lb_grpc-8f1c9dc1672bd5e0)
+
+running 21 tests
+test tests::deadline_invalid_format ... ok
+test tests::deadline_parse_hours ... ok
+test tests::deadline_parse_minutes ... ok
+test tests::deadline_format_roundtrip ... ok
+test tests::deadline_parse_millis ... ok
+test tests::deadline_parse_nanos ... ok
+test tests::deadline_parse_micros ... ok
+test tests::deadline_remaining ... ok
+test tests::deadline_parse_seconds ... ok
+test tests::deadline_submillisecond_rounds_up ... ok
+test tests::frame_incomplete_body ... ok
+test tests::frame_empty_data ... ok
+test tests::frame_incomplete_header ... ok
+test tests::frame_roundtrip_uncompressed ... ok
+test tests::frame_roundtrip_compressed ... ok
+test tests::grpc_message_too_large ... ok
+test tests::multi_frame_decode ... ok
+test tests::status_from_code_invalid ... ok
+test tests::status_from_code_valid ... ok
+test tests::status_from_http ... ok
+test tests::status_to_http ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/ubuntu/Code/eg-target/debug/deps/lb_h1-8e4a57c52d035e8b)
+
+running 14 tests
+test chunked::tests::encode_decode_roundtrip ... ok
+test chunked::tests::encode_decode_with_trailers ... ok
+test chunked::tests::incremental_feed ... ok
+test parse::tests::header_unterminated_over_limit_rejected ... ok
+test parse::tests::header_over_limit_rejected ... ok
+test parse::tests::header_exactly_at_limit_accepted ... ok
+test parse::tests::default_constant_matches_wrapper ... ok
+test parse::tests::headers_basic ... ok
+test parse::tests::headers_incomplete ... ok
+test parse::tests::request_line_get ... ok
+test parse::tests::request_line_incomplete ... ok
+test parse::tests::request_line_post_http10 ... ok
+test parse::tests::status_line_200 ... ok
+test parse::tests::status_line_404 ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/proptest_parser.rs (/home/ubuntu/Code/eg-target/debug/deps/proptest_parser-2b6e2be916cb82f8)
+
+running 2 tests
+test headers_no_panic ... ok
+test request_line_no_panic ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/round8_chunk_size_cve_corpus.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_chunk_size_cve_corpus-fe0d463938640902)
+
+running 14 tests
+test accepts_mixed_case_hex ... ok
+test accepts_chunk_extensions ... ok
+test accepts_u64_max_size_token_on_64bit ... ok
+test regression_well_formed_chunked_decodes ... ok
+test rejects_leading_whitespace_space ... ok
+test rejects_leading_whitespace_tab ... ok
+test rejects_minus_sign ... ok
+test rejects_empty_size_line ... ok
+test rejects_overflow_via_checked_shl ... ok
+test rejects_overlong_hex_zero_pad ... ok
+test rejects_empty_size_token_before_extension ... ok
+test rejects_plus_sign ... ok
+test rejects_non_hex_inside_size_token ... ok
+test rejects_trailing_whitespace_in_size_token ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_header_name_rfc9110.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_header_name_rfc9110-720cd8ca145f48e7)
+
+running 9 tests
+test empty_name_rejected ... ok
+test control_char_in_name_rejected ... ok
+test leading_whitespace_in_name_rejected ... ok
+test null_byte_in_name_rejected ... ok
+test tab_in_name_rejected ... ok
+test valid_token_chars_accepted ... ok
+test underscore_in_name_accepted_default ... ok
+test whitespace_in_name_rejected ... ok
+test value_whitespace_still_trimmed ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/ubuntu/Code/eg-target/debug/deps/lb_h2-3f3af0007faad922)
+
+running 30 tests
+test frame::tests::data_frame_roundtrip ... ok
+test frame::tests::frame_too_large_rejected ... ok
+test frame::tests::goaway_roundtrip ... ok
+test frame::tests::settings_ack_roundtrip ... ok
+test frame::tests::incomplete_returns_error ... ok
+test hpack::tests::hpack_encode_decode_roundtrip ... ok
+test hpack::tests::hpack_dynamic_table_eviction ... ok
+test frame::tests::unknown_frame_roundtrip ... ok
+test hpack::tests::string_roundtrip ... ok
+test security::tests::continuation_flood_exceeded ... ok
+test security::tests::continuation_flood_ok ... ok
+test frame::tests::unknown_frame_type_ignored ... ok
+test frame::tests::ping_roundtrip ... ok
+test hpack::tests::hpack_static_indexed ... ok
+test security::tests::hpack_bomb_size_exceeded ... ok
+test security::tests::hpack_bomb_ratio_exceeded ... ok
+test hpack::tests::integer_roundtrip ... ok
+test security::tests::hpack_bomb_ok ... ok
+test security::tests::ping_under_limit_allowed ... ok
+test security::tests::ping_burst_rejected ... ok
+test security::tests::rapid_reset_boundary_attack_detected ... ok
+test security::tests::rapid_reset_over_threshold ... ok
+test security::tests::rapid_reset_sliding_window_decays ... ok
+test security::tests::rapid_reset_under_threshold ... ok
+test security::tests::rapid_reset_window_expiry ... ok
+test security::tests::settings_burst_rejected ... ok
+test security::tests::settings_resets_after_window ... ok
+test security::tests::settings_under_limit_allowed ... ok
+test security::tests::zero_window_stall_fires_after_timeout ... ok
+test security::tests::zero_window_stall_reset_on_progress ... ok
+
+test result: ok. 30 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/proptest_hpack.rs (/home/ubuntu/Code/eg-target/debug/deps/proptest_hpack-f2c83d7e00599357)
+
+running 2 tests
+test decode_frame_no_panic ... ok
+test hpack_round_trip ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.45s
+
+     Running tests/round8_h2_cve_corpus.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_h2_cve_corpus-5159851e5bcfc28a)
+
+running 3 tests
+test data_padded_empty_payload_errors ... ok
+test data_padded_pad_length_exceeds_payload_errors ... ok
+test data_padded_strips_padding ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_padded_frame.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_padded_frame-348489376c51401e)
+
+running 6 tests
+test data_pad_length_exceeds_payload_errors ... ok
+test data_padded_empty_payload_errors ... ok
+test data_with_padded_strips_padding ... ok
+test data_without_padded_unaffected ... ok
+test headers_with_padded_and_priority_decoded_correctly ... ok
+test headers_without_padded_unaffected ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/ubuntu/Code/eg-target/debug/deps/lb_h3_testcodec-480b57041f29f0a9)
+
+running 22 tests
+test frame::tests::data_frame_roundtrip ... ok
+test frame::tests::frame_too_large_rejected ... ok
+test frame::tests::goaway_frame_roundtrip ... ok
+test frame::tests::incomplete_input ... ok
+test frame::tests::settings_frame_roundtrip ... ok
+test frame::tests::headers_frame_roundtrip ... ok
+test qpack::tests::decode_literal_literal_name_length_continuation ... ok
+test frame::tests::unknown_frame_type_ignored ... ok
+test qpack::tests::roundtrip_name_ref_value_literal ... ok
+test qpack::tests::roundtrip_with_literals ... ok
+test security::tests::normal_input_ok ... ok
+test qpack::tests::decode_conformant_literal_literal_name ... ok
+test qpack::tests::roundtrip_static_only ... ok
+test security::tests::ratio_exceeded ... ok
+test security::tests::zero_encoded ... ok
+test varint::tests::overflow ... ok
+test security::tests::size_exceeded ... ok
+test varint::tests::roundtrip_eight_byte ... ok
+test qpack::tests::roundtrip_literal_literal_name_fixed_format ... ok
+test varint::tests::roundtrip_four_byte ... ok
+test varint::tests::roundtrip_small ... ok
+test varint::tests::roundtrip_two_byte ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/proptest_qpack.rs (/home/ubuntu/Code/eg-target/debug/deps/proptest_qpack-97dfa2994f9f34a7)
+
+running 4 tests
+test varint_round_trip ... ok
+test varint_decode_no_panic ... ok
+test decode_frame_no_panic ... ok
+test qpack_round_trip ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.43s
+
+     Running unittests src/lib.rs (/home/ubuntu/Code/eg-target/debug/deps/lb_health-2fb24f0a4f27eb71)
+
+running 6 tests
+test tests::becomes_unhealthy_after_threshold ... ok
+test tests::display_status ... ok
+test tests::starts_unknown ... ok
+test tests::success_resets_failure_count ... ok
+test tests::becomes_healthy_after_threshold ... ok
+test tests::zero_threshold_clamped_to_one ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/balancer_counter_sync.rs (/home/ubuntu/Code/eg-target/debug/deps/balancer_counter_sync-e3f3461c3104fbd0)
+
+running 4 tests
+test legacy_backend_keeps_plain_u64_semantics ... ok
+test with_state_seeds_snapshot_from_atomic ... ok
+test snapshot_tracks_atomic_monotonic_midflight ... ok
+test test_no_divergence_under_load ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/balancer_ewma.rs (/home/ubuntu/Code/eg-target/debug/deps/balancer_ewma-5ce0b74c37539774)
+
+running 4 tests
+test test_balancer_ewma_empty ... ok
+test test_balancer_ewma_load_factor ... ok
+test test_balancer_ewma_prefers_fast ... ok
+test test_balancer_ewma_zero_latency ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/balancer_least_connections.rs (/home/ubuntu/Code/eg-target/debug/deps/balancer_least_connections-f74711ad0ae98614)
+
+running 3 tests
+test test_balancer_least_conn_empty ... ok
+test test_balancer_least_conn_picks_min ... ok
+test test_balancer_least_conn_tie_breaks_by_index ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/balancer_least_request.rs (/home/ubuntu/Code/eg-target/debug/deps/balancer_least_request-532b1d5ddb20662d)
+
+running 3 tests
+test test_balancer_least_req_empty ... ok
+test test_balancer_least_req_picks_min ... ok
+test test_balancer_least_req_tie_breaks_by_index ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/balancer_maglev.rs (/home/ubuntu/Code/eg-target/debug/deps/balancer_maglev-da1768212075ad14)
+
+running 3 tests
+test test_balancer_maglev_consistent ... ok
+test test_balancer_maglev_distribution ... ok
+test test_balancer_maglev_minimal_disruption ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/balancer_p2c.rs (/home/ubuntu/Code/eg-target/debug/deps/balancer_p2c-3b5ef4aa9363ac4d)
+
+running 3 tests
+test test_balancer_p2c_empty ... ok
+test test_balancer_p2c_single_backend ... ok
+test test_balancer_p2c_converges ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/balancer_random.rs (/home/ubuntu/Code/eg-target/debug/deps/balancer_random-1cd73794ed9ca9a5)
+
+running 2 tests
+test test_balancer_random_empty ... ok
+test test_balancer_random_uniform ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/balancer_ring_hash.rs (/home/ubuntu/Code/eg-target/debug/deps/balancer_ring_hash-05da353e83190f95)
+
+running 3 tests
+test test_balancer_ring_hash_consistent ... ok
+test test_balancer_ring_hash_distribution ... ok
+test test_balancer_ring_hash_minimal_disruption ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/balancer_round_robin.rs (/home/ubuntu/Code/eg-target/debug/deps/balancer_round_robin-4149b541d1e456ac)
+
+running 3 tests
+test test_balancer_round_robin_distribution ... ok
+test test_balancer_round_robin_empty ... ok
+test test_balancer_round_robin_single_backend ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/balancer_session_affinity.rs (/home/ubuntu/Code/eg-target/debug/deps/balancer_session_affinity-6c36e7a4d5bec9f1)
+
+running 3 tests
+test test_balancer_session_affinity_empty ... ok
+test test_balancer_session_affinity_sticky ... ok
+test test_balancer_session_affinity_different_sessions_spread ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/balancer_weighted_random.rs (/home/ubuntu/Code/eg-target/debug/deps/balancer_weighted_random-6d1d2ab9ba76ac9e)
+
+running 2 tests
+test test_balancer_wrandom_all_zero_weight ... ok
+test test_balancer_wrandom_respects_weights ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/balancer_weighted_round_robin.rs (/home/ubuntu/Code/eg-target/debug/deps/balancer_weighted_round_robin-7891c26eaecc42d6)
+
+running 3 tests
+test test_balancer_wrr_all_zero_weight ... ok
+test test_balancer_wrr_smooth_interleaving ... ok
+test test_balancer_wrr_respects_weights ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/binary_proto_routing.rs (/home/ubuntu/Code/eg-target/debug/deps/binary_proto_routing-083b1f25e263e647)
+
+running 1 test
+test mixed_protocol_listener_yields_h1_proxy_with_h2_pool_and_round_robin_picker ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h1_h1.rs (/home/ubuntu/Code/eg-target/debug/deps/bridging_h1_h1-665aaa87e38f9cdd)
+
+running 1 test
+test test_bridge_h1_to_h1 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h1_h2.rs (/home/ubuntu/Code/eg-target/debug/deps/bridging_h1_h2-b62cc9b0cf1661c9)
+
+running 1 test
+test test_bridge_h1_to_h2 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h1_h3.rs (/home/ubuntu/Code/eg-target/debug/deps/bridging_h1_h3-ce01cc17be4d11d5)
+
+running 1 test
+test test_bridge_h1_to_h3 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h2_h1.rs (/home/ubuntu/Code/eg-target/debug/deps/bridging_h2_h1-8e22c148a19e633d)
+
+running 1 test
+test test_bridge_h2_to_h1 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h2_h2.rs (/home/ubuntu/Code/eg-target/debug/deps/bridging_h2_h2-47c2cef55f13ea26)
+
+running 1 test
+test test_bridge_h2_to_h2 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h2_h3.rs (/home/ubuntu/Code/eg-target/debug/deps/bridging_h2_h3-b251203b7ecc6859)
+
+running 1 test
+test test_bridge_h2_to_h3 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h3_h1.rs (/home/ubuntu/Code/eg-target/debug/deps/bridging_h3_h1-756c469edbabb1f7)
+
+running 1 test
+test test_bridge_h3_to_h1 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h3_h2.rs (/home/ubuntu/Code/eg-target/debug/deps/bridging_h3_h2-369c3f1c998ea2d5)
+
+running 1 test
+test test_bridge_h3_to_h2 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h3_h3.rs (/home/ubuntu/Code/eg-target/debug/deps/bridging_h3_h3-b5c5ba7959d8166d)
+
+running 1 test
+test test_bridge_h3_to_h3 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/cert_rotation.rs (/home/ubuntu/Code/eg-target/debug/deps/cert_rotation-77d3c4a3cccd8ee8)
+
+running 3 tests
+test test_in_flight_handshake_sees_pre_rotation_bundle ... ok
+test test_invalid_reload_keeps_old_cert_serving ... ok
+test test_sigusr1_rotates_cert_no_drop ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/codec_roundtrip_h1.rs (/home/ubuntu/Code/eg-target/debug/deps/codec_roundtrip_h1-c0b2161c0b45db16)
+
+running 3 tests
+test test_h1_chunked_encoding ... ok
+test test_h1_request_line_parsing ... ok
+test test_h1_trailer_handling ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/codec_roundtrip_h2.rs (/home/ubuntu/Code/eg-target/debug/deps/codec_roundtrip_h2-90bf22179623ff91)
+
+running 5 tests
+test test_h2_continuation_flood_mitigation ... ok
+test test_h2_hpack_bomb_mitigation ... ok
+test test_h2_frame_decoder ... ok
+test test_h2_rapid_reset_mitigation ... ok
+test test_h2_hpack_roundtrip ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/codec_roundtrip_h3.rs (/home/ubuntu/Code/eg-target/debug/deps/codec_roundtrip_h3-f9539ff409f8a533)
+
+running 3 tests
+test test_h3_frame_decoder ... ok
+test test_h3_qpack_bomb_mitigation ... ok
+test test_h3_qpack_roundtrip ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/controlplane_ha.rs (/home/ubuntu/Code/eg-target/debug/deps/controlplane_ha-021694bf9a7caddf)
+
+running 1 test
+test test_controlplane_ha_polling ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/controlplane_rollback.rs (/home/ubuntu/Code/eg-target/debug/deps/controlplane_rollback-db60ae37b4eb8434)
+
+running 1 test
+test test_controlplane_rollback_on_invalid ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/controlplane_standalone.rs (/home/ubuntu/Code/eg-target/debug/deps/controlplane_standalone-7f325bc0a3732422)
+
+running 2 tests
+test test_controlplane_standalone_sighup_reload ... ok
+test test_backend_pool_observes_toml_reload ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/grpc_bidi_streaming.rs (/home/ubuntu/Code/eg-target/debug/deps/grpc_bidi_streaming-1cd09a8edd635ea6)
+
+running 1 test
+test test_grpc_bidi_streaming ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/grpc_client_streaming.rs (/home/ubuntu/Code/eg-target/debug/deps/grpc_client_streaming-3e4612a00a1904c2)
+
+running 1 test
+test test_grpc_client_streaming ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/grpc_deadline.rs (/home/ubuntu/Code/eg-target/debug/deps/grpc_deadline-fc82a05e715176fe)
+
+running 1 test
+test test_grpc_deadline_propagation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/grpc_external.rs (/home/ubuntu/Code/eg-target/debug/deps/grpc_external-08d43c483becf3d8)
+
+running 2 tests
+test ghz_harness ... ok
+test grpc_health_probe_harness ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/grpc_proxy_e2e.rs (/home/ubuntu/Code/eg-target/debug/deps/grpc_proxy_e2e-b2f46a21d6d7a9e8)
+
+running 12 tests
+test grpc_health_check_unknown_service_not_found ... ok
+test grpc_health_check_synthesized ... ok
+test grpc_malformed_timeout_returns_invalid_argument ... ok
+test grpc_health_check_overall_serving ... ok
+test grpc_bidi_stream ... ok
+test grpc_client_stream ... ok
+test grpc_deadline_clamps_at_300s ... ok
+test grpc_unary_echo ... ok
+test grpc_status_translation_404 ... ok
+test grpc_server_stream ... ok
+test grpc_upstream_oversize_trailer_rejected_by_gateway ... ok
+test grpc_deadline_exceeded_from_gateway ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+
+     Running tests/grpc_server_streaming.rs (/home/ubuntu/Code/eg-target/debug/deps/grpc_server_streaming-c767017d79f4af64)
+
+running 1 test
+test test_grpc_server_streaming ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/grpc_status_translation.rs (/home/ubuntu/Code/eg-target/debug/deps/grpc_status_translation-072067bf59a9af7e)
+
+running 1 test
+test test_grpc_status_translation ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/grpc_unary.rs (/home/ubuntu/Code/eg-target/debug/deps/grpc_unary-64dac422dbf68138)
+
+running 1 test
+test test_grpc_unary_roundtrip ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/h1_proxy_e2e.rs (/home/ubuntu/Code/eg-target/debug/deps/h1_proxy_e2e-99f5ebeb8db51c5f)
+
+running 7 tests
+test genuine_upstream_failure_still_yields_502 ... ok
+test forbidden_framing_trailer_yields_400_not_502 ... ok
+test h1_proxy_strips_hop_by_hop_in_request ... ok
+test h1s_proxy_returns_backend_response_with_alt_svc ... ok
+test over_cap_content_length_upload_yields_413_not_502 ... ok
+test over_cap_chunked_upload_yields_413_not_502 ... ok
+test h1s_proxy_times_out_on_slow_body ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.41s
+
+     Running tests/h1_rejects_grpc.rs (/home/ubuntu/Code/eg-target/debug/deps/h1_rejects_grpc-b3118d3f8504d843)
+
+running 5 tests
+test h1_rejects_grpc_with_charset_param_with_415 ... ok
+test h1_rejects_grpc_uppercase_with_415 ... ok
+test h1_listener_rejects_grpc_with_415 ... ok
+test h1_passes_grpc_web_proto_through ... ok
+test h1_passes_grpc_web_through ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/h1h1_md_streaming_verify.rs (/home/ubuntu/Code/eg-target/debug/deps/h1h1_md_streaming_verify-4a57db531fd729f1)
+
+running 14 tests
+test genuine_upstream_failure_still_502 ... ok
+test pre_pump_cl_te_smuggle_still_rejected ... ok
+test over_64mib_upload_yields_413_with_body_reading_backend ... ok
+test real_wire_small_body_byte_identical ... ok
+test real_wire_large_body_byte_identical ... ok
+test legit_request_trailer_forwarded_200 ... ok
+test forbidden_framing_field_trailer_rejected_400 ... ok
+test under_cap_large_upload_yields_200 ... ok
+test over_64mib_upload_yields_413_when_backend_responds_early ... ok
+test smuggle_parity_chunked_truncation ... ok
+test smuggle_parity_content_length_truncation ... ok
+test memory_gauge_non_vacuous_and_load_bearing ... ok
+test memory_gauge_tracks_live_occupancy_not_cumulative ... ok
+test backpressure_client_send_paused_while_backend_stalled ... ok
+
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.15s
+
+     Running tests/h1h2_md_streaming_verify.rs (/home/ubuntu/Code/eg-target/debug/deps/h1h2_md_streaming_verify-6d0c219a3fb9c2ef)
+
+running 13 tests
+test fcap1_genuine_upstream_failure_yields_502 ... ok
+test fcap1_over_window_forbidden_trailer_no_leak_not_502 ... ok
+test fcap1_over_cap_upload_yields_413_not_502 ... ok
+test req_branch_a_within_window_byte_identical ... ok
+test req_branch_a_truncation_zero_dial ... ok
+test memory_gauge_tracks_live_occupancy_not_cumulative ... ok
+test req_branch_b_5mib_byte_identical ... ok
+test req_branch_b_8mib_byte_identical ... ok
+test req_backpressure_resume_completes_byte_identical ... ok
+test req_backpressure_client_paused_while_backend_stalled ... ok
+test memory_gauge_non_vacuous_and_load_bearing ... ok
+test fmd4_h1_chunked_truncation_never_complete_at_h2_upstream ... ok
+test fmd4_h1_cl_short_never_complete_at_h2_upstream ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 34.26s
+
+     Running tests/h1h2_resp_streaming_verify.rs (/home/ubuntu/Code/eg-target/debug/deps/h1h2_resp_streaming_verify-0d80b9db04f403c5)
+
+running 4 tests
+test resp_trailers_wire_behaviour ... ok
+test resp_streaming_head_before_full_body ... ok
+test resp_large_5mib_byte_identical ... ok
+test resp_large_8mib_byte_identical ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.24s
+
+     Running tests/h1h3_md_streaming_verify.rs (/home/ubuntu/Code/eg-target/debug/deps/h1h3_md_streaming_verify-a38e3777a9425809)
+
+running 12 tests
+test h1h3_fmd4_response_truncation_chunked_never_complete ... ok
+test h1h3_fmd4_response_truncation_never_false_complete ... ok
+test h1h3_fmd4_truncated_upload_never_complete ... ok
+test h1h3_grpc_response_trailers_empirical ... ok
+test h1h3_request_trailers_forwarded_to_backend ... ok
+test h1h3_binary_body_byte_identical_both_directions ... ok
+test h1h3_memory_gauge_non_vacuous_and_load_bearing ... ok
+test h1h3_fmd4_truncation_burst_current_thread ... ok
+test h1h3_fmd4_response_truncation_burst_current_thread ... ok
+test h1h3_fmd4_response_truncation_chunked_burst_current_thread ... ok
+test h1h3_upstream_down_yields_502 ... ok
+test h1h3_fcap1_over_cap_upload_never_complete ... ok
+
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 6.39s
+
+     Running tests/h2_proxy_e2e.rs (/home/ubuntu/Code/eg-target/debug/deps/h2_proxy_e2e-192948294116ef0b)
+
+running 5 tests
+test h2s_alpn_downgrade_to_http11 ... ok
+test h2s_proxy_returns_backend_response_with_alt_svc ... ok
+test h2_genuine_upstream_failure_still_yields_502 ... ok
+test h2s_per_stream_load_balancing ... ok
+test h2_over_cap_upload_yields_413_not_502 ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.80s
+
+     Running tests/h2_rapid_reset_goaway_under_load.rs (/home/ubuntu/Code/eg-target/debug/deps/h2_rapid_reset_goaway_under_load-a24eb96157f9ef52)
+
+running 1 test
+test rapid_reset_server_goaway_corroboration ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/h2_security_live.rs (/home/ubuntu/Code/eg-target/debug/deps/h2_security_live-ad687728311e3338)
+
+running 6 tests
+test rapid_reset_goaway ... ok
+test hpack_bomb_connection_close ... ok
+test continuation_flood_goaway ... ok
+test ping_flood_goaway ... ok
+test settings_flood_goaway ... ok
+test zero_window_stall_stream_reset ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+     Running tests/h2_validation_before_forward.rs (/home/ubuntu/Code/eg-target/debug/deps/h2_validation_before_forward-eb2d48b5825a9b3d)
+
+running 3 tests
+test content_length_mismatch_never_leaks_backend_body ... ok
+test pseudo_header_in_trailers_never_leaks_backend_body ... ok
+test oversized_request_body_rejected_413_not_buffered_unbounded ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.63s
+
+     Running tests/h2h1_md_coverage_driver.rs (/home/ubuntu/Code/eg-target/debug/deps/h2h1_md_coverage_driver-1356e7368b1936b8)
+
+running 11 tests
+test cov_over_window_pseudo_trailers ... ok
+test cov_over_window_cl_mismatch ... ok
+test cov_branch_a_small_body ... ok
+test cov_branch_a_empty_and_exact_window ... ok
+test cov_branch_b_early_response ... ok
+test cov_branch_b_large_body ... ok
+test cov_over_window_valid_trailers ... ok
+test cov_branch_b_stalled_backend ... ok
+test cov_within_window_valid_trailers ... ok
+test cov_within_window_rst_mid_body ... ok
+test cov_smuggling_rst_mid_body ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.32s
+
+     Running tests/h2h1_md_streaming_verify.rs (/home/ubuntu/Code/eg-target/debug/deps/h2h1_md_streaming_verify-b29721cb0ded2334)
+
+running 15 tests
+test harness_bug_reqwest_independent_512k_byte_identical ... ok
+test deviation1_early_response_on_over_window_upload ... ok
+test diag_legit_upload_status_across_window_boundary ... ok
+test over_window_content_length_mismatch_no_leak ... ok
+test over_window_pseudo_header_trailers_no_leak ... ok
+test real_wire_large_body_byte_identical ... ok
+test real_wire_small_body_byte_identical ... ok
+test diag_branch_b_echo_body_seen ... ok
+test backpressure_client_send_paused_while_backend_stalled ... ok
+test memory_gauge_non_vacuous_and_load_bearing ... ok
+test memory_gauge_tracks_live_occupancy_not_cumulative ... ok
+test smuggling_rst_mid_body_never_complete_at_upstream ... ok
+test harness_bug_cumulative_release_stall_is_reader_side ... ok
+test fcap1_h2_over_cap_upload_yields_413 ... ok
+test diag_branch_b_body_bytes_reaching_upstream ... ok
+
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 10.52s
+
+     Running tests/h2h2_md_streaming_verify.rs (/home/ubuntu/Code/eg-target/debug/deps/h2h2_md_streaming_verify-3d192c5e25492547)
+
+running 21 tests
+test fcap1_genuine_upstream_failure_yields_502 ... ok
+test fcap1_over_window_pseudo_header_trailer_yields_400_not_502 ... ok
+test fcap1_over_window_content_length_mismatch_no_leak ... ok
+test req_branch_a_valid_trailers_forwarded ... ok
+test req_branch_a_within_window_byte_identical ... ok
+test memory_gauge_tracks_live_occupancy_not_cumulative ... ok
+test req_branch_b_5mib_byte_identical ... ok
+test req_branch_b_valid_trailers_forwarded ... ok
+test memory_gauge_non_vacuous_and_load_bearing ... ok
+test req_backpressure_resume_completes_byte_identical ... ok
+test req_branch_a_rst_mid_body_zero_dial_reject ... ok
+test resp_alt_svc_header_injected ... ok
+test req_branch_b_8mib_byte_identical ... ok
+test resp_trailers_relayed_to_client ... ok
+test resp_8mib_byte_identical ... ok
+test reset_peer_collateral_concurrent_stream_probe ... ok
+test fcap1_over_cap_upload_yields_413_not_502 ... ok
+test req_backpressure_client_paused_while_backend_stalled ... ok
+test resp_backpressure_slow_client_streams_incrementally ... ok
+test resp_48mib_byte_identical ... ok
+test fmd4_client_rst_mid_body_never_complete_at_h2_upstream has been running for over 60 seconds
+test fmd4_client_rst_mid_body_never_complete_at_h2_upstream ... ok
+
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 101.26s
+
+     Running tests/h2h3_md_streaming_verify.rs (/home/ubuntu/Code/eg-target/debug/deps/h2h3_md_streaming_verify-7c27d91cbdb1a90b)
+
+running 13 tests
+test h2h3_connection_header_not_forwarded_to_h2_client ... ok
+test h2h3_fmd4_response_truncation_chunked_never_complete ... ok
+test h2h3_fmd4_response_truncation_cl_never_false_complete ... ok
+test h2h3_grpc_response_trailers_reach_h2_client ... ok
+test h2h3_request_trailers_forwarded_to_backend ... ok
+test h2h3_binary_body_byte_identical_both_directions ... ok
+test h2h3_fmd4_request_rst_never_complete ... ok
+test h2h3_upstream_down_yields_502 ... ok
+test h2h3_fmd4_response_truncation_chunked_burst_current_thread ... ok
+test h2h3_fcap1_over_cap_upload_never_complete ... ok
+test h2h3_backpressure_both_legs_round_trips_bounded ... ok
+test h2h3_memory_gauge_non_vacuous_and_load_bearing ... ok
+test h2h3_fmd4_request_rst_burst_current_thread has been running for over 60 seconds
+test h2h3_fmd4_request_rst_burst_current_thread ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 244.99s
+
+     Running tests/h2spec.rs (/home/ubuntu/Code/eg-target/debug/deps/h2spec-c1f98af6b5105b43)
+
+running 1 test
+test h2spec_generic_conformance ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.93s
+
+     Running tests/h2spec_server_conformance.rs (/home/ubuntu/Code/eg-target/debug/deps/h2spec_server_conformance-5fa111264f84d43a)
+
+running 1 test
+test h2spec_server_conformance_strict_passes ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s
+
+     Running tests/h3_s3_inflight_h1_drain_proof.rs (/home/ubuntu/Code/eg-target/debug/deps/h3_s3_inflight_h1_drain_proof-b6c3f3c8b23d08ff)
+
+running 3 tests
+test shortwindow_control_is_window_not_drop ... ok
+test inflight_h1_completes_with_long_read_window ... ok
+test fixed_400ms_window_is_shorter_than_drain_timeline_not_a_drop ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.34s
+
+     Running tests/h3_upstream_verify.rs (/home/ubuntu/Code/eg-target/debug/deps/h3_upstream_verify-4b1aa63235ba149c)
+
+running 8 tests
+test h3_backend_with_ca_path_validates_cleanly ... ok
+test h3_backend_with_empty_sni_override_rejected ... ok
+test h3_backend_with_explicit_sni_override_validates ... ok
+test h3_backend_without_ca_path_accepted_when_verify_peer_explicitly_false ... ok
+test h3_backend_without_ca_path_rejected_when_verify_peer_default ... ok
+test non_h3_backend_with_tls_knobs_rejected ... ok
+test non_h3_backend_with_verify_peer_false_rejected ... ok
+test h3_backend_default_protocol_parses_with_verify_peer_true ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/l4_xdp_conntrack.rs (/home/ubuntu/Code/eg-target/debug/deps/l4_xdp_conntrack-952cbadbbd7a921a)
+
+running 1 test
+test test_xdp_conntrack_flow_pinning ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/l4_xdp_hotswap.rs (/home/ubuntu/Code/eg-target/debug/deps/l4_xdp_hotswap-95280be33489aa64)
+
+running 1 test
+test test_xdp_hotswap_no_flow_drop ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/l4_xdp_maglev.rs (/home/ubuntu/Code/eg-target/debug/deps/l4_xdp_maglev-266c3be855db8ac3)
+
+running 1 test
+test test_xdp_maglev_consistent_hash ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/metrics_endpoint.rs (/home/ubuntu/Code/eg-target/debug/deps/metrics_endpoint-b33073550c1a2557)
+
+running 3 tests
+test metrics_endpoint_serves_text_exposition ... ok
+test metrics_endpoint_healthz_returns_200 ... ok
+test test_accept_inflight_gauge_emitted_per_listener ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/metrics_label_shape.rs (/home/ubuntu/Code/eg-target/debug/deps/metrics_label_shape-1dc07812fb480dae)
+
+running 2 tests
+test test_http_requests_total_has_listener_route_labels ... ok
+test test_http_request_duration_seconds_has_listener_route_labels ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/proto_translation_e2e.rs (/home/ubuntu/Code/eg-target/debug/deps/proto_translation_e2e-b40876e5bf4bc3f4)
+
+running 5 tests
+test proxy_h1_listener_h2_backend ... ok
+test proxy_h2_listener_h2_backend ... ok
+test proxy_h1_listener_h3_backend ... ok
+test proxy_h3_listener_h2_backend ... ok
+test proxy_h2_listener_h3_backend ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/quic_alpn_h3.rs (/home/ubuntu/Code/eg-target/debug/deps/quic_alpn_h3-1b38fcf28dc50447)
+
+running 4 tests
+test production_alpn_constant_is_h3 ... ok
+test server_advertises_h3 ... ok
+test server_accepts_h3_29_legacy_client ... ok
+test server_rejects_unknown_alpn ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.04s
+
+     Running tests/quic_listener_e2e.rs (/home/ubuntu/Code/eg-target/debug/deps/quic_listener_e2e-4ccd0be2bddc5254)
+
+running 6 tests
+test zero_rtt_replay_dropped ... ok
+test quic_listener_accepts_handshake_smoke ... ok
+test quic_listener_e2e_http3_get_through_proxy_to_h1_backend ... ok
+test retry_mints_on_first_initial_verifies_on_second ... ok
+test quic_listener_shuts_down_on_cancellation_token ... ok
+test quic_listener_e2e_http3_get_through_proxy_to_h3_backend ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/quic_native.rs (/home/ubuntu/Code/eg-target/debug/deps/quic_native-0949d322dff9383d)
+
+running 3 tests
+test replay_filter_rejects_second_0rtt_with_same_token ... ok
+test test_quic_datagram_forwarding ... ok
+test test_quic_stream_forwarding ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/reload_zero_drop.rs (/home/ubuntu/Code/eg-target/debug/deps/reload_zero_drop-18e0a96239bd0d44)
+
+running 6 tests
+test drain_tests::classify_close_requires_observed_fin_for_finonly ... ok
+test test_reload_zero_drop_under_load ... ok
+test drain_tests::negative_regression_complete_body_never_closed_is_caught ... ok
+test drain_tests::test_sigterm_drains_h2_with_goaway ... ok
+test drain_tests::test_sigterm_drains_h3_with_connection_close ... ok
+test drain_tests::test_sigterm_drains_h1_with_connection_close ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 17.82s
+
+     Running tests/round8_drain_15case.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_drain_15case-1ff1d5de57df3efa)
+
+running 16 tests
+test case_c01_steady_idle ... ok
+test case_c09_drain_after_external_cancel_is_safe ... ok
+test case_c02_sigterm_during_pending_accept ... ok
+test case_c10_two_sigterms_idempotent ... ok
+test case_c11_admin_drain_then_sigterm_idempotent ... ok
+test case_c04_handshake_future_dropped_on_cancel ... ok
+test case_c13_admin_drain_skips_xdp_detach ... ok
+test case_c14_listener_cancel_signal_fires ... ok
+test case_c08_xdp_detach_hang_bounded ... ok
+test case_c15_zero_listeners_clean_drain ... ok
+test xdp_detach_kernel_error_surfaced ... ok
+test case_c12_per_conn_panic_does_not_hang_drain ... ok
+test case_c03_post_accept_synchronous_tail_visibility ... ok
+test case_c07_inflight_timeout_still_runs_xdp_phase ... ok
+test case_c06_websocket_severed_at_deadline ... ok
+test case_c05_long_lived_stream_severed_at_deadline ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/s14_cfbw_h1h1.rs (/home/ubuntu/Code/eg-target/debug/deps/s14_cfbw_h1h1-74d886a9814723da)
+
+running 4 tests
+test cfbw_b_wedged_upstream_504s_within_idle_plus_slack ... ignored, CF-CFBW-CELL-LIVENESS-TEST-FRAGILITY — see disabled-arm comment above
+test cfbw_c_head_timeout_fires_when_response_head_stalls ... ignored, CF-CFBW-CELL-LIVENESS-TEST-FRAGILITY — see disabled-arm comment above
+test cfbw_c_control_fast_head_unaffected_by_short_head_timeout ... ok
+test cfbw_a_slow_progressing_upload_succeeds ... ok
+
+test result: ok. 2 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 6.02s
+
+     Running tests/security_continuation_flood.rs (/home/ubuntu/Code/eg-target/debug/deps/security_continuation_flood-e314d7515e3bc36f)
+
+running 1 test
+test test_continuation_flood_detection ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/security_hpack_bomb.rs (/home/ubuntu/Code/eg-target/debug/deps/security_hpack_bomb-feb6cbac54abf85f)
+
+running 1 test
+test test_hpack_bomb_detection ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/security_qpack_bomb.rs (/home/ubuntu/Code/eg-target/debug/deps/security_qpack_bomb-9dff88bff3095a21)
+
+running 1 test
+test test_qpack_bomb_detection ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/security_rapid_reset.rs (/home/ubuntu/Code/eg-target/debug/deps/security_rapid_reset-e9d624b4d2d60091)
+
+running 1 test
+test test_rapid_reset_detection ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/security_slow_post.rs (/home/ubuntu/Code/eg-target/debug/deps/security_slow_post-000cbfb8a68c8087)
+
+running 1 test
+test test_slow_post_rejected ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/security_slowloris.rs (/home/ubuntu/Code/eg-target/debug/deps/security_slowloris-823e7cf25a156e2a)
+
+running 1 test
+test test_slowloris_connection_reaped ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/security_smuggling_cl_te.rs (/home/ubuntu/Code/eg-target/debug/deps/security_smuggling_cl_te-ba61a4210c10b116)
+
+running 1 test
+test test_smuggling_cl_te_rejected ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/security_smuggling_h2_downgrade.rs (/home/ubuntu/Code/eg-target/debug/deps/security_smuggling_h2_downgrade-21bf5891537386cd)
+
+running 1 test
+test test_smuggling_h2_downgrade_rejected ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/security_smuggling_te_cl.rs (/home/ubuntu/Code/eg-target/debug/deps/security_smuggling_te_cl-7dc2bf08d02b36d0)
+
+running 1 test
+test test_smuggling_te_cl_rejected ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/security_zero_rtt_replay.rs (/home/ubuntu/Code/eg-target/debug/deps/security_zero_rtt_replay-8ecfbdbaa3624752)
+
+running 1 test
+test test_zero_rtt_replay_rejected ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/tls_listener.rs (/home/ubuntu/Code/eg-target/debug/deps/tls_listener-62ecfa565b257c58)
+
+running 1 test
+test tls_listener_handshake_and_ticket_reuse ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/watchdog_wired.rs (/home/ubuntu/Code/eg-target/debug/deps/watchdog_wired-a869333b5bec2d55)
+
+running 2 tests
+test test_watchdog_progress_path_evicts_on_deadline ... ok
+test test_slow_loris_evicted_within_deadline ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+     Running tests/ws_autobahn.rs (/home/ubuntu/Code/eg-target/debug/deps/ws_autobahn-fef3f7c9a89db138)
+
+running 1 test
+test autobahn_fuzzingclient_smoke ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/ws_proxy_e2e.rs (/home/ubuntu/Code/eg-target/debug/deps/ws_proxy_e2e-9d62cec2efd86276)
+
+running 7 tests
+test ws_echo_roundtrip ... ok
+test ws_close_code_forwarded ... ok
+test ws_binary_message_roundtrip ... ok
+test ws_ping_flood_closes_with_1008 ... ok
+test ws_ping_pong_keepalive ... ok
+test ws_read_frame_timeout_closes_with_1008 ... ok
+test ws_idle_timeout_emits_1001 ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.01s
+
+     Running unittests src/lib.rs (/home/ubuntu/Code/eg-target/debug/deps/lb_io-d612ff7d98642739)
+
+running 56 tests
+test dns::tests::resolver_config_defaults ... ok
+test dns::tests::io_err_mapped_to_nxdomain_for_getaddrinfo_text ... ok
+test http2_pool::tests::defaults_match_documented_values ... ok
+test http2_pool::tests::pool_starts_empty ... ok
+test dns::tests::cache_hit_returns_same_result_before_ttl ... ok
+test dns::tests::cache_size_tracks_entries ... ok
+test dns::tests::refresh_all_re_queries_entries ... ok
+test http2_pool::tests::send_request_idle_dial_fail_smoke ... ok
+test idle_send::tests::arm_i_chunked_progress_completes ... ok
+test idle_send::tests::arm_ii_immediate_wedge_idle ... ok
+test idle_send::tests::arm_iii_complete_then_slow_head_fires_head ... ok
+test idle_send::tests::arm_iv_complete_then_fast_head_succeeds ... ok
+test idle_send::tests::arm_v_zero_bump_scaled_idle ... ok
+test idle_send::tests::arm_ix_lp_zero_bump_then_complete_fires_head_not_idle ... ok
+test idle_send::tests::arm_vi_late_bump_rearms ... ok
+test idle_send::tests::arm_vii_tick_race_recheck ... ok
+test http2_pool::tests::send_request_idle_success_arm ... ok
+test pool::tests::acquire_async_dials_then_parks ... ok
+test pool::tests::defaults_match_prompt_section_21 ... ok
+test pool::tests::acquire_then_release_returns_same_socket ... ok
+test dns::tests::concurrent_resolvers_share_cache ... ok
+test pool::tests::no_spawn_blocking_in_pool_dial_path ... ok
+test pool::tests::non_reusable_is_not_parked ... ok
+test pool::tests::per_peer_max_enforced ... ok
+test pool::tests::probe_discards_peer_closed_connection ... ok
+test pool::tests::size_invariant_holds_under_random_ops ... ok
+test pool::tests::take_stream_detaches_from_pool ... ok
+test pool::tests::total_max_enforced ... ok
+test quic_pool::tests::idle_count_zero_on_fresh_pool ... ok
+test dns::tests::positive_entry_expires_at_cap ... ok
+test dns::tests::negative_entry_caches_nxdomain ... ok
+test pool::tests::idle_timeout_discards_on_acquire ... ok
+test quic_pool::tests::quic_pool_config_defaults_match_section_21 ... ok
+test http2_pool::tests::send_request_idle_head_timeout_arm ... ok
+test http2_pool::tests::send_request_idle_idle_timeout_arm ... ok
+test quic_pool::tests::test_pool_dialer_uses_h3 ... ok
+test ring::tests::accept_one_loopback ... ok
+test ring::tests::nop_roundtrip_ok_or_skip ... ok
+test ring::tests::splice_rejects_non_pipe_or_succeeds ... ok
+test ring::tests::recv_send_loopback_pair ... ok
+test sockopts::tests::apply_listener_defaults_is_noop ... ok
+test sockopts::tests::apply_backend_minimal ... ok
+test sockopts::tests::apply_udp_minimal ... ok
+test tests::backend_names ... ok
+test tests::detect_backend_returns_real_choice ... ok
+test tests::nop_roundtrip_linux ... ok
+test tests::runtime_listener_and_connect_sockets ... ok
+test tests::runtime_with_backend ... ok
+test tests::socket_options_listener ... ok
+test tests::watermarks_present ... ok
+test pool::tests::max_age_expiry_discards_on_acquire ... ok
+test quic_pool::tests::total_max_enforced ... ok
+test pool::tests::acquire_async_timeout_fires ... ok
+test quic_pool::tests::per_peer_max_enforced ... ok
+test quic_pool::tests::max_age_expiry_discards_on_acquire ... ok
+test quic_pool::tests::probe_discards_closed_connection ... ok
+
+test result: ok. 56 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.22s
+
+     Running tests/miri_ring.rs (/home/ubuntu/Code/eg-target/debug/deps/miri_ring-d9dd0c8c22821e68)
+
+running 3 tests
+test head_tail_wrap_arithmetic ... ok
+test head_tail_wraps_past_u32_max ... ok
+test raw_slice_round_trip_is_provenance_clean ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/ubuntu/Code/eg-target/debug/deps/lb_l4_xdp-aca0d77e9ba750e2)
+
+running 52 tests
+test bpffs::tests::bpf_fs_magic_constant_is_kernel_value ... ok
+test bpffs::tests::rejects_interior_nul_path ... ok
+test bpffs::tests::rejects_non_bpffs_tempdir ... ok
+test bpffs::tests::rejects_missing_path ... ok
+test loader::tests::load_empty_bytes_rejected ... ok
+test loader::tests::load_garbage_bytes_rejected ... ok
+test loader::tests::license_check_accepts_gpl_payload ... ok
+test loader::tests::license_check_rejects_elf_without_license_section ... ok
+test nic_compat::tests::classify_unchanged_is_pure_and_untouched ... ok
+test loader::tests::license_check_rejects_wrong_payload ... ok
+test loader::tests::xdp_mode_flag_mapping ... ok
+test nic_compat::tests::ena_and_ice_rows ... ok
+test nic_compat::tests::current_kernel_mm_resolves_on_this_box ... ok
+test loader::tests::xdp_mode_is_copy ... ok
+test nic_compat::tests::ena_unresolved_fw_modern_kernel_stays_allowed ... ok
+test nic_compat::tests::ethtool_firmware_parse ... ok
+test nic_compat::tests::ena_unresolved_fw_prebad_kernel_refuses ... ok
+test nic_compat::tests::mlx5_new_firmware_allowed ... ok
+test nic_compat::tests::mlx5_old_firmware_refused ... ok
+test nic_compat::tests::non_kernel_keyed_driver_unresolved_fw_still_fail_open ... ok
+test nic_compat::tests::probe_reports_unavailable_on_aya_013 ... ok
+test nic_compat::tests::unknown_driver_allowed ... ok
+test nic_compat::tests::version_compare_basic ... ok
+test nic_compat::tests::version_parse_truncates_junk ... ok
+test sim::tests::ipv6_conntrack_hit_triggers_xdp_tx_sim ... ok
+test sim::tests::lpm_trie_zero_prefix_matches_everything ... ok
+test sim::tests::lpm_trie_acl_matches_prefix ... ok
+test sim::tests::truncated_vlan_frame_returns_none ... ok
+test sim::tests::untagged_frame_has_14_byte_l3_offset ... ok
+test sim::tests::rfc_1624_incremental_reversible ... ok
+test sim::tests::vlan_tag_stripped_before_ipv4_parse ... ok
+test stats_export::tests::attach_probe_failed_counter_round_trip ... ok
+test stats_export::tests::label_strings_match_kernel_vocab ... ok
+test stats_export::tests::num_slots_matches_enum ... ok
+test stats_export::tests::pin_reuse_records_round_trip ... ok
+test stats_export::tests::pin_reuse_unknown_name_is_silent ... ok
+test stats_export::tests::round_trip_all_modes ... ok
+test stats_export::tests::stat_slot_indices_are_wire_stable ... ok
+test stats_export::tests::unset_returns_none ... ok
+test tests::conntrack_default ... ok
+test tests::conntrack_eviction_at_capacity ... ok
+test tests::conntrack_insert_lookup_remove ... ok
+test tests::conntrack_update_existing_does_not_evict ... ok
+test tests::is_prime_checks ... ok
+test tests::maglev_no_backends_error ... ok
+test tests::maglev_non_prime_table_size_rejected ... ok
+test tests::maglev_zero_table_size_error ... ok
+test tests::maglev_consistency ... ok
+test tests::maglev_distribution ... ok
+test sim::tests::rfc_1624_incremental_checksum_matches_recompute ... ok
+test tests::hotswap_evicts_stale_conntrack_after_shrink ... ok
+test tests::hotswap_preserves_conntrack ... ok
+
+test result: ok. 52 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+     Running tests/elf_sections.rs (/home/ubuntu/Code/eg-target/debug/deps/elf_sections-0a9da0c7a198bbd8)
+
+running 3 tests
+test elf_size_within_budget ... ok
+test btf_sections_present_and_non_empty ... ok
+test license_section_says_gpl ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/l4_xdp_conntrack.rs (/home/ubuntu/Code/eg-target/debug/deps/l4_xdp_conntrack-1af9e0f256e5bcdd)
+
+running 2 tests
+test lru_evicts_oldest_under_flood ... ignored, needs CAP_BPF + post-EBPF-2-03 lb_xdp.bin rebuild — runs in CI privileged stage
+test flood_does_not_oom_userspace_simulator ... ok
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/loader_license_assert.rs (/home/ubuntu/Code/eg-target/debug/deps/loader_license_assert-d2b3d26cb774f1b7)
+
+running 2 tests
+test test_loader_refuses_elf_without_license ... ok
+test test_loader_refuses_real_elf_without_license_section ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/pod_padding.rs (/home/ubuntu/Code/eg-target/debug/deps/pod_padding-65e68767b8fc4aeb)
+
+running 5 tests
+test test_backend_entry_pad_zeroed_after_new ... ok
+test test_flowkeyv6_pad_zeroed_after_new ... ok
+test test_backend_entry_v6_pad_zeroed_after_new ... ok
+test test_flowkey_pad_zeroed_after_new ... ok
+test test_struct_sizes_match_bpf_side ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/real_elf.rs (/home/ubuntu/Code/eg-target/debug/deps/real_elf-cc74112815ea8ac8)
+
+running 2 tests
+test real_elf_parses_via_loader ... ok
+test real_elf_has_single_lb_xdp_program ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_acl_admission.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_acl_admission-370601dc97a1fc07)
+
+running 6 tests
+test accept_host_route_zero_ip_with_full_prefix ... ok
+test reject_prefix_max_u8 ... ok
+test reject_prefix_thirty_three ... ok
+test error_variant_shape ... ok
+test accept_prefix_one_through_thirty_two ... ok
+test reject_prefix_zero ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_atomic_backends.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_atomic_backends-4ad49e4abe3e9acb)
+
+running 6 tests
+test backend_table_wire_size_is_frozen ... ok
+test fixture_macs_distinct ... ok
+test daisy_chain_shifts_current_into_previous ... ok
+test generation_wraps ... ok
+test too_many_backends_error_carries_count ... ok
+test zeroed_table_is_clean_slate ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_attach_probe.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_attach_probe-52ab3dc3f37131b3)
+
+running 11 tests
+test attach_probe_failed_counter_is_monotonic ... ok
+test aya_lock_parser_does_not_confuse_sibling_crates ... ok
+test ena_and_ice_blocklist_rows_round_trip ... ok
+test drv_supported_fails_open_on_unknown_iface ... ok
+test ethtool_firmware_line_parsing ... ok
+test probe_synthetic_packet_round_trip ... ignored, needs CAP_BPF + aya BPF_PROG_TEST_RUN (aya 0.13.1 API blocker)
+test mlx5_patched_firmware_allowed ... ok
+test mlx5_pre_ghsa_firmware_is_refused_with_bug_id ... ok
+test unknown_or_virtual_driver_allowed ... ok
+test tripwire_fires_when_aya_is_upgraded_simulation ... ok
+test aya_version_is_pinned_to_the_no_test_run_release ... ok
+
+test result: ok. 10 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_attach_replace.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_attach_replace-7d403353130b9902)
+
+running 5 tests
+test detach_verifying_on_real_iface ... ignored, kernel-touching: requires CAP_BPF + dummy netdev
+test attach_replacing_signature_present ... ok
+test detach_signature_matches_ops04_coordinator ... ok
+test query_unknown_iface_is_a_loud_error_not_a_silent_none ... ok
+test xdp_query_result_is_copy_and_default ... ok
+
+test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_backend_flags.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_backend_flags-156682999f739f9b)
+
+running 5 tests
+test backend_entry_constructor_takes_no_flags_arg ... ok
+test backend_entry_size_is_24_post_l4_07 ... ok
+test backend_entry_v6_constructor_takes_no_flags_arg ... ok
+test no_flags_field_on_backend_entry ... ok
+test backend_entry_v6_size_is_36_post_l4_07 ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_backend_sentinel.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_backend_sentinel-3cbea78ee5c89bdf)
+
+running 7 tests
+test legacy_new_still_accepts_zero_for_back_compat ... ok
+test userspace_try_new_accepts_populated_v4 ... ok
+test stats_slot_backend_unpopulated_at_slot_10 ... ok
+test userspace_try_new_rejects_zero_ip_v6 ... ok
+test userspace_try_new_rejects_zero_ip_v4 ... ok
+test userspace_try_new_rejects_zero_port_v4 ... ok
+test userspace_try_new_rejects_zero_port_v6 ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_bpffs_check.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_bpffs_check-26c9d3857d6bea3e)
+
+running 5 tests
+test accepts_real_bpffs ... ignored, requires CAP_BPF and a bpffs mount; see CI privileged lane
+test bpf_fs_magic_matches_uapi_constant ... ok
+test rejects_missing_path ... ok
+test rejects_relative_root ... ok
+test rejects_tempdir_with_actionable_hint ... ok
+
+test result: ok. 4 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_conntrack_state.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_conntrack_state-ca328a4d9017c10f)
+
+running 7 tests
+test fin_ack_prunes_after_tx ... ok
+test fin_without_ack_does_not_prune ... ok
+test rst_for_untracked_flow_is_no_op_on_table ... ok
+test rst_prunes_conntrack_and_passes_to_kernel ... ok
+test rst_replay_only_evicts_matching_flow ... ok
+test stat_slot_indices_for_prune_slots_are_stable ... ok
+test syn_ack_does_not_prune ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_ena_kernel_blocklist.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_ena_kernel_blocklist-ba936311466c7155)
+
+running 1 test
+test drv_supported_ens5_is_allowed_on_this_not_known_bad_ena_box ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_fragments.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_fragments-718db766eccd71ee)
+
+running 6 tests
+test ipv4_fragment_mask_0x3fff_covers_offset_and_mf ... ok
+test ipv4_unfragmented_packet_not_detected ... ok
+test ipv6_fragment_proto_value_is_44 ... ok
+test stat_slots_for_fragments_at_indices_11_and_12 ... ok
+test ipv4_later_fragment_with_offset_detected ... ok
+test ipv4_first_fragment_with_mf_set_detected ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_netlink_xdp_query.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_netlink_xdp_query-19c07b08eef1ff74)
+
+running 8 tests
+test live_query_loopback_has_no_xdp ... ignored, live AF_NETLINK socket — privileged CI lane only
+test empty_buffer_is_default_not_error ... ok
+test extracts_prog_id_from_real_shaped_getlink_reply ... ok
+test malformed_nested_rtattr_does_not_loop_or_panic ... ok
+test no_xdp_attribute_means_prog_id_none ... ok
+test nlmsg_error_with_errno_is_surfaced ... ok
+test prog_id_zero_is_normalised_to_none ... ok
+test truncated_message_is_rejected_not_panicked ... ok
+
+test result: ok. 7 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_ptr_at_bounds.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_ptr_at_bounds-6fa929352992f0b8)
+
+running 7 tests
+test accepts_in_bounds ... ok
+test rejects_len_wraparound ... ok
+test rejects_out_of_bounds_no_wrap ... ok
+test header_size_corpus_in_bounds ... ok
+test rejects_strict_greater_than_end ... ok
+test ipv6_extension_header_walk_boundary ... ok
+test rejects_offset_wraparound ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_synflood_cap.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_synflood_cap-0dd32343f8dfad1e)
+
+running 4 tests
+test default_cap_matches_katran_max_conn_rate ... ok
+test ct_insert_gate_zero_cap_disables ... ok
+test ct_insert_gate_blocks_burst_above_cap ... ok
+test ct_insert_gate_refills_after_window ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+
+     Running tests/round8_verifier_baseline_70.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_verifier_baseline_70-01af229ed01d5c8e)
+
+running 1 test
+test capture_real_70_verifier_baseline ... ignored, privileged: real BPF_PROG_LOAD on the running kernel to capture the verifier baseline — run via sudo -E cargo test -p lb-l4-xdp --test round8_verifier_baseline_70 -- --ignored --nocapture
+
+test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_verify_xdp_gate.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_verify_xdp_gate-1f3291640c34f0d8)
+
+running 5 tests
+test placeholder_baselines_carry_pending_marker ... ok
+test baseline_files_exist_for_all_supported_kernels ... ok
+verify-xdp.sh: unsupported kernel version 9.99
+test script_rejects_floating_image_without_override ... ok
+usage: scripts/verify-xdp.sh --kernel <KVER> [--update-baseline]
+
+  --kernel <KVER>      One of: 5.15, 6.1, 6.6 (the supported LTS /
+                       rolling-LTS floors per DEPLOYMENT.md §27).
+  --update-baseline    Capture the verifier log and overwrite the
+                       committed .log.committed snapshot. Use after
+                       an intentional BPF source change.
+
+Each KVER value maps to a pinned lvh-images digest so the CI matrix
+is reproducible.
+
+Deprecated: positional KVER (e.g. `verify-xdp.sh 5.15`) is still
+accepted for one release with a WARN. Switch call sites to the flag
+form.
+usage: scripts/verify-xdp.sh --kernel <KVER> [--update-baseline]
+
+  --kernel <KVER>      One of: 5.15, 6.1, 6.6 (the supported LTS /
+                       rolling-LTS floors per DEPLOYMENT.md §27).
+  --update-baseline    Capture the verifier log and overwrite the
+                       committed .log.committed snapshot. Use after
+                       an intentional BPF source change.
+
+Each KVER value maps to a pinned lvh-images digest so the CI matrix
+is reproducible.
+
+Deprecated: positional KVER (e.g. `verify-xdp.sh 5.15`) is still
+accepted for one release with a WARN. Switch call sites to the flag
+form.
+test script_rejects_unknown_kernel ... ok
+test script_help_exits_with_usage_code ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+
+     Running tests/stats_export.rs (/home/ubuntu/Code/eg-target/debug/deps/stats_export-166ebfa87cd14e00)
+
+running 4 tests
+test summed_counters_advance_under_load ... ignored, needs CAP_BPF + bpffs — runs in CI privileged stage
+test num_slots_constant_tracks_appended_slots ... ok
+test read_stats_without_install_returns_handle_missing ... ok
+test slot_indices_match_ebpf_constants ... ok
+
+test result: ok. 3 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/xdp_attach_mode.rs (/home/ubuntu/Code/eg-target/debug/deps/xdp_attach_mode-6b43eb9f9bdb2240)
+
+running 3 tests
+test d1_native_attach::drv_mode_attach_to_ens5_proves_live_datapath ... ignored, privileged: real DRV-mode XDP attach to ens5 (ENA NIC) — run via sudo -E cargo test -p lb-l4-xdp --test xdp_attach_mode -- --ignored --nocapture
+test test_skb_fallback_logs_warning ... ignored, needs CAP_BPF + CAP_NET_ADMIN + dummy0 netdev — runs in CI privileged stage
+test stats_export_round_trip_drv_skb_hw ... ok
+
+test result: ok. 1 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/xdp_link_id_drop_safe.rs (/home/ubuntu/Code/eg-target/debug/deps/xdp_link_id_drop_safe-c0053d3e88c20445)
+
+running 2 tests
+test xdp_link_persists_after_id_drop ... ignored, needs CAP_BPF + CAP_NET_ADMIN + dummy0 — runs in CI privileged stage
+test loader_attach_signature_drops_xdplinkid_silently ... ok
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/xdp_pin_paths.rs (/home/ubuntu/Code/eg-target/debug/deps/xdp_pin_paths-656dd51dc6f71170)
+
+running 3 tests
+test test_maps_pinned_then_loaded_from_pin ... ignored, needs CAP_BPF + bpffs mount — runs in CI privileged stage
+test default_pin_dir_is_canonical ... ok
+test pin_name_constants_match_ebpf_source ... ok
+
+test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/ubuntu/Code/eg-target/debug/deps/lb_l7-f74a9b413c95e8f4)
+
+running 91 tests
+test authority::tests::predicate_reexport_is_lb_core ... ok
+test authority::tests::request_valid_authority_passes ... ok
+test authority::tests::request_absent_and_empty_authority_skipped ... ok
+test authority::tests::request_host_header_validated ... ok
+test authority::tests::request_uri_authority_validated ... ok
+test grpc_proxy::tests::decode_health_check_service_empty_message_returns_empty ... ok
+test grpc_proxy::tests::decode_health_check_service_skips_unknown_field ... ok
+test grpc_proxy::tests::decode_health_check_service_decodes_string_field ... ok
+test grpc_proxy::tests::grpc_timeout_absent_returns_none ... ok
+test grpc_proxy::tests::grpc_timeout_parse_and_clamp_at_max ... ok
+test grpc_proxy::tests::grpc_timeout_below_max_is_preserved ... ok
+test grpc_proxy::tests::decode_health_check_service_empty_body_returns_empty ... ok
+test grpc_proxy::tests::http_non_200_translates_to_grpc_status ... ok
+test grpc_proxy::tests::is_grpc_request_matches_application_grpc ... ok
+test grpc_proxy::tests::is_grpc_request_matches_application_grpc_plus_proto ... ok
+test grpc_proxy::tests::is_grpc_request_matches_case_insensitive ... ok
+test grpc_proxy::tests::is_grpc_request_matches_with_charset_parameter ... ok
+test grpc_proxy::tests::is_grpc_request_rejects_application_json ... ok
+test grpc_proxy::tests::parse_and_clamp_grpc_timeout_absent_yields_absent ... ok
+test grpc_proxy::tests::is_grpc_request_rejects_empty_extension ... ok
+test grpc_proxy::tests::grpc_error_response_carries_trailer_status ... ok
+test grpc_proxy::tests::health_check_serving_response_well_formed ... ok
+test grpc_proxy::tests::parse_and_clamp_grpc_timeout_malformed_yields_invalid_argument ... ok
+test h1_proxy::tests::alt_svc_injected_when_configured ... ok
+test h1_proxy::tests::alt_svc_absent_when_not_configured ... ok
+test h1_proxy::tests::hop_by_hop_headers_stripped_from_request ... ok
+test h1_proxy::tests::hop_by_hop_response_strips_te_and_transfer_encoding_keeps_trailer ... ok
+test h1_proxy::tests::round_robin_empty_returns_none ... ok
+test h1_proxy::tests::round_robin_picker_cycles ... ok
+test h1_proxy::tests::via_appended ... ok
+test h1_proxy::tests::via_two_lines_preserved ... ok
+test h1_proxy::tests::x_forwarded_for_appended ... ok
+test h1_proxy::tests::x_forwarded_for_created_when_absent ... ok
+test h2_proxy::tests::capture_request_trailers_accepts_valid ... ok
+test h1_proxy::tests::x_forwarded_for_two_lines_preserved ... ok
+test h2_proxy::tests::h2_proxy_alt_svc_injected ... ok
+test h2_proxy::tests::clean_close_io_drains_inbound_to_eof_before_resolving ... ok
+test h2_proxy::tests::h2_proxy_hop_by_hop_stripped ... ok
+test h2_proxy::tests::h2_proxy_xff_appended ... ok
+test h2_proxy::tests::clean_close_io_drain_is_bounded ... ok
+test h1_proxy::tests::test_sigterm_h1_graceful_shutdown_resolves ... ok
+test h2_proxy::tests::h2_req_record_retained_is_monotone_max ... ok
+test h2_security::tests::apply_does_not_panic_with_defaults ... ok
+test h2_proxy::tests::clean_close_io_does_not_resolve_while_peer_still_open ... ok
+test h2_proxy::tests::h2_req_window_constants_pinned ... ok
+test h2_security::tests::defaults_align_with_lb_h2_constants ... ok
+test security_hooks::tests::default_hooks_returns_noop ... ok
+test h2_to_h1::tests::bridge_accepts_matching_authority_host ... ok
+test h2_to_h1::tests::bridge_rejects_authority_host_disagreement ... ok
+test security_hooks::tests::noop_admit_connection_always_ok ... ok
+test security_hooks::tests::noop_inspect_request_always_ok ... ok
+test sni_authority::tests::authority_with_port_compared_on_host_only ... ok
+test sni_authority::tests::case_insensitive_match ... ok
+test h2_proxy::tests::test_sigterm_emits_two_step_goaway ... ok
+test sni_authority::tests::empty_authority_passes ... ok
+test sni_authority::tests::ipv6_authority ... ok
+test sni_authority::tests::matching_pair_passes ... ok
+test sni_authority::tests::misdirected_response_is_421 ... ok
+test sni_authority::tests::mismatch_rejected ... ok
+test sni_authority::tests::no_sni_passes ... ok
+test sni_authority::tests::trailing_dot_normalised ... ok
+test stripped_request::tests::into_inner_yields_request ... ok
+test stripped_request::tests::repr_transparent_zero_cost ... ok
+test stripped_request::tests::strip_removes_hop_by_hop ... ok
+test tests::all_bridge_combinations_report_correct_protocols ... ok
+test tests::bridge_preserves_body ... ok
+test tests::bridge_response_preserves_status_and_body ... ok
+test tests::h1_to_h1_response_strips_te_trailers ... ok
+test tests::h1_to_h1_strips_hop_by_hop_headers ... ok
+test tests::h1_to_h2_uses_custom_scheme ... ok
+test tests::h2_to_h1_empty_authority_errors ... ok
+test tests::h2_to_h1_missing_authority_errors ... ok
+test tests::h3_to_h1_empty_authority_errors ... ok
+test trace_ctx::tests::child_keeps_trace_id_replaces_parent ... ok
+test tests::too_many_headers_rejected ... ok
+test trace_ctx::tests::inject_round_trips_onto_hyper_headers ... ok
+test trace_ctx::tests::missing_traceparent_synthesises_root ... ok
+test trace_ctx::tests::span_ids_are_unique_per_call ... ok
+test upstream::tests::round_robin_upstreams_cycles ... ok
+test upstream::tests::round_robin_upstreams_empty_returns_none ... ok
+test upstream::tests::upstream_backend_constructors_set_proto ... ok
+test ws_proxy::tests::connection_token_list_accepts_additional_tokens ... ok
+test ws_proxy::tests::non_upgrade_request_passes_through ... ok
+test ws_proxy::tests::plain_connect_not_websocket ... ok
+test ws_proxy::tests::handshake_response_headers_includes_accept ... ok
+test ws_proxy::tests::rejects_missing_key ... ok
+test ws_proxy::tests::rejects_non_get ... ok
+test ws_proxy::tests::rejects_wrong_version ... ok
+test ws_proxy::tests::rfc8441_extended_connect_detected ... ok
+test ws_proxy::tests::upgrade_request_detected_correctly ... ok
+test ws_proxy::tests::close_code_1001_on_idle_timeout ... ok
+
+test result: ok. 91 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s
+
+     Running tests/bridging_h1_h1.rs (/home/ubuntu/Code/eg-target/debug/deps/bridging_h1_h1-7446ab2fa14a3a5a)
+
+running 1 test
+test test_bridge_h1_to_h1 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h1_h2.rs (/home/ubuntu/Code/eg-target/debug/deps/bridging_h1_h2-85b8c4bda2cbc52c)
+
+running 1 test
+test test_bridge_h1_to_h2 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h1_h3.rs (/home/ubuntu/Code/eg-target/debug/deps/bridging_h1_h3-4a43f64f82a3c38b)
+
+running 1 test
+test test_bridge_h1_to_h3 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h2_h1.rs (/home/ubuntu/Code/eg-target/debug/deps/bridging_h2_h1-b4e980c3f924f55a)
+
+running 1 test
+test test_bridge_h2_to_h1 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h2_h2.rs (/home/ubuntu/Code/eg-target/debug/deps/bridging_h2_h2-c5fb3f332f5c72c3)
+
+running 1 test
+test test_bridge_h2_to_h2 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h2_h3.rs (/home/ubuntu/Code/eg-target/debug/deps/bridging_h2_h3-f3f47e1beef012c1)
+
+running 1 test
+test test_bridge_h2_to_h3 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h3_h1.rs (/home/ubuntu/Code/eg-target/debug/deps/bridging_h3_h1-19e7d754e47bb4d8)
+
+running 1 test
+test test_bridge_h3_to_h1 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h3_h2.rs (/home/ubuntu/Code/eg-target/debug/deps/bridging_h3_h2-9520ba5ed2ffea84)
+
+running 1 test
+test test_bridge_h3_to_h2 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/bridging_h3_h3.rs (/home/ubuntu/Code/eg-target/debug/deps/bridging_h3_h3-0dc3b06f329caa85)
+
+running 1 test
+test test_bridge_h3_to_h3 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/h2_authority_host_mismatch.rs (/home/ubuntu/Code/eg-target/debug/deps/h2_authority_host_mismatch-c5a080695dd07141)
+
+running 11 tests
+test empty_host_value_rejects ... ok
+test case_insensitive_host_match ... ok
+test ipv6_vs_ipv4_disagreement ... ok
+test missing_authority_is_not_rejected_here ... ok
+test matching_authority_and_host_pass ... ok
+test missing_host_is_not_rejected_here ... ok
+test ipv6_authority_match ... ok
+test port_elision_one_side_accepted ... ok
+test port_mismatch_when_both_explicit_rejected ... ok
+test test_h2_400_on_disagreement ... ok
+test port_match_when_both_explicit ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/h2_connect_protocol_settings.rs (/home/ubuntu/Code/eg-target/debug/deps/h2_connect_protocol_settings-1d61362570514124)
+
+running 2 tests
+test h2_connect_protocol_setting_id_documented ... ok
+test h2_proxy_calls_enable_connect_protocol ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/h2_to_h1_pseudo_strip.rs (/home/ubuntu/Code/eg-target/debug/deps/h2_to_h1_pseudo_strip-8d41947fe2e04728)
+
+running 6 tests
+test h2_to_h1_clean_request_ok ... ok
+test h2_to_h1_te_non_trailers_rejected ... ok
+test h2_to_h1_te_trailers_ok ... ok
+test h2_to_h1_transfer_encoding_rejected ... ok
+test h2_to_h1_connection_header_rejected ... ok
+test h2_to_h1_keep_alive_header_rejected ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/hop_by_hop_set.rs (/home/ubuntu/Code/eg-target/debug/deps/hop_by_hop_set-078ba5c31e02e8ad)
+
+running 3 tests
+test strip_does_not_remove_the_trailers_pseudo_token ... ok
+test strip_removes_connection_listed_extras ... ok
+test strip_removes_exactly_the_rfc_9110_set ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/informational_responses.rs (/home/ubuntu/Code/eg-target/debug/deps/informational_responses-ddf28be39984f5af)
+
+running 5 tests
+test hyper_h1_server_handles_expect_100_continue_internally ... ok
+test test_100_continue_forwarded ... ok
+test test_1xx_from_upstream_passes_through_h1 ... ok
+test test_103_early_hints_forwarded ... ok
+test test_h2_informational ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_authority_enforced.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_authority_enforced-5398b27df74bab86)
+
+running 7 tests
+test h1_valid_authority_passes_validator ... ok
+test h1_comma_in_authority_rejected_before_upstream ... ok
+test h2_comma_in_authority_rejected_before_upstream ... ok
+test h2_valid_authority_passes_validator ... ok
+test test_ws_upgrade_comma_authority_rejected ... ok
+test test_h2_grpc_comma_authority_rejected ... ok
+test test_h2_ext_connect_comma_authority_rejected ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s
+
+     Running tests/round8_body_overread.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_body_overread-8de1715fc2869cef)
+
+running 4 tests
+test http2_pool_send_request_doc_block_present ... ok
+test pooled_tcp_set_reusable_doc_block_present ... ok
+test h2_pool_failed_send_leaves_no_stale_entry ... ok
+test h1_take_and_discard_doc_block_present ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_edge_defaults_table.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_edge_defaults_table-f71a2783231270f9)
+
+running 2 tests
+test h2_security_defaults_match_documented_table ... ok
+test h2_security_thresholds_default_constructs ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_glitches_enforced.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_glitches_enforced-98f5c0f8ee51a9f7)
+
+running 1 test
+test glitches_counter_drains_connection_at_threshold_and_is_observable ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/round8_keepalive_count_cap.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_keepalive_count_cap-082837b33fcc2c33)
+
+running 3 tests
+test h1_nth_response_carries_connection_close ... ok
+test h1_cap_zero_disables ... ok
+test counter_increments_on_cap_close ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s
+
+     Running tests/round8_traceparent_propagation.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_traceparent_propagation-358b984f5375c1a0)
+
+running 1 test
+test request_span_carries_trace_id_and_status ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running tests/round8_underscore_policy.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_underscore_policy-f7c5efe07c74a7ac)
+
+running 6 tests
+test default_policy_is_reject ... ok
+test underscore_byte_scan_predicate_reference_corpus ... ok
+test lb_config_enum_default_matches_lb_l7_enum_default ... ok
+test policy_variants_are_distinct ... ok
+test h1_proxy_source_carries_l7_05_marker ... ok
+test h2_proxy_source_carries_l7_05_marker ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_ws_upgrade_defer.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_ws_upgrade_defer-3098ee21c57fc633)
+
+running 4 tests
+test client_sees_502_when_backend_rejects_ws ... ok
+test upstream_receives_child_traceparent ... ok
+test client_sees_504_on_dial_timeout ... ok
+test no_smuggled_request_forwarded_on_failure ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.50s
+
+     Running tests/round8_xff_iteration.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_xff_iteration-5eb45db563e3afee)
+
+running 5 tests
+test no_xff_header_inserts_peer_only ... ok
+test single_xff_unchanged_format ... ok
+test two_xff_headers_preserved_in_join ... ok
+test three_xff_headers_count_preserved ... ok
+test xff_with_comma_in_existing_value_preserves_inner_commas ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/smuggle_matrix.rs (/home/ubuntu/Code/eg-target/debug/deps/smuggle_matrix-9212e65edb8859a2)
+
+running 13 tests
+test test_default_strict_te ... ok
+test test_duplicate_cl_differing ... ok
+test test_h1_default_accepts_plain_chunked ... ok
+test test_duplicate_cl_identical_accepted ... ok
+test test_h2_downgrade_connection_rejected ... ok
+test test_h2_downgrade_te_chunked_rejected ... ok
+test test_h2_te_non_trailers_rejected ... ok
+test test_h2_te_trailers_accepted ... ok
+test test_pipelined_cl_te ... ok
+test test_strict_rejects_codec_chain_with_chunked_first ... ok
+test test_strict_rejects_empty_codec ... ok
+test test_te_identity_rejected ... ok
+test test_te_non_chunked_final ... ok
+
+test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/smuggle_wired.rs (/home/ubuntu/Code/eg-target/debug/deps/smuggle_wired-f2a4368f44f35d6b)
+
+running 3 tests
+test test_cl_te_rejected ... ok
+test test_te_gzip_chunked_strict_rejected ... ok
+test test_duplicate_cl_differing_values_rejected ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/sni_authority_421.rs (/home/ubuntu/Code/eg-target/debug/deps/sni_authority_421-4e25c365d2e5d4be)
+
+running 2 tests
+test test_421_emitted_on_sni_host_mismatch_over_tls ... ok
+test test_loopback_allows_mismatch ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.00s
+
+     Running tests/sni_authority_mismatch.rs (/home/ubuntu/Code/eg-target/debug/deps/sni_authority_mismatch-dbb0e2a585c262f2)
+
+running 7 tests
+test ipv6_authority_with_brackets ... ok
+test case_insensitive_pass ... ok
+test matching_sni_and_authority_passes ... ok
+test test_421_on_mismatch ... ok
+test missing_sni_does_not_falsely_reject ... ok
+test port_in_authority_ignored ... ok
+test trailing_dot_normalised ... ok
+
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/stripped_request_newtype.rs (/home/ubuntu/Code/eg-target/debug/deps/stripped_request_newtype-a4acf4f5b66ffac2)
+
+running 5 tests
+test cannot_construct_stripped_request_without_strip ... ok
+test idempotent_strip_does_not_panic_or_resurrect_headers ... ok
+test into_inner_round_trips_uri_and_method ... ok
+test repr_transparent_zero_cost ... ok
+test strip_removes_canonical_hop_by_hop_set ... ok
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/trailer_passthrough.rs (/home/ubuntu/Code/eg-target/debug/deps/trailer_passthrough-061f8de8f094f8aa)
+
+running 8 tests
+test every_bridge_forwards_response_trailers ... ok
+test h3_legs_forward_trailers_for_every_pair_involving_h3 ... ok
+test lb_quic_h3_surfaces_carry_trailers ... ok
+test every_bridge_forwards_request_trailers ... ok
+test bridge_request_response_carry_trailers ... ok
+test stream_body_with_trailers_round_trips ... ok
+test test_h3_h1_trailers_emitted_on_wire ... ok
+test test_h2_h1_trailers_emitted_on_wire ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/ubuntu/Code/eg-target/debug/deps/lb_observability-05faeff2346e5070)
+
+running 47 tests
+test label_budget::tests::canonical_label_table_covers_red_families ... ok
+test label_budget::tests::enforced_budget_admits_within_ceiling ... ok
+test label_budget::tests::max_routes_budget_constant_matches_plan ... ok
+test label_budget::tests::enforced_budget_distinguishes_arity_via_separator ... ok
+test label_budget::tests::oversize_config_refuses_to_start ... ok
+test label_budget::tests::realistic_config_fits_within_default_budget ... ok
+test log::tests::format_parser_accepts_canonical_tokens ... ok
+test label_budget::tests::xdp_label_keys_locked_to_action_family_direction_mode ... ok
+test log::tests::default_config_is_json_info ... ok
+test label_budget::tests::enforced_budget_refuses_overflow ... ok
+test passthrough_metrics::tests::register_seeds_all_families_at_zero ... ok
+test passthrough_metrics::tests::register_is_idempotent ... ok
+test probes::tests::body_token_string_is_stable ... ok
+test probes::tests::drain_flips_readiness_but_keeps_liveness ... ok
+test probes::tests::ready_after_drain_is_a_no_op ... ok
+test probes::tests::ready_transition_flips_flags ... ok
+test probes::tests::starts_in_starting_state ... ok
+test prometheus_exposition::tests::empty_registry_renders_empty_string ... ok
+test prometheus_exposition::tests::exposition_text_parses_as_openmetrics_subset ... ok
+test prometheus_exposition::tests::renders_help_and_type_lines ... ok
+test prometheus_exposition::tests::renders_histogram_buckets_and_sum ... ok
+test quic_modeb_metrics::tests::register_is_idempotent ... ok
+test tests::counter_get_or_create_is_idempotent ... ok
+test quic_modeb_metrics::tests::register_seeds_all_families_at_zero ... ok
+test tests::counter_vec_labels_increment_independently ... ok
+test tests::histogram_observe_appears_in_exposition ... ok
+test tests::gather_snapshot_matches_registered_metrics ... ok
+test tests::missing_counter_returns_none ... ok
+test tests::increment_and_read_backcompat ... ok
+test tests::type_mismatch_is_reported ... ok
+test tracing_propagation::tests::extract_and_inject_round_trip ... ok
+test tracing_propagation::tests::otlp_disabled_keeps_sampler_ratio ... ok
+test tracing_propagation::tests::parse_canonical_traceparent ... ok
+test tracing_propagation::tests::rejects_invalid_traceparent_shapes ... ok
+test tracing_propagation::tests::span_name_format_is_locked ... ok
+test xdp_metrics::tests::delta_first_tick_is_zero ... ok
+test xdp_metrics::tests::delta_emits_increments ... ok
+test xdp_metrics::tests::delta_handles_counter_reset ... ok
+test tests::thread_safe_increment ... ok
+test tracing_propagation::tests::roundtrip_encode_decode ... ok
+test tracing_propagation::tests::tracestate_overlong_is_dropped ... ok
+test xdp_metrics::tests::set_attached_mode_one_hot ... ok
+test xdp_metrics::tests::record_conntrack_full_bumps_family ... ok
+test xdp_metrics::tests::apply_packet_deltas_updates_counter ... ok
+test xdp_metrics::tests::register_pre_seeds_all_label_slots ... ok
+test admin_http::tests::bind_and_shutdown ... ok
+test admin_http::tests::test_admin_403_without_token ... ok
+
+test result: ok. 47 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/health_endpoints.rs (/home/ubuntu/Code/eg-target/debug/deps/health_endpoints-c4bf6aef2d26b881)
+
+running 2 tests
+test test_readyz_returns_json_content_type ... ok
+test test_livez_readyz_startupz_states ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/log_format.rs (/home/ubuntu/Code/eg-target/debug/deps/log_format-ae1b6c7e3fb8fe2c)
+
+running 2 tests
+test test_log_format_env_token_round_trips ... ok
+test test_json_log_emits_json ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/metrics_xdp_conntrack.rs (/home/ubuntu/Code/eg-target/debug/deps/metrics_xdp_conntrack-853a04fe9d630209)
+
+running 2 tests
+test test_counter_is_monotonically_increasing ... ok
+test test_counter_reflects_stats_slot ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/metrics_xdp_slots.rs (/home/ubuntu/Code/eg-target/debug/deps/metrics_xdp_slots-76cbc047dfc81831)
+
+running 3 tests
+test all_stat_slots_are_exported_at_zero ... ok
+test label_key_is_action_not_result ... ok
+test deltas_apply_per_slot ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/panic_total.rs (/home/ubuntu/Code/eg-target/debug/deps/panic_total-b2e4485fdbdd12bb)
+
+running 2 tests
+test panic_total_accessor_is_idempotent ... ok
+test panic_total_starts_at_zero_and_is_exposed ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/red_label_budget.rs (/home/ubuntu/Code/eg-target/debug/deps/red_label_budget-db20ea71b0913757)
+
+running 4 tests
+test test_budget_refuses_start_on_overflow ... ok
+test test_canonical_label_table_documents_red_families ... ok
+test test_realistic_budget_passes ... ok
+test test_zero_listeners_is_zero_series ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/tracing_traceparent.rs (/home/ubuntu/Code/eg-target/debug/deps/tracing_traceparent-1ae4e4a269283e71)
+
+running 3 tests
+test test_span_name_convention_documented ... ok
+test test_traceparent_with_child_span_rewrite ... ok
+test test_traceparent_roundtrip ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (/home/ubuntu/Code/eg-target/debug/deps/lb_quic-0e6e4bca75a7e4cf)
+
+running 77 tests
+test h3_bridge::tests::chunk_decoder_decodes_split_chunks ... ok
+test h3_bridge::tests::chunk_decoder_tolerates_chunk_extension ... ok
+test h3_bridge::tests::chunk_decoder_rejects_malformed_framing_c3 ... ok
+test h3_bridge::tests::g5_h3reqabort_display_and_error_impl ... ok
+test h3_bridge::tests::pseudo_12_duplicate_rejected ... ok
+test h3_bridge::tests::pseudo_13_absent_authority_rejected_for_http_scheme ... ok
+test h3_bridge::tests::pseudo_13_missing_mandatory_rejected ... ok
+test h3_bridge::tests::pseudo_14_prohibited_or_unknown_rejected ... ok
+test h3_bridge::tests::pseudo_15_after_regular_field_rejected ... ok
+test h3_bridge::tests::pseudo_connect_request_rules ... ok
+test h3_bridge::tests::pseudo_valid_request_accepted_negative_control ... ok
+test h3_bridge::tests::g5_h2_request_body_from_rx_head_construction_arms ... ok
+test h3_bridge::tests::s12_decoded_sink_on_trailers_emits_h3respevent_trailers ... ok
+test h3_config::tests::client_h3_config_builds_with_static_only_defaults ... ok
+test h3_bridge::tests::s12_decoded_sink_on_head_forwards_full_nonpseudo_set ... ok
+test h3_bridge::tests::s7_j2_request_send_decision ... ok
+test h3_config::tests::server_h3_config_builds_with_static_only_defaults ... ok
+test h3_bridge::tests::g5_h3_to_h2_stream_resp_inline_413_and_502_no_dial ... ok
+test passthrough::tests::audit_allow_one_per_window ... ok
+test h3_bridge::tests::s6_i2_h3_req_stream_body_frame_and_abort_contract ... ok
+test passthrough::tests::flow_entry_audit_compiles ... ok
+test h3_bridge::tests::chunk_decoder_parses_trailer_section_c4 ... ok
+test passthrough::tests::forward_short_multi_length_fallback_hits ... ok
+test passthrough::tests::mint_retry_false_forwards_and_inserts ... ok
+test passthrough::tests::passthrough_params_defaults_match_owner_rulings ... ok
+test passthrough::tests::retry_packet_byte_layout ... ok
+test passthrough::tests::retry_packet_deterministic ... ok
+test passthrough::tests::mint_retry_true_mints_and_does_not_insert ... ok
+test passthrough::tests::retry_secret_loader_edges ... ok
+test public_header::tests::dcid_too_long_rejected ... ok
+test public_header::tests::empty_buffer_is_too_short ... ok
+test public_header::tests::fixed_bit_clear_long_rejected ... ok
+test public_header::tests::fixed_bit_clear_short_rejected ... ok
+test public_header::tests::handshake_parses ... ok
+test public_header::tests::initial_declared_length_overruns ... ok
+test public_header::tests::initial_truncated_in_token_len_varint ... ok
+test public_header::tests::retry_classified_no_length ... ok
+test public_header::tests::rfc9001_a2_initial_parses ... ok
+test public_header::tests::scid_too_long_rejected ... ok
+test public_header::tests::short_header_positive ... ok
+test public_header::tests::short_header_too_short_for_dcid ... ok
+test public_header::tests::short_header_zero_len_rejected ... ok
+test public_header::tests::varint_eight_byte ... ok
+test public_header::tests::varint_four_byte ... ok
+test public_header::tests::varint_incomplete ... ok
+test public_header::tests::varint_one_byte ... ok
+test public_header::tests::varint_two_byte ... ok
+test public_header::tests::version_negotiation_overrides_type_bits ... ok
+test raw_proxy::tests::admit_or_refuse_keeps_tracked_refuses_new_at_cap ... ok
+test raw_proxy::tests::dgram_queue_cap_constant_is_documented_default ... ok
+test raw_proxy::tests::dgram_queue_drop_newest_negative_control ... ok
+test raw_proxy::tests::dgram_queue_preserves_binary_and_zero_length_verbatim ... ok
+test raw_proxy::tests::dgram_queue_preserves_fifo_order ... ok
+test passthrough::tests::idle_sweep_reclaims_idle_flows_and_frees_them ... ok
+test passthrough::tests::pick_backend_is_deterministic ... ok
+test raw_proxy::tests::max_relay_streams_constant_is_documented_default ... ok
+test passthrough::tests::evict_oldest_at_cap_and_negative_control ... ok
+test passthrough::tests::token_verify_reject_then_accept ... ok
+test passthrough::tests::idle_sweeper_task_reaps_periodically_and_stops_on_shutdown ... ok
+test passthrough::tests::forward_short_via_strict_source_table ... ok
+test passthrough::tests::min_client_dcid_len_floor_table ... ok
+test raw_proxy::tests::pump_dgram_dir_buffer_too_short_drops_one_continues ... ok
+test terminate_loopback::tests::datagram_empty_rejected ... ok
+test terminate_loopback::tests::datagram_forward_ok ... ok
+test terminate_loopback::tests::stream_empty_rejected ... ok
+test terminate_loopback::tests::stream_forward_ok ... ok
+test udp_dataplane::tests::iouring_returns_unavailable_in_v1 ... ok
+test router::tests::router_drops_initial_when_cap_reached ... ok
+test udp_dataplane::tests::tokio_udp_select_auto_binds ... ok
+test udp_dataplane::tests::xdp_returns_unavailable_in_v1 ... ok
+test raw_proxy::tests::pump_dgram_dir_invalid_state_drains_and_disables ... ok
+test udp_dataplane::tests::tokio_udp_roundtrip_via_trait ... ok
+test raw_proxy::tests::fin_only_delivered_when_stream_credit_available ... ok
+test raw_proxy::tests::post_fin_short_write_reread_does_not_drop_tail ... ok
+test raw_proxy::tests::fin_only_stream_limit_does_not_drop_fin ... ok
+test raw_proxy::tests::relay_table_clamped_to_max_relay_streams_under_flood ... ok
+test router::tests::router_drops_flood_of_distinct_initials_at_cap ... ok
+
+test result: ok. 77 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.83s
+
+     Running tests/h3_graceful_close.rs (/home/ubuntu/Code/eg-target/debug/deps/h3_graceful_close-f4e5d35a0e57b553)
+
+running 1 test
+test test_h3_connection_close_emitted_on_cancel ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+     Running tests/h3_h1_bridge_e2e.rs (/home/ubuntu/Code/eg-target/debug/deps/h3_h1_bridge_e2e-0c3f27d4fc9a9999)
+
+running 1 test
+test h3_h1_bridge_status_body_and_host_verbatim_through_quic_listener ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running tests/h3_h1_resp_stream_e2e.rs (/home/ubuntu/Code/eg-target/debug/deps/h3_h1_resp_stream_e2e-a4a91b84b2d02139)
+
+running 17 tests
+test c5_resp_retained_ceiling_is_sound_and_much_less_than_1mib ... ok
+test c3_unit_supplement_documents_coverage ... ok
+test fixture_r4_empty_body ... ok
+test fixture_r7_chunked_split_reassembles ... ok
+test fixture_r1_binary_body_is_large_and_non_utf8_marked ... ok
+test cf_h3_head_h3_to_h1_full_response_headers_round_trip ... ok
+test r4_empty_response_body_clean_fin ... ok
+test r1_multi_data_binary_response_byte_identical ... ok
+test r7_chunked_upstream_response_byte_identical ... ok
+test c3_malformed_chunked_responses_reset_never_forward_truncated ... ok
+test c2_clientgone_drops_pooled_upstream ... ok
+test r8_chunked_response_trailers_delivered_to_h3_client ... ok
+test r6_client_cancel_midresponse_stops_upstream_read ... ok
+test r2_response_memory_bounded_through_stalled_client ... ok
+test r3_slow_client_backpressures_upstream_read ... ok
+test r5_upstream_reset_midresponse_yields_reset_stream ... ok
+test c2_every_abort_variant_drops_pooled_upstream_and_resets ... ok
+
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 13.31s
+
+     Running tests/h3_h1_stream_body_e2e.rs (/home/ubuntu/Code/eg-target/debug/deps/h3_h1_stream_body_e2e-7d4f2699317a7d0e)
+
+running 4 tests
+test t2_empty_body_is_byte_identical_to_s1_bodyless_head ... ok
+test t3_zero_length_data_frame_then_fin_no_spurious_chunk ... ok
+test t1_multi_data_frame_binary_body_forwarded_byte_identical ... ok
+test t5_single_large_data_frame_is_memory_bounded_through_stalled_upstream ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 7.00s
+
+     Running tests/h3_h1_stream_body_errors_e2e.rs (/home/ubuntu/Code/eg-target/debug/deps/h3_h1_stream_body_errors_e2e-d99532273bbd3e91)
+
+running 2 tests
+test p1b_t2_upstream_resets_mid_body_yields_502 ... ok
+test p1b_t1_client_cancels_mid_body_upstream_not_completed_and_no_leak ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.80s
+
+     Running tests/h3_h1_trailers_resp_e2e.rs (/home/ubuntu/Code/eg-target/debug/deps/h3_h1_trailers_resp_e2e-f79df4f76c8d2002)
+
+running 2 tests
+test pc2_large_binary_response_body_reassembled_byte_identical ... ok
+test pc1_request_with_trailing_field_section_completes_and_drops_trailers ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running tests/h3_h2_stream_e2e.rs (/home/ubuntu/Code/eg-target/debug/deps/h3_h2_stream_e2e-8d21832f9966b83d)
+
+running 11 tests
+test g5_stream_h2_response_client_gone_on_closed_channel ... ok
+test g5_stream_h2_response_forwards_trailers ... ok
+test g5_stream_h2_response_over_cap_arms_reset ... ok
+test h2_e2e_get_response_byte_identical ... ok
+test cf_h3_head_h3_to_h2_full_response_headers_round_trip ... ok
+test h2_e2e_upstream_reset_midbody_resets_client_no_fin ... ok
+test h2_e2e_request_body_byte_identical_at_backend ... ok
+test h2_e2e_client_reset_midrequest_rsts_h2_upstream_no_truncated_request ... ok
+test h2_e2e_response_memory_bounded_through_stalled_client ... ok
+test h2_e2e_backpressure_stalled_client_pauses_h2_upstream_read ... ok
+test h2_e2e_request_memory_bounded_through_stalled_backend ... ok
+
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.94s
+
+     Running tests/h3_h3_stream_e2e.rs (/home/ubuntu/Code/eg-target/debug/deps/h3_h3_stream_e2e-2ac89c9f935595b0)
+
+running 26 tests
+test h3h3_e2e_data_before_headers_closes_h3_frame_unexpected ... ok
+test h3h3_e2e_absent_authority_rejected_message_error ... ok
+test h3h3_e2e_content_length_truncation_resets_no_clean_complete ... ok
+test h3h3_e2e_empty_data_frame_skipped_then_body ... ok
+test h3h3_e2e_full_response_headers_round_trip ... ok
+test h3h3_e2e_invalid_qpack_static_index_closes_decompression_failed ... ok
+test h3h3_e2e_get_response_byte_identical ... ok
+test h3h3_e2e_no_cl_truncated_data_delivered_quiche_028_frame_completeness_gap ... ok
+test h3h3_e2e_oversized_headers_block_rejected ... ok
+test h3h3_e2e_oversized_unknown_frame_rejected ... ok
+test h3h3_e2e_client_reset_midrequest_rsts_upstream_no_truncated_request ... ok
+test h3h3_e2e_response_pseudo_header_trailer_rejected ... ok
+test h3h3_e2e_response_trailers_forwarded ... ok
+test h3h3_e2e_unknown_response_frame_skipped_transparently ... ok
+test h3h3_e2e_upstream_reset_midbody_resets_client_no_fin ... ok
+test h3h3_e2e_request_body_byte_identical_at_backend ... ok
+test h3h3_e2e_response_memory_bounded_through_stalled_client ... ok
+test h3h3_e2e_pool_acquire_failure_returns_502 ... ok
+test h3h3_e2e_upstream_stop_sending_mid_request_data_aborts_no_fin ... ok
+test h3h3_e2e_client_stop_sending_response_maps_client_gone ... ok
+test h3h3_e2e_backpressure_stalled_client_pauses_upstream_read ... ok
+test h3h3_e2e_request_memory_bounded_through_stalled_backend ... ok
+test h3h3_e2e_upstream_stop_sending_at_request_fin_aborts_no_fin ... ok
+test h3h3_e2e_upstream_stop_sending_immediately_aborts_no_fin ... ok
+test h3h3_e2e_upstream_reset_midresponse_burst_current_thread ... ok
+test h3h3_e2e_client_reset_midrequest_burst_current_thread has been running for over 60 seconds
+test h3h3_e2e_client_reset_midrequest_burst_current_thread ... ok
+
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 64.42s
+
+     Running tests/listener_lifecycle.rs (/home/ubuntu/Code/eg-target/debug/deps/listener_lifecycle-4102c2012ea0c747)
+
+running 6 tests
+test udp_bind_and_local_addr_observable ... ok
+test shutdown_cancels_join_cleanly ... ok
+test retry_secret_autogenerated_0600_then_reloaded ... ok
+test alpn_h3_29_legacy_accepted_handshake_established ... ok
+test alpn_h3_accepted_handshake_established ... ok
+test alpn_unknown_rejected_handshake_fails ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.04s
+
+     Running tests/passthrough_retry_differential.rs (/home/ubuntu/Code/eg-target/debug/deps/passthrough_retry_differential-3d99ebbf06fdbeee)
+
+running 2 tests
+test quiche_retry_byte_equality_smoke ... ok
+test quiche_retry_byte_equality ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s
+
+     Running tests/proptest_header.rs (/home/ubuntu/Code/eg-target/debug/deps/proptest_header-f02938fd36b9b6d9)
+
+running 1 test
+test header_from_slice_no_panic ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+
+     Running tests/public_header_differential.rs (/home/ubuntu/Code/eg-target/debug/deps/public_header_differential-bf79406d6fbd7dd2)
+
+running 3 tests
+test ours_never_panics ... ok
+test initial_diff_matches_quiche ... ok
+test initial_length_within_packet_bounds ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 16.94s
+
+     Running tests/quic_router_leak.rs (/home/ubuntu/Code/eg-target/debug/deps/quic_router_leak-ea34e3211ffefec9)
+
+running 3 tests
+test clean_exit_also_removes_entries ... ok
+test cancel_drops_entries ... ok
+test test_panicking_actor_removes_entry ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/round8_h3_authority_enforced.rs (/home/ubuntu/Code/eg-target/debug/deps/round8_h3_authority_enforced-99cecc8e89b409fd)
+
+running 3 tests
+test h3_whitespace_in_authority_rejected_before_upstream ... ok
+test h3_comma_in_authority_rejected_before_upstream ... ok
+test h3_valid_authority_passes_validator ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s
+
+     Running tests/router_accept_path.rs (/home/ubuntu/Code/eg-target/debug/deps/router_accept_path-64c44b892fc3e37e)
+
+running 3 tests
+test zero_rtt_replay_guard_rejects_second_use_on_shared_instance ... ok
+test retry_token_round_trip_through_router ... ok
+test two_concurrent_clients_distinct_actors ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s
+
+     Running tests/s16_b1_two_connections.rs (/home/ubuntu/Code/eg-target/debug/deps/s16_b1_two_connections-40ac70fbc2923068)
+
+running 1 test
+test s16_b1_two_distinct_connections_not_a_bridge ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.89s
+
+     Running tests/s16_b2_backpressure.rs (/home/ubuntu/Code/eg-target/debug/deps/s16_b2_backpressure-6b44986d1be3bf8a)
+
+running 1 test
+test s16_b2_backpressure_client_throttled_then_complete_on_resume ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.87s
+
+     Running tests/s16_b2_multistream.rs (/home/ubuntu/Code/eg-target/debug/deps/s16_b2_multistream-3d3c8940646807b0)
+
+running 1 test
+test s16_b2_multistream_byte_identical_round_trip ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.59s
+
+     Running tests/s16_b2_reset_not_fin.rs (/home/ubuntu/Code/eg-target/debug/deps/s16_b2_reset_not_fin-b5906b869e66f798)
+
+running 1 test
+test s16_b2_client_reset_does_not_become_clean_fin_upstream ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.32s
+
+     Running tests/s16_b2_stream_relay_smoke.rs (/home/ubuntu/Code/eg-target/debug/deps/s16_b2_stream_relay_smoke-62f67330ee3c1ae9)
+
+running 4 tests
+test s21_eight_concurrent_bidi_streams_all_echo ... ok
+test s21_four_concurrent_bidi_streams_all_echo ... ok
+test s16_b2_one_bidi_stream_round_trips_byte_identical ... ok
+test s21_singleshot_send_wedges_a_stream_negative_control ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.20s
+
+     Running tests/s16_b3_reset_propagation_smoke.rs (/home/ubuntu/Code/eg-target/debug/deps/s16_b3_reset_propagation_smoke-cc4a24eb45df16cd)
+
+running 1 test
+test s16_b3_client_reset_propagates_with_code_to_backend ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.36s
+
+     Running tests/s16_b3_reset_propagation_verify.rs (/home/ubuntu/Code/eg-target/debug/deps/s16_b3_reset_propagation_verify-fac80a6dc0159478)
+
+running 4 tests
+test reverse_backend_reset_propagates_with_code_to_client ... ok
+test discriminator_clean_fin_is_observable_on_happy_path ... ok
+test client_stop_sending_propagates_to_backend ... ok
+test forward_client_reset_propagates_with_code_conn_stays_up ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.42s
+
+     Running tests/s16_raw_proxy_smoke.rs (/home/ubuntu/Code/eg-target/debug/deps/s16_raw_proxy_smoke-2205c3eeae0e1176)
+
+running 2 tests
+test raw_backend_is_constructible_and_clone ... ok
+test dial_dedicated_reaches_established_with_mirrored_alpn ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.04s
+
+     Running tests/s19_b4_datagram_relay_smoke.rs (/home/ubuntu/Code/eg-target/debug/deps/s19_b4_datagram_relay_smoke-cd4307f4fd210229)
+
+running 1 test
+test s19_b4_datagrams_round_trip_byte_identical ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+
+     Running tests/s19_b4_datagram_verify.rs (/home/ubuntu/Code/eg-target/debug/deps/s19_b4_datagram_verify-3d3ac40f4a57d3ef)
+
+running 3 tests
+test verify_b4_pass_through_both_directions_binary ... ok
+test verify_b4_queue_bound_under_flood_stays_healthy ... ok
+test verify_b4_drop_newest_oldest_survive_when_drained ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.48s
+
+     Running tests/s19_b5_stream_flood.rs (/home/ubuntu/Code/eg-target/debug/deps/s19_b5_stream_flood-7f5031acb096a3df)
+
+running 1 test
+test s19_b5_stream_flood_bounded_table_completes_all ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.31s
+
+     Running tests/s19_b5_verify.rs (/home/ubuntu/Code/eg-target/debug/deps/s19_b5_verify-e3b44be909ade1dc)
+
+running 1 test
+test s19_b5_verify_eviction_bounds_table_across_total_streams ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.39s
+
+     Running tests/s19_b6_metrics_nonvacuous.rs (/home/ubuntu/Code/eg-target/debug/deps/s19_b6_metrics_nonvacuous-9cea7c1f76cbc2b2)
+
+running 3 tests
+test connections_total_increments_and_gauge_returns_to_zero ... ok
+test datagrams_dropped_total_increments_under_flood ... ok
+test streams_active_set_nonzero_during_multistream_transfer ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 12.13s
+
+     Running tests/s19_b6_two_connections.rs (/home/ubuntu/Code/eg-target/debug/deps/s19_b6_two_connections-c5e16ffbab776117)
+
+running 1 test
+test s19_b6_mode_b_holds_two_distinct_connections_not_a_bridge ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.90s
+
+     Running tests/s19_b6_zero_rtt_rejection.rs (/home/ubuntu/Code/eg-target/debug/deps/s19_b6_zero_rtt_rejection-cda2cfe22177ad05)
+
+running 1 test
+test s19_b6_lb_server_rejects_client_zero_rtt_early_data ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.25s
+
+     Running unittests src/lib.rs (/home/ubuntu/Code/eg-target/debug/deps/lb_security-eee188dab067b39c)
+
+running 84 tests
+test admin_auth::tests::from_hex_non_hex_rejected ... ok
+test admin_auth::tests::debug_does_not_print_digest_bytes ... ok
+test admin_auth::tests::from_hex_round_trips_with_plaintext_hash ... ok
+test admin_auth::tests::bearer_prefix_case_insensitive ... ok
+test admin_auth::tests::correct_token_accepted ... ok
+test admin_auth::tests::from_hex_wrong_length_rejected ... ok
+test admin_auth::tests::loopback_v6_always_ok ... ok
+test admin_auth::tests::missing_header_rejected ... ok
+test admin_auth::tests::non_bearer_rejected ... ok
+test admin_auth::tests::loopback_v4_always_ok ... ok
+test admin_auth::tests::no_token_configured_allows_all ... ok
+test admin_auth::tests::public_bind_override_with_token_ok ... ok
+test admin_auth::tests::public_bind_override_without_token_rejected ... ok
+test admin_auth::tests::public_bind_without_override_rejected ... ok
+test admin_auth::tests::wrong_token_rejected ... ok
+test glitches::tests::counter_resets_after_window ... ok
+test glitches::tests::crossing_threshold_drains ... ok
+test glitches::tests::defaults_match_haproxy_3_0 ... ok
+test glitches::tests::glitches_score_aggregates_across_detectors ... ok
+test glitches::tests::under_threshold_allows ... ok
+test glitches::tests::weights_match_haproxy_table ... ok
+test hooks::tests::admit_connection_over_cap_rejected ... ok
+test hooks::tests::admit_connection_returns_permit ... ok
+test hooks::tests::inspect_request_clean_h1_ok ... ok
+test hooks::tests::inspect_request_cl_te_rejected ... ok
+test hooks::tests::inspect_request_h2_downgrade_connection_rejected ... ok
+test key::tests_unix::missing_file_returns_io_error ... ok
+test key::tests_unix::mode_0600_passes_lax ... ok
+test key::tests_unix::mode_0600_passes_strict ... ok
+test key::tests_unix::mode_0640_group_read_only_still_advises ... ok
+test key::tests_unix::mode_0644_errors_in_strict ... ok
+test key::tests_unix::mode_0644_advises_in_lax ... ok
+test hooks::tests::inspect_request_strict_te_rejected_only_under_strict ... ok
+test key::tests_unix::mode_0700_passes ... ok
+test handshake::tests::timeout_fires_on_silent_stream ... ok
+test retry::tests::mint_then_verify_roundtrip ... ok
+test retry::tests::verify_rejects_tampered_token ... ok
+test retry::tests::verify_rejects_expired_token ... ok
+test retry::tests::verify_rejects_wrong_peer ... ok
+test tests::slow_post_above_threshold_windowed ... ok
+test tests::slow_post_below_threshold_windowed ... ok
+test tests::slow_post_timeout_exceeded ... ok
+test tests::slowloris_rate_above_min_windowed ... ok
+test tests::slowloris_rate_below_min_windowed ... ok
+test tests::slowloris_timeout_exceeded ... ok
+test tests::slowloris_window_too_short_skipped ... ok
+test tests::slowloris_within_timeout ... ok
+test tests::smuggle_check_all_clean_headers_ok ... ok
+test tests::smuggle_cl_only_ok ... ok
+test tests::smuggle_cl_te_both_present_rejected ... ok
+test tests::smuggle_duplicate_cl_differing_values_rejected ... ok
+test tests::smuggle_duplicate_cl_same_values_ok ... ok
+test tests::smuggle_h2_downgrade_connection_header_rejected ... ok
+test tests::smuggle_h2_downgrade_not_h2_ok ... ok
+test tests::smuggle_h2_downgrade_te_non_trailers_rejected ... ok
+test tests::smuggle_h2_downgrade_te_trailers_case_insensitive_ok ... ok
+test tests::smuggle_h2_downgrade_te_trailers_ok ... ok
+test tests::smuggle_single_cl_ok ... ok
+test tests::smuggle_te_cl_chunked_final_ok ... ok
+test tests::smuggle_te_cl_non_chunked_final_rejected ... ok
+test tests::zero_rtt_check_0rtt_token_detects_replay ... ok
+test tests::zero_rtt_eviction_on_capacity ... ok
+test tests::zero_rtt_different_tokens_ok ... ok
+test tests::zero_rtt_hash_based_dedup ... ok
+test tests::zero_rtt_replay_detected ... ok
+test ticket::tests::new_tickets_use_current_key ... ok
+test ticket::tests::overlap_preserves_previous_for_decrypt ... ok
+test ticket::tests::previous_expires_after_overlap ... ok
+test ticket::tests::rotate_if_due_noop_before_interval ... ok
+test ticket::tests::rotate_if_due_swaps_keys_at_interval ... ok
+test ticket::tests::build_server_config_round_trip_encrypts_and_decrypts_with_current_key ... ok
+test ticket::tests::tls_bundle_load_from_paths_missing_cert_io_error ... ok
+test ticket::tests::tls_bundle_load_from_paths_empty_cert_rejected ... ok
+test ticket::tests::reload_tls_bundle_invalid_keeps_old_live ... ok
+test watchdog::tests::max_registered_enforced ... ok
+test ticket::tests::tls_bundle_load_from_paths_alpn_advertised ... ok
+test watchdog::tests::register_progress_deregister_roundtrip ... ok
+test ticket::tests::tls_bundle_load_from_paths_round_trip ... ok
+test watchdog::tests::unknown_id_errs ... ok
+test ticket::tests::tls_bundle_mismatched_key_rejected ... ok
+test ticket::tests::reload_tls_bundle_succeeds_swaps_under_readers ... ok
+test handshake::tests::zero_budget_promoted_to_one_ms ... ok
+test watchdog::tests::deadline_evicts_via_progress ... ok
+test watchdog::tests::sweep_evicts_stalled_connections ... ok
+
+test result: ok. 84 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+
+     Running tests/conn_gate.rs (/home/ubuntu/Code/eg-target/debug/deps/conn_gate-6f270845e8bc7847)
+
+running 10 tests
+test cap_accessors_return_config ... ok
+test per_ip_entry_gcs_when_count_drops_to_zero ... ok
+test per_ip_cap_independent_across_ips ... ok
+test per_ip_full_does_not_consume_listener_slot ... ok
+test test_listener_cap_enforced ... ok
+test test_listener_cap_releases_on_drop ... ok
+test trusted_cidrs_do_not_currently_exempt ... ok
+test test_per_ip_cap_drops_on_drop ... ok
+test trusted_cidrs_field_round_trips ... ok
+test concurrent_admits_observe_cap ... ok
+
+test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/hooks_impl.rs (/home/ubuntu/Code/eg-target/debug/deps/hooks_impl-bb6e0b77d0dbc22e)
+
+running 8 tests
+test admit_per_ip_full_rolls_back_listener_count ... ok
+test admit_returns_permit_and_drop_releases ... ok
+test admit_listener_full_rejected_with_overcap ... ok
+test clean_request_passes_inspect ... ok
+test smuggle_h2_downgrade_connection_header_rejected ... ok
+test smuggle_cl_te_is_rejected_as_smuggle ... ok
+test smuggle_duplicate_cl_differing_is_rejected ... ok
+test smuggle_strict_te_gzip_chunked_rejected_only_under_strict ... ok
+
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/slowloris_watchdog.rs (/home/ubuntu/Code/eg-target/debug/deps/slowloris_watchdog-56ce76b7a6a57caf)
+
+running 6 tests
+test deregister_returns_existence ... ok
+test max_registered_caps_the_table ... ok
+test sweep_expired_evicts_stalled ... ok
+test deadline_evicts ... ok
+test test_slow_progress_fires_eviction ... ok
+test fast_progress_passes ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.12s
+
+     Running tests/smuggle_strict_te.rs (/home/ubuntu/Code/eg-target/debug/deps/smuggle_strict_te-2ab3497b1fe48e82)
+
+running 16 tests
+test check_all_mode_h2_te_trailers_ok ... ok
+test check_all_mode_h2_runs_downgrade_check ... ok
+test check_all_mode_lenient_accepts_gzip_chunked ... ok
+test check_all_mode_strict_still_catches_cl_te ... ok
+test strict_te_chunked_alone_ok ... ok
+test strict_te_chunked_alone_case_insensitive_ok ... ok
+test strict_te_chunked_gzip_rejected ... ok
+test strict_te_gzip_chunked_rejected ... ok
+test strict_te_deflate_rejected ... ok
+test strict_te_internal_whitespace_normalised ... ok
+test strict_te_leading_empty_codec_rejected ... ok
+test strict_te_identity_rejected ... ok
+test check_all_mode_strict_rejects_gzip_chunked ... ok
+test strict_te_multiple_te_headers_each_checked ... ok
+test strict_te_trailing_empty_codec_rejected ... ok
+test strict_te_no_te_header_ok ... ok
+
+test result: ok. 16 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/timeout_accept.rs (/home/ubuntu/Code/eg-target/debug/deps/timeout_accept-8189ec6067869f4d)
+
+running 3 tests
+test very_short_budget_still_returns_timeout ... ok
+test timeout_uses_default_budget_constant ... ok
+test test_slow_handshake_times_out ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/tls_versions.rs (/home/ubuntu/Code/eg-target/debug/deps/tls_versions-74278d16fd87300f)
+
+running 3 tests
+test default_config_lists_tls12_and_tls13 ... ok
+test tls13_only_config_builds_without_tls12 ... ok
+test test_tls13_only_rejects_tls12 ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/zero_rtt_replay_window.rs (/home/ubuntu/Code/eg-target/debug/deps/zero_rtt_replay_window-cb894aba3e0915f8)
+
+running 9 tests
+test default_window_size_constant_is_65k ... ok
+test capacity_one_still_detects_replay_of_last_token ... ok
+test replay_hit_promotes_to_mru ... ok
+test capacity_zero_coerced_to_one ... ok
+test test_lru_evicts_oldest ... ok
+test replay_detected_within_window ... ok
+test with_default_window_sizes_correctly ... ok
+test fills_and_evicts_under_unique_token_spray ... ok
+test arena_reuses_freed_slots ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+     Running unittests src/lib.rs (/home/ubuntu/Code/eg-target/debug/deps/lb_soak-53f0a6948aefeca4)
+
+running 45 tests
+test backends::tests::drop_sampler_respects_zero_and_full ... ok
+test backends::tests::slow_and_stop_knobs ... ok
+test config_gen::tests::h1_front_toml_shape ... ok
+test config_gen::tests::passthrough_mode_a_is_listener_free ... ok
+test config_gen::tests::h1_front_h2_backend_marks_backend_proto ... ok
+test gateway::tests::ephemeral_ports_are_distinct_enough ... ok
+test gateway::tests::find_binary_reports_helpfully_when_absent ... ok
+test loadgen::tests::body_sizes_cycle ... ok
+test config_gen::tests::quic_h3_terminate_has_quic_listener_no_raw_proxy_no_backend ... ok
+test config_gen::tests::certs_generate_and_key_is_0600 ... ok
+test config_gen::tests::quic_mode_b_has_raw_proxy_and_backend_ca ... ok
+test backends::tests::h1_backend_serves_200 ... ok
+test loadgen::tests::load_stats_count ... ok
+test metrics::tests::absent_name_is_none_not_zero ... ok
+test metrics::tests::comments_and_blanks_skipped ... ok
+test metrics::tests::float_values_parse ... ok
+test metrics::tests::labels_are_captured ... ok
+test metrics::tests::malformed_value_line_skipped_not_fatal ... ok
+test metrics::tests::parses_unlabelled_gauge ... ok
+test metrics::tests::sums_labelled_series ... ok
+test metrics::tests::value_with_trailing_timestamp ... ok
+test procstat::tests::gone_pid_returns_none ... ok
+test procstat::tests::malformed_lines_are_skipped ... ok
+test procstat::tests::parses_status_fields ... ok
+test procstat::tests::missing_fields_stay_zero ... ok
+test procstat::tests::samples_own_process ... ok
+test sampler::tests::http_get_against_dead_port_errors ... ok
+test sampler::tests::scrape_dead_port_is_empty_set ... ok
+test timeseries::tests::counter_accelerating_is_drift ... ok
+test sampler::tests::http_get_parses_status_and_body ... ok
+test timeseries::tests::csv_roundtrip_shape ... ok
+test timeseries::tests::flat_series_is_bounded ... ok
+test timeseries::tests::counter_constant_rate_is_bounded ... ok
+test timeseries::tests::panic_counter_nonzero_is_drift ... ok
+test timeseries::tests::linear_climb_is_drift ... ok
+test timeseries::tests::panic_counter_zero_is_bounded ... ok
+test timeseries::tests::push_fills_missing_columns_with_nan ... ok
+test timeseries::tests::sawtooth_around_constant_is_bounded ... ok
+test timeseries::tests::too_few_samples_inconclusive ... ok
+test timeseries::tests::warmup_spike_then_flat_is_bounded ... ok
+test chaos::tests::conn_flood_stops_on_cancel ... ok
+test loadgen::tests::h3_one_request_accepts_real_400_roundtrip ... ok
+test loadgen::tests::h3_one_request_rejects_wrong_status_on_bad_authority ... ok
+test loadgen::tests::quic_session_full_send_multistream_echoes ... ok
+test loadgen::tests::h3_one_request_valid_authority_silent_drop_is_bounded ... ok
+
+test result: ok. 45 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s
+
+     Running unittests src/bin/eg-soak.rs (/home/ubuntu/Code/eg-target/debug/deps/eg_soak-357f1e1ed6af75a6)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_balancer
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_config
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_controlplane
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_cp_client
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_grpc
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_h1
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_h2
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_h3_testcodec
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_health
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_io
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_l4_xdp
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_l7
+
+running 2 tests
+test crates/lb-l7/src/stripped_request.rs - stripped_request::strip_for_test (line 103) - compile fail ... ok
+test crates/lb-l7/src/stripped_request.rs - stripped_request::strip_for_test (line 116) - compile fail ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+   Doc-tests lb_observability
+
+running 2 tests
+test crates/lb-observability/src/label_budget.rs - label_budget (line 8) ... ignored
+test crates/lb-observability/src/tracing_propagation.rs - tracing_propagation::span_name (line 257) ... ok
+
+test result: ok. 1 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_quic
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_security
+
+running 3 tests
+test crates/lb-security/src/admin_auth.rs - admin_auth (line 8) ... ignored
+test crates/lb-security/src/hooks.rs - hooks (line 13) ... ignored
+test crates/lb-security/src/watchdog.rs - watchdog (line 12) ... ignored
+
+test result: ok. 0 passed; 0 failed; 3 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests lb_soak
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

@@ -1,9 +1,9 @@
 //! QPACK bomb integration test.
 //!
-//! Exercises the `QpackBombDetector` from `lb-h3` to verify that excessive
-//! decompression ratios are detected and rejected.
+//! Exercises the `QpackBombDetector` from `lb-h3-testcodec` to verify that
+//! excessive decompression ratios are detected and rejected.
 
-use lb_h3::QpackBombDetector;
+use lb_h3_testcodec::QpackBombDetector;
 
 #[test]
 fn test_qpack_bomb_detection() {

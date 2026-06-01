@@ -51,7 +51,31 @@ use lb_quic::{QuicListener, QuicListenerParams};
 use tokio::net::{TcpListener, UdpSocket};
 use tokio_util::sync::CancellationToken;
 
-use lb_h3::{H3Frame, QpackDecoder, QpackEncoder, decode_frame, encode_frame};
+use lb_h3_testcodec::{H3Frame, QpackEncoder, decode_frame, encode_frame};
+
+/// SESSION 24 / INC-3: decode a RESPONSE QPACK field block emitted by the
+/// migrated wire egress. The gateway now terminates H3 via
+/// `quiche::h3::Connection`, whose QPACK encoder Huffman-encodes field
+/// values; the hand-rolled `lb_h3_testcodec::QpackDecoder` is raw-only and would
+/// mis-read the Huffman bytes ("non-utf8 qpack name"). Same client-decode
+/// adaptation as the lb-quic wire-test clients (the gateway is conformant;
+/// only the test client must speak the conformant encoding).
+#[allow(dead_code)]
+fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, String> {
+    use quiche::h3::NameValue;
+    let hdrs = quiche::h3::qpack::Decoder::new()
+        .decode(header_block, u64::MAX)
+        .map_err(|e| format!("qpack decode: {e:?}"))?;
+    Ok(hdrs
+        .iter()
+        .map(|h| {
+            (
+                String::from_utf8_lossy(h.name()).into_owned(),
+                String::from_utf8_lossy(h.value()).into_owned(),
+            )
+        })
+        .collect())
+}
 
 const TEST_SNI: &str = "expressgateway.test";
 /// Production gateway ALPN advertised by `QuicListener` after
@@ -291,7 +315,27 @@ async fn spawn_h3_static_backend(
                         }
                     }
                 }
-                if let Ok((H3Frame::Headers { .. }, _)) = decode_frame(&rx_tail, 1 << 20) {
+                // RFC 9114 §9 + §7.2.8: skip any leading GREASE / unknown /
+                // non-HEADERS frame and respond once a HEADERS frame is seen.
+                // (The migrated quiche::h3 client correctly prepends a GREASE
+                // frame on the request stream — `0x1f*N + 0x21` — which this
+                // minimal backend must tolerate per the "ignore unknown frames"
+                // rule, exactly as a conformant H3 server does.)
+                let mut scan = 0usize;
+                let mut saw_req_headers = false;
+                while let Ok((frame, consumed)) =
+                    decode_frame(rx_tail.get(scan..).unwrap_or(&[]), 1 << 20)
+                {
+                    if consumed == 0 {
+                        break;
+                    }
+                    if matches!(frame, H3Frame::Headers { .. }) {
+                        saw_req_headers = true;
+                        break;
+                    }
+                    scan += consumed;
+                }
+                if saw_req_headers {
                     let encoder = QpackEncoder::new();
                     let resp_headers: Vec<(String, String)> = vec![
                         (":status".to_string(), "200".to_string()),
@@ -743,8 +787,7 @@ async fn proxy_h3_listener_h2_backend() {
                 match decode_frame(&rx_tail, 1 << 20) {
                     Ok((H3Frame::Headers { header_block }, consumed)) => {
                         rx_tail.drain(..consumed);
-                        let dec = QpackDecoder::new();
-                        let hdrs = dec.decode(&header_block).unwrap();
+                        let hdrs = decode_resp_qpack(&header_block).unwrap();
                         for (n, v) in hdrs {
                             if n == ":status" {
                                 decoded_status = v.parse::<u16>().ok();
@@ -760,7 +803,7 @@ async fn proxy_h3_listener_h2_backend() {
                     Ok((_other, consumed)) => {
                         rx_tail.drain(..consumed);
                     }
-                    Err(lb_h3::H3Error::Incomplete) => break,
+                    Err(lb_h3_testcodec::H3Error::Incomplete) => break,
                     Err(_) => break,
                 }
             }

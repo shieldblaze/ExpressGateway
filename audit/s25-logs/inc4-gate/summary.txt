@@ -1,0 +1,3 @@
+INC4_GATE aggregate_ok=531/0
+test result: FAILED. 3 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 30.10s
+error: test failed, to rerun pass `-p lb-integration-tests --test proto_translation_e2e`

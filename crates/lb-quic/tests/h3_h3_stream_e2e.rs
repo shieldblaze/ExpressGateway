@@ -4,7 +4,7 @@
 //! → `router` → `conn_actor::poll_h3` (the LIVE J3 `h3_backend`
 //! branch) → `h3_to_h3_stream_resp` → a REAL quiche `accept` H3
 //! upstream (genuine QUIC endpoint over a real `UdpSocket` speaking
-//! the `lb_h3` codec — NOT an in-process stub, NOTHING below quiche
+//! the `lb_h3_testcodec` codec — NOT an in-process stub, NOTHING below quiche
 //! hand-rolled; the real-quiche-accept pump pattern is extended from
 //! `round8_h3_authority_enforced.rs` / `h3_graceful_close.rs`).
 //!
@@ -59,10 +59,30 @@ use lb_quic::{QuicListener, QuicListenerParams};
 use tokio::net::UdpSocket;
 use tokio_util::sync::CancellationToken;
 
-use lb_h3::{H3Frame, QpackDecoder, QpackEncoder, decode_frame, encode_frame};
+use lb_h3_testcodec::{H3Frame, QpackEncoder, decode_frame, encode_frame};
 
 const TEST_SNI: &str = "expressgateway.test";
 const H3_ALPN: &[u8] = b"h3";
+
+/// SESSION 24 / INC-3: decode a RESPONSE QPACK field block emitted by
+/// the migrated egress (quiche::h3 encoder Huffman-encodes values); the
+/// hand-rolled `lb_h3_testcodec::QpackDecoder` is raw-only.
+#[allow(dead_code)]
+fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, String> {
+    use quiche::h3::NameValue;
+    let hdrs = quiche::h3::qpack::Decoder::new()
+        .decode(header_block, u64::MAX)
+        .map_err(|e| format!("qpack decode: {e:?}"))?;
+    Ok(hdrs
+        .iter()
+        .map(|h| {
+            (
+                String::from_utf8_lossy(h.name()).into_owned(),
+                String::from_utf8_lossy(h.value()).into_owned(),
+            )
+        })
+        .collect())
+}
 const H3_ALPN_PROTOS: &[&[u8]] = &[b"h3", b"h3-29"];
 const MAX_UDP: usize = 65_535;
 
@@ -458,7 +478,9 @@ async fn drive_h3(
                         // any SUBSEQUENT (post-DATA) HEADERS frame is a
                         // forwarded trailer section (F-S7-8 cluster 2).
                         let is_trailer = out.resp_headers_frames > 1;
-                        if let Ok(h) = QpackDecoder::new().decode(&header_block) {
+                        // SESSION 24 / INC-3: quiche-encoded response head
+                        // ⇒ Huffman-capable QPACK decode (see helper).
+                        if let Ok(h) = decode_resp_qpack(&header_block) {
                             for (n, v) in h {
                                 if is_trailer {
                                     out.resp_trailer_names.push(n.clone());
@@ -556,7 +578,7 @@ async fn drive_h3(
 
 // ─────────────────────────────────────────────────────────────────────
 // §2  Real quiche::accept H3 upstream (genuine endpoint, real socket,
-//     lb_h3 codec — extends the round8 / h3_graceful_close pattern).
+//     lb_h3_testcodec codec — extends the round8 / h3_graceful_close pattern).
 // ─────────────────────────────────────────────────────────────────────
 
 /// What the upstream observed about the request it received.
@@ -629,7 +651,22 @@ enum UpstreamMode {
     /// lands, so it is NOT between frames ⇒ a premature EOF
     /// (h3_bridge.rs :3375-3383: `else { outcome = PrematureEof }`).
     /// The client MUST NOT receive a clean complete 200+FIN.
+    ///
+    /// SESSION 25 / INC-4 (quiche::h3 migration): this NO-content-length
+    /// case is the documented quiche-0.28 §7.1 frame-completeness gap —
+    /// quiche delivers the truncated frame as a clean `Finished` with no
+    /// public API to detect the mid-frame finish, so the migrated E2
+    /// relays it as complete (see `..._no_cl_truncated_data_delivered_*`).
     HeadThenTruncatedData,
+    /// SESSION 25 / INC-4 (content-length truncation guard) — 200 WITH
+    /// `content-length: 4096` but only 16 body bytes written, then a clean
+    /// QUIC FIN. quiche-0.28 delivers this as a clean `Finished` (no §7.1
+    /// frame-completeness check), so the gateway's content-length
+    /// truncation guard MUST catch the under-run (`body_relayed <
+    /// content-length`) and RESET downstream — the client never gets a
+    /// clean complete 200+FIN. This is the defense-in-depth the owner ruled
+    /// MUST be verified to actually fire.
+    HeadCLThenTruncatedData,
     /// CF-H3H3-HEAD — 200 + a response HEAD carrying REGULAR headers
     /// (content-type + a custom `x-eg-resp` header) ALONGSIDE
     /// `content-length`, then a small DATA body + clean FIN. Drives the
@@ -658,7 +695,7 @@ enum TrailerKind {
 /// Spawn a genuine quiche `accept` H3 upstream on a real `UdpSocket`.
 /// One accepted connection per pooled dial (the gateway pool dials a
 /// fresh conn per request and `set_reusable(false)`s it — S-2). Per
-/// request stream: decode the HEADERS + DATA frames via `lb_h3`,
+/// request stream: decode the HEADERS + DATA frames via `lb_h3_testcodec`,
 /// capture the body + whether it FIN'd cleanly + the HEADERS-frame
 /// count, then emit the configured response. NOTHING below quiche is
 /// hand-rolled.
@@ -867,6 +904,7 @@ async fn spawn_h3_upstream(
                         | UpstreamMode::OversizedBlock { .. }
                         | UpstreamMode::EmptyDataThenResp
                         | UpstreamMode::HeadThenTruncatedData
+                        | UpstreamMode::HeadCLThenTruncatedData
                         | UpstreamMode::RespWithHeaders => req_fin,
                     };
                     if ready {
@@ -983,6 +1021,15 @@ async fn spawn_h3_upstream(
                             // (remaining > 0) ⇒ PrematureEof.
                             UpstreamMode::HeadThenTruncatedData => {
                                 resp_wire = response_head(200, None);
+                                resp_wire.extend_from_slice(&truncated_data_frame(4096, 16));
+                                resp_fin_on_drain = true;
+                            }
+                            // SESSION 25 / INC-4 — content-length truncation
+                            // guard: declare content-length: 4096 but write only
+                            // 16 body bytes, then a clean FIN. The gateway's CL
+                            // guard MUST reset (under-run), never a clean 200+FIN.
+                            UpstreamMode::HeadCLThenTruncatedData => {
+                                resp_wire = response_head(200, Some(4096));
                                 resp_wire.extend_from_slice(&truncated_data_frame(4096, 16));
                                 resp_fin_on_drain = true;
                             }
@@ -1128,8 +1175,8 @@ fn unknown_frame(frame_type: u64, payload: &[u8]) -> Vec<u8> {
 fn oversized_block_header(frame_type: u64, declared_len: u64) -> Vec<u8> {
     use bytes::BytesMut;
     let mut buf = BytesMut::new();
-    lb_h3::encode_varint(&mut buf, frame_type).unwrap();
-    lb_h3::encode_varint(&mut buf, declared_len).unwrap();
+    lb_h3_testcodec::encode_varint(&mut buf, frame_type).unwrap();
+    lb_h3_testcodec::encode_varint(&mut buf, declared_len).unwrap();
     buf.to_vec()
 }
 
@@ -1140,8 +1187,8 @@ fn oversized_block_header(frame_type: u64, declared_len: u64) -> Vec<u8> {
 fn empty_data_frame() -> Vec<u8> {
     use bytes::BytesMut;
     let mut buf = BytesMut::new();
-    lb_h3::encode_varint(&mut buf, 0x00).unwrap(); // FRAME_DATA
-    lb_h3::encode_varint(&mut buf, 0).unwrap(); // length 0
+    lb_h3_testcodec::encode_varint(&mut buf, 0x00).unwrap(); // FRAME_DATA
+    lb_h3_testcodec::encode_varint(&mut buf, 0).unwrap(); // length 0
     buf.to_vec()
 }
 
@@ -1152,8 +1199,8 @@ fn empty_data_frame() -> Vec<u8> {
 fn truncated_data_frame(declared_len: u64, actual_len: usize) -> Vec<u8> {
     use bytes::BytesMut;
     let mut buf = BytesMut::new();
-    lb_h3::encode_varint(&mut buf, 0x00).unwrap(); // FRAME_DATA
-    lb_h3::encode_varint(&mut buf, declared_len).unwrap();
+    lb_h3_testcodec::encode_varint(&mut buf, 0x00).unwrap(); // FRAME_DATA
+    lb_h3_testcodec::encode_varint(&mut buf, declared_len).unwrap();
     let mut out = buf.to_vec();
     out.extend(std::iter::repeat_n(0x5Au8, actual_len));
     out
@@ -1540,6 +1587,132 @@ async fn h3h3_e2e_upstream_reset_midbody_resets_client_no_fin() {
              mid-body upstream reset"
         );
     }
+}
+
+/// SESSION 25 / INC-4 — R13 (b)+(c) for the F-MD-4 MIRROR (RESPONSE
+/// direction): a BACKEND reset mid/after-body MUST relay as a reset to the
+/// downstream client, NEVER a clean complete 200+FIN. The single-shot
+/// `_upstream_reset_midbody_resets_client_no_fin` above is R13 (a)
+/// (in-gate); this adds (b) a ≥50-iteration burst on a SINGLE-THREADED
+/// runtime — the scheduling configuration that exposes the timing-
+/// dependent quiche `Finished`-vs-`Reset` delivery for a stream RESET
+/// after its last DATA (the `Event::Finished` reset-probe path, mirror of
+/// `conn_actor.rs:1269`; memory `h3h3-fmd4-no-r13-bc`) — and (c) a
+/// LOAD-BEARING non-vacuity control: a CLEAN GET on a SEPARATE Echo backend
+/// MUST yield a clean complete 200+FIN, so the burst's "no clean complete"
+/// assertion is not vacuously true.
+///
+/// NOTE FOR THE VERIFIER (R13 (c) mutation): the migrated E2's F-MD-4
+/// mirror is the `Event::Finished` `was_reset` probe + the `Event::Reset`
+/// arm + the `recv_body`-error arm. Flip the `Finished` arm's `was_reset`
+/// to always-false (treat every Finished as a clean end) and confirm THIS
+/// burst then FAILS — a reset-after-last-DATA backend would deliver a clean
+/// complete 200+FIN. This test provides the burst the mutation acts on.
+#[tokio::test(flavor = "current_thread")]
+async fn h3h3_e2e_upstream_reset_midresponse_burst_current_thread() {
+    const ITERS: usize = 60; // ≥50 per R13 (b)
+    let certs = generate_loopback_certs();
+
+    // (c) NON-VACUITY control — a CLEAN GET on an Echo backend MUST yield a
+    // clean complete 200+FIN (so the burst assertion below is not vacuous).
+    {
+        let seen = BackendSeen::default();
+        let (backend, bh) = spawn_h3_upstream(&certs, UpstreamMode::Echo, seen).await;
+        let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
+        let clean = drive_h3(
+            gw,
+            &certs.ca,
+            DriveCfg {
+                method: "GET",
+                path: "/clean",
+                req_body: vec![],
+                req_trailers: vec![],
+                stall_after: None,
+                stall_for: Duration::ZERO,
+                reset_after_req_bytes: None,
+                omit_authority: false,
+                stop_reading_resp_after: None,
+            },
+            Duration::from_secs(30),
+        )
+        .await;
+        let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+        sd.cancel();
+        bh.abort();
+        assert!(
+            clean.status == Some(200) && clean.fin,
+            "non-vacuity control: a clean GET (Echo backend) must yield 200+FIN \
+             (status={:?} fin={})",
+            clean.status,
+            clean.fin
+        );
+    }
+
+    // (b) BURST — ITERS GETs against a ResetMidResponse backend (declares a
+    // 1 MiB body, writes ~64 KiB, then RESETs the response stream). NONE may
+    // yield a clean 200+FIN. Bounded concurrency (`IN_FLIGHT`-wide) on the
+    // single-threaded runtime contends concurrent resets on ONE scheduler —
+    // a STRONGER mirror-race probe than back-to-back sequential requests.
+    let seen = BackendSeen::default();
+    let (backend, bh) = spawn_h3_upstream(&certs, UpstreamMode::ResetMidResponse, seen).await;
+    let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
+    const IN_FLIGHT: usize = 8;
+    let ca = certs.ca.clone();
+    let local = tokio::task::LocalSet::new();
+    local
+        .run_until(async {
+            let mut set: tokio::task::JoinSet<ClientOut> = tokio::task::JoinSet::new();
+            let mut launched = 0usize;
+            let mut finished = 0usize;
+            let spawn_one = |set: &mut tokio::task::JoinSet<ClientOut>| {
+                let ca = ca.clone();
+                set.spawn_local(async move {
+                    drive_h3(
+                        gw,
+                        &ca,
+                        DriveCfg {
+                            method: "GET",
+                            path: "/broken",
+                            req_body: vec![],
+                            req_trailers: vec![],
+                            stall_after: None,
+                            stall_for: Duration::ZERO,
+                            reset_after_req_bytes: None,
+                            omit_authority: false,
+                            stop_reading_resp_after: None,
+                        },
+                        Duration::from_secs(30),
+                    )
+                    .await
+                });
+            };
+            while launched < IN_FLIGHT.min(ITERS) {
+                spawn_one(&mut set);
+                launched += 1;
+            }
+            while let Some(joined) = set.join_next().await {
+                let out = joined.expect("burst task panicked");
+                finished += 1;
+                assert!(
+                    !(out.status == Some(200) && out.fin),
+                    "F-MD-4 MIRROR (burst iter {finished}/{ITERS}): a mid/after-body \
+                     backend RESET yielded a clean 200+FIN to the client \
+                     (status={:?} fin={} body_len={})",
+                    out.status,
+                    out.fin,
+                    out.body.len()
+                );
+                if launched < ITERS {
+                    spawn_one(&mut set);
+                    launched += 1;
+                }
+            }
+        })
+        .await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+    sd.cancel();
+    bh.abort();
+    eprintln!("H3H3_FMD4_MIRROR_BURST iters={ITERS} (all reset, none clean-complete)");
 }
 
 /// Case 7 (BINDING — request-side smuggling-parity) — the H3 client
@@ -2665,16 +2838,36 @@ async fn h3h3_e2e_empty_data_frame_skipped_then_body() {
     );
 }
 
-/// Cluster 4 / CASE 15 — the upstream sends 200, then a DATA frame
-/// header declaring 4096 bytes but only 16 bytes of payload, then a
-/// clean QUIC FIN. The gateway sees the upstream stream end while still
-/// mid-`InData` (`remaining > 0`), i.e. NOT between frames, so it is a
-/// premature EOF (h3_bridge.rs :3375-3383: the `else { outcome =
-/// PrematureEof }` branch — never FIN a partial body, the response-
-/// splitting / smuggling guard). The client MUST NOT receive a clean
-/// complete 200+FIN.
+/// Cluster 4 / CASE 15 — RE-SCOPED in SESSION 25 / INC-4 (quiche::h3
+/// migration; owner-ruled documented behaviour change, NOT a silent
+/// weakening).
+///
+/// The upstream sends 200 (NO content-length), then a DATA frame header
+/// declaring 4096 bytes but only 16 bytes of payload, then a clean QUIC
+/// FIN. The PRE-MIGRATION hand-rolled E2 tracked DATA-frame boundaries
+/// and detected the mid-frame FIN as a premature EOF (reset, never a
+/// clean complete). The MIGRATED E2 delegates HTTP/3 framing to
+/// `quiche::h3`, and **quiche-0.28 does NOT enforce DATA-frame
+/// completeness at FIN (RFC 9114 §7.1)**: it delivers a clean
+/// `Event::Finished` and exposes NO public API to observe that the
+/// stream finished mid-frame (`recv_body` discards the `fin` flag;
+/// `process_finished_stream` collapses the incomplete `State::Data`).
+/// So with NO content-length to cross-check, the gateway relays the
+/// truncated response to the client as a complete 200+FIN.
+///
+/// THREAT MODEL (why this is LOW severity, owner-assessed): the gap
+/// requires a malformed/buggy BACKEND (a trusted upstream, not an
+/// untrusted client); HTTP/3 streams are independent, so a truncated
+/// response CANNOT desync the connection or smuggle across streams (the
+/// HTTP/1-style danger does not exist here); RESET-based truncation is
+/// still caught (the F-MD-4 mirror, all three →H3 cells); and a
+/// content-length-bearing truncation IS caught by the compensating
+/// guard below — see `h3h3_e2e_content_length_truncation_resets_*`.
+/// CARRY-FORWARD CF-QUICHE-FRAME-COMPLETENESS (tied to CF-QUICHE-UPGRADE):
+/// a quiche version that enforces §7.1 restores the strict frame-level
+/// guard; RE-TIGHTEN this assertion to `!(200 && fin)` then.
 #[tokio::test]
-async fn h3h3_e2e_upstream_premature_eof_mid_data_no_clean_fin() {
+async fn h3h3_e2e_no_cl_truncated_data_delivered_quiche_028_frame_completeness_gap() {
     let certs = generate_loopback_certs();
     let seen = BackendSeen::default();
     let (backend, bh) = spawn_h3_upstream(&certs, UpstreamMode::HeadThenTruncatedData, seen).await;
@@ -2685,7 +2878,7 @@ async fn h3h3_e2e_upstream_premature_eof_mid_data_no_clean_fin() {
         &certs.ca,
         DriveCfg {
             method: "GET",
-            path: "/premature-eof",
+            path: "/no-cl-truncated",
             req_body: vec![],
             req_trailers: vec![],
             stall_after: None,
@@ -2702,12 +2895,79 @@ async fn h3h3_e2e_upstream_premature_eof_mid_data_no_clean_fin() {
     sd.cancel();
     bh.abort();
 
-    // An upstream FIN mid-DATA (declared 4096, only 16 sent) must NEVER
-    // be presented to the client as a clean complete 200+FIN.
+    // DOCUMENTED quiche-0.28 §7.1 gap: with NO content-length the gateway
+    // relays the (16-byte) truncated body + the upstream's clean FIN. This
+    // asserts the migrated, compensated behaviour — the client receives the
+    // head + whatever DATA arrived + FIN; H3 stream isolation means no
+    // desync. (RE-TIGHTEN to `!(200 && fin)` once quiche enforces §7.1.)
+    assert_eq!(
+        out.status,
+        Some(200),
+        "head relayed before the truncated body"
+    );
+    assert!(
+        out.fin,
+        "quiche-0.28 §7.1 gap (no content-length): the truncated frame's clean \
+         FIN is relayed as a clean complete response (documented residual)"
+    );
+    assert!(
+        out.body.len() <= 16,
+        "only the 16 truncated body bytes (declared 4096) were available; \
+         got body_len={}",
+        out.body.len()
+    );
+}
+
+/// SESSION 25 / INC-4 — the content-length TRUNCATION GUARD (defense-in-
+/// depth, owner-ruled it MUST be verified to actually fire). The upstream
+/// sends 200 WITH `content-length: 4096` but only 16 body bytes, then a
+/// clean QUIC FIN. quiche-0.28 delivers this as a clean `Finished` (no
+/// §7.1 frame-completeness check), but the migrated E2 cross-checks the
+/// relayed body against the declared content-length: `body_relayed (16) <
+/// content-length (4096)` ⇒ a truncated upstream response ⇒ RESET
+/// downstream. The client MUST NOT receive a clean complete 200+FIN. This
+/// is the COMMON real-world truncation case (content-length is near-
+/// universal on real responses) and the compensation for the no-content-
+/// length residual gap documented above.
+#[tokio::test]
+async fn h3h3_e2e_content_length_truncation_resets_no_clean_complete() {
+    let certs = generate_loopback_certs();
+    let seen = BackendSeen::default();
+    let (backend, bh) =
+        spawn_h3_upstream(&certs, UpstreamMode::HeadCLThenTruncatedData, seen).await;
+    let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
+
+    let out = drive_h3(
+        gw,
+        &certs.ca,
+        DriveCfg {
+            method: "GET",
+            path: "/cl-truncated",
+            req_body: vec![],
+            req_trailers: vec![],
+            stall_after: None,
+            stall_for: Duration::ZERO,
+            reset_after_req_bytes: None,
+            omit_authority: false,
+            stop_reading_resp_after: None,
+        },
+        Duration::from_secs(25),
+    )
+    .await;
+
+    let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
+    sd.cancel();
+    bh.abort();
+
+    // The content-length guard MUST fire: a declared-4096 / sent-16 + clean
+    // FIN response is a truncation ⇒ the client never gets a clean complete
+    // 200+FIN. (Load-bearing: if the guard is removed, quiche's clean
+    // `Finished` would deliver `200 + 16 bytes + FIN` and this fails.)
     assert!(
         !(out.status == Some(200) && out.fin),
-        "a premature upstream EOF mid-DATA must NOT yield a clean \
-         complete 200+FIN (status={:?} fin={} body_len={})",
+        "content-length under-run (declared 4096, sent 16, clean FIN) MUST NOT \
+         yield a clean complete 200+FIN — the truncation guard did not fire \
+         (status={:?} fin={} body_len={})",
         out.status,
         out.fin,
         out.body.len()

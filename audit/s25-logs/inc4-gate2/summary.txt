@@ -1,0 +1,3 @@
+INC4_GATE2 aggregate_ok=540/0 failed_suites=1
+test result: FAILED. 5 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 5.10s
+error: test failed, to rerun pass `-p lb-integration-tests --test quic_listener_e2e`

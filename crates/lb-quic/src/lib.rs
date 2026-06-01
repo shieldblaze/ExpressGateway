@@ -116,8 +116,8 @@ pub use passthrough::{PassthroughListener, PassthroughParams};
 //
 // S15 A2 (a1) — CF-S15-PASSTHROUGH-FEATURE-GATING. Everything below is
 // the existing H3 termination router/actor/bridge/listener tree. It
-// requires `quiche`, `tokio-quiche`, `lb-io`, `lb-h3`, `lb-core`,
-// `hyper`, `http-body-util`. Building with
+// requires `quiche`, `tokio-quiche`, `lb-io`, `lb-core`, `hyper`,
+// `http-body-util`. Building with
 // `--no-default-features --features quic-passthrough-only` excludes
 // all of it, so `cargo bloat --filter quiche` shows ZERO
 // quiche::Connection / BoringSSL symbols on the Mode A binary segment
@@ -146,6 +146,12 @@ mod cleanup_guard;
 pub mod conn_actor;
 #[cfg(feature = "quic-terminate")]
 pub mod h3_bridge;
+// SESSION 23 / INC-0 — `quiche::h3::Config` builder for the H3-front
+// migration. Infra only (no live-path change); same gate as the rest of
+// the termination tree. `pub` so the INC-1 go/no-go experiment
+// (`tests/inc1_quiche_h3_experiment.rs`) can construct it.
+#[cfg(feature = "quic-terminate")]
+pub mod h3_config;
 #[cfg(feature = "quic-terminate")]
 mod listener;
 // SESSION 16 / Mode B (terminate-and-re-originate). Same gate as the H3
@@ -174,10 +180,7 @@ pub use conn_actor::{H3_INTERNAL_ERROR, H3_NO_ERROR, graceful_h3_shutdown};
 pub use cleanup_guard::CidEntryGuard;
 
 #[cfg(feature = "quic-terminate")]
-pub use h3_bridge::{
-    H3Request, H3RespEvent, H3RespOut, H3UpstreamResponse, request_h3_upstream,
-    stream_request_to_h3_upstream,
-};
+pub use h3_bridge::{H3Request, H3RespEvent, H3RespOut, stream_request_to_h3_upstream};
 #[cfg(feature = "quic-terminate")]
 pub use listener::{QuicListener, QuicListenerParams};
 // SESSION 16 / Mode B: re-export the raw-proxy seam types at the crate

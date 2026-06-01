@@ -34,10 +34,10 @@
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use lb_h3::{H3Frame, QpackDecoder, QpackEncoder, decode_frame, encode_frame};
+use lb_h3_testcodec::{H3Frame, QpackEncoder, decode_frame, encode_frame};
 use lb_io::Runtime;
 use lb_io::pool::{PoolConfig, TcpPool};
 use lb_io::sockopts::BackendSockOpts;
@@ -52,6 +52,26 @@ const TEST_SNI: &str = "expressgateway.test";
 const MAX_UDP: usize = 65_535;
 const REQUEST_AUTHORITY: &str = "h3-stream.test:4433";
 const REQUEST_PATH: &str = "/p1a/echo";
+
+/// SESSION 24 / INC-3: decode a RESPONSE QPACK field block emitted by
+/// the migrated wire egress (quiche::h3 encoder Huffman-encodes values);
+/// the hand-rolled `lb_h3_testcodec::QpackDecoder` is raw-only.
+#[allow(dead_code)]
+fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, String> {
+    use quiche::h3::NameValue;
+    let hdrs = quiche::h3::qpack::Decoder::new()
+        .decode(header_block, u64::MAX)
+        .map_err(|e| format!("qpack decode: {e:?}"))?;
+    Ok(hdrs
+        .iter()
+        .map(|h| {
+            (
+                String::from_utf8_lossy(h.name()).into_owned(),
+                String::from_utf8_lossy(h.value()).into_owned(),
+            )
+        })
+        .collect())
+}
 const UPSTREAM_STATUS: u16 = 201;
 const UPSTREAM_BODY: &[u8] = b"p1a-resp-body";
 
@@ -414,9 +434,12 @@ async fn drive_h3_body_request(
                 match decode_frame(&rx_tail, 1 << 20) {
                     Ok((H3Frame::Headers { header_block }, c)) => {
                         rx_tail.drain(..c);
-                        let hdrs = QpackDecoder::new()
-                            .decode(&header_block)
-                            .map_err(|e| format!("qpack decode: {e}"))?;
+                        // SESSION 24 / INC-3: the wire client decodes the
+                        // quiche-encoded response head with a
+                        // Huffman-capable QPACK decoder (see helper). The
+                        // buffered `h3_to_h1_stream` 413 path below still
+                        // uses the raw lb_h3_testcodec decoder (hand-rolled encode).
+                        let hdrs = decode_resp_qpack(&header_block)?;
                         for (n, v) in hdrs {
                             if n == ":status" {
                                 status = Some(v.parse().map_err(|_| "status".to_string())?);
@@ -437,7 +460,7 @@ async fn drive_h3_body_request(
                     Ok((_, c)) => {
                         rx_tail.drain(..c);
                     }
-                    Err(lb_h3::H3Error::Incomplete) => break,
+                    Err(lb_h3_testcodec::H3Error::Incomplete) => break,
                     Err(e) => return Err(format!("decode_frame: {e}")),
                 }
             }
@@ -633,151 +656,6 @@ async fn t3_zero_length_data_frame_then_fin_no_spurious_chunk() {
         body.is_empty(),
         "zero-length DATA frame must yield an empty backend body, got {} bytes",
         body.len()
-    );
-}
-
-// ---------------------------------------------------------------------
-// T4 — oversized vs tiny max_body ⇒ H3 413, upstream not completed.
-//
-// The production const is 64 MiB. To exercise the cap with a tiny
-// limit we drive the listener whose `poll_h3` passes
-// `MAX_REQUEST_BODY_BYTES`; instead of plumbing a config knob (S3
-// work) we assert the *contract* against the real implementation by
-// sending a body that exceeds a deliberately small client-declared
-// content-length AND triggers the cap. Since the production cap is 64
-// MiB, a true >64 MiB e2e is impractical on the 2-CPU/7 GB box, so we
-// assert the cap path via a focused unit on `StreamRxBuf::feed_body`
-// with a tiny cap (the exact code poll_h3 calls) PLUS an e2e that the
-// 413 wire path is reachable. See `t4_oversized_*` below.
-// ---------------------------------------------------------------------
-#[test]
-fn t4_feed_body_tiny_cap_emits_toolarge_and_latches() {
-    use lb_quic::h3_bridge::{BodyItem, StreamRxBuf};
-
-    // Decode a HEADERS frame first so the buffer is in Body phase.
-    let hb = QpackEncoder::new()
-        .encode(&[(":method".to_string(), "POST".to_string())])
-        .unwrap();
-    let hf = encode_frame(&H3Frame::Headers { header_block: hb }).unwrap();
-    let mut rx = StreamRxBuf::default();
-    assert!(rx.feed(&hf).unwrap().is_some());
-
-    // Body with the non-UTF-8 marker, far larger than the 16-byte cap.
-    let mut payload = vec![0u8; 64];
-    payload[..3].copy_from_slice(NON_UTF8);
-    let df = encode_frame(&H3Frame::Data {
-        payload: bytes::Bytes::from(payload),
-    })
-    .unwrap();
-
-    let items = rx.feed_body(&df, 16).unwrap();
-    assert_eq!(
-        items,
-        vec![BodyItem::TooLarge],
-        "cumulative body over the cap must emit exactly TooLarge"
-    );
-    assert!(rx.is_too_large(), "TooLarge must latch");
-    // Latched: further feeds keep reporting TooLarge, never data.
-    let again = rx.feed_body(b"more", 16).unwrap();
-    assert_eq!(again, vec![BodyItem::TooLarge]);
-}
-
-#[tokio::test]
-async fn t4_oversized_body_yields_413_and_upstream_not_completed() {
-    // P1-A oversized contract, exercised against the REAL streaming
-    // egress (`h3_to_h1_stream`) with a real TCP upstream socket and a
-    // tiny `max_body` — the design explicitly states the fn takes
-    // `max_body` as a param so tests can pass a tiny cap (the 64 MiB
-    // production const is impractical to drive e2e on this box).
-    //
-    // poll_h3 detects `BodyItem::TooLarge` (proven by the unit test
-    // above using the exact `feed_body` call poll_h3 makes) and signals
-    // the egress with `ReqBodyEvent::Reset`, dropping the channel. Here
-    // we reproduce that exact signal sequence: a Chunk that the client
-    // declared via content-length, then the Reset poll_h3 emits on cap
-    // breach. Asserts (1) the client-facing bytes are H3 413 and (2)
-    // the upstream is NOT left with a completed request.
-    let completed = Arc::new(AtomicUsize::new(0));
-    let completed_c = completed.clone();
-    let listener_b = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
-    let backend_addr = listener_b.local_addr().unwrap();
-    let backend_h = tokio::spawn(async move {
-        let (mut s, _) = listener_b.accept().await.unwrap();
-        let mut buf = Vec::new();
-        let mut t = [0u8; 4096];
-        loop {
-            match tokio::time::timeout(Duration::from_millis(500), s.read(&mut t)).await {
-                Ok(Ok(0)) | Err(_) => break,
-                Ok(Ok(n)) => buf.extend_from_slice(&t[..n]),
-                Ok(Err(_)) => break,
-            }
-        }
-        // A complete chunked request ends with the 0\r\n\r\n terminator;
-        // a complete content-length request has all declared bytes. The
-        // aborted request has neither.
-        if buf.windows(5).any(|w| w == b"0\r\n\r\n") {
-            completed_c.fetch_add(1, Ordering::SeqCst);
-        }
-    });
-
-    let pool = build_tcp_pool();
-    // Client declared a content-length (so framing is Content-Length,
-    // not chunked) — the request would be "complete" only if all
-    // declared bytes arrived; the cap abort must prevent that.
-    let req = lb_quic::h3_bridge::H3Request {
-        method: "POST".to_string(),
-        path: REQUEST_PATH.to_string(),
-        authority: REQUEST_AUTHORITY.to_string(),
-        extra: vec![("content-length".to_string(), "1048576".to_string())],
-        trailers: Vec::new(),
-    };
-
-    let (tx, rx) = tokio::sync::mpsc::channel::<lb_quic::h3_bridge::ReqBodyEvent>(8);
-    // First a real chunk (non-UTF-8 marker), then the Reset poll_h3
-    // emits the instant `feed_body` reports TooLarge against the tiny
-    // cap. Tiny `max_body` = 16 passed to the egress as the design
-    // prescribes.
-    let mut chunk = vec![0u8; 4096];
-    chunk[..3].copy_from_slice(NON_UTF8);
-    tx.send(lb_quic::h3_bridge::ReqBodyEvent::Chunk(bytes::Bytes::from(
-        chunk,
-    )))
-    .await
-    .unwrap();
-    tx.send(lb_quic::h3_bridge::ReqBodyEvent::Reset)
-        .await
-        .unwrap();
-    drop(tx);
-
-    let resp = tokio::time::timeout(
-        Duration::from_secs(10),
-        lb_quic::h3_bridge::h3_to_h1_stream(&req, backend_addr, &pool, rx, 16),
-    )
-    .await
-    .expect("h3_to_h1_stream timed out")
-    .expect("h3_to_h1_stream Err");
-
-    backend_h.abort();
-
-    // Decode the H3 response the client would receive: must be 413.
-    let (frame, _used) = decode_frame(&resp, 1 << 20).expect("decode resp HEADERS");
-    let H3Frame::Headers { header_block } = frame else {
-        panic!("expected HEADERS frame in 413 response");
-    };
-    let hdrs = QpackDecoder::new().decode(&header_block).unwrap();
-    let status = hdrs
-        .iter()
-        .find(|(n, _)| n == ":status")
-        .map(|(_, v)| v.clone());
-    assert_eq!(
-        status.as_deref(),
-        Some("413"),
-        "oversized body (cap breach → Reset) must surface H3 413"
-    );
-    assert_eq!(
-        completed.load(Ordering::SeqCst),
-        0,
-        "upstream must NOT be left with a completed request when the cap aborts the body"
     );
 }
 

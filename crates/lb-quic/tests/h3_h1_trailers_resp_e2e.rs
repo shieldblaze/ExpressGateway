@@ -36,7 +36,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use lb_h3::{H3Frame, QpackDecoder, QpackEncoder, decode_frame, encode_frame};
+use lb_h3_testcodec::{H3Frame, QpackEncoder, decode_frame, encode_frame};
 use lb_io::Runtime;
 use lb_io::pool::{PoolConfig, TcpPool};
 use lb_io::sockopts::BackendSockOpts;
@@ -51,6 +51,26 @@ const TEST_SNI: &str = "expressgateway.test";
 const MAX_UDP: usize = 65_535;
 const REQUEST_AUTHORITY: &str = "h3-trailers.test:4433";
 const REQUEST_PATH: &str = "/p1c/echo";
+
+/// SESSION 24 / INC-3: decode a RESPONSE QPACK field block emitted by
+/// the migrated egress (quiche::h3 encoder Huffman-encodes values); the
+/// hand-rolled `lb_h3_testcodec::QpackDecoder` is raw-only.
+#[allow(dead_code)]
+fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, String> {
+    use quiche::h3::NameValue;
+    let hdrs = quiche::h3::qpack::Decoder::new()
+        .decode(header_block, u64::MAX)
+        .map_err(|e| format!("qpack decode: {e:?}"))?;
+    Ok(hdrs
+        .iter()
+        .map(|h| {
+            (
+                String::from_utf8_lossy(h.name()).into_owned(),
+                String::from_utf8_lossy(h.value()).into_owned(),
+            )
+        })
+        .collect())
+}
 
 /// Distinctive non-UTF-8 marker embedded at head/mid/tail of every
 /// binary payload (request body and response body).
@@ -376,9 +396,9 @@ async fn drive_h3(
                 match decode_frame(&rx_tail, 1 << 20) {
                     Ok((H3Frame::Headers { header_block }, c)) => {
                         rx_tail.drain(..c);
-                        let hdrs = QpackDecoder::new()
-                            .decode(&header_block)
-                            .map_err(|e| format!("qpack decode: {e}"))?;
+                        // SESSION 24 / INC-3: Huffman-capable QPACK
+                        // decode of the quiche-encoded response head.
+                        let hdrs = decode_resp_qpack(&header_block)?;
                         for (n, v) in hdrs {
                             if n == ":status" {
                                 status = Some(v.parse().map_err(|_| "status".to_string())?);
@@ -399,7 +419,7 @@ async fn drive_h3(
                     Ok((_, c)) => {
                         rx_tail.drain(..c);
                     }
-                    Err(lb_h3::H3Error::Incomplete) => break,
+                    Err(lb_h3_testcodec::H3Error::Incomplete) => break,
                     Err(e) => return Err(format!("decode_frame: {e}")),
                 }
             }

@@ -13,7 +13,7 @@
 //!
 //! This test drives a REAL loopback QUIC handshake, runs the REAL
 //! [`lb_quic::run_actor`] with a REAL accept-counting TCP probe
-//! backend, and sends a REAL lb-h3 HEADERS frame on a client bidi
+//! backend, and sends a REAL lb-h3-testcodec HEADERS frame on a client bidi
 //! stream, asserting:
 //!   * comma-in-`:authority` → H3 `:status 400` AND the probe backend
 //!     records ZERO connections (the validator tripped BEFORE
@@ -34,7 +34,7 @@ use tokio::net::{TcpListener, UdpSocket};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use lb_h3::{H3Frame, QpackDecoder, QpackEncoder, decode_frame, encode_frame};
+use lb_h3_testcodec::{H3Frame, QpackDecoder, QpackEncoder, decode_frame, encode_frame};
 use lb_io::pool::{PoolConfig, TcpPool};
 use lb_io::sockopts::BackendSockOpts;
 use lb_quic::conn_actor::{ActorParams, InboundPacket, run_actor};

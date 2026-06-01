@@ -162,6 +162,51 @@ pub fn quic_mode_b(
     )
 }
 
+/// `quic` front in **H3-terminate** mode (the default QUIC datapath — no
+/// `[listeners.quic.raw_proxy]` block, so `raw_quic_backend = None` and the
+/// listener terminates client QUIC + speaks HTTP/3 via `quiche::h3`; R3).
+///
+/// ## F-S26-1 — this front is BACKEND-LESS in the production binary
+///
+/// The shipped `expressgateway` binary NEVER wires an HTTP backend onto a
+/// `protocol = "quic"` listener: `spawn_quic` → `quic_listener_params_from_config`
+/// does not call `with_backends`/`with_h3_backend`/`with_h2_backend`, and the
+/// listener loop ignores `[[listeners.backends]]` on the QUIC path. So a real
+/// H3 request to this front reaches `conn_actor::poll_h3` with no pool/backends
+/// and the stream is dropped ("no backends available for H3 request"). The full
+/// H3→{H1,H2,H3} relay + the §7.1 content-length truncation guard are
+/// library/harness-reachable only (covered by the e2e harnesses + Phase-3 R13
+/// bursts, NOT by this soak). The soak therefore deliberately emits NO backend
+/// block — adding one would test a path the binary cannot enter and silently
+/// mislead the verdict. What this front DOES exercise end-to-end (and what the
+/// soak drives): the migrated `quiche::h3` ingress (handshake + control/QPACK
+/// streams + HEADERS/DATA decode + the request-body cap/backpressure), the
+/// inline-400 DECODED egress (a bad-`:authority` request → `send_response`/
+/// `send_body` 400 "bad request", a true request→response round-trip), F-MD-4
+/// RST/STOP_SENDING mapping, and the no-backend stream-drop path.
+///
+/// `front_certs` terminate the client TLS (ALPN `h3` — matches the listener's
+/// `H3_ALPN_PROTOS`); the client trusts them. No DATAGRAM support (R3: only
+/// `with_raw_backend` flips that on).
+#[must_use]
+pub fn quic_h3_terminate(
+    listener: SocketAddr,
+    metrics: SocketAddr,
+    front_certs: &Certs,
+    retry_secret: &Path,
+) -> String {
+    format!(
+        "{rt}[[listeners]]\naddress = \"{listener}\"\nprotocol = \"quic\"\n\n\
+         [listeners.quic]\ncert_path = \"{cert}\"\nkey_path = \"{key}\"\nretry_secret_path = \"{retry}\"\n\n\
+         {obs}",
+        rt = runtime_block(),
+        cert = front_certs.cert.display(),
+        key = front_certs.key.display(),
+        retry = retry_secret.display(),
+        obs = observability_block(metrics),
+    )
+}
+
 /// Mode A QUIC passthrough — a top-level `[passthrough]` block routing flows to
 /// `backend`. TLS is end-to-end client↔backend; the gateway never decrypts.
 ///
@@ -271,6 +316,31 @@ mod tests {
             "Mode B must pin a backend CA"
         );
         assert!(toml.contains("max_relay_streams = 256"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn quic_h3_terminate_has_quic_listener_no_raw_proxy_no_backend() {
+        let dir = std::env::temp_dir().join(format!("lb-soak-h3t-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let certs = generate_certs(&dir, "soak-front").unwrap();
+        let retry = dir.join("retry.bin");
+        let toml = quic_h3_terminate(addr(8443), addr(9090), &certs, &retry);
+        assert!(toml.contains("protocol = \"quic\""));
+        assert!(toml.contains("[listeners.quic]"));
+        assert!(toml.contains("retry_secret_path ="));
+        // R3 / F-S26-1: a H3-terminate front must NOT carry a raw_proxy block
+        // (that would flip it to Mode B) NOR a backend block (the binary
+        // ignores it on the quic path — emitting one would mislead the soak).
+        assert!(
+            !toml.contains("[listeners.quic.raw_proxy]"),
+            "H3-terminate must have no raw_proxy block (else it's Mode B)"
+        );
+        assert!(
+            !toml.contains("[[listeners.backends]]"),
+            "F-S26-1: the binary ignores backends on the quic path — emit none"
+        );
+        assert!(toml.contains("metrics_bind = \"127.0.0.1:9090\""));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

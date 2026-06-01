@@ -23,7 +23,12 @@ members = [
     "crates/lb-io",
     "crates/lb-h1",
     "crates/lb-h2",
-    "crates/lb-h3",
+    # S26: the hand-rolled H3 frame/QPACK codec. Production migrated to
+    # `quiche::h3` (S24/S25), so this is now a TEST-ONLY crate — linked ONLY as
+    # a dev-dependency (root + lb-quic) and a fuzz dependency; no production
+    # crate links it. (Relocated here from the original production codec crate,
+    # which was deleted in INC-C once the wire-test harnesses were re-pointed.)
+    "crates/lb-h3-testcodec",
     "crates/lb-quic",
     "crates/lb-grpc",
     "crates/lb-l7",
@@ -146,7 +151,8 @@ lb-l4-xdp = { path = "crates/lb-l4-xdp" }
 lb-io = { path = "crates/lb-io" }
 lb-h1 = { path = "crates/lb-h1" }
 lb-h2 = { path = "crates/lb-h2" }
-lb-h3 = { path = "crates/lb-h3" }
+# S26: test-only codec for the H3 wire-test harnesses (dev-dep only).
+lb-h3-testcodec = { path = "crates/lb-h3-testcodec" }
 lb-quic = { path = "crates/lb-quic" }
 lb-grpc = { path = "crates/lb-grpc" }
 lb-l7 = { path = "crates/lb-l7" }

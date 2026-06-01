@@ -1,0 +1,238 @@
+88:/// from the *response* leg: [`crate::conn_actor::H3_INTERNAL_ERROR`]
+132:/// Memory safety = this depth × [`H3_RESP_CHUNK_MAX`] (+ frame header),
+137:/// a [`RespEvent::Bytes`] carries. Mirrors [`H3_BODY_CHUNK_MAX`]. A
+140:pub const H3_RESP_CHUNK_MAX: usize = 8 * 1024;
+142:/// SESSION 4 / P1-A: a `RespEvent::Bytes` carries a PRE-ENCODED H3
+143:/// frame — a ≤ [`H3_RESP_CHUNK_MAX`] payload PLUS a small frame header
+172:/// `Err(RespAbort::PrematureEof)` + `Reset`, NEVER `RespEvent::End`
+212:/// keeps the [`RespEvent`] wire-bytes path (see [`H3RespOut`]).
+216:/// chunks (each ≤ [`H3_RESP_CHUNK_MAX`], the in-flight window bounded
+238:    /// A decoded response-body chunk (≤ [`H3_RESP_CHUNK_MAX`]).
+248:    /// finalizes (mirror of [`RespEvent::Reset`]).
+253:/// maps to a single client-facing outcome — emit [`RespEvent::Reset`]
+323:/// `H3_RESP_CHANNEL_DEPTH × (H3_RESP_CHUNK_MAX + H3_FRAME_HDR_MAX)`,
+706:pub fn encode_h3_response(status: u16, body: &[u8]) -> Result<Vec<u8>, String> {
+707:    let headers_frame = encode_h3_headers_frame(status, Some(body.len()))?;
+708:    let data_frame = encode_h3_data_frame(body)?;
+720:///     frame [`encode_h3_response`] produced before this refactor
+727:/// `encode_h3_response`.
+733:pub fn encode_h3_headers_frame(
+758:/// This is the full-fidelity sibling of [`encode_h3_headers_frame`]
+761:/// `encode_h3_response`). The H3→H3 streaming response head
+762:/// ([`H3RespOut::on_head`] `Wire` arm) uses THIS so it forwards the
+776:pub fn encode_h3_headers_frame_full(
+798:/// [`stream_h2_response`], [`H3RespOut::on_head`]'s `Wire` arm) which
+824:/// `payload`. Byte-identical to the DATA frame [`encode_h3_response`]
+831:pub fn encode_h3_data_frame(payload: &[u8]) -> Result<Bytes, String> {
+854:pub fn encode_h3_trailers_frame(trailers: &[(String, String)]) -> Result<Bytes, String> {
+1102:/// 2. Emit the HEADERS [`RespEvent::Bytes`] **immediately** — before
+1104:///    [`encode_h3_headers_frame`]`(status, Some(n))` (byte-identical
+1108:/// 3. Stream the body per framing as ≤ [`H3_RESP_CHUNK_MAX`] DATA
+1114:/// 4. On clean completion emit [`RespEvent::End`] and return `Ok(())`.
+1117:///    a cancelling client) emits [`RespEvent::Reset`] (best-effort)
+1128:pub async fn stream_h1_response(
+1150:            let _ = tx.send(RespEvent::Reset).await;
+1156:                let _ = tx.send(RespEvent::Reset).await;
+1162:            let _ = tx.send(RespEvent::Reset).await;
+1179:            let _ = tx.send(RespEvent::Reset).await;
+1191:            let _ = tx.send(RespEvent::Reset).await;
+1214:                    let _ = tx.send(RespEvent::Reset).await;
+1228:            let _ = tx.send(RespEvent::Reset).await;
+1246:    let headers_frame = match encode_h3_headers_frame_full(status, &fwd_headers) {
+1249:            let _ = tx.send(RespEvent::Reset).await;
+1255:        let _ = tx.send(RespEvent::Reset).await;
+1259:    send!(tx, RespEvent::Bytes(headers_frame));
+1262:    // Emit one ≤H3_RESP_CHUNK_MAX DATA frame from `payload`.
+1263:    macro_rules! emit_data {
+1265:            for slice in $payload.chunks(H3_RESP_CHUNK_MAX) {
+1266:                let frame = match encode_h3_data_frame(slice) {
+1269:                        let _ = tx.send(RespEvent::Reset).await;
+1275:                    let _ = tx.send(RespEvent::Reset).await;
+1278:                send!(tx, RespEvent::Bytes(frame));
+1290:                    let _ = tx.send(RespEvent::Reset).await;
+1295:                emit_data!(&p);
+1303:                        let _ = tx.send(RespEvent::Reset).await;
+1309:                    let _ = tx.send(RespEvent::Reset).await;
+1314:                emit_data!(slice);
+1323:                    let _ = tx.send(RespEvent::Reset).await;
+1328:                    emit_data!(&d);
+1341:                        let _ = tx.send(RespEvent::Reset).await;
+1348:                    let _ = tx.send(RespEvent::Reset).await;
+1352:                    let _ = tx.send(RespEvent::Reset).await;
+1357:                    emit_data!(&d);
+1363:            // final `RespEvent::Bytes` AFTER the last DATA and BEFORE
+1367:            // `encode_h3_trailers_frame`'s no-regression note).
+1370:                let trailer_frame = match encode_h3_trailers_frame(&trailers) {
+1373:                        let _ = tx.send(RespEvent::Reset).await;
+1379:                    let _ = tx.send(RespEvent::Reset).await;
+1382:                send!(tx, RespEvent::Bytes(trailer_frame));
+1388:                emit_data!(&p);
+1394:                        let _ = tx.send(RespEvent::Reset).await;
+1402:                emit_data!(slice);
+1408:    send!(tx, RespEvent::End);
+1419:///    iff the upstream declared one]) as the FIRST [`RespEvent::Bytes`]
+1424:///    `≤ H3_RESP_CHUNK_MAX` slices, encode each as an H3 DATA frame,
+1434:///    one final post-DATA H3 trailing-HEADERS [`RespEvent::Bytes`]
+1437:/// 4. Clean end ⇒ [`RespEvent::End`] (actor FINs), `Ok(())`.
+1439:///    [`RespEvent::Reset`] + `Err(RespAbort::UpstreamReset)` so the
+1451:pub async fn stream_h2_response(
+1495:    let headers_frame = match encode_h3_headers_frame_full(parts.status.as_u16(), &fwd_headers) {
+1498:            let _ = tx.send(RespEvent::Reset).await;
+1504:        let _ = tx.send(RespEvent::Reset).await;
+1507:    send!(tx, RespEvent::Bytes(headers_frame));
+1510:    // Emit one ≤H3_RESP_CHUNK_MAX DATA frame per slice; identical
+1511:    // framing/cap discipline to `stream_h1_response`'s `emit_data!`.
+1512:    macro_rules! emit_data {
+1514:            for slice in $payload.chunks(H3_RESP_CHUNK_MAX) {
+1515:                let frame = match encode_h3_data_frame(slice) {
+1518:                        let _ = tx.send(RespEvent::Reset).await;
+1524:                    let _ = tx.send(RespEvent::Reset).await;
+1527:                send!(tx, RespEvent::Bytes(frame));
+1538:                let _ = tx.send(RespEvent::Reset).await;
+1546:                emit_data!(bytes);
+1562:                let trailer_frame = match encode_h3_trailers_frame(&trailers) {
+1565:                        let _ = tx.send(RespEvent::Reset).await;
+1571:                    let _ = tx.send(RespEvent::Reset).await;
+1574:                send!(tx, RespEvent::Bytes(trailer_frame));
+1582:    send!(tx, RespEvent::End);
+1619:            return encode_h3_response(502, b"bad gateway");
+1630:            return encode_h3_response(502, b"bad gateway");
+1635:            return encode_h3_response(502, b"bad gateway");
+1642:                return encode_h3_response(502, b"bad gateway");
+1648:    encode_h3_response(response.status, &response.body)
+1944:/// with the buffered [`read_h1_response`] + [`encode_h3_response`]
+1974:            return encode_h3_response(502, b"bad gateway");
+1990:                    return encode_h3_response(502, b"bad gateway");
+2000:                return encode_h3_response(status, body);
+2006:                return encode_h3_response(502, b"bad gateway");
+2012:    encode_h3_response(response.status, &response.body)
+2039:/// `RespEvent::End` and will FIN), or `Err(RespAbort)` describing why
+2040:/// it aborted (the actor already saw the matching `RespEvent::Reset`
+2041:/// and will `RESET_STREAM` with `H3_INTERNAL_ERROR`). The request-write
+2056:        if let Ok(bytes) = encode_h3_response(status, body) {
+2057:            let _ = tx.send(RespEvent::Bytes(Bytes::from(bytes))).await;
+2058:            let _ = tx.send(RespEvent::End).await;
+2060:            let _ = tx.send(RespEvent::Reset).await;
+2298:/// Returns `Ok(())` once the response was fully piped (`RespEvent::End`
+2313:        if let Ok(bytes) = encode_h3_response(status, body) {
+2314:            let _ = tx.send(RespEvent::Bytes(Bytes::from(bytes))).await;
+2315:            let _ = tx.send(RespEvent::End).await;
+2317:            let _ = tx.send(RespEvent::Reset).await;
+2617:///   [`encode_h3_headers_frame_full`] (`:status` plus the FULL
+2620:///   via `encode_h3_data_frame`, the trailers via
+2621:///   `encode_h3_trailers_frame` — and sends them on a
+2638:pub enum H3RespOut {
+2660:impl H3RespOut {
+2666:    /// `encode_h3_response(status, body)` → one `RespEvent::Bytes` +
+2667:    /// `End`, or `RespEvent::Reset` on encode failure.
+2673:                if let Ok(bytes) = encode_h3_response(status, body) {
+2674:                    let _ = tx.send(RespEvent::Bytes(Bytes::from(bytes))).await;
+2675:                    let _ = tx.send(RespEvent::End).await;
+2677:                    let _ = tx.send(RespEvent::Reset).await;
+2682:                    .send(H3RespEvent::Head {
+2689:                        .send(H3RespEvent::Body(Bytes::copy_from_slice(body)))
+2692:                let _ = tx.send(H3RespEvent::End).await;
+2703:    /// [`encode_h3_headers_frame_full`] — CF-H3H3-HEAD fix. Pre-S12 this
+2710:    async fn on_head(&mut self, fields: &[(String, String)]) -> Result<(), RespAbort> {
+2738:                let head = match encode_h3_headers_frame_full(status, &headers) {
+2741:                        let _ = tx.send(RespEvent::Reset).await;
+2747:                    let _ = tx.send(RespEvent::Reset).await;
+2750:                tx.send(RespEvent::Bytes(head))
+2766:                tx.send(H3RespEvent::Head { status, headers })
+2773:    /// Relay one response-body slice (≤ [`H3_RESP_CHUNK_MAX`]).
+2775:    /// `Wire`: `encode_h3_data_frame(slice)` → `RespEvent::Bytes`,
+2776:    /// byte-identical. `Decoded`: `H3RespEvent::Body(slice)`.
+2777:    async fn on_data(&mut self, slice: &[u8]) -> Result<(), RespAbort> {
+2780:                let data_frame = match encode_h3_data_frame(slice) {
+2783:                        let _ = tx.send(RespEvent::Reset).await;
+2789:                    let _ = tx.send(RespEvent::Reset).await;
+2792:                tx.send(RespEvent::Bytes(data_frame))
+2799:                    let _ = tx.send(H3RespEvent::Reset).await;
+2802:                tx.send(H3RespEvent::Body(Bytes::copy_from_slice(slice)))
+2811:    /// `Wire`: `encode_h3_trailers_frame(trailers)` → `RespEvent::Bytes`,
+2812:    /// byte-identical. `Decoded`: `H3RespEvent::Trailers(trailers)`.
+2813:    async fn on_trailers(&mut self, trailers: Vec<(String, String)>) -> Result<(), RespAbort> {
+2816:                let tf = match encode_h3_trailers_frame(&trailers) {
+2819:                        let _ = tx.send(RespEvent::Reset).await;
+2825:                    let _ = tx.send(RespEvent::Reset).await;
+2828:                tx.send(RespEvent::Bytes(tf))
+2833:                .send(H3RespEvent::Trailers(trailers))
+2843:                .send(RespEvent::End)
+2847:                .send(H3RespEvent::End)
+2859:                let _ = tx.send(RespEvent::Reset).await;
+2862:                let _ = tx.send(H3RespEvent::Reset).await;
+2874:/// connector with an [`H3RespOut::Wire`] sink (re-encoding the decoded
+2904:    let sink = H3RespOut::Wire {
+2920:/// (H3_RESP_CHUNK_MAX + H3_FRAME_HDR_MAX)` + one in-hand frame) —
+2933:/// [`H3RespOut`] sink: `Wire` reproduces the H3→H3 wire bytes
+2987:///   `≤ H3_RESP_CHUNK_MAX` slices through the per-front [`H3RespOut`]
+2988:///   sink (`Wire`: re-encoded via [`encode_h3_data_frame`];
+2989:///   `Decoded`: forwarded as [`H3RespEvent::Body`]) and dropped — with
+3023:    mut sink: H3RespOut,
+3189:        let trailer_frame = match encode_h3_trailers_frame(&bodyless_trailers) {
+3266:    // per-front `sink` — see `H3RespOut` — so the cap accounting is
+3297:            Some(b0) => match encode_h3_data_frame(&b0) {
+3517:                    // ≤H3_RESP_CHUNK_MAX slices and DROP it — the DATA
+3522:                        let stop = (off + H3_RESP_CHUNK_MAX).min(end);
+3525:                        // `Wire`: `encode_h3_data_frame` + cap + Bytes
+3529:                        match sink.on_data(slice).await {
+3589:                                // `Wire`: `encode_h3_trailers_frame` +
+3591:                                // `Decoded`: `H3RespEvent::Trailers`.
+3592:                                match sink.on_trailers(trailers).await {
+3608:                            // to H3 via `encode_h3_headers_frame_full`,
+3610:                            send_progress!(sink.on_head(&fields).await);
+3713:                        let tf = match encode_h3_trailers_frame(&trailers) {
+3872:/// request). `Err` from [`encode_h3_data_frame`] maps to `AbortNoFin`
+3882:        Some(ReqBodyEvent::Chunk(b)) => match encode_h3_data_frame(&b) {
+4122:    fn encode_h3_response_includes_status_and_body() {
+4123:        let bytes = encode_h3_response(200, b"hello").unwrap();
+4291:    /// `encode_h3_headers_frame(status, Some(len)) + encode_h3_data_frame`
+4292:    /// is BYTE-IDENTICAL to the monolithic `encode_h3_response` (every
+4295:    fn encode_h3_response_is_byte_identical_to_split_helpers() {
+4302:            let whole = encode_h3_response(status, body).unwrap();
+4304:            split.extend_from_slice(&encode_h3_headers_frame(status, Some(body.len())).unwrap());
+4305:            split.extend_from_slice(&encode_h3_data_frame(body).unwrap());
+4321:    ///     `ceil(len / H3_RESP_CHUNK_MAX)` DATA frames each ≤ the cap;
+4327:        let with_len = encode_h3_headers_frame(200, Some(1234)).unwrap();
+4338:        let no_len = encode_h3_headers_frame(204, None).unwrap();
+4349:        // (c) a body larger than H3_RESP_CHUNK_MAX is emitted as
+4350:        // multiple DATA frames, each payload ≤ H3_RESP_CHUNK_MAX —
+4351:        // exactly the `emit_data!` split loop in stream_h2_response.
+4352:        let big = vec![0xABu8; H3_RESP_CHUNK_MAX * 2 + 7];
+4355:        for slice in big.chunks(H3_RESP_CHUNK_MAX) {
+4356:            assert!(slice.len() <= H3_RESP_CHUNK_MAX);
+4357:            let enc = encode_h3_data_frame(slice).unwrap();
+4370:        // frame before encode_h3_trailers_frame).
+4381:        let tf = encode_h3_trailers_frame(&filtered).unwrap();
+4605:                RespEvent::Bytes(b) => blob.extend_from_slice(&b),
+4606:                RespEvent::End => saw_end = true,
+4607:                RespEvent::Reset => panic!("413 path must not Reset"),
+4646:                RespEvent::Bytes(b) => blob2.extend_from_slice(&b),
+4647:                RespEvent::End => saw_end2 = true,
+4648:                RespEvent::Reset => {}
+4667:    fn encode_h3_headers_frame_none_omits_content_length() {
+4668:        let f = encode_h3_headers_frame(200, None).unwrap();
+4829:        let hf = encode_h3_headers_frame(200, Some(5)).unwrap();
+4843:        let body = vec![0xABu8; H3_RESP_CHUNK_MAX * 2 + 7];
+4844:        let dfr = encode_h3_data_frame(&body).unwrap();
+4862:        //     `encode_h3_data_frame` per ≤H3_RESP_CHUNK_MAX slice — a
+4866:        for slice in body.chunks(H3_RESP_CHUNK_MAX) {
+4867:            let f = encode_h3_data_frame(slice).unwrap();
+4907:                // Byte-identical to a fresh encode_h3_data_frame...
+4908:                assert_eq!(frame, encode_h3_data_frame(&payload).unwrap());
+5043:    /// trailing field section as `H3RespEvent::Trailers`, with the
+5053:    async fn s12_decoded_sink_on_trailers_emits_h3respevent_trailers() {
+5055:        let mut sink = H3RespOut::Decoded {
+5064:        let r = sink.on_trailers(trailers.clone()).await;
+5065:        assert!(r.is_ok(), "on_trailers with a live channel returns Ok");
+5067:            Ok(H3RespEvent::Trailers(got)) => assert_eq!(
+5070:                 verbatim as H3RespEvent::Trailers"
+5072:            other => panic!("expected H3RespEvent::Trailers, got {other:?}"),
+5077:    /// sink's `on_head` MUST forward the FULL non-pseudo response header
+5081:    /// `encode_h3_headers_frame_full`).
+5083:    async fn s12_decoded_sink_on_head_forwards_full_nonpseudo_set() {
+5085:        let mut sink = H3RespOut::Decoded {
+5096:        let r = sink.on_head(&fields).await;
+5097:        assert!(r.is_ok(), "on_head with a live channel returns Ok");
+5099:            Ok(H3RespEvent::Head { status, headers }) => {
+5113:            other => panic!("expected H3RespEvent::Head, got {other:?}"),
