@@ -51,7 +51,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use lb_h3::{H3Frame, QpackDecoder, QpackEncoder, decode_frame, encode_frame};
+use lb_h3::{H3Frame, QpackEncoder, decode_frame, encode_frame};
 use lb_io::Runtime;
 use lb_io::pool::{PoolConfig, TcpPool};
 use lb_io::sockopts::BackendSockOpts;
@@ -91,6 +91,26 @@ const NON_UTF8: &[u8] = &[0xFF, 0x00, 0x80];
 /// function so the R-tests bind it then).
 fn resp_retained_ceiling(depth: usize, chunk_max: usize, frame_hdr_max: usize) -> usize {
     4 * (depth * (chunk_max + frame_hdr_max))
+}
+
+/// SESSION 24 / INC-3: decode a RESPONSE QPACK field block emitted by
+/// the migrated egress (quiche::h3 encoder Huffman-encodes values); the
+/// hand-rolled `lb_h3::QpackDecoder` is raw-only.
+#[allow(dead_code)]
+fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, String> {
+    use quiche::h3::NameValue;
+    let hdrs = quiche::h3::qpack::Decoder::new()
+        .decode(header_block, u64::MAX)
+        .map_err(|e| format!("qpack decode: {e:?}"))?;
+    Ok(hdrs
+        .iter()
+        .map(|h| {
+            (
+                String::from_utf8_lossy(h.name()).into_owned(),
+                String::from_utf8_lossy(h.value()).into_owned(),
+            )
+        })
+        .collect())
 }
 
 static DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -643,9 +663,9 @@ async fn drive_h3_response_client(
                 match decode_frame(&rx_tail, 1 << 20) {
                     Ok((H3Frame::Headers { header_block }, c)) => {
                         rx_tail.drain(..c);
-                        let hdrs = QpackDecoder::new()
-                            .decode(&header_block)
-                            .map_err(|e| format!("qpack decode: {e}"))?;
+                        // SESSION 24 / INC-3: Huffman-capable QPACK
+                        // decode of the quiche-encoded response head.
+                        let hdrs = decode_resp_qpack(&header_block)?;
                         if hdrs.iter().any(|(n, _)| n == ":status") {
                             for (n, v) in hdrs {
                                 if n == ":status" {
@@ -934,9 +954,9 @@ async fn drive_h3_response_client_stalled(
                     match decode_frame(&rx_tail, 1 << 20) {
                         Ok((H3Frame::Headers { header_block }, c)) => {
                             rx_tail.drain(..c);
-                            let hdrs = QpackDecoder::new()
-                                .decode(&header_block)
-                                .map_err(|e| format!("qpack decode: {e}"))?;
+                            // SESSION 24 / INC-3: Huffman-capable QPACK
+                            // decode of the quiche-encoded response head.
+                            let hdrs = decode_resp_qpack(&header_block)?;
                             for (n, v) in hdrs {
                                 if n == ":status" {
                                     status = Some(v.parse().map_err(|_| "status".to_string())?);

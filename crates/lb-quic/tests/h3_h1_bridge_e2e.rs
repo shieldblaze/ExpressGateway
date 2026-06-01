@@ -35,7 +35,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use lb_h3::{H3Frame, QpackDecoder, QpackEncoder, decode_frame, encode_frame};
+use lb_h3::{H3Frame, QpackEncoder, decode_frame, encode_frame};
 use lb_io::Runtime;
 use lb_io::pool::{PoolConfig, TcpPool};
 use lb_io::sockopts::BackendSockOpts;
@@ -214,6 +214,27 @@ async fn spawn_capturing_h1_backend() -> (
 
 /// Drive a client quiche::Connection through handshake, send a single
 /// H3 GET on bidi stream 0, and collect the response status + body.
+/// SESSION 24 / INC-3: decode a RESPONSE QPACK field block emitted by
+/// the migrated egress (the actor's `quiche::h3` encoder, which
+/// Huffman-encodes values). Uses quiche's Huffman-capable QPACK decoder
+/// — the hand-rolled `lb_h3::QpackDecoder` is raw-only. Returns the
+/// `(name, value)` pairs as UTF-8 strings.
+fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, String> {
+    use quiche::h3::NameValue;
+    let hdrs = quiche::h3::qpack::Decoder::new()
+        .decode(header_block, u64::MAX)
+        .map_err(|e| format!("qpack decode: {e:?}"))?;
+    Ok(hdrs
+        .iter()
+        .map(|h| {
+            (
+                String::from_utf8_lossy(h.name()).into_owned(),
+                String::from_utf8_lossy(h.value()).into_owned(),
+            )
+        })
+        .collect())
+}
+
 async fn drive_h3_get(
     mut conn: quiche::Connection,
     socket: &UdpSocket,
@@ -293,9 +314,14 @@ async fn drive_h3_get(
                 match decode_frame(&rx_tail, 1 << 20) {
                     Ok((H3Frame::Headers { header_block }, consumed)) => {
                         rx_tail.drain(..consumed);
-                        let hdrs = QpackDecoder::new()
-                            .decode(&header_block)
-                            .map_err(|e| format!("qpack decode: {e}"))?;
+                        // SESSION 24 / INC-3: the server (actor) now
+                        // encodes the response field section with
+                        // quiche::h3's QPACK, which Huffman-encodes
+                        // values. The hand-rolled `lb_h3::QpackDecoder`
+                        // has no Huffman support, so this client decodes
+                        // the RESPONSE head with quiche's decoder (same
+                        // adaptation as INC-2's ingress client swap).
+                        let hdrs = decode_resp_qpack(&header_block)?;
                         for (n, v) in hdrs {
                             if n == ":status" {
                                 decoded_status = Some(v.parse::<u16>().map_err(|e| e.to_string())?);

@@ -180,17 +180,41 @@ pub const H3_FRAME_HDR_MAX: usize = MAX_FRAME_HEADER_BYTES;
 /// intentionally NOT fixed here.
 pub const H3_RESP_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// SESSION 4 / P1-A: one unit of the bounded response byte-pipe from
-/// the H1-upstream reader task ([`stream_h1_response`]) back to the
-/// actor. PRE-ENCODED H3 wire bytes so the actor-side drain stays a
-/// uniform byte queue (the producer owns ALL H3 framing: HEADERS /
-/// DATA / trailing-HEADERS). H2/H3 + inline-error responses do NOT use
-/// this channel — they remain on the legacy buffered path.
+/// SESSION 4 / P1-A: one unit of the bounded response pipe from the
+/// upstream reader task ([`stream_h1_response`] / [`stream_h2_response`]
+/// / the H3→H3 wire connector) back to the actor.
+///
+/// SESSION 24 / INC-3: this is now a **DECODED** event (not pre-encoded
+/// H3 wire bytes). The actor's `quiche::h3::Connection` owns ALL H3
+/// framing (HEADERS / DATA / trailing-HEADERS via
+/// `send_response`/`send_body`/`send_additional_headers`), so the
+/// producers hand back the decoded head / body chunks / trailers and
+/// the actor encodes. The producer still owns the hop-by-hop strip,
+/// content-length management, and the R8 body chunking (≤
+/// [`H3_RESP_CHUNK_MAX`] per `Body`). Ordering contract: exactly one
+/// [`Head`](Self::Head) first, then zero or more [`Body`](Self::Body)
+/// chunks, then an OPTIONAL [`Trailers`](Self::Trailers), then
+/// [`End`](Self::End); on ANY abort a single [`Reset`](Self::Reset) and
+/// NEVER `End`.
 #[derive(Debug, Clone)]
 pub enum RespEvent {
-    /// Pre-encoded H3 wire bytes to `stream_send` to the client as-is.
-    Bytes(Bytes),
-    /// All response bytes delivered — the actor sets FIN on the client
+    /// The response head. `status` is the `:status`; `headers` is the
+    /// hop-by-hop-stripped, content-length-managed non-pseudo field
+    /// list. Emitted exactly once, before any `Body`.
+    Head {
+        /// Parsed response status code.
+        status: u16,
+        /// Decoded non-pseudo response headers (hop-by-hop stripped).
+        headers: Vec<(String, String)>,
+    },
+    /// A decoded response-body chunk (≤ [`H3_RESP_CHUNK_MAX`],
+    /// producer-split — the R8 bound).
+    Body(Bytes),
+    /// The RFC 9114 §4.1 trailing field section (post-DATA HEADERS),
+    /// hop-by-hop stripped. Emitted only when non-empty, after the last
+    /// `Body` and before `End`.
+    Trailers(Vec<(String, String)>),
+    /// All response events delivered — the actor sets FIN on the client
     /// stream.
     End,
     /// Abort: the actor RESET_STREAMs the client (never FIN). Emitted
@@ -1243,39 +1267,39 @@ pub async fn stream_h1_response(
     if let RespFraming::ContentLength(n) = &framing {
         fwd_headers.push(("content-length".to_string(), n.to_string()));
     }
-    let headers_frame = match encode_h3_headers_frame_full(status, &fwd_headers) {
-        Ok(f) => f,
-        Err(_) => {
-            let _ = tx.send(RespEvent::Reset).await;
-            return Err(RespAbort::BadHead);
-        }
-    };
+    // SESSION 24 / INC-3: emit the DECODED head (the actor encodes via
+    // `quiche::h3::send_response`). `fwd_headers` is already
+    // hop-by-hop-stripped + content-length-managed above; we just stop
+    // encoding here. The `cap`/`total` accounting now counts the
+    // decoded header byte length (a DoS threshold, not a memory bound —
+    // mirrors how the Decoded arm counts decoded bytes).
     let mut total: usize = 0;
-    if headers_frame.len() > cap {
+    total = total.saturating_add(fwd_headers.iter().map(|(n, v)| n.len() + v.len()).sum());
+    if total > cap {
         let _ = tx.send(RespEvent::Reset).await;
         return Err(RespAbort::OverCap);
     }
-    total = total.saturating_add(headers_frame.len());
-    send!(tx, RespEvent::Bytes(headers_frame));
+    send!(
+        tx,
+        RespEvent::Head {
+            status,
+            headers: fwd_headers.clone(),
+        }
+    );
 
     // --- 3. stream the body per framing, as it arrives ---
-    // Emit one ≤H3_RESP_CHUNK_MAX DATA frame from `payload`.
+    // Emit one ≤H3_RESP_CHUNK_MAX DATA chunk from `payload` (the actor
+    // encodes the DATA frame via `send_body`). `cap`/`total` counts
+    // PAYLOAD bytes.
     macro_rules! emit_data {
         ($payload:expr) => {{
             for slice in $payload.chunks(H3_RESP_CHUNK_MAX) {
-                let frame = match encode_h3_data_frame(slice) {
-                    Ok(f) => f,
-                    Err(_) => {
-                        let _ = tx.send(RespEvent::Reset).await;
-                        return Err(RespAbort::UpstreamReset);
-                    }
-                };
-                total = total.saturating_add(frame.len());
+                total = total.saturating_add(slice.len());
                 if total > cap {
                     let _ = tx.send(RespEvent::Reset).await;
                     return Err(RespAbort::OverCap);
                 }
-                send!(tx, RespEvent::Bytes(frame));
+                send!(tx, RespEvent::Body(Bytes::copy_from_slice(slice)));
             }
         }};
     }
@@ -1359,27 +1383,20 @@ pub async fn stream_h1_response(
             }
             // SESSION 4 / P1-C (C4): trailing-HEADERS-after-DATA. The
             // RFC 9112 §7.1.2 chunked trailer section maps to an
-            // RFC 9114 §4.1 H3 trailing HEADERS frame, emitted as ONE
-            // final `RespEvent::Bytes` AFTER the last DATA and BEFORE
+            // RFC 9114 §4.1 H3 trailing field section, emitted as ONE
+            // final `RespEvent::Trailers` AFTER the last DATA and BEFORE
             // `End` (never before the body; never on an abort — any
-            // abort returned above without reaching here). Reuses the
-            // same QPACK/frame encode as `request_h3_upstream` (see
-            // `encode_h3_trailers_frame`'s no-regression note).
+            // abort returned above without reaching here). SESSION 24 /
+            // INC-3: emitted DECODED; the actor encodes via
+            // `send_additional_headers`.
             let trailers = dec.take_trailers();
             if !trailers.is_empty() {
-                let trailer_frame = match encode_h3_trailers_frame(&trailers) {
-                    Ok(f) => f,
-                    Err(_) => {
-                        let _ = tx.send(RespEvent::Reset).await;
-                        return Err(RespAbort::UpstreamReset);
-                    }
-                };
-                total = total.saturating_add(trailer_frame.len());
+                total = total.saturating_add(trailers.iter().map(|(n, v)| n.len() + v.len()).sum());
                 if total > cap {
                     let _ = tx.send(RespEvent::Reset).await;
                     return Err(RespAbort::OverCap);
                 }
-                send!(tx, RespEvent::Bytes(trailer_frame));
+                send!(tx, RespEvent::Trailers(trailers));
             }
         }
         RespFraming::Eof => {
@@ -1492,39 +1509,36 @@ pub async fn stream_h2_response(
     if let Some(n) = declared_len {
         fwd_headers.push(("content-length".to_string(), n.to_string()));
     }
-    let headers_frame = match encode_h3_headers_frame_full(parts.status.as_u16(), &fwd_headers) {
-        Ok(f) => f,
-        Err(_) => {
-            let _ = tx.send(RespEvent::Reset).await;
-            return Err(RespAbort::BadHead);
-        }
-    };
-    let mut total: usize = headers_frame.len();
+    // SESSION 24 / INC-3: emit the DECODED head (the actor encodes via
+    // `send_response`). `cap`/`total` counts decoded header bytes
+    // (DoS threshold, not a memory bound).
+    let mut total: usize = fwd_headers.iter().map(|(n, v)| n.len() + v.len()).sum();
     if total > cap {
         let _ = tx.send(RespEvent::Reset).await;
         return Err(RespAbort::OverCap);
     }
-    send!(tx, RespEvent::Bytes(headers_frame));
+    send!(
+        tx,
+        RespEvent::Head {
+            status: parts.status.as_u16(),
+            headers: fwd_headers.clone(),
+        }
+    );
 
     // --- 2/3. stream body frames as they arrive ---
-    // Emit one ≤H3_RESP_CHUNK_MAX DATA frame per slice; identical
-    // framing/cap discipline to `stream_h1_response`'s `emit_data!`.
+    // Emit one ≤H3_RESP_CHUNK_MAX DATA chunk per slice (the actor
+    // encodes the DATA frame via `send_body`); identical framing/cap
+    // discipline to `stream_h1_response`'s `emit_data!`. `cap`/`total`
+    // counts PAYLOAD bytes.
     macro_rules! emit_data {
         ($payload:expr) => {{
             for slice in $payload.chunks(H3_RESP_CHUNK_MAX) {
-                let frame = match encode_h3_data_frame(slice) {
-                    Ok(f) => f,
-                    Err(_) => {
-                        let _ = tx.send(RespEvent::Reset).await;
-                        return Err(RespAbort::UpstreamReset);
-                    }
-                };
-                total = total.saturating_add(frame.len());
+                total = total.saturating_add(slice.len());
                 if total > cap {
                     let _ = tx.send(RespEvent::Reset).await;
                     return Err(RespAbort::OverCap);
                 }
-                send!(tx, RespEvent::Bytes(frame));
+                send!(tx, RespEvent::Body(Bytes::copy_from_slice(slice)));
             }
         }};
     }
@@ -1559,19 +1573,14 @@ pub async fn stream_h2_response(
                 })
                 .collect();
             if !trailers.is_empty() {
-                let trailer_frame = match encode_h3_trailers_frame(&trailers) {
-                    Ok(f) => f,
-                    Err(_) => {
-                        let _ = tx.send(RespEvent::Reset).await;
-                        return Err(RespAbort::UpstreamReset);
-                    }
-                };
-                total = total.saturating_add(trailer_frame.len());
+                // SESSION 24 / INC-3: emit DECODED trailers (the actor
+                // encodes via `send_additional_headers`).
+                total = total.saturating_add(trailers.iter().map(|(n, v)| n.len() + v.len()).sum());
                 if total > cap {
                     let _ = tx.send(RespEvent::Reset).await;
                     return Err(RespAbort::OverCap);
                 }
-                send!(tx, RespEvent::Bytes(trailer_frame));
+                send!(tx, RespEvent::Trailers(trailers));
             }
         }
         // Any other frame kind (none currently in http-body 1.x) is
@@ -2049,16 +2058,22 @@ pub async fn h3_to_h1_stream_resp(
     resp_tx: tokio::sync::mpsc::Sender<RespEvent>,
     cap: usize,
 ) -> Result<(), RespAbort> {
-    /// Emit a complete inline H3 response (HEADERS+DATA) then `End`,
-    /// for the request-write abort/error paths. Best-effort: a closed
-    /// channel (client already gone) just means nobody is listening.
+    /// Emit a complete inline H3 response (Head+Body) then `End`, for
+    /// the request-write abort/error paths. SESSION 24 / INC-3: emits
+    /// DECODED events (the actor encodes via `quiche::h3`). Best-effort:
+    /// a closed channel (client already gone) just means nobody is
+    /// listening.
     async fn inline(tx: &tokio::sync::mpsc::Sender<RespEvent>, status: u16, body: &[u8]) {
-        if let Ok(bytes) = encode_h3_response(status, body) {
-            let _ = tx.send(RespEvent::Bytes(Bytes::from(bytes))).await;
-            let _ = tx.send(RespEvent::End).await;
-        } else {
-            let _ = tx.send(RespEvent::Reset).await;
+        let _ = tx
+            .send(RespEvent::Head {
+                status,
+                headers: Vec::new(),
+            })
+            .await;
+        if !body.is_empty() {
+            let _ = tx.send(RespEvent::Body(Bytes::copy_from_slice(body))).await;
         }
+        let _ = tx.send(RespEvent::End).await;
     }
 
     let mut pooled = match pool.acquire_async(backend).await {
@@ -2306,16 +2321,22 @@ pub async fn h3_to_h2_stream_resp(
     resp_tx: tokio::sync::mpsc::Sender<RespEvent>,
     cap: usize,
 ) -> Result<(), RespAbort> {
-    /// Emit a complete inline H3 response (HEADERS+DATA) then `End`.
-    /// Best-effort: a closed channel (client gone) just means nobody
-    /// is listening. Identical helper to `h3_to_h1_stream_resp`'s.
+    /// Emit a complete inline H3 response (Head+Body) then `End`.
+    /// SESSION 24 / INC-3: emits DECODED events (the actor encodes via
+    /// `quiche::h3`). Best-effort: a closed channel (client gone) just
+    /// means nobody is listening. Identical helper to
+    /// `h3_to_h1_stream_resp`'s.
     async fn inline(tx: &tokio::sync::mpsc::Sender<RespEvent>, status: u16, body: &[u8]) {
-        if let Ok(bytes) = encode_h3_response(status, body) {
-            let _ = tx.send(RespEvent::Bytes(Bytes::from(bytes))).await;
-            let _ = tx.send(RespEvent::End).await;
-        } else {
-            let _ = tx.send(RespEvent::Reset).await;
+        let _ = tx
+            .send(RespEvent::Head {
+                status,
+                headers: Vec::new(),
+            })
+            .await;
+        if !body.is_empty() {
+            let _ = tx.send(RespEvent::Body(Bytes::copy_from_slice(body))).await;
         }
+        let _ = tx.send(RespEvent::End).await;
     }
 
     // Peek the FIRST body event (bounded — one event) to choose
@@ -2670,12 +2691,20 @@ impl H3RespOut {
     async fn inline(&mut self, status: u16, body: &[u8]) {
         match self {
             Self::Wire { tx, .. } => {
-                if let Ok(bytes) = encode_h3_response(status, body) {
-                    let _ = tx.send(RespEvent::Bytes(Bytes::from(bytes))).await;
-                    let _ = tx.send(RespEvent::End).await;
-                } else {
-                    let _ = tx.send(RespEvent::Reset).await;
+                // SESSION 24 / INC-3: emit DECODED Head + Body + End
+                // (the actor encodes). No encode step now, so there is
+                // no Reset-on-encode-failure path; a closed channel just
+                // means nobody is listening.
+                let _ = tx
+                    .send(RespEvent::Head {
+                        status,
+                        headers: Vec::new(),
+                    })
+                    .await;
+                if !body.is_empty() {
+                    let _ = tx.send(RespEvent::Body(Bytes::copy_from_slice(body))).await;
                 }
+                let _ = tx.send(RespEvent::End).await;
             }
             Self::Decoded { tx, .. } => {
                 let _ = tx
@@ -2735,19 +2764,16 @@ impl H3RespOut {
                         headers.push((n.clone(), v.clone()));
                     }
                 }
-                let head = match encode_h3_headers_frame_full(status, &headers) {
-                    Ok(f) => f,
-                    Err(_) => {
-                        let _ = tx.send(RespEvent::Reset).await;
-                        return Err(RespAbort::BadHead);
-                    }
-                };
-                *total = total.saturating_add(head.len());
+                // SESSION 24 / INC-3: emit the DECODED head (the actor
+                // encodes via `send_response`). The hop-by-hop strip +
+                // :status parse above are UNCHANGED (RFC 9114 §4.2);
+                // `cap`/`total` counts decoded header bytes.
+                *total = total.saturating_add(headers.iter().map(|(n, v)| n.len() + v.len()).sum());
                 if *total > *cap {
                     let _ = tx.send(RespEvent::Reset).await;
                     return Err(RespAbort::OverCap);
                 }
-                tx.send(RespEvent::Bytes(head))
+                tx.send(RespEvent::Head { status, headers })
                     .await
                     .map_err(|_| RespAbort::ClientGone)
             }
@@ -2777,19 +2803,14 @@ impl H3RespOut {
     async fn on_data(&mut self, slice: &[u8]) -> Result<(), RespAbort> {
         match self {
             Self::Wire { tx, total, cap } => {
-                let data_frame = match encode_h3_data_frame(slice) {
-                    Ok(f) => f,
-                    Err(_) => {
-                        let _ = tx.send(RespEvent::Reset).await;
-                        return Err(RespAbort::UpstreamReset);
-                    }
-                };
-                *total = total.saturating_add(data_frame.len());
+                // SESSION 24 / INC-3: emit DECODED Body (the actor
+                // encodes via `send_body`); `cap`/`total` counts payload.
+                *total = total.saturating_add(slice.len());
                 if *total > *cap {
                     let _ = tx.send(RespEvent::Reset).await;
                     return Err(RespAbort::OverCap);
                 }
-                tx.send(RespEvent::Bytes(data_frame))
+                tx.send(RespEvent::Body(Bytes::copy_from_slice(slice)))
                     .await
                     .map_err(|_| RespAbort::ClientGone)
             }
@@ -2813,19 +2834,16 @@ impl H3RespOut {
     async fn on_trailers(&mut self, trailers: Vec<(String, String)>) -> Result<(), RespAbort> {
         match self {
             Self::Wire { tx, total, cap } => {
-                let tf = match encode_h3_trailers_frame(&trailers) {
-                    Ok(f) => f,
-                    Err(_) => {
-                        let _ = tx.send(RespEvent::Reset).await;
-                        return Err(RespAbort::UpstreamReset);
-                    }
-                };
-                *total = total.saturating_add(tf.len());
+                // SESSION 24 / INC-3: emit DECODED trailers (the actor
+                // encodes via `send_additional_headers`); `cap`/`total`
+                // counts decoded trailer bytes.
+                *total =
+                    total.saturating_add(trailers.iter().map(|(n, v)| n.len() + v.len()).sum());
                 if *total > *cap {
                     let _ = tx.send(RespEvent::Reset).await;
                     return Err(RespAbort::OverCap);
                 }
-                tx.send(RespEvent::Bytes(tf))
+                tx.send(RespEvent::Trailers(trailers))
                     .await
                     .map_err(|_| RespAbort::ClientGone)
             }
@@ -4597,27 +4615,22 @@ mod tests {
         let (rtx, mut rrx) = tokio::sync::mpsc::channel::<RespEvent>(8);
         let r = h3_to_h2_stream_resp(&req, addr, &pool, brx, rtx, MAX_RESPONSE_BODY_BYTES).await;
         assert!(r.is_ok(), "pre-data Reset path returns Ok(())");
-        // The inline 413 HEADERS+DATA then End must be on the channel.
+        // SESSION 24 / INC-3: the inline 413 is now DECODED — a
+        // `Head { status: 413 }` then `End` on the channel (the actor
+        // encodes). The assertion (status == 413, clean End, no Reset)
+        // is unchanged; only the on-wire→decoded harness shape is.
         let mut saw_end = false;
-        let mut blob: Vec<u8> = Vec::new();
+        let mut head_status: Option<u16> = None;
         while let Ok(ev) = rrx.try_recv() {
             match ev {
-                RespEvent::Bytes(b) => blob.extend_from_slice(&b),
+                RespEvent::Head { status, .. } => head_status = Some(status),
+                RespEvent::Body(_) | RespEvent::Trailers(_) => {}
                 RespEvent::End => saw_end = true,
                 RespEvent::Reset => panic!("413 path must not Reset"),
             }
         }
         assert!(saw_end, "inline path must emit End");
-        // Decode the inline response status == 413.
-        let (f, _c) = decode_frame(&blob, 1 << 20).expect("inline HEADERS decodes");
-        let H3Frame::Headers { header_block } = f else {
-            panic!("expected HEADERS");
-        };
-        let hdrs = QpackDecoder::new().decode(&header_block).unwrap();
-        assert!(
-            hdrs.iter().any(|(n, v)| n == ":status" && v == "413"),
-            "pre-data Reset ⇒ inline 413"
-        );
+        assert_eq!(head_status, Some(413), "pre-data Reset ⇒ inline 413");
 
         // --- 502 arm: builder failure ⇒ inline 502, Ok(()) ---
         // An invalid method byte makes `Request::builder().method(..)`
@@ -4639,25 +4652,20 @@ mod tests {
         let (rtx2, mut rrx2) = tokio::sync::mpsc::channel::<RespEvent>(8);
         let r2 = h3_to_h2_stream_resp(&bad, addr, &pool, brx2, rtx2, MAX_RESPONSE_BODY_BYTES).await;
         assert!(r2.is_ok(), "builder-failure path returns Ok(())");
-        let mut blob2: Vec<u8> = Vec::new();
+        // SESSION 24 / INC-3: decoded inline 502 (`Head { status: 502 }`
+        // then `End`).
+        let mut head_status2: Option<u16> = None;
         let mut saw_end2 = false;
         while let Ok(ev) = rrx2.try_recv() {
             match ev {
-                RespEvent::Bytes(b) => blob2.extend_from_slice(&b),
+                RespEvent::Head { status, .. } => head_status2 = Some(status),
+                RespEvent::Body(_) | RespEvent::Trailers(_) => {}
                 RespEvent::End => saw_end2 = true,
                 RespEvent::Reset => {}
             }
         }
         assert!(saw_end2, "inline 502 must emit End");
-        let (f2, _c2) = decode_frame(&blob2, 1 << 20).expect("inline 502 HEADERS decodes");
-        let H3Frame::Headers { header_block: hb2 } = f2 else {
-            panic!("expected HEADERS");
-        };
-        let hdrs2 = QpackDecoder::new().decode(&hb2).unwrap();
-        assert!(
-            hdrs2.iter().any(|(n, v)| n == ":status" && v == "502"),
-            "builder failure ⇒ inline 502"
-        );
+        assert_eq!(head_status2, Some(502), "builder failure ⇒ inline 502");
         // Pool was never dialled (both arms returned pre-send_request).
         assert_eq!(pool.peer_count(), 0, "no upstream dial on inline arms");
     }

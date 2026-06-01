@@ -1,0 +1,31 @@
+##### TEST LOG STATUS #####
+exit marker:
+num 'test result: ok' lines:
+9
+any FAILED:
+0
+
+##### AGGREGATE PASS/FAIL COUNTS #####
+TOTAL passed=126 failed=0
+
+##### REQUIRED TESTS PRESENCE #####
+--- h3_h1_bridge_status_body_and_host_verbatim_through_quic_listener
+test h3_h1_bridge_status_body_and_host_verbatim_through_quic_listener ... ok
+--- t5_single_large_data_frame_is_memory_bounded_through_stalled_upstream
+test t5_single_large_data_frame_is_memory_bounded_through_stalled_upstream ... ok
+--- t4_oversized_body_yields_413
+test t4_oversized_body_yields_413_and_upstream_not_completed ... ok
+--- p1b_t1
+test p1b_t1_client_cancels_mid_body_upstream_not_completed_and_no_leak ... ok
+--- p1b_t2
+test p1b_t2_upstream_resets_mid_body_yields_502 ... ok
+--- p1b_t3
+test p1b_t3_oversized_after_partial_chunked_send_413_upstream_aborted ... ok
+--- h3h3_e2e_client_reset_midrequest_burst_current_thread
+   NOT FOUND in log
+
+##### h3_h2 / h3_h3 cells (R12) #####
+test h3_bridge::tests::g5_h3_to_h2_stream_resp_inline_413_and_502_no_dial ... ok
+test cf_h3_head_h3_to_h2_full_response_headers_round_trip ... ok
+
+##### s16_ / s19_ Mode B (R3) #####

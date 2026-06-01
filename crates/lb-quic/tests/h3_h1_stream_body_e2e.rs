@@ -52,6 +52,26 @@ const TEST_SNI: &str = "expressgateway.test";
 const MAX_UDP: usize = 65_535;
 const REQUEST_AUTHORITY: &str = "h3-stream.test:4433";
 const REQUEST_PATH: &str = "/p1a/echo";
+
+/// SESSION 24 / INC-3: decode a RESPONSE QPACK field block emitted by
+/// the migrated wire egress (quiche::h3 encoder Huffman-encodes values);
+/// the hand-rolled `lb_h3::QpackDecoder` is raw-only.
+#[allow(dead_code)]
+fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, String> {
+    use quiche::h3::NameValue;
+    let hdrs = quiche::h3::qpack::Decoder::new()
+        .decode(header_block, u64::MAX)
+        .map_err(|e| format!("qpack decode: {e:?}"))?;
+    Ok(hdrs
+        .iter()
+        .map(|h| {
+            (
+                String::from_utf8_lossy(h.name()).into_owned(),
+                String::from_utf8_lossy(h.value()).into_owned(),
+            )
+        })
+        .collect())
+}
 const UPSTREAM_STATUS: u16 = 201;
 const UPSTREAM_BODY: &[u8] = b"p1a-resp-body";
 
@@ -414,9 +434,12 @@ async fn drive_h3_body_request(
                 match decode_frame(&rx_tail, 1 << 20) {
                     Ok((H3Frame::Headers { header_block }, c)) => {
                         rx_tail.drain(..c);
-                        let hdrs = QpackDecoder::new()
-                            .decode(&header_block)
-                            .map_err(|e| format!("qpack decode: {e}"))?;
+                        // SESSION 24 / INC-3: the wire client decodes the
+                        // quiche-encoded response head with a
+                        // Huffman-capable QPACK decoder (see helper). The
+                        // buffered `h3_to_h1_stream` 413 path below still
+                        // uses the raw lb_h3 decoder (hand-rolled encode).
+                        let hdrs = decode_resp_qpack(&header_block)?;
                         for (n, v) in hdrs {
                             if n == ":status" {
                                 status = Some(v.parse().map_err(|_| "status".to_string())?);

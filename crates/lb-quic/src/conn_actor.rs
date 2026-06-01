@@ -234,8 +234,12 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
 
     loop {
         // Before waiting: push any outbound bytes from quiche + any
-        // per-stream response bytes into quiche stream_send.
-        drain_streams_to_conn(&mut params.conn, &mut stream_response);
+        // per-stream response items out. SESSION 24 / INC-3: the
+        // Progressive arm now encodes via quiche::h3 (`h3.as_mut()`); at
+        // the top-of-loop `h3` may still be `None` (pre-establishment) —
+        // that's fine, nothing to send yet. The later `poll_h3` borrow
+        // of `h3` is sequential, so the borrow checker is satisfied.
+        drain_streams_to_conn(&mut params.conn, h3.as_mut(), &mut stream_response);
         drain_conn_send(&params.socket, &mut params.conn, &mut out_buf).await;
 
         if params.conn.is_closed() {
@@ -462,6 +466,7 @@ fn drain_resp_channels(
             ended,
             reset,
             fin_sent,
+            ..
         } = tx
         else {
             continue;
@@ -485,7 +490,14 @@ fn drain_resp_channels(
         // tick ⇒ channel fills ⇒ producer `send().await` blocks ⇒
         // upstream read pauses).
         match rx.try_recv() {
-            Ok(RespEvent::Bytes(b)) => queue.push_back(b),
+            // SESSION 24 / INC-3: push the DECODED item; the actor's
+            // `drain_streams_to_conn` Progressive arm encodes it onto
+            // the `quiche::h3::Connection`.
+            Ok(RespEvent::Head { status, headers }) => {
+                queue.push_back(RespItem::Head { status, headers });
+            }
+            Ok(RespEvent::Body(b)) => queue.push_back(RespItem::Body(b)),
+            Ok(RespEvent::Trailers(t)) => queue.push_back(RespItem::Trailers(t)),
             Ok(RespEvent::End) => *ended = true,
             Ok(RespEvent::Reset) => *reset = true,
             Err(mpsc::error::TryRecvError::Empty) => {}
@@ -501,17 +513,27 @@ fn drain_resp_channels(
     // SESSION 4 / P1-B §1.5 (test-gauge): non-vacuous memory proof —
     // recorded here, the largest instant (StreamTx just refilled from
     // the channels, before `drain_streams_to_conn` ships bytes to
-    // quiche). Σ progressive-queue bytes + a sound UPPER bound on
-    // channel occupancy (`used_slots × (H3_RESP_CHUNK_MAX +
-    // H3_FRAME_HDR_MAX)` — each queued `RespEvent::Bytes` is a
-    // pre-encoded frame: ≤chunk payload + frame-header varints; the
-    // gauge must over- not under-count, parity with the request gauge).
+    // quiche). SESSION 24 / INC-3: the queue now holds DECODED items;
+    // sum `Body` bytes (the load-bearing quantity, each ≤
+    // `H3_RESP_CHUNK_MAX`) plus `Head`/`Trailers` field bytes (tiny /
+    // bounded — counted too for a sound OVER-estimate, parity with the
+    // request gauge) + a sound UPPER bound on channel occupancy
+    // (`used_slots × (H3_RESP_CHUNK_MAX + H3_FRAME_HDR_MAX)`). The gauge
+    // must over- not under-count.
     #[cfg(any(test, feature = "test-gauges"))]
     {
         let mut total: usize = 0;
         for tx in stream_response.values() {
             if let StreamTx::Progressive { queue, .. } = tx {
-                total = total.saturating_add(queue.iter().map(Bytes::len).sum());
+                for item in queue.iter() {
+                    total = total.saturating_add(match item {
+                        RespItem::Body(b) => b.len(),
+                        RespItem::Head { headers, .. } => {
+                            headers.iter().map(|(n, v)| n.len() + v.len()).sum()
+                        }
+                        RespItem::Trailers(t) => t.iter().map(|(n, v)| n.len() + v.len()).sum(),
+                    });
+                }
             }
         }
         for rx in resp_rx_by_stream.values() {
@@ -524,6 +546,27 @@ fn drain_resp_channels(
     }
 }
 
+/// SESSION 24 / INC-3: one DECODED response item queued for a
+/// `Progressive` stream. The actor encodes it onto the
+/// `quiche::h3::Connection` via `send_response` / `send_body` /
+/// `send_additional_headers`. The queue holds only bounded decoded
+/// items (the R8 egress bound) — never the whole response.
+enum RespItem {
+    /// The response head — encoded via `h3.send_response` (once).
+    Head {
+        /// `:status`.
+        status: u16,
+        /// Hop-by-hop-stripped non-pseudo response headers.
+        headers: Vec<(String, String)>,
+    },
+    /// A body chunk (≤ `H3_RESP_CHUNK_MAX`) — encoded via
+    /// `h3.send_body`; a partial write keeps the unsent tail at front.
+    Body(Bytes),
+    /// The trailing field section — encoded via
+    /// `h3.send_additional_headers(.., is_trailer=true, ..)`.
+    Trailers(Vec<(String, String)>),
+}
+
 /// Per-stream outbound cursor.
 ///
 /// Two variants. `Buffered` is the LEGACY shape (a single pre-built
@@ -531,11 +574,11 @@ fn drain_resp_channels(
 /// serves H2/H3 round-trips and the inline 400/502/413 error responses
 /// (bit-for-bit identical wire behaviour; SESSION 4 adds no buffering
 /// to that path). `Progressive` is the SESSION 4 / P1-B incremental
-/// H1-response egress: a bounded queue of pre-encoded H3 frame chunks
-/// fed by [`stream_h1_response`] over a bounded channel, drained into
-/// quiche as flow control allows. The queue + the channel are the
-/// memory bound (≈ `H3_RESP_CHANNEL_DEPTH` × chunk), independent of
-/// total response size.
+/// H1-response egress: a bounded queue of DECODED response items fed by
+/// [`stream_h1_response`] over a bounded channel, encoded into the
+/// `quiche::h3::Connection` (INC-3) as flow control allows. The queue +
+/// the channel are the memory bound (≈ `H3_RESP_CHANNEL_DEPTH` × chunk),
+/// independent of total response size.
 enum StreamTx {
     /// Legacy: one pre-built `Vec`, byte cursor + FIN-on-empty.
     Buffered {
@@ -543,15 +586,18 @@ enum StreamTx {
         sent: usize,
         finished: bool,
     },
-    /// SESSION 4 / P1-B: progressive H1 response egress.
+    /// SESSION 4 / P1-B: progressive response egress (INC-3: via
+    /// `quiche::h3`).
     ///
-    /// `queue` holds pre-encoded H3 wire chunks not yet handed to
-    /// quiche. `ended` ⇒ once `queue` drains, set FIN. `reset` ⇒
-    /// `RESET_STREAM` (never FIN) — a partial body is never presented
-    /// as complete (response-splitting / cache-poisoning guard).
-    /// `fin_sent` guards the one-shot FIN/shutdown.
+    /// `queue` holds DECODED response items not yet encoded onto the
+    /// h3 connection. `head_sent` guards the one-shot `send_response`.
+    /// `ended` ⇒ once `queue` drains, set FIN (`send_body(.., true)`).
+    /// `reset` ⇒ `RESET_STREAM` (never FIN) — a partial body is never
+    /// presented as complete (response-splitting / cache-poisoning
+    /// guard). `fin_sent` guards the one-shot FIN/shutdown.
     Progressive {
-        queue: VecDeque<Bytes>,
+        queue: VecDeque<RespItem>,
+        head_sent: bool,
         ended: bool,
         reset: bool,
         fin_sent: bool,
@@ -574,6 +620,7 @@ impl StreamTx {
     fn progressive() -> Self {
         Self::Progressive {
             queue: VecDeque::new(),
+            head_sent: false,
             ended: false,
             reset: false,
             fin_sent: false,
@@ -581,10 +628,21 @@ impl StreamTx {
     }
 }
 
-/// Pump per-stream response bytes into quiche's send buffer. We send
-/// incrementally because `stream_send` may refuse bytes when flow
-/// control is saturated.
-fn drain_streams_to_conn(conn: &mut quiche::Connection, streams: &mut HashMap<u64, StreamTx>) {
+/// Pump per-stream responses out. The `Buffered` arm raw-`stream_send`s
+/// pre-encoded bytes (INC-1 Exp4: raw bidi egress coexists with
+/// quiche::h3 ingress on one conn — unchanged). The `Progressive` arm
+/// (INC-3) encodes DECODED items onto the `quiche::h3::Connection` via
+/// `send_response`/`send_body`/`send_additional_headers`; we send
+/// incrementally because those calls may refuse bytes (`Done` /
+/// `StreamBlocked`) when the send window is saturated. `h3` is `None`
+/// until `with_transport` builds it post-establishment; while `None`
+/// the Progressive arm does nothing this tick (no h3 responses can be
+/// sent before the h3 conn exists).
+fn drain_streams_to_conn(
+    conn: &mut quiche::Connection,
+    mut h3: Option<&mut quiche::h3::Connection>,
+    streams: &mut HashMap<u64, StreamTx>,
+) {
     let mut to_drop = Vec::new();
     for (&sid, tx) in streams.iter_mut() {
         match tx {
@@ -627,9 +685,10 @@ fn drain_streams_to_conn(conn: &mut quiche::Connection, streams: &mut HashMap<u6
                     }
                 }
             }
-            // SESSION 4 / P1-B progressive H1 egress.
+            // SESSION 24 / INC-3: progressive egress via quiche::h3.
             StreamTx::Progressive {
                 queue,
+                head_sent,
                 ended,
                 reset,
                 fin_sent,
@@ -637,31 +696,107 @@ fn drain_streams_to_conn(conn: &mut quiche::Connection, streams: &mut HashMap<u6
                 if *fin_sent {
                     continue;
                 }
-                // Drain queued pre-encoded chunks front-to-back. On a
-                // short/refused send, split the front chunk so the
-                // unsent tail stays queued in order (no drop / reorder).
+                // Can't send H3 responses before `with_transport` builds
+                // the h3 conn. Do nothing this tick; the channel-refill
+                // gate keeps the (bounded) queue intact for the next.
+                let Some(h3c) = h3.as_deref_mut() else {
+                    continue;
+                };
+                // Encode queued DECODED items front-to-back. A blocked
+                // send (`Done` / `StreamBlocked`) leaves the item at the
+                // front for next tick — this partial-write/Done retry IS
+                // the egress R8 gate (never force-drain). A genuine error
+                // latches `reset`.
                 while let Some(front) = queue.front_mut() {
-                    match conn.stream_send(sid, front, false) {
-                        Ok(0) | Err(quiche::Error::Done) => break,
-                        Ok(n) if n >= front.len() => {
-                            queue.pop_front();
+                    match front {
+                        RespItem::Head { status, headers } => {
+                            if *head_sent {
+                                // Defensive: a duplicate Head can't be
+                                // sent twice — drop it.
+                                queue.pop_front();
+                                continue;
+                            }
+                            let mut h3_headers: Vec<quiche::h3::Header> =
+                                Vec::with_capacity(headers.len() + 1);
+                            h3_headers.push(quiche::h3::Header::new(
+                                b":status",
+                                status.to_string().as_bytes(),
+                            ));
+                            for (n, v) in headers.iter() {
+                                h3_headers
+                                    .push(quiche::h3::Header::new(n.as_bytes(), v.as_bytes()));
+                            }
+                            match h3c.send_response(conn, sid, &h3_headers, false) {
+                                Ok(()) => {
+                                    *head_sent = true;
+                                    queue.pop_front();
+                                }
+                                Err(quiche::h3::Error::StreamBlocked)
+                                | Err(quiche::h3::Error::Done) => break,
+                                Err(e) => {
+                                    tracing::debug!(error = %e, stream_id = sid, "h3 send_response");
+                                    *reset = true;
+                                    break;
+                                }
+                            }
                         }
-                        Ok(n) => {
-                            // Partial: advance past the sent prefix,
-                            // keep the remainder at the queue front.
-                            let _ = front.split_to(n);
-                            break;
+                        RespItem::Body(b) => {
+                            match h3c.send_body(conn, sid, b, false) {
+                                Ok(0) | Err(quiche::h3::Error::Done) => break,
+                                Ok(n) if n >= b.len() => {
+                                    queue.pop_front();
+                                }
+                                Ok(n) => {
+                                    // Partial: keep the unsent tail at the
+                                    // front (R8 gate — do NOT force-drain).
+                                    let _ = b.split_to(n);
+                                    break;
+                                }
+                                Err(quiche::h3::Error::StreamBlocked) => break,
+                                Err(e) => {
+                                    tracing::debug!(error = %e, stream_id = sid, "h3 send_body");
+                                    *reset = true;
+                                    break;
+                                }
+                            }
                         }
-                        Err(e) => {
-                            tracing::debug!(error = %e, stream_id = sid, "stream_send (resp)");
-                            break;
+                        RespItem::Trailers(t) => {
+                            let h3_trailers: Vec<quiche::h3::Header> = t
+                                .iter()
+                                .map(|(n, v)| quiche::h3::Header::new(n.as_bytes(), v.as_bytes()))
+                                .collect();
+                            // The trailing field section is ALWAYS the
+                            // terminal frame on the stream (the RespEvent
+                            // ordering contract emits Trailers only after
+                            // the last Body and immediately before End;
+                            // nothing follows it), and quiche rejects any
+                            // DATA after it. So the FIN rides on this
+                            // HEADERS frame: `fin=true`, mark terminal. A
+                            // later `End` event just sets `ended` and is
+                            // a no-op (the arm is `fin_sent`-guarded).
+                            match h3c.send_additional_headers(conn, sid, &h3_trailers, true, true) {
+                                Ok(()) => {
+                                    queue.pop_front();
+                                    *fin_sent = true;
+                                    to_drop.push(sid);
+                                    break;
+                                }
+                                Err(quiche::h3::Error::StreamBlocked)
+                                | Err(quiche::h3::Error::Done) => break,
+                                Err(e) => {
+                                    tracing::debug!(error = %e, stream_id = sid, "h3 send_additional_headers");
+                                    *reset = true;
+                                    break;
+                                }
+                            }
                         }
                     }
                 }
                 if *reset {
                     // Abort: RESET_STREAM, NEVER FIN — a partial body
                     // is never presented as a complete response (Q2 /
-                    // C1: H3_INTERNAL_ERROR, not the graceful code).
+                    // C1: H3_INTERNAL_ERROR, not the graceful code). The
+                    // transport-level shutdown is UNCHANGED.
                     match conn.stream_shutdown(sid, quiche::Shutdown::Write, H3_INTERNAL_ERROR) {
                         Ok(()) | Err(quiche::Error::Done) => {}
                         Err(e) => {
@@ -670,13 +805,15 @@ fn drain_streams_to_conn(conn: &mut quiche::Connection, streams: &mut HashMap<u6
                     }
                     *fin_sent = true;
                     to_drop.push(sid);
-                } else if *ended && queue.is_empty() {
-                    // Clean completion: FIN via a zero-length fin send
-                    // (same mechanism as the legacy branch).
-                    match conn.stream_send(sid, &[], true) {
-                        Ok(_) | Err(quiche::Error::Done) => {}
+                } else if *ended && queue.is_empty() && !*fin_sent {
+                    // Clean completion: FIN via a zero-length
+                    // `send_body(.., true)`. Skipped when the FIN already
+                    // rode on a terminal trailer section above (quiche
+                    // rejects DATA after the trailing field section).
+                    match h3c.send_body(conn, sid, &[], true) {
+                        Ok(_) | Err(quiche::h3::Error::Done) => {}
                         Err(e) => {
-                            tracing::debug!(error = %e, stream_id = sid, "stream_send FIN (resp)");
+                            tracing::debug!(error = %e, stream_id = sid, "h3 send_body FIN (resp)");
                         }
                     }
                     *fin_sent = true;

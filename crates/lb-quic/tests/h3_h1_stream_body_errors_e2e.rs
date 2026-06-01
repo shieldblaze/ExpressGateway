@@ -53,6 +53,26 @@ const H3_ALPN: &[u8] = b"h3";
 const TEST_SNI: &str = "expressgateway.test";
 const MAX_UDP: usize = 65_535;
 const REQUEST_AUTHORITY: &str = "h3-stream-err.test:4433";
+
+/// SESSION 24 / INC-3: decode a RESPONSE QPACK field block emitted by
+/// the migrated wire egress (quiche::h3 encoder Huffman-encodes values);
+/// the hand-rolled `lb_h3::QpackDecoder` is raw-only.
+#[allow(dead_code)]
+fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, String> {
+    use quiche::h3::NameValue;
+    let hdrs = quiche::h3::qpack::Decoder::new()
+        .decode(header_block, u64::MAX)
+        .map_err(|e| format!("qpack decode: {e:?}"))?;
+    Ok(hdrs
+        .iter()
+        .map(|h| {
+            (
+                String::from_utf8_lossy(h.name()).into_owned(),
+                String::from_utf8_lossy(h.value()).into_owned(),
+            )
+        })
+        .collect())
+}
 const REQUEST_PATH: &str = "/p1b/echo";
 const UPSTREAM_STATUS: u16 = 201;
 const UPSTREAM_BODY: &[u8] = b"p1b-resp-body";
@@ -297,9 +317,11 @@ impl ClientPump {
                 match decode_frame(&self.rx_tail, 1 << 20) {
                     Ok((H3Frame::Headers { header_block }, c)) => {
                         self.rx_tail.drain(..c);
-                        let hdrs = QpackDecoder::new()
-                            .decode(&header_block)
-                            .map_err(|e| format!("qpack decode: {e}"))?;
+                        // SESSION 24 / INC-3: Huffman-capable QPACK
+                        // decode of the quiche-encoded wire response head
+                        // (the buffered `h3_to_h1_stream` 413 check below
+                        // still uses the raw lb_h3 decoder).
+                        let hdrs = decode_resp_qpack(&header_block)?;
                         for (n, v) in hdrs {
                             if n == ":status" {
                                 self.status = Some(v.parse().map_err(|_| "status".to_string())?);

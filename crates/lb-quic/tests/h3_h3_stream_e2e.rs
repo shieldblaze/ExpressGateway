@@ -59,10 +59,30 @@ use lb_quic::{QuicListener, QuicListenerParams};
 use tokio::net::UdpSocket;
 use tokio_util::sync::CancellationToken;
 
-use lb_h3::{H3Frame, QpackDecoder, QpackEncoder, decode_frame, encode_frame};
+use lb_h3::{H3Frame, QpackEncoder, decode_frame, encode_frame};
 
 const TEST_SNI: &str = "expressgateway.test";
 const H3_ALPN: &[u8] = b"h3";
+
+/// SESSION 24 / INC-3: decode a RESPONSE QPACK field block emitted by
+/// the migrated egress (quiche::h3 encoder Huffman-encodes values); the
+/// hand-rolled `lb_h3::QpackDecoder` is raw-only.
+#[allow(dead_code)]
+fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, String> {
+    use quiche::h3::NameValue;
+    let hdrs = quiche::h3::qpack::Decoder::new()
+        .decode(header_block, u64::MAX)
+        .map_err(|e| format!("qpack decode: {e:?}"))?;
+    Ok(hdrs
+        .iter()
+        .map(|h| {
+            (
+                String::from_utf8_lossy(h.name()).into_owned(),
+                String::from_utf8_lossy(h.value()).into_owned(),
+            )
+        })
+        .collect())
+}
 const H3_ALPN_PROTOS: &[&[u8]] = &[b"h3", b"h3-29"];
 const MAX_UDP: usize = 65_535;
 
@@ -458,7 +478,9 @@ async fn drive_h3(
                         // any SUBSEQUENT (post-DATA) HEADERS frame is a
                         // forwarded trailer section (F-S7-8 cluster 2).
                         let is_trailer = out.resp_headers_frames > 1;
-                        if let Ok(h) = QpackDecoder::new().decode(&header_block) {
+                        // SESSION 24 / INC-3: quiche-encoded response head
+                        // ⇒ Huffman-capable QPACK decode (see helper).
+                        if let Ok(h) = decode_resp_qpack(&header_block) {
                             for (n, v) in h {
                                 if is_trailer {
                                     out.resp_trailer_names.push(n.clone());
