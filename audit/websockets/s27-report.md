@@ -38,6 +38,78 @@ Box: 8 cores, 30 GB free, ENA ens5. Shared `CARGO_TARGET_DIR=/home/ubuntu/Code/e
 
 **Phase 0: COMPLETE — baseline green ×3, F-S26-1 + F-S27-1 decisions taken.**
 
+---
+
+## PHASE 1 — WS relay core + WS-over-H2 (RFC 8441)
+
+The relay core (`WsProxy::proxy_frames`) and the WS-over-H2 implementation already existed on main;
+Phase 1 = build the missing real-wire verification to the S27 bar + harden the findings it surfaces.
+
+### Increments (author ≠ verifier on every one)
+- **INC-1 (ws-eng) `4f45f5d3`** — real-wire WS-over-H2 happy-path e2e `tests/ws_h2_e2e.rs`: raw `h2`
+  client, TLS+ALPN-h2, extended CONNECT (`h2::ext::Protocol`), 200, masked tungstenite Text+Binary
+  echo through the gateway → H1 WS backend, clean Close. ×3 deterministic. Lead-reviewed non-vacuous.
+- **INC-1V (verifier) `e0e5a21b`** — independently **CONFIRMED F-S27-1** (HIGH/security): on main, a
+  pickable H1 backend that refuses the WS handshake (non-101) makes the H2 client receive 200 (false
+  success), not 502/504. Code-path proof + load-bearing reproducer (audit/, kept out of the suite).
+- **INC-2 (ws-eng) `83746d1c`** — **FIXED F-S27-1**: `handle_ws_extended_connect` now async, dials +
+  completes the upstream RFC 6455 handshake INLINE under `timeouts.header` BEFORE any 200
+  (Refused→502, Timeout/elapsed→504); 200 only on success → spawn splice. Regression test
+  `tests/ws_h2_upgrade_defer.rs` (502/504/no-smuggle); load-bearing proven (revert→RED, restore→GREEN).
+  Mirrors the H1 sibling. Lead-reviewed diff correct.
+- **INC-2V (verifier) `26e0e223`** — comprehensive independent verification:
+  - Task A no-regression ×3 (ws_h2_upgrade_defer 3, ws_h2_e2e 1, ws_proxy_e2e 7, H1 round8 4) — **PASS**.
+  - Task B F-S27-1 **CONFIRMED CLOSED**, regression independently load-bearing (reverted to e0e5a21b →
+    RED, restored → GREEN).
+  - Task C fix-correctness — CORRECT; the spawned `hyper::upgrade::on` await is NOT an unbounded hold
+    (hyper resolves the H2 upgrade ~45 ms after the 200 flush regardless of client data; idle/read-frame
+    watchdogs reclaim) — **no finding**.
+  - Task D **RFC 8441 conformance PASS** (`audit/websockets/s27-rfc8441-conformance.md`); 1 PARTIAL
+    (`is_h2_extended_connect` doesn't independently require `:scheme`/`:path` — safe, defaults `:path`
+    to `/`); deviations: RFC 7692 compression (none), RFC 9220 H3 (Phase 2).
+  - Task E **R8: (i) bounded-memory PASS** (VmHWM flat across 10× message volume); **(ii) backpressure
+    FAIL → NEW BLOCKER F-S27-2**.
+  - Task F **R13 burst PASS** — 60 upgrade/relay/close cycles, fds 12→12 (zero leak), ×3.
+
+### Findings
+- **F-S27-1 (HIGH/security) — FIXED + independently verified.** WS-over-H2 emitted 200 before the
+  upstream WS handshake (H2 analog of the H1 GHSA; false-success + smuggle window). R12 sibling
+  alignment: H1 was already fixed; H2 now matches; H3 to be built correct from the start.
+- **F-S27-2 (HIGH/security, DoS / memory-exhaustion) — H2-ONLY, shipped; clean fix genuinely-large →
+  ESCALATED (R6/R7).** A WS-over-H2 client that stops reading lets the gateway buffer a fast/amplifying
+  backend's bytes UNBOUNDED in memory (measured ~360 MiB). **Three independent steps reconciled the
+  root cause** (the program's "symptom ≠ attribution" discipline):
+  - INC-2V (verifier) found the symptom but mis-attributed it to the shared `tungstenite_config`
+    (`max_write_buffer_size`) and claimed it was "identical on the shipped H1 path."
+  - INC-3 (ws-eng) measure-first **REFUTED** both: the `max_write_buffer_size` bound is a no-op
+    (tokio-tungstenite already parks on `WouldBlock`); and WS-over-H1 backpressures correctly.
+  - Reconciliation (protocol-expert, `1a308ac3`, `audit/websockets/s27-fs27-2-recon/`) confirmed by
+    independent measurement + vendored source: **WS-over-H1 BOUNDED/SAFE** (17/2048 plateau, identical
+    with/without the bound — the TCP socket's `WouldBlock` propagates backpressure); **H2 UNBOUNDED**
+    because hyper's `UpgradedSendStreamTask::tick` (hyper-1.9.0 `upgrade.rs:98,119`) calls
+    `h2::SendStream::send_data` even on `Poll::Pending` capacity → h2's unbounded send buffer
+    (`share.rs:48-59`, `prioritize.rs:145-219`); hyper's `max_send_buf_size` only caps reported
+    `capacity()`, not `send_data`.
+  - Scope: **H2-ONLY** (NOT shared-core, NOT H1). Shipped/reachable (`main.rs:1014` wires
+    `with_websocket` on the H2/ALPN path; `h2_proxy.rs:804` advertises extended CONNECT).
+  - Fix feasibility: no hyper knob; raw `h2::SendStream` not reachable (`H2Upgraded` is `pub(super)`)
+    → only via driving raw h2 = a rearchitecture of H2 serving (LARGE + R3-risky); the relay-level
+    drain-gate is refuted (over H2 `send()` returns on buffer, not drain). **TRUE backpressure fix is
+    genuinely-large → R6 escalate.**
+  - **WS-over-H3 will NOT inherit it** — the planned adapter backpressures by construction (window-gated
+    drain + empty-queue refill + partial-write retention); to be re-verified at Stage E.
+  - Landed + KEPT (`bd3f991d`, correct & in-scope, NOT the H2 fix): defensive `max_write_buffer_size`
+    bound + an anti-hang guard wrapping both forwarding `send().await` in `timeout(read_frame, …)` →
+    Close 1008 (reclaims a wedged write on socket transports — load-bearing on H1/raw).
+  - **Owner decision pending** (escalation): interim guard + carry CF-S27-2 vs. the large fix now vs.
+    gate WS-over-H2 conservatively.
+- **F-S27-3 (LOW, observability parity) — flagged, tracking.** H1 injects child `traceparent` on the
+  upstream WS handshake; the H2 path does not (pre-existing; not session-introduced). Optional R12
+  parity follow-up.
+- **Conformance PARTIAL (LOW):** `is_h2_extended_connect` accepts an extended CONNECT lacking
+  `:scheme`/`:path` (defaults `:path`=`/`) — lenient-accept, not a security issue; could be tightened
+  for strict RFC 8441 §4.
+
 ### F-S26-1 characterization (the gating dependency)
 
 **Verdict: case (a) — "schema + library API both exist; the binary's config→params
