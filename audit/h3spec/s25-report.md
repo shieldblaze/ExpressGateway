@@ -89,5 +89,23 @@ LOW-severity RFC 9114 §7.1 robustness gap, not a security hole. Implemented:
 
 **INC-4 wire state:** h3h3 **26/26** (incl. the re-scope, the CL-guard test, the empty-DATA
 fix, the F-MD-4 mirror burst R13 b+c); h1h3+h2h3 verify **25/25**; lb-quic lib **84/84**;
-clippy `-D` + fmt clean. *(report continues — INC-4 full gate + independent verify, INC-5,
-Phase-3 — below.)*
+clippy `-D` + fmt clean.
+
+### Independent verification (author ≠ verifier) — AGREE
+A fresh-context verifier READ the migrated `stream_request_to_h3_upstream` in full + the
+`drain_resp_body!` macro + the `H3RespOut` sink and confirmed, with `file:line` evidence:
+(1) R8 RESPONSE per-chunk into a fixed 8 KiB scratch, **no whole-body `Vec`/`.collect()`/
+`.extend`** (adversarially grep-confirmed — the only `.collect()`s are header field-lists),
+`on_data().await` is the backpressure point; (2) R8 REQUEST retains the in-hand chunk on
+`Done`, fills the depth-8 channel; (3) F-MD-4 mirror maps ALL THREE reset surfaces
+(`Event::Reset`, mid-body `recv_body` error, `Finished`-on-reset `was_reset` probe) to
+`UpstreamReset`, and `on_end` is reachable ONLY when `response_complete==true` (set only on
+a clean `Finished` with `sent_head && !was_reset && !cl_truncated`); (4) the CL guard never
+falsely resets a complete CL response and never misses a truncated one, correctly scoped
+past HEAD/1xx/204/304; (5) the empty-DATA re-poll is progress-gated + finite (no spin) and
+does not bypass backpressure; (6) error contract (`set_reusable(false)` everywhere, 413
+pre-dial / 502 dial-failure, case-7 `H3_REQUEST_CANCELLED` no-FIN aborts). **No path found
+where a truncated/reset upstream reaches the client as a clean complete response, and no
+whole-buffering path.** Verdict: **AGREE**.
+
+*(report continues — INC-4 full gate + mutation proofs, INC-5, Phase-3 — below.)*
