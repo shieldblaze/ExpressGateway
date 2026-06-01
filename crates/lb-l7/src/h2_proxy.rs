@@ -1378,10 +1378,63 @@ impl H2Proxy {
         }
         let backend_addr = backend.addr;
 
-        let path_and_query = req
+        // INC-4 Fix 1 (RFC 8441 §4 conformance) — a WebSocket extended
+        // CONNECT MUST carry `:scheme` and `:path` (in addition to
+        // `:authority`). hyper surfaces these as the request URI's scheme and
+        // path-and-query. Previously a request missing either was accepted and
+        // `:path` was silently defaulted to "/", which is non-conformant
+        // (INC-2V flagged this PARTIAL). Reject a malformed extended CONNECT
+        // with a clean 400 BEFORE any backend dial, instead of defaulting or
+        // tunneling. (`is_h2_extended_connect` already established this is
+        // `:method=CONNECT` + `:protocol=websocket`.)
+        //
+        // Reachability (measured, tests/ws_h2_conformance.rs):
+        //   * MISSING :scheme reaches here and is rejected by THIS check
+        //     (hyper's h2 server does not require :scheme for extended
+        //     CONNECT) → clean 400, no dial. Load-bearing.
+        //   * MISSING :path is additionally enforced by hyper's h2 codec,
+        //     which RST_STREAMs a path-less extended CONNECT before dispatch;
+        //     this check is therefore defense-in-depth for that field (and
+        //     the single point that also closes the prior silent `/` default).
+        let Some(path_and_query) = req
             .uri()
             .path_and_query()
-            .map_or_else(|| "/".to_owned(), std::string::ToString::to_string);
+            .map(std::string::ToString::to_string)
+        else {
+            tracing::debug!("ws/h2: extended CONNECT missing :path — 400 (RFC 8441 §4)");
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "malformed websocket extended CONNECT: missing :path (RFC 8441 §4)",
+            );
+        };
+        if req.uri().scheme().is_none() {
+            tracing::debug!("ws/h2: extended CONNECT missing :scheme — 400 (RFC 8441 §4)");
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "malformed websocket extended CONNECT: missing :scheme (RFC 8441 §4)",
+            );
+        }
+
+        // INC-4 Fix 2 (ROUND8-OPS-06 R12 parity) — propagate the W3C trace
+        // context onto the upstream WS handshake, mirroring the H1 sibling
+        // (`dial_upstream_ws`). `H2Proxy::handle` already injected the CHILD
+        // `traceparent` (+ forwarded `tracestate`) onto the inbound request's
+        // header map via `RequestTrace::inject_upstream` before this handler
+        // ran, so we read the now-child values straight off `req.headers()`
+        // and re-emit them on the tungstenite `ClientRequestBuilder` (which
+        // takes header pairs, not a `HeaderMap`). The LB span is thus the
+        // upstream's parent.
+        let child_traceparent = req
+            .headers()
+            .get(lb_observability::tracing_propagation::TRACEPARENT_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        let tracestate = req
+            .headers()
+            .get(lb_observability::tracing_propagation::TRACESTATE_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+
         let ws_cfg = ws_proxy.config();
         let pool = self.pool.clone();
 
@@ -1400,7 +1453,22 @@ impl H2Proxy {
             let uri = format!("ws://{backend_addr}{path_and_query}")
                 .parse()
                 .map_err(|e| WsDialErr::Refused(format!("upstream uri build failed: {e}")))?;
-            let builder = tokio_tungstenite::tungstenite::client::ClientRequestBuilder::new(uri);
+            let mut builder =
+                tokio_tungstenite::tungstenite::client::ClientRequestBuilder::new(uri);
+            // INC-4 Fix 2 — ROUND8-OPS-06: propagate the child W3C trace
+            // context onto the upstream WS handshake (mirror H1's
+            // `dial_upstream_ws`). The builder takes header pairs, not a
+            // `HeaderMap`, so we use the pre-rendered child header values.
+            if let Some(tp) = child_traceparent {
+                builder = builder.with_header(
+                    lb_observability::tracing_propagation::TRACEPARENT_HEADER,
+                    tp,
+                );
+            }
+            if let Some(ts) = tracestate {
+                builder = builder
+                    .with_header(lb_observability::tracing_propagation::TRACESTATE_HEADER, ts);
+            }
             let (backend_ws, _resp) = tokio_tungstenite::client_async_with_config(
                 builder,
                 upstream_stream,

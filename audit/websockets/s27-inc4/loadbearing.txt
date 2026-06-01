@@ -1,0 +1,30 @@
+============================================================
+INC-4 — WS-over-H2 LOW items: load-bearing proof
+Test: tests/ws_h2_conformance.rs
+Generated: 2026-06-01T21:49:44Z
+============================================================
+
+## Fix 1 (RFC 8441 :scheme/:path conformance) — GREEN (fix in place)
+## (the reachable case, missing :scheme, returns a clean 400 from
+##  handle_ws_extended_connect; missing :path is RST'd by hyper's h2
+##  codec before dispatch — my check is defense-in-depth there).
+## Fix 2 (ROUND8-OPS-06 child traceparent on H2 upstream WS) — GREEN.
+------------------------------------------------------------
+missing :scheme outcome: Ok(400)
+upstream handshake traceparent: 00-0af7651916cd43dd8448eb211c80319c-9e7a82421dfd75f3-01
+test upstream_ws_handshake_carries_child_traceparent ... ok
+test well_formed_extended_connect_tunnels_200 ... ok
+missing :path: saw_400=false saw_rst=true
+test extended_connect_missing_path_rejected_no_dial ... ok
+test extended_connect_missing_scheme_is_400 ... ok
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+------------------------------------------------------------
+
+## LOAD-BEARING (captured during INC-4):
+##  - Neutralizing the :scheme check (if false) → missing-:scheme
+##    extended CONNECT returns 200 OK (old non-conformant tunnel),
+##    extended_connect_missing_scheme_is_400 FAILS (got 200 OK).
+##  - Neutralizing Fix 2 (child_traceparent = None) → the upstream WS
+##    handshake carries NO traceparent, upstream_ws_handshake_carries_
+##    child_traceparent FAILS ('never carried a traceparent').
+## Both were observed then the fixes restored (source clean).
