@@ -24,6 +24,12 @@ members = [
     "crates/lb-h1",
     "crates/lb-h2",
     "crates/lb-h3",
+    # S26 INC-A: test-only relocation of the hand-rolled lb-h3 frame/QPACK
+    # codec. Built as a workspace member (it is a path crate) but linked
+    # ONLY as a dev-dependency (root + lb-quic) and a fuzz dependency — no
+    # production crate links it. lb-h3 is deleted in INC-C once the wire-test
+    # harnesses are re-pointed onto this crate.
+    "crates/lb-h3-testcodec",
     "crates/lb-quic",
     "crates/lb-grpc",
     "crates/lb-l7",
@@ -147,6 +153,8 @@ lb-io = { path = "crates/lb-io" }
 lb-h1 = { path = "crates/lb-h1" }
 lb-h2 = { path = "crates/lb-h2" }
 lb-h3 = { path = "crates/lb-h3" }
+# S26 INC-A: test-only codec for the H3 wire-test harnesses (dev-dep only).
+lb-h3-testcodec = { path = "crates/lb-h3-testcodec" }
 lb-quic = { path = "crates/lb-quic" }
 lb-grpc = { path = "crates/lb-grpc" }
 lb-l7 = { path = "crates/lb-l7" }

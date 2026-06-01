@@ -66,6 +66,8 @@ lb-io = { path = "../lb-io", optional = true }
 # dev-dependency for the H3 e2e test rigs that still hand-roll wire
 # bytes (`h3_h1_stream_body*_e2e.rs`, etc.).
 lb-h3 = { path = "../lb-h3" }
+# S26 INC-A: test-only codec for the H3 e2e wire-test rigs (dev-dep only).
+lb-h3-testcodec = { path = "../lb-h3-testcodec" }
 rcgen = { version = "0.13", features = ["pem"] }
 tokio = { workspace = true, features = ["full", "test-util"] }
 # CODE-2-11: proptest harness for the long/short header parse path.

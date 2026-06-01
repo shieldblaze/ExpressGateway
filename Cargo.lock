@@ -1498,6 +1498,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "lb-h3-testcodec"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "proptest",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "lb-health"
 version = "0.1.0"
 dependencies = [
@@ -1526,6 +1535,7 @@ dependencies = [
  "lb-h1",
  "lb-h2",
  "lb-h3",
+ "lb-h3-testcodec",
  "lb-health",
  "lb-io",
  "lb-l4-xdp",
@@ -1643,6 +1653,7 @@ dependencies = [
  "lb-balancer",
  "lb-core",
  "lb-h3",
+ "lb-h3-testcodec",
  "lb-io",
  "lb-observability",
  "lb-security",
