@@ -1707,6 +1707,50 @@ fn validate_quic_listener(i: usize, listener: &ListenerConfig) -> Result<(), Con
             "listener {i} has [listeners.tls] but protocol is \"quic\""
         )));
     }
+    // F-S26-1: a QUIC listener is EITHER Mode B (terminate-and-
+    // re-originate raw QUIC via `[listeners.quic.raw_proxy]`) OR
+    // H3-terminate-and-forward (decode H3 → relay to `[[listeners.
+    // backends]]`). Configuring both is a genuine conflict — raw_proxy
+    // hands every accepted connection to the raw-proxy actor, so the
+    // H3-terminate backend list would be silently ignored. Reject it at
+    // startup rather than do something surprising.
+    if quic.raw_proxy.is_some() && !listener.backends.is_empty() {
+        return Err(ConfigError::Validation(format!(
+            "listener {i} sets both [listeners.quic.raw_proxy] (Mode B raw-QUIC \
+             proxy) and [[listeners.backends]] (H3-terminate forwarding); these \
+             are mutually exclusive — remove one"
+        )));
+    }
+    // F-S26-1: the H3-terminate forwarding path wires exactly ONE
+    // backend protocol family onto the listener (the library's
+    // `with_h2_backend` / `with_h3_backend` take a single address; the
+    // H1 `with_backends` takes the resolved vector). The router's
+    // dispatch precedence is h2 > h3 > h1, so a mixed-protocol backend
+    // list would silently drop the lower-precedence backends. Require a
+    // single family so an operator misconfig fails loudly at startup.
+    if quic.raw_proxy.is_none() && !listener.backends.is_empty() {
+        let mut saw_h1 = false;
+        let mut saw_h2 = false;
+        let mut saw_h3 = false;
+        for b in &listener.backends {
+            match b.protocol.as_str() {
+                "tcp" | "h1" => saw_h1 = true,
+                "h2" => saw_h2 = true,
+                "h3" => saw_h3 = true,
+                // Unknown protocols are already rejected by
+                // `validate_backend_list`; nothing to do here.
+                _ => {}
+            }
+        }
+        let families = usize::from(saw_h1) + usize::from(saw_h2) + usize::from(saw_h3);
+        if families > 1 {
+            return Err(ConfigError::Validation(format!(
+                "listener {i} (protocol=\"quic\", H3-terminate) mixes backend \
+                 protocol families (h1/tcp, h2, h3); a QUIC listener forwards to \
+                 exactly one backend protocol — split the listeners or pick one"
+            )));
+        }
+    }
     Ok(())
 }
 
@@ -2170,6 +2214,162 @@ protocol = "h1"
             passthrough: None,
         };
         assert!(validate_config(&config).is_err());
+    }
+
+    // F-S26-1: a QUIC listener with a single h1 backend and NO raw_proxy
+    // is the H3-terminate → H1 forwarding shape — it must VALIDATE (this
+    // is the config the binary now wires; previously backends were
+    // "allowed but ignored" on the quic path).
+    #[test]
+    fn validate_quic_h3_terminate_with_h1_backend_ok() {
+        let config = LbConfig {
+            listeners: vec![ListenerConfig {
+                address: "0.0.0.0:443".into(),
+                protocol: "quic".into(),
+                tls: None,
+                quic: Some(QuicListenerConfig {
+                    cert_path: "/x".into(),
+                    key_path: "/y".into(),
+                    retry_secret_path: "/z".into(),
+                    max_idle_timeout_ms: 30_000,
+                    max_recv_udp_payload_size: 1_350,
+                    raw_proxy: None,
+                }),
+                alt_svc: None,
+                http: None,
+                h2_security: None,
+                websocket: None,
+                grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
+                backends: vec![BackendConfig {
+                    address: "127.0.0.1:3000".into(),
+                    protocol: "h1".into(),
+                    weight: 1,
+                    tls_ca_path: None,
+                    tls_verify_hostname: None,
+                    tls_verify_peer: true,
+                }],
+            }],
+            runtime: None,
+            observability: None,
+            admin: None,
+            security: None,
+            passthrough: None,
+        };
+        assert!(
+            validate_config(&config).is_ok(),
+            "a quic H3-terminate listener with a single h1 backend must validate"
+        );
+    }
+
+    // F-S26-1: a QUIC listener that sets BOTH a raw_proxy (Mode B) and
+    // backends (H3-terminate forwarding) is a genuine conflict — reject.
+    #[test]
+    fn validate_quic_raw_proxy_with_backends_rejected() {
+        let config = LbConfig {
+            listeners: vec![ListenerConfig {
+                address: "0.0.0.0:443".into(),
+                protocol: "quic".into(),
+                tls: None,
+                quic: Some(QuicListenerConfig {
+                    cert_path: "/x".into(),
+                    key_path: "/y".into(),
+                    retry_secret_path: "/z".into(),
+                    max_idle_timeout_ms: 30_000,
+                    max_recv_udp_payload_size: 1_350,
+                    raw_proxy: Some(RawQuicProxyConfig {
+                        backend_addr: "127.0.0.1:4443".into(),
+                        sni: "backend.test".into(),
+                        backend_ca_path: None,
+                        dgram_queue_cap: 1024,
+                        max_relay_streams: 256,
+                    }),
+                }),
+                alt_svc: None,
+                http: None,
+                h2_security: None,
+                websocket: None,
+                grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
+                backends: vec![BackendConfig {
+                    address: "127.0.0.1:3000".into(),
+                    protocol: "h1".into(),
+                    weight: 1,
+                    tls_ca_path: None,
+                    tls_verify_hostname: None,
+                    tls_verify_peer: true,
+                }],
+            }],
+            runtime: None,
+            observability: None,
+            admin: None,
+            security: None,
+            passthrough: None,
+        };
+        let err = validate_config(&config).unwrap_err();
+        assert!(
+            matches!(&err, ConfigError::Validation(m) if m.contains("mutually exclusive")),
+            "raw_proxy + backends must be rejected as mutually exclusive, got: {err:?}"
+        );
+    }
+
+    // F-S26-1: a QUIC listener whose H3-terminate backends mix protocol
+    // families (h1 + h2) is ambiguous given the single-address h2/h3
+    // forwarding API — reject so the misconfig fails loudly.
+    #[test]
+    fn validate_quic_h3_terminate_mixed_backend_families_rejected() {
+        let config = LbConfig {
+            listeners: vec![ListenerConfig {
+                address: "0.0.0.0:443".into(),
+                protocol: "quic".into(),
+                tls: None,
+                quic: Some(QuicListenerConfig {
+                    cert_path: "/x".into(),
+                    key_path: "/y".into(),
+                    retry_secret_path: "/z".into(),
+                    max_idle_timeout_ms: 30_000,
+                    max_recv_udp_payload_size: 1_350,
+                    raw_proxy: None,
+                }),
+                alt_svc: None,
+                http: None,
+                h2_security: None,
+                websocket: None,
+                grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
+                backends: vec![
+                    BackendConfig {
+                        address: "127.0.0.1:3000".into(),
+                        protocol: "h1".into(),
+                        weight: 1,
+                        tls_ca_path: None,
+                        tls_verify_hostname: None,
+                        tls_verify_peer: true,
+                    },
+                    BackendConfig {
+                        address: "127.0.0.1:3001".into(),
+                        protocol: "h2".into(),
+                        weight: 1,
+                        tls_ca_path: None,
+                        tls_verify_hostname: None,
+                        tls_verify_peer: true,
+                    },
+                ],
+            }],
+            runtime: None,
+            observability: None,
+            admin: None,
+            security: None,
+            passthrough: None,
+        };
+        let err = validate_config(&config).unwrap_err();
+        assert!(
+            matches!(&err, ConfigError::Validation(m) if m.contains("backend protocol families")),
+            "mixed backend families on a quic listener must be rejected, got: {err:?}"
+        );
     }
 
     #[test]

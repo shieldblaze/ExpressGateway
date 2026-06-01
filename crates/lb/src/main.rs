@@ -1097,6 +1097,13 @@ fn merge_h2_security(cfg: Option<&H2SecurityConfig>) -> H2SecurityThresholds {
 /// listener-token cancel.
 async fn spawn_quic(
     listener_cfg: &lb_config::ListenerConfig,
+    // F-S26-1: the shared TCP backend pool + DNS resolver, threaded in so
+    // the H3-terminate path can wire `[[listeners.backends]]` for the
+    // H3→H1 (and H3→H2) forwarding legs — mirroring what `spawn_tcp`
+    // already does on the L7 path. `None` on both keeps the call site
+    // for tests that only exercise the Mode-B / backendless shapes.
+    pool: &TcpPool,
+    resolver: &DnsResolver,
     metrics: &Arc<MetricsRegistry>,
     shutdown_token: CancellationToken,
 ) -> anyhow::Result<QuicListener> {
@@ -1127,7 +1134,22 @@ async fn spawn_quic(
     };
     let mode_b = raw_backend.is_some();
 
-    let params = quic_listener_params_from_config(bind_addr, quic_cfg, raw_backend, modeb_metrics);
+    let mut params =
+        quic_listener_params_from_config(bind_addr, quic_cfg, raw_backend, modeb_metrics);
+
+    // F-S26-1: wire the H3-terminate → backend relay. ONLY on the
+    // H3-terminate path (no raw_proxy ⇒ not Mode B; the config validator
+    // rejects raw_proxy + backends together). A QUIC listener with no
+    // backends stays backendless H3-terminate, byte-identical to before
+    // (R3) — `params` is untouched. With backends, dispatch by the
+    // (single, validator-enforced) protocol family:
+    //   h1/tcp → with_backends (H3→H1, the WS-over-H3 backend leg)
+    //   h2     → with_h2_backend (H3→H2)
+    //   h3     → with_h3_backend (H3→H3)
+    if !mode_b && !listener_cfg.backends.is_empty() {
+        params = wire_h3_terminate_backends(params, listener_cfg, pool, resolver, metrics).await?;
+    }
+
     let listener = QuicListener::spawn(params, shutdown_token)
         .await
         .with_context(|| format!("QUIC listener bind failed for {bind_addr}"))?;
@@ -1150,12 +1172,113 @@ async fn spawn_quic(
         tracing::info!(
             address = %listener.local_addr(),
             protocol = "quic",
+            mode = "H3-terminate",
             cert = %quic_cfg.cert_path,
             retry_secret = %quic_cfg.retry_secret_path,
+            // F-S26-1: surface how many forwarding backends were wired.
+            // 0 ⇒ the transport-only / inline-egress smoke shape (R3).
+            backends = listener_cfg.backends.len(),
             "QUIC listener started"
         );
     }
     Ok(listener)
+}
+
+/// F-S26-1: wire the H3-terminate → backend forwarding leg onto a QUIC
+/// listener's [`QuicListenerParams`]. Resolves each `[[listeners.
+/// backends]]` address (mirroring [`spawn_tcp`]'s resolve loop +
+/// dns_cache_hits/misses bookkeeping) and dispatches by the listener's
+/// single backend protocol family (the config validator guarantees the
+/// list is non-empty and not mixed):
+///   * `h1`/`tcp` → [`QuicListenerParams::with_backends`] (H3→H1; this
+///     is the WS-over-H3 backend leg, the F-S26-1 must-have).
+///   * `h2`       → [`QuicListenerParams::with_h2_backend`] (H3→H2),
+///     first resolved address (the router takes a single H2 backend).
+///   * `h3`       → [`QuicListenerParams::with_h3_backend`] (H3→H3),
+///     first resolved address + its SNI.
+///
+/// Caller guarantees `listener_cfg.backends` is non-empty and the
+/// listener is NOT Mode B (no `raw_proxy`).
+async fn wire_h3_terminate_backends(
+    mut params: QuicListenerParams,
+    listener_cfg: &lb_config::ListenerConfig,
+    pool: &TcpPool,
+    resolver: &DnsResolver,
+    metrics: &Arc<MetricsRegistry>,
+) -> anyhow::Result<QuicListenerParams> {
+    // Resolve every backend address up front (same bookkeeping spawn_tcp
+    // does). `addresses[i]` corresponds to `listener_cfg.backends[i]`.
+    let mut addresses: Vec<SocketAddr> = Vec::with_capacity(listener_cfg.backends.len());
+    for b in &listener_cfg.backends {
+        let (host, port) = split_host_port(&b.address)
+            .with_context(|| format!("invalid backend address: {}", b.address))?;
+        let pre_cache = resolver.cache_size();
+        let lookup = resolver
+            .resolve(host, port)
+            .await
+            .with_context(|| format!("cannot resolve backend: {}", b.address))?;
+        let grew = resolver.cache_size() > pre_cache;
+        let name = if grew {
+            ("dns_cache_misses_total", "DNS resolver cache misses")
+        } else {
+            ("dns_cache_hits_total", "DNS resolver cache hits")
+        };
+        if let Ok(c) = metrics.counter(name.0, name.1) {
+            c.inc();
+        }
+        let Some(first) = lookup.first().copied() else {
+            anyhow::bail!("resolver returned no addresses for {}", b.address);
+        };
+        addresses.push(first);
+    }
+
+    // The validator enforces a single protocol family + a non-empty
+    // list, so the first backend's protocol determines the forwarding
+    // leg for the whole listener.
+    let Some(first) = listener_cfg.backends.first() else {
+        anyhow::bail!(
+            "listener {}: wire_h3_terminate_backends called with no backends",
+            listener_cfg.address
+        );
+    };
+    let proto = parse_upstream_proto(first.protocol.as_str())
+        .with_context(|| format!("listener {} backend 0", listener_cfg.address))?;
+    match proto {
+        UpstreamProto::H1 => {
+            // H3→H1: round-robin across ALL resolved H1 backends via the
+            // shared TCP pool (the must-have; the WS-over-H3 backend leg).
+            params = params.with_backends(addresses, pool.clone());
+        }
+        UpstreamProto::H2 => {
+            // H3→H2: the router takes a single H2 backend address.
+            // `build_h2_upstream_pool` hands back an `Arc<Http2Pool>`;
+            // the QUIC listener API wants it by value. `Http2Pool` is a
+            // cheap Arc-backed Clone, so clone out of the Arc.
+            let h2pool = build_h2_upstream_pool(pool.clone(), listener_cfg.h2_security.as_ref());
+            let Some(addr) = addresses.first().copied() else {
+                anyhow::bail!("listener {}: no resolved H2 backend", listener_cfg.address);
+            };
+            params = params.with_h2_backend((*h2pool).clone(), addr);
+        }
+        UpstreamProto::H3 => {
+            // H3→H3: the router takes a single upstream QUIC backend +
+            // its SNI. The pool's verify-peer/CA posture comes from the
+            // H3-backend TLS knobs (build_h3_upstream_pool). Same
+            // Arc-backed-Clone story as the H2 leg above.
+            let h3_backends = collect_h3_backends(listener_cfg);
+            let h3pool = build_h3_upstream_pool(&h3_backends)?;
+            let Some(addr) = addresses.first().copied() else {
+                anyhow::bail!("listener {}: no resolved H3 backend", listener_cfg.address);
+            };
+            let sni = first.tls_verify_hostname.clone().unwrap_or_else(|| {
+                split_host_port(&first.address)
+                    .ok()
+                    .map_or_else(|| first.address.clone(), |(host, _)| host.to_owned())
+            });
+            params = params.with_h3_backend((*h3pool).clone(), addr, sni);
+        }
+    }
+    Ok(params)
 }
 
 /// S15 A2-8: spawn the Mode A QUIC passthrough listener. Independent
@@ -2035,8 +2158,16 @@ async fn async_main() -> anyhow::Result<()> {
 
     for listener_cfg in &config.listeners {
         if listener_cfg.protocol == "quic" {
-            quic_listeners
-                .push(spawn_quic(listener_cfg, &metrics, shutdown.token().child_token()).await?);
+            quic_listeners.push(
+                spawn_quic(
+                    listener_cfg,
+                    &pool,
+                    &resolver,
+                    &metrics,
+                    shutdown.token().child_token(),
+                )
+                .await?,
+            );
             continue;
         }
         if listener_cfg.backends.is_empty() {
@@ -3571,10 +3702,15 @@ mod tests {
             backends: vec![],
         };
 
-        // 4) Drive the REAL production entry point.
+        // 4) Drive the REAL production entry point. The pool + resolver
+        //    are unused on the Mode-B path (raw_proxy ⇒ no H3-terminate
+        //    backend wiring) but are now required by `spawn_quic`'s
+        //    signature (F-S26-1).
         let metrics = Arc::new(MetricsRegistry::new());
         let token = CancellationToken::new();
-        let listener = spawn_quic(&listener_cfg, &metrics, token.clone())
+        let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
+        let resolver = DnsResolver::new(ResolverConfig::default());
+        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, token.clone())
             .await
             .expect("spawn_quic Mode-B must start");
         let lb_addr = listener.local_addr();
@@ -3708,6 +3844,324 @@ mod tests {
         // The client negotiated `h3` with the LB listener (build_server_config
         // advertised it on the Mode-B client-facing config).
         assert_eq!(client.application_proto(), MODEB_E2E_ALPN);
+
+        // 8) Clean shutdown via the production token.
+        token.cancel();
+        let _ = tokio::time::timeout(Duration::from_secs(5), listener.shutdown()).await;
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // F-S26-1 — REAL `spawn_quic` H3-terminate → H1 backend relay e2e.
+    //
+    // Before this fix the production `spawn_quic` NEVER read
+    // `listener_cfg.backends` on the H3-terminate path (no raw_proxy), so
+    // every H3 request that reached established state got a 502 "no
+    // backends available". This test drives the REAL production entry
+    // point: a `ListenerConfig{protocol:"quic", backends:[h1 backend]}` is
+    // handed to `spawn_quic`, a real quiche::h3 CLIENT issues a GET
+    // THROUGH the spawned listener, and we assert the request reaches the
+    // TCP backend AND the backend's 200 response (NOT a 502) comes back.
+    // This is the mechanism proof that the binary's config → backend
+    // wiring glue (`wire_h3_terminate_backends` → `with_backends`) ran.
+    //
+    // Bounded budgets, single pump loop, no tight per-read timeouts —
+    // matches the Mode-B e2e flake-hardening.
+    // ─────────────────────────────────────────────────────────────────────
+
+    const H3H1_E2E_ALPN: &[u8] = b"h3";
+    const H3H1_E2E_SNI: &str = "lb.h3h1.test";
+    const H3H1_E2E_MAX_UDP: usize = 65_535;
+    const H3H1_E2E_BACKEND_STATUS: u16 = 200;
+    const H3H1_E2E_BACKEND_BODY: &[u8] = b"f-s26-1-backend-ok";
+    const H3H1_E2E_BUDGET: Duration = Duration::from_secs(20);
+
+    /// A throwaway HTTP/1.1 backend: accepts ONE connection, reads the
+    /// request head, sends `200 OK` with a fixed body, and closes. The
+    /// request-line is captured back to the caller through a oneshot so
+    /// the test can assert the H3 request actually reached the backend
+    /// (not short-circuited by a 502).
+    fn h3h1_e2e_spawn_h1_backend() -> (SocketAddr, tokio::sync::oneshot::Receiver<String>) {
+        let std_listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        std_listener.set_nonblocking(true).unwrap();
+        let addr = std_listener.local_addr().unwrap();
+        let (tx, rx) = tokio::sync::oneshot::channel::<String>();
+        tokio::spawn(async move {
+            let listener = TcpListener::from_std(std_listener).unwrap();
+            let Ok((mut sock, _)) = listener.accept().await else {
+                return;
+            };
+            // Read the request head (up to the CRLFCRLF terminator).
+            let mut buf = Vec::with_capacity(2048);
+            let mut tmp = [0u8; 2048];
+            loop {
+                if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+                match tokio::io::AsyncReadExt::read(&mut sock, &mut tmp).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => buf.extend_from_slice(tmp.get(..n).unwrap_or(&[])),
+                }
+            }
+            let head = String::from_utf8_lossy(&buf).into_owned();
+            let request_line = head.lines().next().unwrap_or("").to_string();
+            let _ = tx.send(request_line);
+            let resp = format!(
+                "HTTP/1.1 {H3H1_E2E_BACKEND_STATUS} OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                H3H1_E2E_BACKEND_BODY.len()
+            );
+            let _ = sock.write_all(resp.as_bytes()).await;
+            let _ = sock.write_all(H3H1_E2E_BACKEND_BODY).await;
+            let _ = sock.shutdown().await;
+        });
+        (addr, rx)
+    }
+
+    /// Downstream client config trusting the LB's self-signed leaf.
+    fn h3h1_e2e_client_config(lb_ca: &std::path::Path) -> quiche::Config {
+        let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
+        cfg.set_application_protos(&[H3H1_E2E_ALPN]).unwrap();
+        cfg.load_verify_locations_from_file(lb_ca.to_str().unwrap())
+            .unwrap();
+        cfg.verify_peer(true);
+        cfg.set_max_idle_timeout(10_000);
+        cfg.set_max_recv_udp_payload_size(1_350);
+        cfg.set_max_send_udp_payload_size(1_350);
+        cfg.set_initial_max_data(1024 * 1024);
+        cfg.set_initial_max_stream_data_bidi_local(256 * 1024);
+        cfg.set_initial_max_stream_data_bidi_remote(256 * 1024);
+        cfg.set_initial_max_stream_data_uni(64 * 1024);
+        cfg.set_initial_max_streams_bidi(8);
+        cfg.set_initial_max_streams_uni(8);
+        cfg.set_disable_active_migration(true);
+        cfg
+    }
+
+    /// **F-S26-1 — the REAL `spawn_quic` H3→H1 e2e.** Proves the binary's
+    /// H3-terminate → backend wiring runs end to end: config → spawn_quic
+    /// → quiche::h3 request → TCP backend → 200 response back to the
+    /// client. FAILS on the pre-fix binary (502 "no backends available").
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn spawn_quic_h3_terminate_forwards_to_h1_backend_through_real_listener() {
+        // `NameValue::{name,value}` for reading the response :status header.
+        use quiche::h3::NameValue;
+
+        // 1) LB leaf cert (its own CA — the s16/Mode-B pattern).
+        let lb_certs = modeb_e2e_gen_certs(H3H1_E2E_SNI, "h3h1-lb");
+        let retry_secret_path = lb_certs.dir.join("retry.secret");
+
+        // 2) Real HTTP/1.1 backend (the H3→H1 forwarding target).
+        let (backend_addr, request_line_rx) = h3h1_e2e_spawn_h1_backend();
+
+        // 3) REAL ListenerConfig: protocol=quic, NO raw_proxy ⇒ the
+        //    H3-terminate path, WITH a single h1 backend. This is the
+        //    config shape the WS-over-H3 work rides on.
+        let listener_cfg = lb_config::ListenerConfig {
+            address: "127.0.0.1:0".to_string(),
+            protocol: "quic".to_string(),
+            tls: None,
+            quic: Some(QuicListenerConfig {
+                cert_path: lb_certs.cert.to_string_lossy().into_owned(),
+                key_path: lb_certs.key.to_string_lossy().into_owned(),
+                retry_secret_path: retry_secret_path.to_string_lossy().into_owned(),
+                max_idle_timeout_ms: 10_000,
+                max_recv_udp_payload_size: 1_350,
+                raw_proxy: None,
+            }),
+            alt_svc: None,
+            http: None,
+            h2_security: None,
+            websocket: None,
+            grpc: None,
+            drain_timeout_ms: None,
+            drain_jitter_ms: None,
+            backends: vec![lb_config::BackendConfig {
+                address: backend_addr.to_string(),
+                protocol: "h1".to_string(),
+                weight: 1,
+                tls_ca_path: None,
+                tls_verify_hostname: None,
+                tls_verify_peer: true,
+            }],
+        };
+
+        // Sanity: the config must be VALID (the new validation must accept
+        // a quic listener with an h1 backend and no raw_proxy).
+        lb_config::validate_config(&lb_config::LbConfig {
+            listeners: vec![listener_cfg.clone()],
+            ..Default::default()
+        })
+        .expect("a quic H3-terminate listener with an h1 backend must validate");
+
+        // 4) Drive the REAL production entry point with the shared pool +
+        //    resolver (exactly what main() threads in at the call site).
+        let metrics = Arc::new(MetricsRegistry::new());
+        let token = CancellationToken::new();
+        let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
+        let resolver = DnsResolver::new(ResolverConfig::default());
+        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, token.clone())
+            .await
+            .expect("spawn_quic H3-terminate must start");
+        let lb_addr = listener.local_addr();
+
+        // 5) Real downstream quiche::h3 CLIENT → the listener bound addr.
+        let client_socket = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let client_local = client_socket.local_addr().unwrap();
+        let mut client_cfg = h3h1_e2e_client_config(&lb_certs.ca);
+        let c_scid = modeb_e2e_random_scid();
+        let mut conn = quiche::connect(
+            Some(H3H1_E2E_SNI),
+            &quiche::ConnectionId::from_ref(&c_scid),
+            client_local,
+            lb_addr,
+            &mut client_cfg,
+        )
+        .unwrap();
+
+        let h3_config = quiche::h3::Config::new().unwrap();
+        let mut h3: Option<quiche::h3::Connection> = None;
+        let mut req_sent = false;
+        let mut status: Option<u16> = None;
+        let mut body: Vec<u8> = Vec::new();
+        let mut finished = false;
+        let mut out = vec![0u8; H3H1_E2E_MAX_UDP];
+        let mut in_buf = vec![0u8; H3H1_E2E_MAX_UDP];
+        let deadline = tokio::time::Instant::now() + H3H1_E2E_BUDGET;
+
+        // 6) Single pump loop: flush → (on established) build the H3 conn +
+        //    send GET once → poll H3 events → recv with a SHORT bounded
+        //    wait (re-polls; the only hard deadline is the test budget).
+        //    quiche handles the LB's RETRY transparently inside conn.recv.
+        loop {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "H3→H1 e2e budget exhausted: established={}, req_sent={req_sent}, status={status:?}",
+                conn.is_established()
+            );
+            if conn.is_closed() {
+                panic!(
+                    "client conn closed before completion: peer={:?} local={:?} status={status:?}",
+                    conn.peer_error(),
+                    conn.local_error()
+                );
+            }
+
+            // Build the H3 connection once the QUIC handshake completes.
+            if conn.is_established() && h3.is_none() {
+                h3 = Some(
+                    quiche::h3::Connection::with_transport(&mut conn, &h3_config)
+                        .expect("h3 with_transport"),
+                );
+            }
+
+            // Send the GET request once.
+            if let Some(h3c) = h3.as_mut() {
+                if !req_sent {
+                    let req = vec![
+                        quiche::h3::Header::new(b":method", b"GET"),
+                        quiche::h3::Header::new(b":scheme", b"https"),
+                        quiche::h3::Header::new(b":authority", H3H1_E2E_SNI.as_bytes()),
+                        quiche::h3::Header::new(b":path", b"/f-s26-1/probe"),
+                    ];
+                    match h3c.send_request(&mut conn, &req, true) {
+                        Ok(_) => req_sent = true,
+                        Err(quiche::h3::Error::StreamBlocked) => {}
+                        Err(e) => panic!("send_request: {e:?}"),
+                    }
+                }
+            }
+
+            // Poll H3 events for the response.
+            if let Some(h3c) = h3.as_mut() {
+                loop {
+                    match h3c.poll(&mut conn) {
+                        Ok((_sid, quiche::h3::Event::Headers { list, .. })) => {
+                            for h in &list {
+                                if h.name() == b":status" {
+                                    status = std::str::from_utf8(h.value())
+                                        .ok()
+                                        .and_then(|s| s.parse().ok());
+                                }
+                            }
+                        }
+                        Ok((sid, quiche::h3::Event::Data)) => {
+                            let mut chunk = [0u8; 4096];
+                            while let Ok(n) = h3c.recv_body(&mut conn, sid, &mut chunk) {
+                                if n == 0 {
+                                    break;
+                                }
+                                body.extend_from_slice(chunk.get(..n).unwrap_or(&[]));
+                            }
+                        }
+                        Ok((_sid, quiche::h3::Event::Finished)) => {
+                            finished = true;
+                        }
+                        Ok((_sid, quiche::h3::Event::Reset(e))) => {
+                            panic!("H3 stream reset by LB: {e}");
+                        }
+                        Ok(_) => {}
+                        Err(quiche::h3::Error::Done) => break,
+                        Err(e) => panic!("h3 poll: {e:?}"),
+                    }
+                }
+            }
+
+            if finished && status.is_some() {
+                break;
+            }
+
+            // Flush all pending outbound.
+            loop {
+                match conn.send(&mut out) {
+                    Ok((n, info)) => {
+                        let _ = client_socket
+                            .send_to(out.get(..n).unwrap_or(&[]), info.to)
+                            .await;
+                    }
+                    Err(quiche::Error::Done) => break,
+                    Err(e) => panic!("conn.send: {e:?}"),
+                }
+            }
+
+            // Short bounded recv wait (not a correctness timeout).
+            let qto = conn.timeout().unwrap_or(Duration::from_millis(20));
+            let wait = qto.clamp(Duration::from_millis(2), Duration::from_millis(20));
+            match tokio::time::timeout(wait, client_socket.recv_from(&mut in_buf)).await {
+                Ok(Ok((n, from))) => {
+                    let info = quiche::RecvInfo {
+                        from,
+                        to: client_local,
+                    };
+                    let slice = in_buf.get_mut(..n).unwrap_or(&mut []);
+                    let _ = conn.recv(slice, info);
+                }
+                Ok(Err(_)) | Err(_) => conn.on_timeout(),
+            }
+        }
+
+        // 7) THE PROOF: the request reached the H1 backend AND the
+        //    backend's 200 response (NOT a 502) came back through the
+        //    spawned listener. Only possible if `wire_h3_terminate_backends`
+        //    wired `with_backends` so the router relayed H3→H1.
+        assert_eq!(
+            status,
+            Some(H3H1_E2E_BACKEND_STATUS),
+            "the H1 backend's 200 must come back (a 502 ⇒ backends NOT wired — the F-S26-1 gap)"
+        );
+        assert_eq!(
+            body, H3H1_E2E_BACKEND_BODY,
+            "the H1 backend body must round-trip byte-identically"
+        );
+        let request_line = tokio::time::timeout(Duration::from_secs(2), request_line_rx)
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .expect("the H1 backend must have received the forwarded request");
+        assert!(
+            request_line.starts_with("GET /f-s26-1/probe"),
+            "the backend must see the forwarded GET (request-line: {request_line:?})"
+        );
 
         // 8) Clean shutdown via the production token.
         token.cancel();
