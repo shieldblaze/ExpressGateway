@@ -128,4 +128,18 @@ only checked whether the FIRST frame was HEADERS, so it never responded → E2 i
 non-HEADERS frames (RFC 9114 §9) to find the request HEADERS — exactly as a conformant H3
 server does. `proto_translation_e2e` 5/5 green (commit `d26abe68`).
 
-*(report continues — INC-4 final gate + 2nd verify, INC-5, Phase-3 — below.)*
+### Second independent verifier (R8 + F-MD-4 + CL-guard + GREASE-fix) — AGREE
+A second fresh-context verifier adversarially cross-checked: (1) R8 — classified EVERY
+`Vec`/`.collect()`/`.extend`/`push` in the function: all are header/trailer field-lists or
+fixed UDP datagram buffers, **never the body** — neither request nor response body can be
+whole-buffered; `on_data().await`→bounded-mpsc `tx.send().await` is the genuine backpressure
+point (read in the sink, not the gauge). (2) F-MD-4 — `response_complete` has ONE writer,
+`on_end()` ONE call-site gated on it; the ONLY truncated-reaches-downstream path is the
+documented no-CL §7.1 residual (bounded by H3 stream isolation). (3) CL-guard mutation
+(`mutA`) load-bearing confirmed. (4) The GREASE fix is legitimate — one test file, no
+production change, no weakened assertion — and cross-confirmed that the h3h3 backend ALREADY
+tolerates unknown frames (`h3_h3_stream_e2e.rs:834` `Ok((_other,c)) => rx_tail.drain(..c)`),
+which is why h3h3 passed 26/26 without the fix. **Verdict: AGREE.** Two independent verifies
+AGREE on the R8 + F-MD-4 + CL-guard surface (S24 two-verifier pattern + owner requirement).
+
+*(report continues — INC-4 final gate result, INC-5, Phase-3 — below.)*
