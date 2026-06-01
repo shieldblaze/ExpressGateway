@@ -136,6 +136,7 @@ dependencies = [
  "lb-h1",
  "lb-h2",
  "lb-h3",
+ "lb-h3-testcodec",
  "libfuzzer-sys",
  "quiche",
  "rustls",
@@ -161,6 +162,14 @@ dependencies = [
 
 [[package]]
 name = "lb-h3"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "thiserror",
+]
+
+[[package]]
+name = "lb-h3-testcodec"
 version = "0.1.0"
 dependencies = [
  "bytes",
