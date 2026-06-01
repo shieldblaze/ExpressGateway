@@ -922,9 +922,32 @@ async fn h3_one_request(
     }
 
     let bodyless = body_len == 0;
-    let stream_id = h3
-        .send_request(conn, &headers, bodyless)
-        .map_err(|e| anyhow::anyhow!("send_request: {e:?}"))?;
+    // `send_request` returns `StreamBlocked` when the client has hit the peer's
+    // bidi `MAX_STREAMS` grant — a normal flow-control condition under churn, NOT
+    // a gateway fault (the S21 lesson: a load client must HONOR flow-control, not
+    // mis-count it as a failure). Pump the transport so the peer's MAX_STREAMS /
+    // window advances, then retry; only a persistent block (or a real error) is
+    // a failure.
+    let mut stream_id = None;
+    let open_deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+    while stream_id.is_none() {
+        match h3.send_request(conn, &headers, bodyless) {
+            Ok(id) => stream_id = Some(id),
+            Err(quiche::h3::Error::StreamBlocked) | Err(quiche::h3::Error::Done) => {
+                if tokio::time::Instant::now() > open_deadline {
+                    anyhow::bail!("send_request stayed StreamBlocked past the open budget");
+                }
+                flush(conn, socket, out).await?;
+                recv_one(conn, socket, local, inb, Duration::from_millis(20)).await;
+                while h3.poll(conn).is_ok() {} // drain so MAX_STREAMS re-arms
+                if conn.is_closed() {
+                    anyhow::bail!("connection closed before a request stream could open");
+                }
+            }
+            Err(e) => anyhow::bail!("send_request: {e:?}"),
+        }
+    }
+    let stream_id = stream_id.expect("loop exits only with Some");
     flush(conn, socket, out).await?;
 
     // Send the request body (if any), re-trying on flow-control Done.
