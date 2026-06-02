@@ -1956,7 +1956,11 @@ async fn ws_h3_echo_session(
         let payload: Vec<u8> = (0..len)
             .map(|k| ((k as u64).wrapping_add(seed).wrapping_add(f as u64) % 251) as u8)
             .collect();
-        let frame = ws_mask_frame(0x1, &payload);
+        // BINARY (opcode 0x2), not Text: the payload is arbitrary bytes, and a
+        // WS Text frame MUST be valid UTF-8 (RFC 6455 §5.6) — the gateway
+        // (tungstenite) correctly rejects non-UTF-8 Text, which would tear the
+        // tunnel down. Binary has no such constraint.
+        let frame = ws_mask_frame(0x2, &payload);
 
         // Send (retry on a full send window).
         let send_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -2000,7 +2004,7 @@ async fn ws_h3_echo_session(
             ws_h3_drain(&mut h3, &mut conn, &mut status, &mut rx);
             while let Some((op, pl, consumed)) = ws_parse_one(&rx) {
                 rx.drain(..consumed);
-                if op == 0x1 && pl == payload {
+                if op == 0x2 && pl == payload {
                     got = true;
                     stats.ok();
                 }
