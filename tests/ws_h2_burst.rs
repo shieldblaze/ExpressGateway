@@ -145,7 +145,7 @@ async fn spawn_gateway(backend: SocketAddr) -> (SocketAddr, CertificateDer<'stat
                 let Ok(tls) = acceptor.accept(sock).await else {
                     return;
                 };
-                if tls.get_ref().1.alpn_protocol().as_deref() == Some(b"h2".as_ref()) {
+                if tls.get_ref().1.alpn_protocol() == Some(b"h2".as_ref()) {
                     let _ = h2.serve_connection(tls, peer).await;
                 }
             });

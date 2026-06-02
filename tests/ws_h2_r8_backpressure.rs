@@ -192,7 +192,7 @@ async fn spawn_gateway(backend: SocketAddr) -> (SocketAddr, CertificateDer<'stat
                 let Ok(tls) = acceptor.accept(sock).await else {
                     return;
                 };
-                if tls.get_ref().1.alpn_protocol().as_deref() == Some(b"h2".as_ref()) {
+                if tls.get_ref().1.alpn_protocol() == Some(b"h2".as_ref()) {
                     let _ = h2.serve_connection(tls, peer).await;
                 }
             });
@@ -331,7 +331,7 @@ async fn open_ws_windowed(
 /// O(1) at all times.
 async fn round_trip_n(ws: &mut WebSocketStream<H2StreamAdapter>, n: u64) {
     for i in 0..n {
-        ws.send(Message::Text(format!("m{i}").into()))
+        ws.send(Message::Text(format!("m{i}")))
             .await
             .unwrap();
         let echo = tokio::time::timeout(Duration::from_secs(10), ws.next())
