@@ -206,7 +206,27 @@ the lock before and after; no socket2 crate upgrade, and these are not on our qu
 - **KEEP-surface untouched**: 4 lint fixes are in tests, 1 is a doc comment — no production logic
   changed. The diff-level F-MD-4 / R8 safety claims are re-proven empirically in Phase 2.
 
-### ×3 gate on 0.29/1.88: RUNNING (`scripts/s31-gate.sh 029-1.88`, task bgw3c3ka4)
+### ×3 gate on 0.29/1.88: GREEN (atomic, no asterisks)
+
+Binding R11 gate (`scripts/s31-gate.sh 029-1.88`, completed run `bk9y1rini`, on the final
+fmt-fixed tree):
+
+| stage | result |
+|---|---|
+| BUILD (--no-run) | RC=0 |
+| PASS1 | 247 binaries, **1512 passed, 0 failed**, 18 ignored |
+| PASS2 | 247 binaries, **1512 passed, 0 failed**, 18 ignored |
+| PASS3 | 247 binaries, **1512 passed, 0 failed**, 18 ignored |
+| clippy `-D warnings` | RC=0 |
+| fmt --check | RC=0 |
+
+**All three passes fully clean** — even cleaner than the 0.28 baseline (which had the fcap1 flake
+in PASS1). The fcap1 saturation flake did not fire in any 0.29 pass. No regressions across the 9
+cells + both QUIC modes + WS matrix + gRPC-H3 (R3). The ≥50-iter F-MD-4 burst tests + R8 gauge
+tests are part of these 1512 and passed ×3 → first-order R8/R13 confirmation on 0.29 (explicit
+evidence-capturing re-proofs follow).
+
+## Fresh h3spec diff vs baseline — (RUNNING)
 ## Fresh h3spec diff vs baseline — (Phase 2, TBD)
 ## R8 re-proofs — (Phase 2, TBD)
 ## R13 F-MD-4 bursts — (Phase 2, TBD)
