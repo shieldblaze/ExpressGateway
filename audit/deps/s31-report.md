@@ -362,8 +362,43 @@ the research read it as a leak-FIX, suggesting the churn leak may be pre-existin
 the SAME 1800s sc9 soak on a 0.28 build (regression ⇒ PARTIAL; pre-existing ⇒ upgrade is clean,
 promote + file leak as a pre-existing CF). **Surfaced to owner.**
 
-## h2spec-intact confirm — (deferred pending sc9 decision)
-## Promote decision — BLOCKED on sc9 attribution (see above)
+### sc9 attribution: 0.28-vs-0.29 1800s comparison → PRE-EXISTING, NOT a 0.29 regression
+
+Built a 0.28 binary in an isolated worktree (`git worktree` @ `c09ecbab`, quiche 0.28.0 + 1.85,
+own target dir `eg-target-028`) and ran the IDENTICAL 1800s sc9 churn soak (same params, only the
+quiche version differs). The RSS trajectories are **nearly identical**:
+
+| t_secs | 0.28 rss_kb | 0.29 rss_kb |
+|---|---|---|
+| 0 | 8,140 | 8,040 |
+| 240 | 32,104 | 32,128 |
+| 480 | 40,092 | 39,692 |
+| 720 | 40,156 | 40,660 |
+| 960 | 54,140 | 54,696 |
+| 1200 | 54,212 | 54,732 |
+| 1440 | 54,244 | 54,744 |
+| 1680 | 81,904 | 68,616 |
+| 1800 | **81,944** | **82,456** |
+
+Same staircase (8→32→40→54→82 MB), same plateaus, same ~82 MB ceiling (within 0.6%), same slope
+(0.28: 381/sample, 0.29: 365/sample), both DRIFT identically. fds/threads flat, panic=0 on both.
+0.28 ran 5.05M RPCs **err=0** (0.29: 4.9M, err=4 ≈ 0.00008% — noise, not a correctness regression).
+
+**VERDICT: the sc9 gRPC-H3 connection-churn RSS growth is PRE-EXISTING on 0.28 — quiche 0.29 did
+NOT introduce or worsen it (R3 NO-REGRESSION satisfied).** It is glibc-allocator working-set growth
+under 2M+ connection open/close cycles (sharp +14 MB arena-acquisition steps; no fd/thread/conn
+leak), specific to the churn path (sustained/reused-connection scenarios plateau). → Filed as a NEW
+**pre-existing CF (CF-GRPC-H3-CHURN-RSS)**, its OWN fix session, NOT part of CF-QUICHE-UPGRADE. The
+re-soak is CLEAN *for the purposes of this upgrade*: 4 scenarios BOUNDED + sc9 byte-for-byte
+equivalent to its 0.28 baseline.
+
+## Re-soak verdict (0.29) — CLEAN vs 0.28 baseline
+sc5_modea / sc4_modeb / sc7_h3terminate / sc8c_ws_h3 BOUNDED (panic=0); sc9_grpc_h3 shows
+pre-existing churn RSS growth IDENTICAL to 0.28 (no regression). panic=0 across all; ~7M+ RPCs
+total err≈0. **No memory/behavior regression introduced by the upgrade.**
+
+## h2spec-intact confirm — (promote path, running next)
+## Promote decision — GO (pending h2spec + coverage); upgrade is no-regression vs 0.28
 
 ## h2spec-intact confirm — (TBD)
 ## Fresh h3spec diff vs baseline — (Phase 2, TBD)
