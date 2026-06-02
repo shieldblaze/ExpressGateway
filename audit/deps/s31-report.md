@@ -89,8 +89,53 @@ bites if `ConnectionParams`' shape changed. (To confirm in Phase 1.)
 
 ---
 
-## Version delta — (Phase 1, TBD)
-## API breaks adapted — (Phase 1, TBD)
+## Version delta + API-break analysis (research, diff-level — to be EMPIRICALLY confirmed)
+
+Source-grounded analysis (full agent output: `audit/deps/s31-research-quiche-029.md`). **quiche has
+no CHANGELOG.md** — analysis is from the git history `0.28.0..0.29.1` (48 commits) + docs.rs.
+
+**Versions:** quiche 0.29.1 (2026-05-27) and tokio-quiche 0.19.0 (2026-05-14) ARE the latest (no
+0.29.2 / 0.20). Pinned to latest of both.
+
+**Two mission hints CORRECTED by source:**
+1. "Stats fields moved to `Connection::peer_transport_params()`" — **FALSE.** `peer_transport_params()`
+   already existed in 0.28 (unchanged); `Stats` lost zero fields. The actual change: `Stats`/`PathStats`/
+   `h3::Stats` became `#[non_exhaustive]` (commit `2f00a0d`) + `Stats` gained `amplification_limited_count`
+   (commit #2432). We only **read** `cstats.recv`/`cstats.lost` (in ONE test, `crates/lb/src/main.rs:5233`),
+   never construct/exhaustively-match → **no break.**
+2. "Expect #23/#25 + several #1-10 to flip ✔ in h3spec" — **LIKELY FALSE.** `transport_params.rs` changed
+   only +6/−2 (a `MAX_ACK_DELAY_EXPONENT` const-rename, no new receive-side validation); **no QPACK file
+   changed at all.** Prediction: **same 12 failures, closes 0.** (To confirm by fresh h3spec.)
+
+**API BREAKS (compile-affecting): essentially none for our surface.** Every symbol we use
+(`quiche::{accept,connect,retry,accept_with_retry,Config::*,Connection::*,ConnectionId,Header,RecvInfo,
+Shutdown,Type,Error::*}`, `quiche::h3::{Connection::with_transport,poll,send_response,send_body,
+send_additional_headers,recv_body,Header::new,NameValue,Config::*,qpack::Decoder::new,Event::*,Error::*}`,
+`tokio_quiche::ConnectionParams`) is signature-identical in 0.29.1. `h3::Config::new` is now `const fn`
+(source-compatible). The `#[non_exhaustive]` additions only block external construction / exhaustive match,
+neither of which we do (verified: no `quiche::Stats {` match, no `ConnectionParams {`/`::new` in our code).
+
+**BEHAVIOR CHANGES (5 risk items, all verified SAFE at diff level — to RE-PROVE empirically):**
+- **(1) "h3: clear streams when send finishes before recv"** (commit `cbc8173`, 0.29.1) — F-MD-4 area.
+  **SAFE & strengthened**: `pop_finished_stream()` checks `Err(StreamReset)` FIRST, returns `Event::Reset`
+  before any `Finished`; the poll reset arm now calls `remove_local_finished_stream` so a
+  locally-finished-then-reset stream can NEVER later surface a spurious `Finished`; new upstream regression
+  test `collect_reset_streams`. → R13 re-prove reset-vs-EOF (E1+E2).
+- **(2) "ignore priority updates for closed streams"** — NO IMPACT (we don't use PRIORITY_UPDATE).
+- **(3) MAX_PTO** (`MAX_PTO_EXPONENT` raised to 20) — internal non-pub const, loss-recovery PTO backoff
+  only, no public API, not an idle/handshake timeout. NO IMPACT.
+- **(4) recv_body/send_body/poll** — signatures unchanged; NO flow-control/buffering change (diff touches
+  only stream-cleanup bookkeeping). → R8 bounded-relay invariant intact. RE-PROVE empirically.
+- **(5) server TP validation** — NO new validation added (hence no h3spec movement).
+- **One client-visible shift** (commit `2cccba0`): LB-as-H3-client now rejects illegal control frames
+  (CANCEL_PUSH/SETTINGS/GOAWAY/MAX_PUSH_ID/PRIORITY_UPDATE) on a request stream with `H3_FRAME_UNEXPECTED`
+  instead of silently accepting — strictly more conformant, routes through our existing reset/error path.
+
+**Highest first-compile risk:** quiche dropped the OpenSSL backend + vendored-BoringSSL option; now pulls
+BoringSSL exclusively via `boring`/`boring-sys`. We don't enable the `openssl` feature anywhere → expected
+fine, but watch the first build for BoringSSL toolchain/feature drift.
+
+## API breaks adapted — (Phase 1, empirical — TBD)
 ## Fresh h3spec diff vs baseline — (Phase 2, TBD)
 ## R8 re-proofs — (Phase 2, TBD)
 ## R13 F-MD-4 bursts — (Phase 2, TBD)
