@@ -1593,7 +1593,8 @@ async fn grpc_h3_server_stream_bounded_memory_r8() {
 
     let retained = lb_quic::h3_bridge::MAX_RETAINED_RESP_BYTES.load(Ordering::Relaxed);
     let total: usize = out.body.len();
-    let ceiling = 4 * lb_quic::h3_bridge::H3_RESP_CHANNEL_DEPTH
+    let ceiling = 4
+        * lb_quic::h3_bridge::H3_RESP_CHANNEL_DEPTH
         * (lb_quic::h3_bridge::H3_RESP_CHUNK_MAX + lb_quic::h3_bridge::H3_FRAME_HDR_MAX);
     eprintln!("GRPC_H3_R8 retained={retained} ceiling={ceiling} total={total}");
     assert!(
