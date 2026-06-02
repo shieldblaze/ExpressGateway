@@ -222,8 +222,72 @@ WS-H2 (`h2_proxy::handle_ws_extended_connect`, F-S27-1 "defer 200"), WS-H3
 sends the 200; failure → 502/504, no 200). The relay (`proxy_frames`) is the same
 single source across all three (R12, no divergence).
 
-- WS-over-H3 soak (sc8c_ws_h3): *(see soak section below)*
-- Binding ×3 gate + scoped coverage: *(see Phase 3 baseline below)*
+**WS-over-H3 soak (sc8c_ws_h3) — BOUNDED / CLEAN** (`audit/soak/s28-soak-data/`):
+720s, 73 samples, default load (8 sustained held tunnels + 8 open/close churn
+workers driving the quiche::h3 client through the real `expressgateway`):
+- `rss_kb [BOUNDED]` — flat plateau ~22–23 MB (last-third median 23404 vs
+  first-third 23394, **+0.0%**); ramped 8 MB (idle) → 22 MB (16 tunnels) by t=10s
+  then flat for 710s. `vmhwm_kb [BOUNDED]` (+3.9%, within band).
+- `fds [BOUNDED]` — median 21, range 11–24 (the F-S20-2 leak-class signal: no
+  fd/connection/relay-task leak across ~358K churn cycles). `threads [BOUNDED]`.
+- `panic_total` = 0 across the whole run.
+- `ws_h3_sustained: ok=239,980 err=0` + `ws_h3_churn: ok=357,808 err=0` —
+  ~600K WS-H3 echoes, **ZERO errors**.
+- **overall = BOUNDED.**
+
+Soak-build finding (loadgen, NOT a gateway bug): the first loadgen draft sent
+arbitrary-byte payloads as WS **Text** frames (opcode 0x1); RFC 6455 §5.6 requires
+Text payloads to be valid UTF-8, so the gateway (tungstenite) **correctly** rejected
+non-UTF-8 Text and tore the tunnel down (a single tunnel got ok=0). Fixed by sending
+**Binary** (0x2). Confirms the gateway enforces the WS Text UTF-8 rule end-to-end.
+
+## Phase 3 baseline — binding gate + coverage
+- **Binding ×3 gate GREEN** (verifier-independent, `audit/websockets/s28-phase3-gate.log`):
+  fmt✓ · clippy `--all-targets --all-features -D warnings`✓ · ×3 `cargo test
+  --workspace --all-features` = **1492 passed / 0 failed / 18 ignored** per run
+  (+4 WS-H3 tests vs baseline 1488; the 4 WS tests confirmed under full
+  parallelism, R13(a)). **No regression (R3).** (The post-gate changes are
+  lb-soak-only — the soak scenario + the Binary opcode fix — production code
+  lb/lb-quic/lb-l7 is byte-identical to the gated tree; a final confirming gate
+  is run before promote.)
+- **Scoped coverage = 82.0%** (324/395 lines, ≥80% bar; `s28-cov.lcov`, full-suite
+  llvm-cov, per-line DA over the exact WS-H3 fn ranges): `build_ws_h3_launcher`
+  89.4%, `dial_backend_ws` 84.4%, conn_actor WS fns 78.8%, poll_h3 WS intercept
+  92.9%. The ~71 uncovered lines are characterized defensive arms tied to
+  `quiche::Connection` (the send-error `ws_teardown` path, `recv_body`-error mid-
+  tunnel, the Finished-on-reset branch, the pump `send_response`/`send_body` error
+  arms — each requires a precise client/upstream fault race) + `tracing!` macro
+  string-literal lines; the CORE logic (happy path, 501, 502 ×2, reset, FIN, R8
+  both directions, the launcher dial) is covered. 8 WS-H3 e2e tests:
+  echo-roundtrip, reset-vs-EOF (CleanClose vs Abrupt), burst-50, R8-backpressure,
+  501-unknown-protocol, 502-upstream-unreachable, client-FIN-abnormal,
+  no-launcher-fail-closed-502.
+
+## S29 handoff
+`audit/websockets/s29-handoff.md` — gRPC-over-H3 (the program's last spec item);
+CF-S27-2 (WS-H2 backpressure, own workstream); CF-S28-WSH3-WAKEUP (the 2 ms
+busy-poll LOW residual).
+
+## Findings disposition (R4 — none asterisked)
+1. **WS Text UTF-8 enforcement (soak-build, NOT a gateway bug, CONFIRMED CORRECT):**
+   the gateway (tungstenite) rejects non-UTF-8 WS Text frames and tears the tunnel
+   down per RFC 6455 §5.6 — the first soak loadgen draft hit this by sending
+   arbitrary bytes as Text; fixed to Binary. Confirms correct gateway behavior.
+2. **Bare stream-FIN = abnormal close (CONFIRMED CORRECT):** a client H3 stream-FIN
+   without a WS Close frame is an RFC 6455 §7.1.5 abnormal closure; the gateway maps
+   it to a clean EOF and does NOT fabricate a clean WS Close to the backend
+   (`ws_over_h3_client_stream_fin_without_close_is_abnormal`).
+3. **CF-S28-WSH3-WAKEUP (LOW, carried):** the actor caps `next_wait` to 2 ms while a
+   WS tunnel is live (nothing wakes the `select!` on an outbound relay frame — the
+   proven body/resp streaming pattern). Bounded busy-poll per WS connection (idle
+   tunnels reaped by `proxy_frames`' 60 s idle); soak fds/RSS bounded. A future
+   relay→actor wakeup is the optimization. NOT a correctness/leak issue.
 
 ## Verdict
-*(pending — see soak + final gate)*
+**SESSION 28 COMPLETE — WS-over-H3 (RFC 9220) complete, opt-in (newness gate).**
+Stage C (relay wiring) built + verified end-to-end: closure-injection launcher
+(off=no-op R3), conn_actor tunnel-mode pump (R8 wired backpressure both directions,
+reset-vs-EOF), real-binary e2e + 501/502/FIN error paths, RFC 9220 conformance,
+WS-H3 soak BOUNDED (~600K echoes, 0 err, no leak, panic=0), scoped coverage 82.0%,
+binding ×3 gate GREEN. 2 findings confirmed-correct-behavior + 1 LOW residual
+carried (CF-S28-WSH3-WAKEUP). *(Promote pending the final binding ×3 gate.)*

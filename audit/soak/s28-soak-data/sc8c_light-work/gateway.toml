@@ -1,0 +1,26 @@
+[runtime]
+drain_timeout_ms = 5000
+readiness_settle_ms = 100
+
+[[listeners]]
+address = "127.0.0.1:37235"
+protocol = "quic"
+
+[listeners.quic]
+cert_path = "audit/soak/s28-soak-data/sc8c_light-work/cert.pem"
+key_path = "audit/soak/s28-soak-data/sc8c_light-work/key.pem"
+retry_secret_path = "audit/soak/s28-soak-data/sc8c_light-work/retry.bin"
+
+[listeners.websocket]
+enabled = true
+h3_extended_connect = true
+idle_timeout_seconds = 120
+read_frame_timeout_seconds = 30
+
+[[listeners.backends]]
+address = "127.0.0.1:42815"
+protocol = "h1"
+weight = 1
+
+[observability]
+metrics_bind = "127.0.0.1:35691"
