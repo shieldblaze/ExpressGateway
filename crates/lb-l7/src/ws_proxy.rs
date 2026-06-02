@@ -475,6 +475,58 @@ where
     WebSocketStream::from_raw_socket(io, Role::Client, Some(cfg.tungstenite_config())).await
 }
 
+/// SESSION 28 / WS-over-H3 (RFC 9220) Stage C — drive the upstream RFC 6455
+/// client handshake over an already-dialed backend `stream`, returning the
+/// established client-role [`WebSocketStream`] and the upstream-selected
+/// `sec-websocket-protocol` (if any).
+///
+/// The `lb` binary's WS-over-H3 relay launcher calls this: `lb-quic`'s H3
+/// datapath cannot import the H1 path's private `dial_upstream_ws`, and
+/// keeping the `tokio-tungstenite` dependency in `lb-l7` (next to the
+/// single-sourced [`WsProxy::proxy_frames`]) avoids pulling it into the
+/// binary. `path` is the extended CONNECT `:path`; `subprotocols` is the
+/// client's `sec-websocket-protocol` offer (each value forwarded so a real
+/// RFC 6455 negotiation happens on the H1 leg). The dial timeout (→ 504)
+/// is the caller's responsibility (it wraps this in a budget); a handshake
+/// refusal here maps to the returned `Err` (→ 502).
+///
+/// # Errors
+///
+/// Returns a human-readable message if the URI is malformed or the
+/// upstream handshake fails.
+pub async fn dial_backend_ws(
+    stream: tokio::net::TcpStream,
+    backend_addr: std::net::SocketAddr,
+    path: &str,
+    subprotocols: Option<&str>,
+    cfg: &WsConfig,
+) -> Result<(WebSocketStream<tokio::net::TcpStream>, Option<String>), String> {
+    let uri = format!("ws://{backend_addr}{path}")
+        .parse()
+        .map_err(|e| format!("upstream ws uri build failed: {e}"))?;
+    let mut builder = tokio_tungstenite::tungstenite::client::ClientRequestBuilder::new(uri);
+    if let Some(protocols) = subprotocols {
+        for p in protocols.split(',') {
+            let p = p.trim();
+            if !p.is_empty() {
+                builder = builder.with_sub_protocol(p);
+            }
+        }
+    }
+    let (backend_ws, resp) =
+        tokio_tungstenite::client_async_with_config(builder, stream, Some(cfg.tungstenite_config()))
+            .await
+            .map_err(|e| format!("upstream handshake failed: {e}"))?;
+    // RFC 6455 §1.3 / RFC 8441 §5: surface the upstream-selected subprotocol
+    // so the caller can echo it in the extended CONNECT 200 response.
+    let negotiated = resp
+        .headers()
+        .get("sec-websocket-protocol")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    Ok((backend_ws, negotiated))
+}
+
 // ── helpers ────────────────────────────────────────────────────────────
 
 static SEC_WEBSOCKET_VERSION: HeaderName = HeaderName::from_static("sec-websocket-version");

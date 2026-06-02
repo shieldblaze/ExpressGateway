@@ -956,6 +956,98 @@ fn ws_config_to_runtime(cfg: &WebsocketConfig) -> WsConfig {
     }
 }
 
+/// SESSION 28 / WS-over-H3 (RFC 9220) Stage C — build the relay launcher
+/// closure injected into the QUIC listener.
+///
+/// Dependency inversion: the binary sees BOTH `lb-quic` (the H3 datapath +
+/// the `H3WsTunnel` seam) and `lb-l7` (the single-sourced
+/// `ws_proxy::proxy_frames`), so it can run the relay across the crate
+/// boundary `lb-quic` cannot. Per validated `:protocol=websocket` extended
+/// CONNECT the closure: dials an H1 backend via the shared `TcpPool`,
+/// drives the upstream RFC 6455 client handshake (echoing the negotiated
+/// subprotocol), signals readiness **before** the `200` (the H3 analog of
+/// the WS-H1 GHSA / WS-H2 F-S27-1 "upstream-before-200" ordering), then
+/// runs `proxy_frames` over the tunnel. Dial+handshake is bounded by
+/// `header_budget` (504 on elapse, 502 on refuse). Mirrors the inline dial
+/// in `h1_proxy::handle_ws_upgrade` / `h2_proxy::handle_ws_extended_connect`.
+fn build_ws_h3_launcher(
+    backends: Vec<SocketAddr>,
+    pool: TcpPool,
+    ws_cfg: WsConfig,
+    header_budget: Duration,
+) -> lb_quic::ws_tunnel::WsRelayLauncher {
+    use lb_quic::ws_tunnel::{H3WsTunnel, WsConnectRequest, WsRelayHandle, WsUpstreamOutcome};
+    let ws_proxy = Arc::new(WsProxy::new(ws_cfg));
+    Arc::new(
+        move |tunnel: H3WsTunnel, req: WsConnectRequest| -> WsRelayHandle {
+            let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<WsUpstreamOutcome>();
+            let backend = backends.first().copied();
+            let pool = pool.clone();
+            let ws_proxy = Arc::clone(&ws_proxy);
+            let task = tokio::spawn(async move {
+                let Some(backend_addr) = backend else {
+                    let _ = ready_tx.send(WsUpstreamOutcome::Failed { status: 502 });
+                    return;
+                };
+                let ws_cfg = ws_proxy.config();
+                // Dial + upstream RFC 6455 handshake INLINE, before readiness
+                // (so the H3 client never sees a 200 toward a backend that
+                // never agreed). `take_stream` removes the socket from the
+                // pool — a WS tunnel owns its backend connection for life.
+                let dial = async {
+                    let pooled = pool
+                        .acquire_async(backend_addr)
+                        .await
+                        .map_err(|e| format!("backend dial failed: {e}"))?;
+                    let stream = pooled
+                        .take_stream()
+                        .ok_or_else(|| "pooled stream missing".to_string())?;
+                    lb_l7::ws_proxy::dial_backend_ws(
+                        stream,
+                        backend_addr,
+                        &req.path,
+                        req.subprotocols.as_deref(),
+                        &ws_cfg,
+                    )
+                    .await
+                };
+                match tokio::time::timeout(header_budget, dial).await {
+                    Ok(Ok((backend_ws, negotiated))) => {
+                        let mut headers = Vec::new();
+                        if let Some(p) = negotiated {
+                            headers.push(("sec-websocket-protocol".to_owned(), p));
+                        }
+                        if ready_tx
+                            .send(WsUpstreamOutcome::Ready { headers })
+                            .is_err()
+                        {
+                            // The actor (H3 stream) went away before the 200;
+                            // dropping `backend_ws` closes the upstream.
+                            return;
+                        }
+                        let client_ws = lb_l7::ws_proxy::server_ws(tunnel, &ws_cfg).await;
+                        if let Err(e) = ws_proxy.proxy_frames(client_ws, backend_ws).await {
+                            tracing::debug!(error = %e, "WS-H3: frame proxy ended with error");
+                        }
+                    }
+                    Ok(Err(msg)) => {
+                        tracing::debug!(backend = %backend_addr, error = %msg, "WS-H3: upstream handshake refused — 502");
+                        let _ = ready_tx.send(WsUpstreamOutcome::Failed { status: 502 });
+                    }
+                    Err(_elapsed) => {
+                        tracing::debug!(backend = %backend_addr, "WS-H3: upstream dial/handshake budget elapsed — 504");
+                        let _ = ready_tx.send(WsUpstreamOutcome::Failed { status: 504 });
+                    }
+                }
+            });
+            WsRelayHandle {
+                ready: ready_rx,
+                task,
+            }
+        },
+    )
+}
+
 /// Build a [`H2Proxy`] sharing the same picker/alt_svc/timeouts shape as
 /// the matching [`H1Proxy`]. Used when the `h1s` listener negotiates
 /// `h2` via ALPN.
@@ -1260,6 +1352,28 @@ async fn wire_h3_terminate_backends(
         .with_context(|| format!("listener {} backend 0", listener_cfg.address))?;
     match proto {
         UpstreamProto::H1 => {
+            // SESSION 28 / WS-over-H3 (RFC 9220) Stage C: when this listener
+            // opted into WebSocket (params.ws_enabled, set in spawn_quic from
+            // a `[listeners.websocket]` block with `h3_extended_connect`),
+            // inject the relay launcher built over THESE H1 backends + the
+            // shared pool, so a validated extended CONNECT is relayed to an
+            // H1 WS backend. The H3→H1 backend leg below is the same one the
+            // launcher dials. Off ⇒ no launcher (byte-identical, R3).
+            if params.ws_enabled {
+                if let Some(ws) = listener_cfg.websocket.as_ref() {
+                    let header_budget = listener_cfg.http.as_ref().map_or_else(
+                        || Duration::from_secs(30),
+                        |h| Duration::from_millis(h.header_timeout_ms),
+                    );
+                    let launcher = build_ws_h3_launcher(
+                        addresses.clone(),
+                        pool.clone(),
+                        ws_config_to_runtime(ws),
+                        header_budget,
+                    );
+                    params = params.with_ws_relay_launcher(launcher);
+                }
+            }
             // H3→H1: round-robin across ALL resolved H1 backends via the
             // shared TCP pool (the must-have; the WS-over-H3 backend leg).
             params = params.with_backends(addresses, pool.clone());
