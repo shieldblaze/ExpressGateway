@@ -13,7 +13,8 @@
 //!   eg-soak --list
 //!
 //! Scenarios: sc1_h1h1, sc1b_h1h2, sc2_h2h2, sc3_slowloris, sc4_modeb,
-//!            sc5_modea, sc6_413teardown, sc7_h3terminate.
+//!            sc5_modea, sc6_413teardown, sc7_h3terminate, sc8_ws_h1,
+//!            sc8b_ws_h2.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -44,6 +45,7 @@ const SCENARIOS: &[&str] = &[
     "sc6_413teardown",
     "sc7_h3terminate",
     "sc8_ws_h1",
+    "sc8b_ws_h2",
 ];
 
 struct Args {
@@ -241,6 +243,7 @@ async fn setup_scenario(
         "sc6_413teardown" => setup_413(args, bin, workdir, cancel).await,
         "sc7_h3terminate" => setup_h3_terminate(args, bin, workdir, cancel).await,
         "sc8_ws_h1" => setup_ws_h1(args, bin, workdir, cancel).await,
+        "sc8b_ws_h2" => setup_ws_h2(args, bin, workdir, cancel).await,
         other => anyhow::bail!("unknown scenario {other} (try --list)"),
     }
 }
@@ -737,6 +740,87 @@ async fn setup_ws_h1(
         tasks,
         backend_ctrls: vec![],
         // Reuse the AtomicBool stop-vec to end the WS backend on teardown.
+        quic_stop: vec![ws_stop],
+        stats,
+        _tmp: workdir.to_path_buf(),
+    })
+}
+
+/// sc8b_ws_h2 (S27) — WebSocket-over-HTTP/2 soak (RFC 8441 extended CONNECT). An
+/// `h1s` (TLS, ALPN h2) front with a `[listeners.websocket]` block carrying
+/// `h2_extended_connect = true` (the CF-S27-2 opt-in) → the same co-located
+/// tungstenite H1 WS echo backend. An H2 client drives WS via extended CONNECT;
+/// the gateway (`build_h2_proxy` → `with_websocket` + `with_h2_extended_connect`)
+/// answers 200, keeps the stream open as the tunnel, and runs the shared
+/// `WsProxy::proxy_frames` relay onto the H1 backend.
+///
+/// Same long-lived-relay leak-class question as sc8_ws_h1, over the RFC 8441
+/// path. F-S27-2 NOTE: the load client READS NORMALLY (drains H2 DATA frames +
+/// releases flow-control capacity) — it intentionally does NOT exercise the
+/// gated, carried H2 unbounded-buffer DoS (a non-reading client); the soak
+/// proves the NORMAL-load bound (fd/connection/memory under churn), which is the
+/// shippable property. Leak discriminant: `fds` (every live tunnel pins a client
+/// fd + a backend fd + the relay task) + RSS + `panic_total = 0`.
+async fn setup_ws_h2(
+    args: &Args,
+    bin: &std::path::Path,
+    workdir: &std::path::Path,
+    cancel: CancellationToken,
+) -> anyhow::Result<Running> {
+    let ws_stop = Arc::new(AtomicBool::new(false));
+    let backend = backends::spawn_ws_h1_backend(Arc::clone(&ws_stop)).await?;
+
+    let metrics = metrics_addr()?;
+    let listener = tcp_addr(gateway::ephemeral_port()?);
+    // The gateway terminates client TLS with its own front cert; the H2 WS load
+    // client trusts it (accept-any loopback verifier) and sends SNI `localhost`.
+    let certs = config_gen::generate_certs(workdir, "localhost")?;
+    let ws_idle = env_usize("WS_IDLE_SECS", 120) as u64;
+    let ws_read_frame = env_usize("WS_READ_FRAME_SECS", 30) as u64;
+    let toml = config_gen::h1s_front_ws(listener, backend, metrics, &certs, ws_idle, ws_read_frame);
+    let cfg = workdir.join("gateway.toml");
+    std::fs::write(&cfg, toml)?;
+    let gw = spawn_gateway(bin, &cfg, metrics, workdir).await?;
+
+    let sni = "localhost".to_string();
+    let ca = certs.ca.clone();
+    let sustained = env_usize("WS_SUSTAINED", 8) * args.scale;
+    let churn = env_usize("WS_CHURN", 8) * args.scale;
+    let frames_per_cycle = env_usize("WS_CHURN_FRAMES", 4);
+
+    let mut tasks = Vec::new();
+    let mut stats = Vec::new();
+
+    let load = LoadStats::new();
+    stats.push(("ws_sustained".into(), Arc::clone(&load)));
+    tasks.push(tokio::spawn(loadgen::run_ws_h2_load(
+        listener,
+        sni.clone(),
+        ca.clone(),
+        sustained,
+        Arc::clone(&load),
+        cancel.clone(),
+    )));
+
+    let chstats = LoadStats::new();
+    stats.push(("ws_churn".into(), Arc::clone(&chstats)));
+    tasks.push(tokio::spawn(loadgen::run_ws_h2_churn(
+        listener,
+        sni,
+        ca,
+        churn,
+        frames_per_cycle,
+        Arc::clone(&chstats),
+        cancel.clone(),
+    )));
+
+    Ok(Running {
+        gateway: gw,
+        metrics_addr: metrics,
+        gauges: ws_gauges(),
+        kinds: ws_kinds(),
+        tasks,
+        backend_ctrls: vec![],
         quic_stop: vec![ws_stop],
         stats,
         _tmp: workdir.to_path_buf(),

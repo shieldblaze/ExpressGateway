@@ -150,6 +150,15 @@ async fn h1_keepalive_burst(target: SocketAddr, seed: u64, burst: usize) -> anyh
 //     connection-table slot / relay task is not released, the count ratchets up
 //     across cycles. A bounded verdict here is the leak-class proof.
 
+/// The outcome of waiting for one echo frame on a WS tunnel (H1 or H2): real
+/// bytes (to be byte-compared against the sent payload — a mismatch is a relay
+/// integrity DEFECT), or a connection-lifecycle close/read-timeout (the worker
+/// reconnects; NOT counted as an error, since the bytes were never wrong).
+enum WsEcho {
+    Bytes(Vec<u8>),
+    Closed,
+}
+
 /// One sustained WS connection: handshake, then loop send→echo-verify until the
 /// cancel fires or an error. Returns the count of verified round-trips. Each
 /// frame is non-trivial (a seeded, non-repeating payload) so a short-circuit
@@ -189,21 +198,27 @@ async fn ws_h1_echo_loop(
         let echoed = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 match ws.next().await {
-                    Some(Ok(Message::Binary(b))) => return Some(b),
-                    Some(Ok(Message::Close(_))) | None => return None,
+                    Some(Ok(Message::Binary(b))) => return WsEcho::Bytes(b),
+                    Some(Ok(Message::Close(_))) | None => return WsEcho::Closed,
                     Some(Ok(_)) => continue, // Pong / Text — keep waiting
-                    Some(Err(_)) => return None,
+                    Some(Err(_)) => return WsEcho::Closed,
                 }
             }
         })
         .await?;
         match echoed {
-            Some(b) if b == payload => stats.ok(),
-            Some(_) => {
+            WsEcho::Bytes(b) if b == payload => stats.ok(),
+            // A genuine byte mismatch is a RELAY DEFECT — count it + propagate.
+            WsEcho::Bytes(_) => {
                 stats.err();
-                anyhow::bail!("ws echo mismatch");
+                anyhow::bail!("ws ECHO MISMATCH (relay integrity defect)");
             }
-            None => anyhow::bail!("ws closed mid-echo"),
+            // A clean close mid-loop is a connection-LIFECYCLE event (the gateway
+            // drained the tunnel, an idle close, or end-of-run cancel landing
+            // between send and read): the worker reconnects. NOT an echo-integrity
+            // failure, so it does NOT increment `err` — return Ok so the caller
+            // re-establishes quietly. (Identical disposition to the H2 path.)
+            WsEcho::Closed => return Ok(()),
         }
         // A short pace so a single client doesn't monopolise the box; the point
         // is sustained churn, not throughput.
@@ -328,6 +343,401 @@ pub async fn run_ws_h1_churn(
                     Err(e) => {
                         if std::env::var("WS_DEBUG").is_ok() {
                             eprintln!("[ws_h1_churn err] {e}");
+                        }
+                        stats.err();
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                }
+            }
+        }));
+    }
+    for w in workers {
+        let _ = w.await;
+    }
+}
+
+// ── WebSocket-over-HTTP/2 load (S27 sc8b_ws_h2, RFC 8441 extended CONNECT) ─────
+//
+// Same leak-class question as sc8_ws_h1 (a long-lived bidirectional opaque
+// relay must stay bounded under churn), but over the RFC 8441 path: an H2 client
+// sends an extended CONNECT (`:protocol = websocket`), the gateway answers 200
+// and the stream stays open as the tunnel, then RFC 6455 frames ride inside H2
+// DATA frames. The gateway's `with_h2_extended_connect(true)` opt-in (CF-S27-2)
+// must be set on the listener (see `config_gen::h1s_front_ws`).
+//
+// CRITICAL (F-S27-2): this load client READS NORMALLY — it drains inbound H2
+// DATA frames AND releases flow-control capacity as it consumes them
+// (`flow_control().release_capacity`). A NON-reading client would exercise the
+// gated, carried H2 unbounded-buffer DoS (F-S27-2, off by default), which is NOT
+// what this soak proves — the soak proves the NORMAL-load relay leak-class
+// property (bounded fd / connection / memory under churn), exactly as
+// sc8_ws_h1 does for H1. The H2 WS client + adapter mirror the proven shapes in
+// `tests/ws_h2_e2e.rs` (`H2StreamAdapter`, `open_ws_over_h2`), reimplemented
+// here free of any product type so lb-soak stays a pure black-box driver.
+
+/// Bridges an open H2 stream (`SendStream<Bytes>` request-body direction +
+/// `RecvStream` response-body direction) into the `AsyncRead + AsyncWrite`
+/// surface `tokio_tungstenite` requires. `AsyncRead` drains inbound DATA frames
+/// and RELEASES the consumed bytes back to the H2 flow-control window (so the
+/// peer is never starved — the normal-reading contract); `AsyncWrite` reserves
+/// window capacity then ships the buffer as a DATA frame.
+struct H2StreamAdapter {
+    send: h2::SendStream<Bytes>,
+    recv: h2::RecvStream,
+    leftover: Bytes,
+}
+
+impl tokio::io::AsyncRead for H2StreamAdapter {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        use std::task::Poll;
+        if !self.leftover.is_empty() {
+            let n = self.leftover.len().min(buf.remaining());
+            let chunk = self.leftover.split_to(n);
+            buf.put_slice(&chunk);
+            return Poll::Ready(Ok(()));
+        }
+        match self.recv.poll_data(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(None) => Poll::Ready(Ok(())), // clean EOF
+            Poll::Ready(Some(Ok(mut data))) => {
+                // Release the whole frame back to the window (we own all of it;
+                // the tail lives in `leftover`). This is the normal-reading
+                // contract that keeps the relay bounded (NOT the F-S27-2 path).
+                let len = data.len();
+                let _ = self.recv.flow_control().release_capacity(len);
+                let n = len.min(buf.remaining());
+                buf.put_slice(data.get(..n).unwrap_or(&[]));
+                bytes::Buf::advance(&mut data, n);
+                self.leftover = data;
+                Poll::Ready(Ok(()))
+            }
+            Poll::Ready(Some(Err(e))) => {
+                Poll::Ready(Err(std::io::Error::other(format!("h2 recv: {e}"))))
+            }
+        }
+    }
+}
+
+impl tokio::io::AsyncWrite for H2StreamAdapter {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        use std::task::Poll;
+        self.send.reserve_capacity(buf.len());
+        match self.send.poll_capacity(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(None) => Poll::Ready(Err(std::io::Error::other(
+                "h2 send stream closed before capacity",
+            ))),
+            Poll::Ready(Some(Ok(cap))) => {
+                let n = cap.min(buf.len());
+                if n == 0 {
+                    cx.waker().wake_by_ref();
+                    return Poll::Pending;
+                }
+                let chunk = Bytes::copy_from_slice(buf.get(..n).unwrap_or(&[]));
+                match self.send.send_data(chunk, false) {
+                    Ok(()) => Poll::Ready(Ok(n)),
+                    Err(e) => Poll::Ready(Err(std::io::Error::other(format!("h2 send: {e}")))),
+                }
+            }
+            Poll::Ready(Some(Err(e))) => {
+                Poll::Ready(Err(std::io::Error::other(format!("h2 capacity: {e}"))))
+            }
+        }
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        // Half-close: an empty end-of-stream DATA frame.
+        match self.send.send_data(Bytes::new(), true) {
+            Ok(()) => std::task::Poll::Ready(Ok(())),
+            Err(e) => {
+                std::task::Poll::Ready(Err(std::io::Error::other(format!("h2 shutdown: {e}"))))
+            }
+        }
+    }
+}
+
+/// Open the gateway TLS+H2 connection, send an RFC 8441 extended CONNECT for
+/// `/soak`, assert 200, and return a post-handshake `tokio_tungstenite`
+/// `Role::Client` riding the now-open H2 stream (+ the detached conn driver
+/// handle, aborted by the caller on close).
+async fn open_ws_over_h2(
+    tls: &tokio_rustls::TlsConnector,
+    target: SocketAddr,
+    sni: &str,
+) -> anyhow::Result<(
+    tokio_tungstenite::WebSocketStream<H2StreamAdapter>,
+    tokio::task::JoinHandle<()>,
+)> {
+    let tcp = tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(target)).await??;
+    let server_name = rustls_pki_types::ServerName::try_from(sni.to_string())?;
+    let tls_stream =
+        tokio::time::timeout(Duration::from_secs(5), tls.connect(server_name, tcp)).await??;
+
+    let (h2c, conn) =
+        tokio::time::timeout(Duration::from_secs(5), h2::client::handshake(tls_stream)).await??;
+    let driver = tokio::spawn(async move {
+        let _ = conn.await;
+    });
+    let mut h2c = tokio::time::timeout(Duration::from_secs(5), h2c.ready()).await??;
+
+    // Extended CONNECT: CONNECT + authority + path + the `:protocol = websocket`
+    // typed extension. end_of_stream = false → the stream stays open as the
+    // tunnel.
+    let uri: http::Uri = format!("https://{sni}/soak").parse()?;
+    let mut req = http::Request::builder()
+        .method(http::Method::CONNECT)
+        .uri(uri)
+        .body(())?;
+    req.extensions_mut()
+        .insert(h2::ext::Protocol::from_static("websocket"));
+
+    let (resp_fut, send_stream) = h2c
+        .send_request(req, false)
+        .map_err(|e| anyhow::anyhow!("send extended CONNECT: {e}"))?;
+    let resp = tokio::time::timeout(Duration::from_secs(5), resp_fut).await??;
+    if resp.status() != http::StatusCode::OK {
+        driver.abort();
+        anyhow::bail!(
+            "extended CONNECT must yield 200 (the gateway accepts the WS tunnel); got {}",
+            resp.status()
+        );
+    }
+    let recv_stream = resp.into_body();
+    let adapter = H2StreamAdapter {
+        send: send_stream,
+        recv: recv_stream,
+        leftover: Bytes::new(),
+    };
+    // Role::Client masks its frames per RFC 6455; the gateway wrapped its end as
+    // Role::Server. tungstenite default config is fine for the soak.
+    let ws = tokio_tungstenite::WebSocketStream::from_raw_socket(
+        adapter,
+        tokio_tungstenite::tungstenite::protocol::Role::Client,
+        None,
+    )
+    .await;
+    Ok((ws, driver))
+}
+
+/// One WS-over-H2 open→echo→close cycle: extended CONNECT → 200 → `frames`
+/// byte-verified bidi echoes → clean Close. Returns the verified-round-trip
+/// count.
+async fn ws_h2_open_close_cycle(
+    tls: &tokio_rustls::TlsConnector,
+    target: SocketAddr,
+    sni: &str,
+    seed: u64,
+    frames: usize,
+) -> anyhow::Result<usize> {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (mut ws, driver) = open_ws_over_h2(tls, target, sni).await?;
+    let mut served = 0usize;
+    for f in 0..frames {
+        let len = BODY_SIZES[((seed as usize).wrapping_add(f)) % BODY_SIZES.len()].max(1);
+        let payload: Vec<u8> = (0..len).map(|k| ((k as u64 + seed) % 251) as u8).collect();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            ws.send(Message::Binary(payload.clone())),
+        )
+        .await??;
+        let echoed = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match ws.next().await {
+                    Some(Ok(Message::Binary(b))) => return Some(b),
+                    Some(Ok(Message::Close(_))) | None => return None,
+                    Some(Ok(_)) => continue,
+                    Some(Err(_)) => return None,
+                }
+            }
+        })
+        .await?;
+        match echoed {
+            Some(b) if b == payload => served += 1,
+            _ => {
+                driver.abort();
+                anyhow::bail!("ws-over-h2 echo mismatch / early close");
+            }
+        }
+    }
+    let _ = tokio::time::timeout(Duration::from_secs(3), ws.close(None)).await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), async {
+        while let Some(Ok(_)) = ws.next().await {}
+    })
+    .await;
+    driver.abort();
+    Ok(served)
+}
+
+/// One sustained WS-over-H2 connection: extended CONNECT, then loop
+/// send→echo-verify until the cancel fires. Records each verified round-trip.
+async fn ws_h2_echo_loop(
+    tls: &tokio_rustls::TlsConnector,
+    target: SocketAddr,
+    sni: &str,
+    seed: u64,
+    cancel: &CancellationToken,
+    stats: &LoadStats,
+) -> anyhow::Result<()> {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let (mut ws, driver) = open_ws_over_h2(tls, target, sni).await?;
+    let mut i = seed;
+    while !cancel.is_cancelled() {
+        i = i.wrapping_add(1);
+        let len = BODY_SIZES[(i as usize) % BODY_SIZES.len()].max(1);
+        let payload: Vec<u8> = (0..len).map(|k| ((k as u64 + i) % 251) as u8).collect();
+        if tokio::time::timeout(
+            Duration::from_secs(5),
+            ws.send(Message::Binary(payload.clone())),
+        )
+        .await
+        .is_err()
+        {
+            driver.abort();
+            anyhow::bail!("ws-over-h2 send timeout");
+        }
+        let echoed = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match ws.next().await {
+                    Some(Ok(Message::Binary(b))) => return WsEcho::Bytes(b),
+                    Some(Ok(Message::Close(_))) | None => return WsEcho::Closed,
+                    Some(Ok(_)) => continue,
+                    Some(Err(_)) => return WsEcho::Closed,
+                }
+            }
+        })
+        .await?;
+        match echoed {
+            // Verified round-trip.
+            WsEcho::Bytes(b) if b == payload => stats.ok(),
+            // A genuine byte mismatch is a RELAY DEFECT — count it + propagate.
+            WsEcho::Bytes(_) => {
+                stats.err();
+                driver.abort();
+                anyhow::bail!("ws-over-h2 ECHO MISMATCH (relay integrity defect)");
+            }
+            // A clean close / read timeout mid-loop is a connection-LIFECYCLE
+            // event (a long-lived H2 tunnel the gateway drained, an idle close,
+            // or end-of-run cancel landing between send and read): the loop
+            // reconnects. It is NOT an echo-integrity failure, so it does NOT
+            // increment `err` — that gauge is reserved for a wrong echo. End the
+            // session quietly so the worker re-establishes.
+            WsEcho::Closed => {
+                driver.abort();
+                return Ok(());
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let _ = ws.close(None).await;
+    driver.abort();
+    Ok(())
+}
+
+/// Sustained WS-over-H2 load: `concurrency` LONG-LIVED clients each looping a
+/// byte-verified bidirectional echo over an RFC 8441 tunnel until cancel. A
+/// dropped tunnel is re-established. The TLS connector (ALPN h2, accept-any
+/// loopback cert) is built once and shared.
+pub async fn run_ws_h2_load(
+    target: SocketAddr,
+    sni: String,
+    ca_path: PathBuf,
+    concurrency: usize,
+    stats: Arc<LoadStats>,
+    cancel: CancellationToken,
+) {
+    let tls = match h2_tls_connector(&ca_path) {
+        Ok(t) => t,
+        Err(_) => {
+            stats.err();
+            return;
+        }
+    };
+    let mut workers = Vec::new();
+    for w in 0..concurrency {
+        let stats = Arc::clone(&stats);
+        let cancel = cancel.clone();
+        let tls = tls.clone();
+        let sni = sni.clone();
+        workers.push(tokio::spawn(async move {
+            let mut seed = (w as u64).wrapping_mul(7);
+            while !cancel.is_cancelled() {
+                seed = seed.wrapping_add(101);
+                if let Err(e) = ws_h2_echo_loop(&tls, target, &sni, seed, &cancel, &stats).await {
+                    if std::env::var("WS_DEBUG").is_ok() {
+                        eprintln!("[ws_h2_load err] {e}");
+                    }
+                    stats.err();
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            }
+        }));
+    }
+    for w in workers {
+        let _ = w.await;
+    }
+}
+
+/// WS-over-H2 open/close CHURN: `concurrency` workers each repeatedly open a WS
+/// tunnel (extended CONNECT), run a short echo burst, then cleanly close —
+/// exercising H2-stream + relay RECLAIM (the F-S20-2 leak-class probe over the
+/// RFC 8441 path).
+pub async fn run_ws_h2_churn(
+    target: SocketAddr,
+    sni: String,
+    ca_path: PathBuf,
+    concurrency: usize,
+    frames_per_cycle: usize,
+    stats: Arc<LoadStats>,
+    cancel: CancellationToken,
+) {
+    let tls = match h2_tls_connector(&ca_path) {
+        Ok(t) => t,
+        Err(_) => {
+            stats.err();
+            return;
+        }
+    };
+    let mut workers = Vec::new();
+    for w in 0..concurrency {
+        let stats = Arc::clone(&stats);
+        let cancel = cancel.clone();
+        let tls = tls.clone();
+        let sni = sni.clone();
+        workers.push(tokio::spawn(async move {
+            let mut seed = (w as u64).wrapping_mul(13).wrapping_add(1);
+            while !cancel.is_cancelled() {
+                seed = seed.wrapping_add(53);
+                match ws_h2_open_close_cycle(&tls, target, &sni, seed, frames_per_cycle).await {
+                    Ok(n) => {
+                        for _ in 0..n {
+                            stats.ok();
+                        }
+                    }
+                    Err(e) => {
+                        if std::env::var("WS_DEBUG").is_ok() {
+                            eprintln!("[ws_h2_churn err] {e}");
                         }
                         stats.err();
                         tokio::time::sleep(Duration::from_millis(50)).await;

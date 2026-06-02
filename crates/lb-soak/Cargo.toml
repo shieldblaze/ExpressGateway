@@ -54,6 +54,14 @@ rustls-pki-types = { workspace = true }
 # existing workspace deps — no new crate enters the tree.
 tokio-tungstenite = { workspace = true, features = ["connect"] }
 futures-util = { workspace = true }
+# S27 WS-over-H2 soak (sc8b_ws_h2): the raw `h2` client to drive an RFC 8441
+# extended CONNECT (`h2::ext::Protocol`, `send_request` end_of_stream=false,
+# manual flow-control) — hyper's client does not expose extended CONNECT.
+# Owner-approved (lead ruling 2026-06-02). NOT a workspace dep, but already
+# vendored in Cargo.lock at this exact version (root dev-dep + transitive via
+# hyper), so this is a dependency EDGE for lb-soak, not a re-resolve — verified
+# `git diff Cargo.lock` shows only new edges, no version bumps.
+h2 = "0.4"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
