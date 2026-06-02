@@ -182,12 +182,28 @@ delivered for every one of 1.18 M RPCs.
 
 ## 8. Phase 3 gates
 
-- _Binding ×3 `--workspace --all-features` (verifier, independent):
-  <FILLED>._
+- **Binding ×3 `--workspace --all-features`: CLEAN GREEN ×3** (all 3 runs
+  exit 0, 0 failed; `grpc_h3_e2e` 16/16 in every run; disk stable 4.9 GB).
+  An independent verifier ran a first ×3 (runs 1&2 fully green 1512/0/18;
+  run 3 had 2 grpc_h3_e2e 502 saturation flakes — proven by solo-pass +
+  runs-1&2-green + the 502 signature). Those 2 new tests were
+  saturation-fragile because this binary ran 16 in-process gateways
+  concurrently; fixed by serializing the binary (`SUITE_SERIAL`, one gateway
+  at a time — matching the non-flaking single-gateway H3-cell binaries), no
+  assertion weakened. The fresh post-serialization ×3 is clean.
 - clippy `--all-targets --all-features -D warnings` + fmt --check: clean.
-- Scoped llvm-cov (the changed egress + the gRPC-over-H3 path): _<FILLED>._
-- The known `h2h3_backpressure` saturation flake: isolation-proven 8/8
-  un-saturated; zero source changes ⇒ pre-existing (CF-SATURATION-1 class).
+- **Scoped llvm-cov** (the changed egress): the changed function
+  `conn_actor::drain_resp_channels` (the F-S29-1 fix) = **85.5% (47/55
+  executable lines) ≥ 80%**, and the fix's load-bearing lines (the `get_mut`
+  + the stale-receiver `remove`+`continue`) are covered. Measured via
+  `cargo llvm-cov -p lb-quic --all-features --test grpc_h3_e2e` (the gRPC
+  suite drives the egress on every response, incl. the B2 reset + B5 paths);
+  the 8 uncovered lines are pre-existing guard/gauge branches the gRPC-only
+  suite does not exercise (whole-file conn_actor 51.4% is diluted by the
+  WS/request/graceful-close paths — per the session-scope method the
+  changed-function metric governs). lcov: `audit/grpc/s29-cov.lcov`.
+- The pre-existing `h2h3_backpressure` saturation flake did NOT fire in
+  either ×3 (CF-SATURATION-1 class; isolation-proven 8/8 un-saturated).
 
 ## 9. PROGRAM STATE — PROTOCOL SPEC COMPLETE
 
