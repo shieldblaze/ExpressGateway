@@ -880,8 +880,7 @@ mod tests {
         // connect timeout (>1 minute).
         assert!(
             elapsed < Duration::from_secs(2),
-            "async dial took {elapsed:?}, expected <2s (timeout {:?})",
-            err
+            "async dial took {elapsed:?}, expected <2s (timeout {err:?})"
         );
     }
 

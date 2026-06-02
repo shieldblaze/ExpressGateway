@@ -1,0 +1,103 @@
+{
+  "scenario": "sc7_h3terminate",
+  "label": "sc7_h3terminate",
+  "duration_secs": 900,
+  "sample_secs": 15,
+  "scale": 1,
+  "samples": 61,
+  "overall": "BOUNDED",
+  "columns": [
+    {
+      "column": "rss_kb",
+      "kind": "trend",
+      "verdict": "BOUNDED",
+      "n": 61,
+      "first": 8432.0,
+      "last": 25364.0,
+      "min": 8432.0,
+      "max": 25688.0,
+      "first_third_median": 24440.0,
+      "last_third_median": 25206.0,
+      "rel_growth": 0.031342062193126026,
+      "slope_per_sample": 18.611544011544012,
+      "monotone_frac": 0.48148148148148145,
+      "note": "rss_kb: bounded — last-third median 25206 vs first-third 24440 (+3.1%, within band 10% or non-monotone 48%)"
+    },
+    {
+      "column": "vmhwm_kb",
+      "kind": "trend",
+      "verdict": "BOUNDED",
+      "n": 61,
+      "first": 8432.0,
+      "last": 26368.0,
+      "min": 8432.0,
+      "max": 26368.0,
+      "first_third_median": 25128.0,
+      "last_third_median": 26368.0,
+      "rel_growth": 0.049347341610951924,
+      "slope_per_sample": 27.94920634920635,
+      "monotone_frac": 1.0,
+      "note": "vmhwm_kb: bounded — last-third median 26368 vs first-third 25128 (+4.9%, within band 10% or non-monotone 100%)"
+    },
+    {
+      "column": "fds",
+      "kind": "trend",
+      "verdict": "BOUNDED",
+      "n": 61,
+      "first": 11.0,
+      "last": 11.0,
+      "min": 11.0,
+      "max": 12.0,
+      "first_third_median": 11.0,
+      "last_third_median": 11.0,
+      "rel_growth": 0.0,
+      "slope_per_sample": -0.0005772005772005772,
+      "monotone_frac": 0.9074074074074074,
+      "note": "fds: bounded — last-third median 11 vs first-third 11 (+0.0%, within band 10% or non-monotone 91%)"
+    },
+    {
+      "column": "threads",
+      "kind": "trend",
+      "verdict": "BOUNDED",
+      "n": 61,
+      "first": 9.0,
+      "last": 9.0,
+      "min": 9.0,
+      "max": 9.0,
+      "first_third_median": 9.0,
+      "last_third_median": 9.0,
+      "rel_growth": 0.0,
+      "slope_per_sample": 0.0,
+      "monotone_frac": 1.0,
+      "note": "threads: bounded — last-third median 9 vs first-third 9 (+0.0%, within band 10% or non-monotone 100%)"
+    },
+    {
+      "column": "panic_total",
+      "kind": "counter_must_be_zero",
+      "verdict": "BOUNDED",
+      "n": 61,
+      "first": 0.0,
+      "last": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "first_third_median": 0.0,
+      "last_third_median": 0.0,
+      "rel_growth": 0.0,
+      "slope_per_sample": 0.0,
+      "monotone_frac": 1.0,
+      "note": "panic_total: stayed zero across the run"
+    }
+  ],
+  "load": [
+    {
+      "name": "h3_load",
+      "ok": 11776,
+      "err": 0
+    },
+    {
+      "name": "h3_reset_flood",
+      "ok": 14426432,
+      "err": 0
+    }
+  ]
+}

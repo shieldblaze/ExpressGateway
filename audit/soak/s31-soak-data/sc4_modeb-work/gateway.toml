@@ -1,0 +1,22 @@
+[runtime]
+drain_timeout_ms = 5000
+readiness_settle_ms = 100
+
+[[listeners]]
+address = "127.0.0.1:57099"
+protocol = "quic"
+
+[listeners.quic]
+cert_path = "audit/soak/s31-soak-data/sc4_modeb-work/cert.pem"
+key_path = "audit/soak/s31-soak-data/sc4_modeb-work/key.pem"
+retry_secret_path = "audit/soak/s31-soak-data/sc4_modeb-work/retry.bin"
+
+[listeners.quic.raw_proxy]
+backend_addr = "127.0.0.1:42333"
+sni = "soak-backend"
+backend_ca_path = "audit/soak/s31-soak-data/sc4_modeb-work/backend/ca.pem"
+dgram_queue_cap = 1024
+max_relay_streams = 256
+
+[observability]
+metrics_bind = "127.0.0.1:35489"

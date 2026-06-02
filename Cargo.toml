@@ -2,7 +2,7 @@
 name = "lb-integration-tests"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 publish = false
 
 # S8 / M-D (verifier I3) — forward the lb-l7 `test-gauges` feature so the
@@ -50,10 +50,13 @@ members = [
 ]
 
 # MSRV-pin notes:
-# Cargo.lock pins `foundations 4.5.0` and `idna_adapter 1.1.0` to preserve
-# MSRV 1.85 — newer foundations pulls darling 0.23 (rustc 1.88) and newer
-# idna_adapter pulls icu 2.2 (rustc 1.86). Do not blindly `cargo update`;
-# verify workspace still builds on stable 1.85 after any dependency bump.
+# MSRV is 1.88 as of S31 (quiche 0.29.1 + tokio-quiche 0.19.0 hard-require Rust
+# 1.88; the bump is unavoidable to adopt quiche 0.29). Cargo.lock STILL pins
+# `foundations 4.5.0` and `idna_adapter 1.1.0` — NOT to hold MSRV (1.88 already
+# clears their newer requirements: darling 0.23 = 1.88, icu 2.2 = 1.86) but to
+# keep them ISOLATED from this quiche-only upgrade (they belong to Dependabot
+# #222's other tiers; bump them in their own session). Do not blindly
+# `cargo update`; verify the workspace still builds on 1.88 after any bump.
 
 [workspace.package]
 license = "GPL-3.0-only"
@@ -97,8 +100,8 @@ http-body-util = "0.1"
 # Pillar 3b.1: lb-quic runs on quiche (BoringSSL) + tokio-quiche; see
 # docs/decisions/quinn-to-quiche-migration.md. rustls stays for the
 # TLS-over-TCP listener path + the Step 5b TicketRotator.
-quiche = "0.28"
-tokio-quiche = "0.18"
+quiche = "0.29"
+tokio-quiche = "0.19"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 rustls-pki-types = "1"
 # Pillar 3b.2: TLS-over-TCP listener wiring.

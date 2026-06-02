@@ -832,8 +832,7 @@ async fn spawn_h2_grpc_reset_backend() -> (SocketAddr, tokio::task::JoinHandle<(
                                 .unwrap();
                                 return Poll::Ready(Some(Ok(hyper::body::Frame::data(f))));
                             }
-                            Poll::Ready(Some(Err(std::io::Error::new(
-                                std::io::ErrorKind::Other,
+                            Poll::Ready(Some(Err(std::io::Error::other(
                                 "backend reset mid-response",
                             ))))
                         }
