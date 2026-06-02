@@ -60,6 +60,10 @@ const TEST_SNI: &str = "expressgateway.test";
 const H3_ALPN: &[u8] = b"h3";
 const MAX_UDP: usize = 65_535;
 
+/// Serialize the gauge tests in THIS binary: `MAX_RETAINED_RESP_BYTES` is a
+/// process-global peak gauge, so a concurrent test would pollute the read.
+static GAUGE_SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 // ─────────────────────────────────────────────────────────────────────
 // §0  Hand-rolled hyper IO adapter + executor (no hyper-util dep), and
 //     a quiche-Huffman-capable QPACK response decoder. Copied verbatim
@@ -1533,4 +1537,115 @@ async fn grpc_h3_to_h1_backend_trailer_characterization() {
         Some(200),
         "H1 backend returns 200; gRPC status is in the (maybe-dropped) trailer"
     );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// §6  R8 (bounded streaming) + R13 (burst) — the streaming-relay proofs.
+// ─────────────────────────────────────────────────────────────────────
+
+/// R8 — a high-volume gRPC server-stream (~1 MiB across 512 messages)
+/// must keep the H3 response egress BOUNDED: the process-global
+/// `MAX_RETAINED_RESP_BYTES` peak gauge stays within the
+/// `4 × depth × (chunk + frame-hdr)` ceiling, INDEPENDENT of total
+/// response size (the relay streams, it does not buffer the stream). The
+/// response total far exceeds the ceiling, so the bound is genuinely
+/// exercised (non-vacuous), and the gauge must be > 0 (the pump recorded
+/// in-flight bytes).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn grpc_h3_server_stream_bounded_memory_r8() {
+    let _serial = GAUGE_SERIAL.lock().await;
+    lb_quic::h3_bridge::MAX_RETAINED_RESP_BYTES.store(0, Ordering::Relaxed);
+
+    let certs = generate_loopback_certs();
+    let per_request = 512usize;
+    let (backend, _st, _bh) =
+        spawn_h2_grpc_backend(GrpcBackendMode::ServerStream { per_request }).await;
+    let (_l, gw, _sd) = start_h3_listener_h2(&certs, backend).await;
+
+    // 2 KiB UTF-8 request payload ⇒ ~2 KiB per server-stream message ⇒
+    // ~1 MiB total response, far exceeding the egress retained ceiling.
+    let payload = Bytes::from("A".repeat(2048));
+    let body = frame_messages(std::slice::from_ref(&payload));
+    let out = drive_grpc_h3(
+        gw,
+        &certs.ca,
+        GrpcDriveCfg {
+            path: "/echo.Echo/ServerStreamBig",
+            req_chunks: vec![body],
+            extra_headers: vec![],
+            content_type: None,
+        },
+        Duration::from_secs(60),
+    )
+    .await;
+
+    assert_eq!(out.status, Some(200));
+    assert_eq!(
+        out.messages().len(),
+        per_request,
+        "all server-stream messages relayed"
+    );
+    assert_eq!(
+        out.field("grpc-status"),
+        Some("0"),
+        "trailer delivered after a large server-stream"
+    );
+
+    let retained = lb_quic::h3_bridge::MAX_RETAINED_RESP_BYTES.load(Ordering::Relaxed);
+    let total: usize = out.body.len();
+    let ceiling = 4 * lb_quic::h3_bridge::H3_RESP_CHANNEL_DEPTH
+        * (lb_quic::h3_bridge::H3_RESP_CHUNK_MAX + lb_quic::h3_bridge::H3_FRAME_HDR_MAX);
+    eprintln!("GRPC_H3_R8 retained={retained} ceiling={ceiling} total={total}");
+    assert!(
+        retained > 0,
+        "gauge vacuous: the egress never recorded in-flight bytes"
+    );
+    assert!(
+        total > ceiling,
+        "test vacuous: response total {total} must exceed the ceiling {ceiling} to exercise the bound"
+    );
+    assert!(
+        retained <= ceiling,
+        "retained {retained} exceeds 4×depth×(chunk+hdr) ceiling {ceiling} — \
+         the egress is buffering the stream, not bounded (R8)"
+    );
+}
+
+/// R13 (b) — burst: 50 sequential gRPC unary call cycles (each a fresh H3
+/// connection), every one delivering the echoed message + a clean
+/// `grpc-status: 0` trailer + FIN. Exercises the streaming relay +
+/// connection churn repeatedly (the timing-sensitive layer). The
+/// load-bearing negative control is
+/// `grpc_h3_backend_reset_midresponse_not_laundered_to_clean_status` (a
+/// mid-response reset must NOT be laundered into a clean status).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn grpc_h3_burst_50_unary_cycles() {
+    let certs = generate_loopback_certs();
+    let (backend, _st, _bh) = spawn_h2_grpc_backend(GrpcBackendMode::Echo).await;
+    let (_l, gw, _sd) = start_h3_listener_h2(&certs, backend).await;
+
+    for i in 0..50 {
+        let payload = Bytes::from(format!("burst-{i}"));
+        let body = frame_messages(std::slice::from_ref(&payload));
+        let out = drive_grpc_h3(
+            gw,
+            &certs.ca,
+            GrpcDriveCfg {
+                path: "/echo.Echo/Burst",
+                req_chunks: vec![body],
+                extra_headers: vec![],
+                content_type: None,
+            },
+            OVERALL,
+        )
+        .await;
+        assert_eq!(out.status, Some(200), "iter {i}: status");
+        assert_eq!(
+            out.messages().first().cloned(),
+            Some(payload.clone()),
+            "iter {i}: echoed message"
+        );
+        assert_eq!(out.field("grpc-status"), Some("0"), "iter {i}: trailer");
+        assert!(out.fin, "iter {i}: clean FIN");
+    }
 }
