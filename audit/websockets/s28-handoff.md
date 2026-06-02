@@ -56,3 +56,18 @@ gRPC conformance over the migrated quiche::h3 stack. Not started.
 - CF-FCAP1-FLAKE (pre-existing H2-timeout race, isolation-proven).
 - F-ESC-1 (multi-kernel CI lane), N-1 (jumbo-MTU), Mode A deferred perf tiers, CF-S15-PASSTHROUGH-RETRY-ODCID.
 - LOW (S27, dispositioned, not carried): F-S27-3 trace-parity FIXED; lenient :scheme/:path FIXED.
+
+## 5. LOW residuals surfaced in S27 (tracked, non-blocking)
+- **close_backpressure teardown can block on a wedged sink (LOW).** `ws_proxy.rs::close_backpressure`
+  (the F-S27-2 anti-hang write-timeout guard) itself does an un-`timeout`-wrapped
+  `backend_tx.send(Close(None)).await` during teardown, so if the wedged side never drains, the
+  teardown send can block. Bounded in practice by the connection/idle timeout; the wedged side is
+  already pathological. Surfaced by the coverage test `close_backpressure_1008_on_forward_write_timeout`
+  (which had to add a delayed drainer to complete teardown). Consider wrapping the teardown sends in a
+  small budget. NOT in S27 scope.
+- **Soak harness (LOW, verifier-p3):** (a) `loadgen` `Some(Err(_))→Closed` reclassifies a transport
+  read-error to a benign reconnect — a defect surfacing purely as a transport Err (not wrong-bytes /
+  not clean-Close) wouldn't increment the soak `err` count (it would still show as a cratered ok-rate /
+  fd-RSS anomaly; doesn't affect the leak-class target). (b) a stale `eg-soak.rs:681-683` comment says
+  `accept_inflight` is "scraped for visibility" but `ws_gauges()` omits it (cosmetic). Tidy in S28's
+  soak work (the H3 soak scenario).

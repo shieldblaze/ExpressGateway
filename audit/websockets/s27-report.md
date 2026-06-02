@@ -221,3 +221,86 @@ deferred; H2 was not). Tractable fix: dial + complete the upstream handshake fir
 on success, 502/504 otherwise (mirrors the H1 fix's intent). To be mechanism-proven by the verifier
 before fixing.
 
+_(The F-S27-1 candidate above was the Phase-0 flag; it was independently confirmed in INC-1V and
+fixed in INC-2 — see the Phase 1 section. Phase 3 follows.)_
+
+---
+
+## PHASE 3 — gates + WS soak + promote (honest-PARTIAL)
+
+### R1 ×3 full gate — GREEN (`audit/websockets/s27-phase3-gate/`, HEAD `9be1a3b7`)
+- `cargo fmt --all --check`: **PASS**.
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings`: **PASS** (exit 0).
+- `cargo test --workspace --all-features` ×3: **1484 passed / 0 failed / 18 ignored**, exit 0 each.
+  (Baseline 1442 → 1484 = +42 WS tests; +1 ignored. No regression, R3.)
+- The gate caught + we fixed: 3 clippy lints in WS-H2 test harnesses (`43a20852`); and a **session R3
+  regression** (R14) — INC-5's WS-over-H2 gating was not propagated to `round8_authority_enforced.rs`'s
+  `spawn_h2_ws_proxy`, so the security test `test_h2_ext_connect_comma_authority_rejected` got a
+  PROTOCOL_ERROR instead of the authority guard's 400; gate-enabled the helper (`9be1a3b7`). These were
+  the 4th–5th self-reported-clean gaps the independent full gate surfaced — verify-to-bar earning its keep.
+- `fcap1_h2_over_cap_upload_yields_413` flaked 1/3 in the first gate run; **isolation-proven PASS**
+  (11.57s) → the documented **CF-FCAP1-FLAKE** (pre-existing H2-timeout saturation race, R2), not a
+  session defect. It did NOT recur in the clean re-run (0 failures ×3).
+
+### WS soak (R8/R10 long-lived leak-class, the F-S20-2 concern) — BOTH BOUNDED
+New lb-soak scenarios `sc8_ws_h1` (`5041325d`) + `sc8b_ws_h2` (`749a2306`); data in
+`audit/soak/s27-soak-data/`. Both 360s/73-sample, against the REAL binary's shared
+`WsProxy::proxy_frames` relay (H1 wired at main.rs:940; H2 at main.rs:1013-1020 with
+`h2_extended_connect=true`) → real RFC 6455 echo backend, byte-verified multi-frame payloads to 64 KiB,
+heavy open→relay→clean-close churn:
+- **sc8_ws_h1**: BOUNDED — rss/fds/threads/vmhwm flat, panic=0, ws_churn ok=5,436,016 / ws_sustained
+  ok=137,075, **err=0**.
+- **sc8b_ws_h2**: BOUNDED — fds 43→43 (flat, no conn leak), rss non-monotone (settling), panic=0,
+  ok=99,331/192,632, **err=0** (after soak-eng's R15 attribution of an initial err=40 to clean
+  lifecycle-closes, not relay defects — WsEcho counts byte-mismatch as err, clean-close as reconnect).
+- Independently confirmed by verifier-p3 (`7f5d9bdb`, read-only, CSV-eyeballed): both COMPLETED,
+  BOUNDED, non-vacuous; err=40 attribution SOUND; `fds` discriminant SOUND (analyzer math untouched).
+  → the long-lived WS relay is leak-bounded under sustained bidi load + churn over H1 + H2.
+- 2 LOW non-blocking residuals tracked: a soak-harness `Some(Err)→Closed` reclassification note + a
+  stale `accept_inflight "scraped for visibility"` doc line (ws_gauges omits it). Neither affects the
+  leak-class proof.
+
+### R10 scoped coverage (session product code ≥80%, verifier re-measured) — PASS
+Independently re-measured by verifier-p3 (`616ba3c3`, `audit/websockets/s27-coverage.md`) from a full
+`--workspace --all-features` llvm-cov lcov, mapped per-line onto the session-changed PRODUCT ranges
+(test-module lines excluded; whole-file % dilutes): **405/483 = 83.9% — PASS (≥80%)**.
+First pass was 77.8% (FAIL); +6.1 pts from 2 targeted tests (`4ee6e80d`): `close_backpressure_1008_on_forward_write_timeout`
+(ws_proxy: 39.4%→97.0% — the anti-hang write-timeout guard now exercised) and
+`wire_h3_terminate_backends_dispatches_{h2,h3,h1}_arm` (main.rs F-S26-1 dispatch arms now hit).
+Per-file: lib.rs 96.0, h2_proxy 87.3, ws_proxy 97.0, ws_tunnel 82.1, h3_bridge/h3_config/conn_actor/router 100,
+listener 54.5, main.rs 67.3. The two sub-80% files are immaterial to the 83.9% overall: their uncovered
+remainder is binary-boot/e2e-only glue (build_h2_proxy WS branch, the `with_websocket` opt-in setter,
+listener-started log, the `run()` spawn_quic call site) + defensive `no-resolved-backend` bails + the
+SNI-fallback closure — none load-bearing; the H3→H2/H3 RELAY datapath itself is covered by the
+`bridging_h2_h3` / `bridging_h3_h3` integration tests. Documented-acceptable per the
+`llvm-cov-session-scope` rule.
+
+### Phase-3 disk hygiene
+Surgical trims of the stale `llvm-cov-target` (20G) + `release/` + `debug/incremental` kept the box
+above the bar throughout (CF-DISK-1; never `rm` during an active compile). Coverage regenerates
+`llvm-cov-target`.
+
+---
+
+## VERDICT — SESSION 27 PARTIAL
+
+**SESSION 27 PARTIAL — WebSocket proxying delivered over H1 (RFC 6455) + H2 (RFC 8441, gated
+off-by-default); WS-over-H3 (RFC 9220) groundwork landed (Stages A+B), Stage C carried to S28.**
+
+Findings: **5 total — 4 fixed, 1 carried.**
+- F-S27-1 (HIGH/security, premature-200 / GHSA-class smuggle on WS-over-H2) — **FIXED** + verified.
+- F-S27-2 (HIGH/security, H2-only unbounded-buffer DoS) — WS-over-H2 **gated off-by-default**; proper
+  window-aware fix **carried as CF-S27-2** (S28). H1 safe; H3 safe by construction.
+- F-S27-3 (LOW, H2 upstream trace-parity) — **FIXED**.
+- Lenient `:scheme`/`:path` extended-CONNECT accept (LOW, RFC 8441 §4) — **FIXED** (now 400).
+- F-S26-1 (operability — H3-terminate backends un-configurable in the binary) — **FIXED** (prerequisite).
+
+Delivered + verified: WS-over-H1 (shipped, R8-bounded+backpressured) · WS-over-H2 (gated, real-wire
+e2e + RFC 8441 conformance + R8(H1) + R13 + F-S27-1/3 fixed) · F-S26-1 binary wiring · WS-over-H3
+Stages A+B (RFC-9220 config+validator R3-safe + bounded tunnel adapter, R8-in-isolation + reset-vs-EOF)
+· WS soak H1+H2 BOUNDED · R1 ×3 GREEN.
+
+Carried to S28: **Stage C** (WS-over-H3 relay wiring — approved closure-injection design + real-wire
+e2e + R8/R13/reset-vs-EOF + RFC 9220 conformance + H3 soak); **CF-S27-2** (WS-over-H2 window-aware
+backpressure); **gRPC-over-H3** (the program's last spec item). See `s28-handoff.md`.
+
