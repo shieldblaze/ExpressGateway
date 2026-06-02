@@ -252,8 +252,52 @@ that adds the checks, an upstream fix, or hand-rolling (which the S23–S26 migr
 deleted). The carry note stays open with the updated status "12 unchanged at 0.29.1". This upgrade
 is a maintenance/safety bump, not an h3spec-conformance improvement — and that was the expectation.
 
-## R8 re-proofs — (RUNNING, driver `bmzeho5kb`)
-## R13 F-MD-4 bursts — (RUNNING, driver `bmzeho5kb`)
+## R8 re-proofs (0.29) — PASS, non-vacuous, body-size-independent
+
+Driver `scripts/s31-phase2-reproofs.sh` (completed run `bbpi6s29y`, log
+`audit/deps/s31-phase2/r8-reproofs.log`): 6 R8 gauge tests, **6 passed / 0 failed**, gauge
+evidence captured (`--nocapture`). The bound is identical to 0.28 (e.g. 73,856 B — the S24 figure):
+
+| path | evidence (0.29) | verdict |
+|---|---|---|
+| H3→H1 response (R2) | 4 MB body → **max_retained=73,856 B**, ceiling=262,656 B, **margin=15.97×**, retained/ceiling=0.28 | bounded, body-size-INDEPENDENT |
+| H3→H1 backpressure (R3) | mid_stall_retained=peak_retained=73,856 B (0.28× ceiling) | backpressure holds |
+| H3→H1 single large DATA (t5) | memory-bounded through stalled upstream — ok | bounded |
+| Mode B (s16_b2) | PHASE A: client queued 625,152 B, backend echoed 0 while stalled (paused); PHASE B: full 4 MB round-trips byte-identical on resume, no loss/reorder | backpressure both ways + integrity |
+| WS-H3 | backend sent 63/512 (ceiling 256) while client not reading, then drains; lost=0 | plateau then drain |
+| gRPC-H3 | retained=67,722 B vs total=1,054,098 B (ceiling 262,656) | bounded |
+
+**R8 RE-PROVEN on 0.29** — non-vacuous (4 MB body, 73 KB retained), body-size-independent,
+backpressure both directions. 0.29's recv_body/send_body changes (bookkeeping only) did not
+reintroduce buffering. (These tests are also among the 1512 that passed ×3 in the gate.)
+
+## R13 F-MD-4 reset-vs-EOF (0.29) — PASS, ≥60-iter bursts ×3, live negative control
+
+Same driver (log `audit/deps/s31-phase2/r13-fmd4-bursts.log`): **33 passed / 0 failed** across the
+×3 outer loop (over each test's built-in ITERS=60 → ≥180 effective burst iters) + single-shot
+reset/discriminator group. 0.29's **"h3: clear streams when send finishes before recv"** change is
+exactly in this area — re-proven SAFE:
+
+| case | evidence (0.29) |
+|---|---|
+| E1 ingress reset (H3→H3) | `H3H3_CASE7_BURST iters=60 baseline=1 after_burst=1` — client reset never becomes a clean complete |
+| E2 egress reset (H3→H3) | `H3H3_FMD4_MIRROR_BURST iters=60 (all reset, none clean-complete)` |
+| E2 mid-body reset | `h3h3_e2e_upstream_reset_midbody_resets_client_no_fin` — ok |
+| H1→H3 resp truncation | `H1H3_RESP_TRUNC_CL_BURST iters=60 all-incomplete (no false-complete)` + chunked `(no leak)` |
+| H1→H3 request F-MD-4 | `H1H3_FMD4_BURST iters=60 baseline=1 after_burst=1` |
+| H2→H3 resp truncation | `H2H3_RESP_TRUNC_CHUNKED_BURST iters=60 all-incomplete`; `..._CL false_complete=false` |
+| gRPC-H3 reset | `GRPC_H3_RESET reset=true fin=true status=502 grpc_status=None` — NOT laundered to a clean grpc-status; `grpc_h3_burst_50_unary_cycles` ok |
+| WS-H3 | `ws_over_h3_burst_50_upgrade_relay_close_cycles` ok |
+| Mode B reset | `reset-not-FIN: VERIFIED — backend saw 12950 bytes and NO clean FIN after the mid-transfer client reset` |
+| **NEGATIVE CONTROL** | `discriminator: VERIFIED — a genuine clean FIN IS observed (witness is live)` + `r4_empty_response_body_clean_fin` ok → the reset-assertions are non-vacuous |
+| §7.1 gap (expect unchanged) | `h3h3_e2e_no_cl_truncated_data_delivered_quiche_028_frame_completeness_gap` ok + `..._content_length_truncation_resets_no_clean_complete` ok |
+
+**R13 RE-PROVEN on 0.29** — reset still maps to reset (502 / reset-stream, never clean EOF) across
+E1, E2, all H3 cells, gRPC-H3, WS-H3, Mode B; the live clean-FIN discriminator proves non-vacuity.
+CF-QUICHE-FRAME-COMPLETENESS (§7.1 no-CL gap) persists unchanged on 0.29 (carry note, as predicted).
+
+## Re-soak — (TBD)
+## h2spec-intact confirm — (TBD)
 ## Fresh h3spec diff vs baseline — (Phase 2, TBD)
 ## R8 re-proofs — (Phase 2, TBD)
 ## R13 F-MD-4 bursts — (Phase 2, TBD)
