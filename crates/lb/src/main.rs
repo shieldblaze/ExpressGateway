@@ -4598,6 +4598,11 @@ mod tests {
         /// `RESET_STREAM` the tunnel stream (abnormal drop — the reset-vs-EOF
         /// negative control).
         Reset,
+        /// FIN the tunnel stream cleanly (empty `send_body(.., fin=true)`) —
+        /// the client closes its WS send half WITHOUT a WS Close frame.
+        /// Exercises `conn_actor::ws_handle_client_fin` (clean EOF → the relay
+        /// forwards a WS Close to the backend).
+        Fin,
     }
 
     /// Drive ONE WS-over-H3 client against the listener at `lb_addr`: QUIC +
@@ -4609,6 +4614,7 @@ mod tests {
         lb_addr: SocketAddr,
         ca: &std::path::Path,
         mode: WsH3CloseMode,
+        protocol: &[u8],
     ) -> (Option<u16>, bool) {
         use quiche::h3::NameValue;
         const PAYLOAD: &[u8] = b"hello over h3 ws";
@@ -4655,7 +4661,7 @@ mod tests {
                 if connect_sid.is_none() {
                     let req = [
                         quiche::h3::Header::new(b":method", b"CONNECT"),
-                        quiche::h3::Header::new(b":protocol", b"websocket"),
+                        quiche::h3::Header::new(b":protocol", protocol),
                         quiche::h3::Header::new(b":scheme", b"https"),
                         quiche::h3::Header::new(b":authority", H3H1_E2E_SNI.as_bytes()),
                         quiche::h3::Header::new(b":path", b"/chat"),
@@ -4710,6 +4716,11 @@ mod tests {
                     echo_ok = true;
                 }
             }
+            // A non-200 (501/502/504) means no tunnel was established — return
+            // promptly rather than waiting out the budget.
+            if matches!(status, Some(s) if s != 200) {
+                break;
+            }
             if echo_ok && !closed {
                 if let Some(sid) = connect_sid {
                     match mode {
@@ -4724,6 +4735,13 @@ mod tests {
                             // H3_REQUEST_CANCELLED (the reset-vs-EOF control).
                             let _ = conn.stream_shutdown(sid, quiche::Shutdown::Write, 0x010c);
                             let _ = conn.stream_shutdown(sid, quiche::Shutdown::Read, 0x010c);
+                        }
+                        WsH3CloseMode::Fin => {
+                            // Clean stream FIN (no WS Close frame): the client
+                            // closes its send half. Exercises ws_handle_client_fin.
+                            if let Some(h3c) = h3.as_mut() {
+                                let _ = h3c.send_body(&mut conn, sid, &[], true);
+                            }
                         }
                     }
                     closed = true;
@@ -4792,7 +4810,7 @@ mod tests {
         let lb_addr = listener.local_addr();
 
         let (status, echo_ok) =
-            ws_h3_e2e_drive_client(lb_addr, &lb_certs.ca, WsH3CloseMode::Clean).await;
+            ws_h3_e2e_drive_client(lb_addr, &lb_certs.ca, WsH3CloseMode::Clean, b"websocket").await;
 
         // THE PROOF: the 200 (extended CONNECT success, NOT a 502) came
         // back AND a WS Text frame round-tripped through the real relay.
@@ -4892,7 +4910,7 @@ mod tests {
 
         // POSITIVE CONTROL: a clean WS Close → the backend sees CleanClose.
         let (status_c, echo_c) =
-            ws_h3_e2e_drive_client(lb_addr, &lb_certs.ca, WsH3CloseMode::Clean).await;
+            ws_h3_e2e_drive_client(lb_addr, &lb_certs.ca, WsH3CloseMode::Clean, b"websocket").await;
         assert_eq!(status_c, Some(200), "clean: extended CONNECT must 200");
         assert!(echo_c, "clean: the frame must echo");
         let clean = tokio::time::timeout(Duration::from_secs(5), outcomes.recv())
@@ -4907,7 +4925,7 @@ mod tests {
 
         // NEGATIVE CONTROL: a RESET_STREAM → the backend sees an Abrupt end.
         let (status_r, echo_r) =
-            ws_h3_e2e_drive_client(lb_addr, &lb_certs.ca, WsH3CloseMode::Reset).await;
+            ws_h3_e2e_drive_client(lb_addr, &lb_certs.ca, WsH3CloseMode::Reset, b"websocket").await;
         assert_eq!(status_r, Some(200), "reset: extended CONNECT must 200");
         assert!(echo_r, "reset: the frame must echo before the reset");
         let reset = tokio::time::timeout(Duration::from_secs(5), outcomes.recv())
@@ -4948,7 +4966,8 @@ mod tests {
         let mut ok = 0u32;
         for i in 0..ITERS {
             let (status, echo) =
-                ws_h3_e2e_drive_client(lb_addr, &lb_certs.ca, WsH3CloseMode::Clean).await;
+                ws_h3_e2e_drive_client(lb_addr, &lb_certs.ca, WsH3CloseMode::Clean, b"websocket")
+                    .await;
             assert_eq!(
                 status,
                 Some(200),
@@ -5286,6 +5305,132 @@ mod tests {
             sent.load(std::sync::atomic::Ordering::Relaxed),
             COUNT,
             "the backend must have flushed all {COUNT} frames once backpressure released"
+        );
+
+        token.cancel();
+        let _ = tokio::time::timeout(Duration::from_secs(5), listener.shutdown()).await;
+    }
+
+    /// A "dead" WS backend: accepts the TCP connection then immediately closes
+    /// it WITHOUT completing the RFC 6455 handshake. The gateway's upstream WS
+    /// handshake (`dial_backend_ws`) therefore fails → the launcher signals
+    /// `Failed{502}` → the actor returns 502 BEFORE any client-visible 200
+    /// (the upstream-before-200 ordering).
+    fn ws_h3_e2e_spawn_dead_backend() -> SocketAddr {
+        let std_listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        std_listener.set_nonblocking(true).unwrap();
+        let addr = std_listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let listener = TcpListener::from_std(std_listener).unwrap();
+            while let Ok((sock, _)) = listener.accept().await {
+                drop(sock); // close immediately — no WS handshake
+            }
+        });
+        addr
+    }
+
+    /// **RFC 9220 §4 — unknown `:protocol` → 501.** An extended CONNECT with
+    /// `:protocol=mqtt` (registered-but-unsupported) is rejected with 501
+    /// BEFORE any backend is dialed; no tunnel is built.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn ws_over_h3_unknown_protocol_yields_501() {
+        let lb_certs = modeb_e2e_gen_certs(H3H1_E2E_SNI, "wsh3-501");
+        let retry_secret_path = lb_certs.dir.join("retry.secret");
+        let backend_addr = ws_h3_e2e_spawn_ws_echo_backend();
+        let listener_cfg = ws_h3_e2e_listener_cfg(&lb_certs, &retry_secret_path, backend_addr);
+
+        let metrics = Arc::new(MetricsRegistry::new());
+        let token = CancellationToken::new();
+        let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
+        let resolver = DnsResolver::new(ResolverConfig::default());
+        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, token.clone())
+            .await
+            .expect("spawn_quic WS-over-H3 must start");
+        let lb_addr = listener.local_addr();
+
+        let (status, echo) =
+            ws_h3_e2e_drive_client(lb_addr, &lb_certs.ca, WsH3CloseMode::Clean, b"mqtt").await;
+        assert_eq!(
+            status,
+            Some(501),
+            "an unsupported :protocol must yield 501 (RFC 9220 §4)"
+        );
+        assert!(!echo, "no tunnel ⇒ no echo");
+
+        token.cancel();
+        let _ = tokio::time::timeout(Duration::from_secs(5), listener.shutdown()).await;
+    }
+
+    /// **RFC 9220 §5 — upstream unreachable → 502, no premature 200.** The
+    /// backend accepts then drops the TCP without a WS handshake, so the
+    /// upstream RFC 6455 handshake fails; the actor returns 502 and NEVER a
+    /// 200 (upstream-before-200 / no false success).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn ws_over_h3_upstream_unreachable_yields_502() {
+        let lb_certs = modeb_e2e_gen_certs(H3H1_E2E_SNI, "wsh3-502");
+        let retry_secret_path = lb_certs.dir.join("retry.secret");
+        let dead = ws_h3_e2e_spawn_dead_backend();
+        let listener_cfg = ws_h3_e2e_listener_cfg(&lb_certs, &retry_secret_path, dead);
+
+        let metrics = Arc::new(MetricsRegistry::new());
+        let token = CancellationToken::new();
+        let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
+        let resolver = DnsResolver::new(ResolverConfig::default());
+        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, token.clone())
+            .await
+            .expect("spawn_quic WS-over-H3 must start");
+        let lb_addr = listener.local_addr();
+
+        let (status, echo) =
+            ws_h3_e2e_drive_client(lb_addr, &lb_certs.ca, WsH3CloseMode::Clean, b"websocket").await;
+        assert_eq!(
+            status,
+            Some(502),
+            "a failed upstream WS handshake must yield 502 (NOT 200 — upstream-before-200)"
+        );
+        assert!(!echo, "no tunnel established ⇒ no echo");
+
+        token.cancel();
+        let _ = tokio::time::timeout(Duration::from_secs(5), listener.shutdown()).await;
+    }
+
+    /// **Client stream-FIN (no WS Close frame) → abnormal close.** The client
+    /// closes its WS send half by FINning the H3 tunnel stream WITHOUT a WS
+    /// Close frame. `conn_actor::ws_handle_client_fin` maps the FIN to a clean
+    /// EOF on the tunnel (NOT a Reset); the relay (tungstenite) then correctly
+    /// surfaces "EOF without closing handshake" as an ABNORMAL closure to the
+    /// backend — per RFC 6455 §7.1.5 the ONLY clean close is the Close-frame
+    /// handshake. This exercises the `ws_handle_client_fin` clean-EOF path and
+    /// proves the gateway does not fabricate a clean Close from a bare FIN.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn ws_over_h3_client_stream_fin_without_close_is_abnormal() {
+        let lb_certs = modeb_e2e_gen_certs(H3H1_E2E_SNI, "wsh3-fin");
+        let retry_secret_path = lb_certs.dir.join("retry.secret");
+        let (backend_addr, mut outcomes) = ws_h3_e2e_spawn_reporting_backend();
+        let listener_cfg = ws_h3_e2e_listener_cfg(&lb_certs, &retry_secret_path, backend_addr);
+
+        let metrics = Arc::new(MetricsRegistry::new());
+        let token = CancellationToken::new();
+        let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
+        let resolver = DnsResolver::new(ResolverConfig::default());
+        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, token.clone())
+            .await
+            .expect("spawn_quic WS-over-H3 must start");
+        let lb_addr = listener.local_addr();
+
+        let (status, echo) =
+            ws_h3_e2e_drive_client(lb_addr, &lb_certs.ca, WsH3CloseMode::Fin, b"websocket").await;
+        assert_eq!(status, Some(200), "fin: extended CONNECT must 200");
+        assert!(echo, "fin: the frame must echo before the stream FIN");
+        let outcome = tokio::time::timeout(Duration::from_secs(5), outcomes.recv())
+            .await
+            .expect("backend must report an outcome")
+            .expect("outcomes channel open");
+        assert_eq!(
+            outcome,
+            WsBackendOutcome::Abrupt,
+            "a bare stream-FIN (no WS Close frame) is an RFC 6455 abnormal closure — the backend \
+             must NOT see a fabricated clean Close"
         );
 
         token.cancel();
