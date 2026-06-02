@@ -30,6 +30,19 @@ fail-fast truncation would hide any real H3 regression behind the flake. Fix: ad
 COMPLETE failure set (strictly MORE rigorous; R15 — a truncated run is an incomplete job). Known
 saturation flakes are then classified by isolation (R2: never weaken an assertion).
 
+#### Baseline ×3 verdict (0.28, completed run `bestk2qzb`) — GREEN
+
+| pass | binaries | passed | failed | ignored |
+|---|---|---|---|---|
+| PASS1 | 247 | 1511 | **1** (`h2h3_fcap1_over_cap_upload_never_complete`) | 18 |
+| PASS2 | 247 | 1512 | 0 | 18 |
+| PASS3 | 247 | 1512 | 0 | 18 |
+
+clippy RC=0, fmt RC=0. The single PASS1 failure is the known **CF-FCAP1-FLAKE** family (F-CAP-1
+over-cap H2 saturation timeout race) — it passed in PASS2 AND PASS3, the signature of a saturation
+flake, not a real defect (R2; isolation-proven in prior sessions). **0.28 reference = GREEN**
+(1512/0 modulo the known flake). This is the comparison anchor for the 0.29 gate.
+
 ### h3spec baseline (the 0.28 reference for the 0.29 diff)
 
 Source: `audit/h3spec/s26-h3spec-final.log` (S26 = the migrated quiche::h3 stack on 0.28,
@@ -135,7 +148,50 @@ neither of which we do (verified: no `quiche::Stats {` match, no `ConnectionPara
 BoringSSL exclusively via `boring`/`boring-sys`. We don't enable the `openssl` feature anywhere → expected
 fine, but watch the first build for BoringSSL toolchain/feature drift.
 
-## API breaks adapted — (Phase 1, empirical — TBD)
+## Phase 1 — the upgrade + adaptation (empirical)
+
+### The one real adaptation: MSRV 1.85 → 1.88 (owner-decided)
+
+`cargo update -p quiche --precise 0.29.1 -p tokio-quiche --precise 0.19.0` revealed that **quiche
+0.29.1 and tokio-quiche 0.19.0 hard-require Rust 1.88** (the project pinned 1.85 via
+`rust-toolchain.toml` + `Cargo.toml rust-version`, the deliberate "MSRV-pin" — foundations 4.5.0 /
+idna_adapter 1.1.0 were held back to keep 1.85). There is no way to adopt quiche 0.29 without
+bumping the toolchain off 1.85. **Surfaced to owner (R7) — decision: pin EXACTLY 1.88** (quiche's
+MSRV; smallest new-lint blast radius vs jumping to stable 1.95/1.96; truthful MSRV declaration).
+
+Applied:
+- `rustup toolchain install 1.88` (rustfmt + clippy).
+- `rust-toolchain.toml` channel `1.85` → `1.88`.
+- `Cargo.toml` `rust-version` `1.85` → `1.88` (workspace + lb-integration-tests).
+- MSRV-pin note updated: foundations 4.5.0 + idna_adapter 1.1.0 stay pinned to ISOLATE from #222's
+  other tiers (no longer needed to hold MSRV; 1.88 clears their reqs).
+- Toolchain bump touches the WHOLE workspace (R7 scope note, owner-accepted): the ×3 gate, h3spec,
+  R8/R13, re-soak ALL run on 1.88 now; any new 1.88 clippy lints fixed surgically (mechanical, no
+  logic changes); MSRV change documented prominently in the promote message.
+
+### Cargo.lock isolation (verified)
+
+ONLY quiche's subtree moved. **No forbidden #222 crate bumped** (hyper, h2, rand, socket2, rcgen,
+toml, tokio-tungstenite, idna_adapter, foundations all UNCHANGED; boring/boring-sys stay 4.21.2):
+
+| moved (quiche subtree) | from → to |
+|---|---|
+| quiche | 0.28.0 → 0.29.1 |
+| tokio-quiche | 0.18.0 → 0.19.0 |
+| qlog | 0.17.0 → 0.18.0 |
+| darling{,_core,_macro} | 0.21.3 → 0.23.0 |
+| serde_with{,_macros} | 3.17.0 → 3.20.0 |
+| time / time-core / time-macros | 0.3.37/0.1.2/0.2.19 → 0.3.47/0.1.8/0.2.27 |
+| deranged / num-conv | 0.3.11/0.1.0 → 0.5.8/0.2.2 |
+| ADDED | zstd, zstd-safe, zstd-sys, flate2, simd-adler32, jobserver, pkg-config, bs58, debug_panic |
+
+Two benign resolver details: (1) qlog 0.18 added a `foundations` dep edge → resolved to the
+existing 4.5.0 pin (no new foundations version). (2) socket2 dep edges for the LEGACY pre-migration
+`quinn`/`quinn-udp`/`hyper-util` re-unified 0.6.3 → 0.5.10 — both socket2 versions were already in
+the lock before and after; no socket2 crate upgrade, and these are not on our quiche path.
+
+### Source changes required: (build/lint probe RUNNING — TBD)
+### ×3 gate on 0.29/1.88: (TBD)
 ## Fresh h3spec diff vs baseline — (Phase 2, TBD)
 ## R8 re-proofs — (Phase 2, TBD)
 ## R13 F-MD-4 bursts — (Phase 2, TBD)
