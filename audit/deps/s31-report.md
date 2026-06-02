@@ -341,9 +341,29 @@ work-independent ceiling. The shape (flat plateaus + flat fds/threads) is alloca
 working-set establishment (bounded by peak concurrency), not a per-request leak. But the 2nd
 plateau held only ~1 min — too short to declare a final ceiling for a PROMOTE gate (R8/R11).
 
-Run 3 (isolated, **1800s** definitive bounded test, `audit/soak/s31-soak-sc9-1800/`): RUNNING
-`blfmky9eg`. Verdict rule: RSS plateauing + holding flat for the last ≥15 min ⇒ BOUNDED (allocator
-working set); continued stepping ⇒ real 0.29 leak (blocker). fds/threads/panic must stay flat/0.
+Run 3 (isolated, **1800s** definitive test, `audit/soak/s31-soak-sc9-1800/`, completed `blfmky9eg`):
+**did NOT plateau — REAL LEAK SIGNAL.** RSS staircase 8→26→32→40→**54** (held 10 min)→68→**82 MB**,
+still at max (82,456 KB) at t=1800. fds flat (11→12), threads flat (9), panic=0, 4.9M RPCs (err=4).
+**RSS scales with duration: 41 MB @ 900s → 82 MB @ 1800s (≈2× for 2× time)** = growth ∝ time/work,
+the signature of a leak, NOT a bounded working set. No custom allocator (system glibc); steps are
+sharp instantaneous +14 MB jumps (allocator arena acquisition under bursty churn).
+
+**Cross-scenario attribution (decisive):** the OTHER 4 scenarios all PLATEAU by mid-run (mid≈last):
+sc4_modeb ~23.5 MB, sc5_modea ~63.6 MB (mid==last exactly), sc7_h3terminate ~25 MB, sc8c_ws_h3
+~26 MB. **sc7 (H3-terminate) and sc8c (WS-H3) are ALSO on the 0.29 quiche-h3 path and they plateau**
+→ this is NOT a blanket 0.29-H3 regression; it is specific to the **gRPC-H3 connection-CHURN path**
+(`grpc_h3_churn`, 1.97M connection open/close cycles). Something per-connection-lifecycle is not
+reclaimed; sustained/reused-connection scenarios don't accumulate it.
+
+**Verdict impact:** the re-soak is NOT clean → **CANNOT promote** (R11). Open question: is this a
+0.29 REGRESSION or a PRE-EXISTING gRPC-H3-churn leak? quiche 0.29's "clear streams when send
+finishes before recv" (cbc8173) is a stream-cleanup change that could plausibly interact — though
+the research read it as a leak-FIX, suggesting the churn leak may be pre-existing. Decisive test =
+the SAME 1800s sc9 soak on a 0.28 build (regression ⇒ PARTIAL; pre-existing ⇒ upgrade is clean,
+promote + file leak as a pre-existing CF). **Surfaced to owner.**
+
+## h2spec-intact confirm — (deferred pending sc9 decision)
+## Promote decision — BLOCKED on sc9 attribution (see above)
 
 ## h2spec-intact confirm — (TBD)
 ## Fresh h3spec diff vs baseline — (Phase 2, TBD)
