@@ -1,0 +1,103 @@
+{
+  "columns": [
+    {
+      "column": "rss_kb",
+      "first": 8144.0,
+      "first_third_median": 0.0,
+      "kind": "trend",
+      "last": 11800.0,
+      "last_third_median": 0.0,
+      "max": 11800.0,
+      "min": 8144.0,
+      "monotone_frac": 1.0,
+      "n": 3,
+      "note": "rss_kb: only 3 steady-state samples (< 8 required)",
+      "rel_growth": 0.0,
+      "slope_per_sample": 1828.0,
+      "verdict": "INCONCLUSIVE"
+    },
+    {
+      "column": "vmhwm_kb",
+      "first": 8144.0,
+      "first_third_median": 0.0,
+      "kind": "trend",
+      "last": 11800.0,
+      "last_third_median": 0.0,
+      "max": 11800.0,
+      "min": 8144.0,
+      "monotone_frac": 1.0,
+      "n": 3,
+      "note": "vmhwm_kb: only 3 steady-state samples (< 8 required)",
+      "rel_growth": 0.0,
+      "slope_per_sample": 1828.0,
+      "verdict": "INCONCLUSIVE"
+    },
+    {
+      "column": "fds",
+      "first": 11.0,
+      "first_third_median": 0.0,
+      "kind": "trend",
+      "last": 12.0,
+      "last_third_median": 0.0,
+      "max": 12.0,
+      "min": 11.0,
+      "monotone_frac": 1.0,
+      "n": 3,
+      "note": "fds: only 3 steady-state samples (< 8 required)",
+      "rel_growth": 0.0,
+      "slope_per_sample": 0.5,
+      "verdict": "INCONCLUSIVE"
+    },
+    {
+      "column": "threads",
+      "first": 10.0,
+      "first_third_median": 0.0,
+      "kind": "trend",
+      "last": 9.0,
+      "last_third_median": 0.0,
+      "max": 10.0,
+      "min": 9.0,
+      "monotone_frac": 0.5,
+      "n": 3,
+      "note": "threads: only 3 steady-state samples (< 8 required)",
+      "rel_growth": 0.0,
+      "slope_per_sample": -0.5,
+      "verdict": "INCONCLUSIVE"
+    },
+    {
+      "column": "panic_total",
+      "first": 0.0,
+      "first_third_median": 0.0,
+      "kind": "counter_must_be_zero",
+      "last": 0.0,
+      "last_third_median": 0.0,
+      "max": 0.0,
+      "min": 0.0,
+      "monotone_frac": 1.0,
+      "n": 3,
+      "note": "panic_total: stayed zero across the run",
+      "rel_growth": 0.0,
+      "slope_per_sample": 0.0,
+      "verdict": "BOUNDED"
+    }
+  ],
+  "duration_secs": 15,
+  "label": "sc8c_one2",
+  "load": [
+    {
+      "err": 0,
+      "name": "ws_h3_sustained",
+      "ok": 616
+    },
+    {
+      "err": 0,
+      "name": "ws_h3_churn",
+      "ok": 0
+    }
+  ],
+  "overall": "BOUNDED",
+  "sample_secs": 10,
+  "samples": 3,
+  "scale": 1,
+  "scenario": "sc8c_ws_h3"
+}

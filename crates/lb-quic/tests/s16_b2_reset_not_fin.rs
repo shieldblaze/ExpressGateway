@@ -509,6 +509,7 @@ async fn s16_b2_client_reset_does_not_become_clean_fin_upstream() {
         quic_modeb_metrics: None,
         // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
         ws_enabled: false,
+        ws_relay_launcher: None,
     };
     let actor = tokio::spawn(run_raw_proxy_actor_for_test(params));
 

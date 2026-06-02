@@ -1737,6 +1737,392 @@ fn random_cid() -> [u8; quiche::MAX_CONN_ID_LEN] {
     cid
 }
 
+// ── WebSocket-over-HTTP/3 load (S28 sc8c_ws_h3, RFC 9220 extended CONNECT) ─────
+//
+// A raw quiche::h3 client drives WS via extended CONNECT (`:protocol=websocket`):
+// the gateway answers 200 (upstream-before-200), keeps the request stream open as
+// the tunnel, and runs the single-sourced `proxy_frames` relay over the bounded
+// `H3WsTunnel` onto an H1 WS backend. Same leak-class question as sc8_ws_h1 (a
+// long-lived opaque relay must stay bounded under churn — the F-S20-2 class), over
+// the H3/quiche datapath. The client speaks WS framing by hand (it cannot wrap the
+// raw quiche stream in tungstenite); payloads stay < 126 bytes (7-bit length).
+
+/// Encode a masked client WS frame (RFC 6455 §5.2). `opcode`: 0x1 Text, 0x8 Close.
+#[allow(clippy::indexing_slicing)]
+fn ws_mask_frame(opcode: u8, payload: &[u8]) -> Vec<u8> {
+    let mut f = Vec::with_capacity(payload.len() + 6);
+    f.push(0x80 | opcode); // FIN + opcode
+    f.push(0x80 | (payload.len() as u8)); // MASK + 7-bit len (payload < 126)
+    let mask = [0x3a_u8, 0x5b, 0x7c, 0x9d];
+    f.extend_from_slice(&mask);
+    for (i, b) in payload.iter().enumerate() {
+        f.push(b ^ mask[i % 4]);
+    }
+    f
+}
+
+/// Parse the first complete WS frame from `buf` → `(opcode, payload, consumed)`.
+#[allow(clippy::indexing_slicing)]
+fn ws_parse_one(buf: &[u8]) -> Option<(u8, Vec<u8>, usize)> {
+    if buf.len() < 2 {
+        return None;
+    }
+    let opcode = buf[0] & 0x0F;
+    let masked = buf[1] & 0x80 != 0;
+    let len7 = (buf[1] & 0x7F) as usize;
+    let mut idx = 2usize;
+    let plen = match len7.cmp(&126) {
+        std::cmp::Ordering::Less => len7,
+        std::cmp::Ordering::Equal => {
+            if buf.len() < 4 {
+                return None;
+            }
+            let l = ((buf[2] as usize) << 8) | (buf[3] as usize);
+            idx = 4;
+            l
+        }
+        std::cmp::Ordering::Greater => return None,
+    };
+    let mask = if masked {
+        if buf.len() < idx + 4 {
+            return None;
+        }
+        let m = [buf[idx], buf[idx + 1], buf[idx + 2], buf[idx + 3]];
+        idx += 4;
+        Some(m)
+    } else {
+        None
+    };
+    if buf.len() < idx + plen {
+        return None;
+    }
+    let mut pl = buf[idx..idx + plen].to_vec();
+    if let Some(m) = mask {
+        for (i, b) in pl.iter_mut().enumerate() {
+            *b ^= m[i % 4];
+        }
+    }
+    Some((opcode, pl, idx + plen))
+}
+
+/// Poll the h3 connection, accumulating `:status` and DATA bytes (the tunneled
+/// WS frames) for the WS tunnel stream.
+fn ws_h3_drain(
+    h3: &mut quiche::h3::Connection,
+    conn: &mut quiche::Connection,
+    status: &mut Option<u16>,
+    rx: &mut Vec<u8>,
+) {
+    use quiche::h3::NameValue;
+    loop {
+        match h3.poll(conn) {
+            Ok((_s, quiche::h3::Event::Headers { list, .. })) => {
+                for h in &list {
+                    if h.name() == b":status" {
+                        *status = std::str::from_utf8(h.value())
+                            .ok()
+                            .and_then(|s| s.parse().ok());
+                    }
+                }
+            }
+            Ok((s, quiche::h3::Event::Data)) => {
+                let mut chunk = [0u8; 8192];
+                while let Ok(n) = h3.recv_body(conn, s, &mut chunk) {
+                    if n == 0 {
+                        break;
+                    }
+                    rx.extend_from_slice(chunk.get(..n).unwrap_or(&[]));
+                }
+            }
+            Ok(_) => {}
+            Err(quiche::h3::Error::Done) | Err(_) => break,
+        }
+    }
+}
+
+/// One WS-over-H3 session: QUIC handshake → quiche::h3 client → extended CONNECT
+/// (`:protocol=websocket`) → 200 → echo round-trips → clean WS Close. With
+/// `until_cancel` the tunnel is HELD open looping echoes (sustained held-tunnel
+/// pressure); else it runs exactly `max_frames` then closes (churn / reclaim).
+/// `stats.ok()` per verified echo. An `Err` is a transport/protocol failure.
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
+async fn ws_h3_echo_session(
+    target: SocketAddr,
+    sni: &str,
+    ca_path: &std::path::Path,
+    seed: u64,
+    max_frames: usize,
+    until_cancel: bool,
+    stats: &LoadStats,
+    cancel: &CancellationToken,
+) -> anyhow::Result<()> {
+    let socket = UdpSocket::bind(("127.0.0.1", 0)).await?;
+    let local = socket.local_addr()?;
+    let mut cfg = quic_client_config(ca_path)?;
+    let scid = random_cid();
+    let scid_ref = quiche::ConnectionId::from_ref(&scid);
+    let mut conn = quiche::connect(Some(sni), &scid_ref, local, target, &mut cfg)
+        .map_err(|e| anyhow::anyhow!("connect: {e:?}"))?;
+    let mut out = vec![0u8; MAX_UDP];
+    let mut inb = vec![0u8; MAX_UDP];
+
+    // Handshake.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    flush(&mut conn, &socket, &mut out).await?;
+    while !conn.is_established() {
+        if tokio::time::Instant::now() > deadline {
+            anyhow::bail!("handshake timeout");
+        }
+        recv_one(
+            &mut conn,
+            &socket,
+            local,
+            &mut inb,
+            Duration::from_millis(50),
+        )
+        .await;
+        flush(&mut conn, &socket, &mut out).await?;
+        if conn.is_closed() {
+            anyhow::bail!("closed during handshake");
+        }
+    }
+    let h3cfg = quiche::h3::Config::new().map_err(|e| anyhow::anyhow!("h3::Config: {e:?}"))?;
+    let mut h3 = quiche::h3::Connection::with_transport(&mut conn, &h3cfg)
+        .map_err(|e| anyhow::anyhow!("h3 with_transport: {e:?}"))?;
+    flush(&mut conn, &socket, &mut out).await?;
+
+    // Extended CONNECT (fin=false ⇒ keep the tunnel stream open).
+    let headers = [
+        quiche::h3::Header::new(b":method", b"CONNECT"),
+        quiche::h3::Header::new(b":protocol", b"websocket"),
+        quiche::h3::Header::new(b":scheme", b"https"),
+        quiche::h3::Header::new(b":authority", sni.as_bytes()),
+        quiche::h3::Header::new(b":path", b"/soak"),
+    ];
+    let sid = loop {
+        match h3.send_request(&mut conn, &headers, false) {
+            Ok(s) => break s,
+            Err(quiche::h3::Error::StreamBlocked) | Err(quiche::h3::Error::Done) => {
+                flush(&mut conn, &socket, &mut out).await?;
+                recv_one(
+                    &mut conn,
+                    &socket,
+                    local,
+                    &mut inb,
+                    Duration::from_millis(10),
+                )
+                .await;
+            }
+            Err(e) => anyhow::bail!("send_request: {e:?}"),
+        }
+        if conn.is_closed() {
+            anyhow::bail!("closed before CONNECT");
+        }
+    };
+
+    // Await the 200.
+    let mut status: Option<u16> = None;
+    let mut rx: Vec<u8> = Vec::new();
+    let st_deadline = tokio::time::Instant::now() + Duration::from_secs(6);
+    while status.is_none() {
+        if tokio::time::Instant::now() > st_deadline {
+            anyhow::bail!("no 200 (status timeout)");
+        }
+        flush(&mut conn, &socket, &mut out).await?;
+        recv_one(
+            &mut conn,
+            &socket,
+            local,
+            &mut inb,
+            Duration::from_millis(20),
+        )
+        .await;
+        ws_h3_drain(&mut h3, &mut conn, &mut status, &mut rx);
+        if conn.is_closed() {
+            anyhow::bail!("closed before 200");
+        }
+    }
+    if status != Some(200) {
+        anyhow::bail!("extended CONNECT status {status:?}");
+    }
+
+    // Echo loop.
+    let mut f = 0usize;
+    while (until_cancel && !cancel.is_cancelled()) || (!until_cancel && f < max_frames) {
+        if conn.is_closed() {
+            anyhow::bail!("tunnel closed mid-echo");
+        }
+        let len = 16 + (((seed as usize).wrapping_add(f)) % 80); // 16..96 (< 126)
+        let payload: Vec<u8> = (0..len)
+            .map(|k| ((k as u64).wrapping_add(seed).wrapping_add(f as u64) % 251) as u8)
+            .collect();
+        // BINARY (opcode 0x2), not Text: the payload is arbitrary bytes, and a
+        // WS Text frame MUST be valid UTF-8 (RFC 6455 §5.6) — the gateway
+        // (tungstenite) correctly rejects non-UTF-8 Text, which would tear the
+        // tunnel down. Binary has no such constraint.
+        let frame = ws_mask_frame(0x2, &payload);
+
+        // Send (retry on a full send window).
+        let send_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            match h3.send_body(&mut conn, sid, &frame, false) {
+                Ok(n) if n == frame.len() => break,
+                Ok(_) | Err(quiche::h3::Error::Done) => {
+                    flush(&mut conn, &socket, &mut out).await?;
+                    recv_one(
+                        &mut conn,
+                        &socket,
+                        local,
+                        &mut inb,
+                        Duration::from_millis(5),
+                    )
+                    .await;
+                }
+                Err(e) => anyhow::bail!("ws send_body: {e:?}"),
+            }
+            if tokio::time::Instant::now() > send_deadline {
+                anyhow::bail!("ws send timeout");
+            }
+        }
+        flush(&mut conn, &socket, &mut out).await?;
+
+        // Receive the echo.
+        let echo_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let mut got = false;
+        while !got {
+            if tokio::time::Instant::now() > echo_deadline {
+                anyhow::bail!("ws echo timeout");
+            }
+            recv_one(
+                &mut conn,
+                &socket,
+                local,
+                &mut inb,
+                Duration::from_millis(20),
+            )
+            .await;
+            ws_h3_drain(&mut h3, &mut conn, &mut status, &mut rx);
+            while let Some((op, pl, consumed)) = ws_parse_one(&rx) {
+                rx.drain(..consumed);
+                if op == 0x2 && pl == payload {
+                    got = true;
+                    stats.ok();
+                }
+            }
+            flush(&mut conn, &socket, &mut out).await?;
+            if conn.is_closed() {
+                anyhow::bail!("tunnel closed awaiting echo");
+            }
+        }
+        f += 1;
+        // Sustained sessions pace themselves so they stay long-lived without
+        // hot-spinning (held-tunnel pressure, not a throughput benchmark).
+        if until_cancel {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    }
+
+    // Clean WS Close (exercise the gateway's tunnel-teardown + reclaim path).
+    let close = ws_mask_frame(0x8, &[0x03, 0xE8]);
+    let _ = h3.send_body(&mut conn, sid, &close, false);
+    let _ = flush(&mut conn, &socket, &mut out).await;
+    for _ in 0..6 {
+        recv_one(
+            &mut conn,
+            &socket,
+            local,
+            &mut inb,
+            Duration::from_millis(10),
+        )
+        .await;
+        let _ = flush(&mut conn, &socket, &mut out).await;
+    }
+    let _ = conn.close(true, 0x100, b"ws-done");
+    let _ = flush(&mut conn, &socket, &mut out).await;
+    Ok(())
+}
+
+/// WS-over-H3 SUSTAINED load: `concurrency` workers each HOLD a WS tunnel open
+/// looping bidirectional echoes (held-tunnel pressure). Reconnects on error.
+pub async fn run_ws_h3_load(
+    target: SocketAddr,
+    sni: String,
+    ca: PathBuf,
+    concurrency: usize,
+    stats: Arc<LoadStats>,
+    cancel: CancellationToken,
+) {
+    let mut workers = Vec::new();
+    for w in 0..concurrency {
+        let (sni, ca, stats, cancel) =
+            (sni.clone(), ca.clone(), Arc::clone(&stats), cancel.clone());
+        workers.push(tokio::spawn(async move {
+            let mut seed = (w as u64).wrapping_mul(17).wrapping_add(3);
+            while !cancel.is_cancelled() {
+                seed = seed.wrapping_add(101);
+                if let Err(e) =
+                    ws_h3_echo_session(target, &sni, &ca, seed, usize::MAX, true, &stats, &cancel)
+                        .await
+                {
+                    if std::env::var("WS_DEBUG").is_ok() {
+                        eprintln!("[ws_h3_load err] {e}");
+                    }
+                    stats.err();
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            }
+        }));
+    }
+    for w in workers {
+        let _ = w.await;
+    }
+}
+
+/// WS-over-H3 open/close CHURN: `concurrency` workers each repeatedly open a WS,
+/// run a short echo burst, then cleanly close — the F-S20-2 reclaim probe over H3.
+pub async fn run_ws_h3_churn(
+    target: SocketAddr,
+    sni: String,
+    ca: PathBuf,
+    concurrency: usize,
+    frames_per_cycle: usize,
+    stats: Arc<LoadStats>,
+    cancel: CancellationToken,
+) {
+    let mut workers = Vec::new();
+    for w in 0..concurrency {
+        let (sni, ca, stats, cancel) =
+            (sni.clone(), ca.clone(), Arc::clone(&stats), cancel.clone());
+        workers.push(tokio::spawn(async move {
+            let mut seed = (w as u64).wrapping_mul(29).wrapping_add(7);
+            while !cancel.is_cancelled() {
+                seed = seed.wrapping_add(53);
+                if let Err(e) = ws_h3_echo_session(
+                    target,
+                    &sni,
+                    &ca,
+                    seed,
+                    frames_per_cycle,
+                    false,
+                    &stats,
+                    &cancel,
+                )
+                .await
+                {
+                    if std::env::var("WS_DEBUG").is_ok() {
+                        eprintln!("[ws_h3_churn err] {e}");
+                    }
+                    stats.err();
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            }
+        }));
+    }
+    for w in workers {
+        let _ = w.await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

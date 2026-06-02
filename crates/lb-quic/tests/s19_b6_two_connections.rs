@@ -476,6 +476,7 @@ async fn s19_b6_mode_b_holds_two_distinct_connections_not_a_bridge() {
         quic_modeb_metrics: None,
         // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
         ws_enabled: false,
+        ws_relay_launcher: None,
     };
 
     // 8) Cancel shortly after both legs are up so the actor returns its

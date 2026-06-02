@@ -25,7 +25,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tokio::net::UdpSocket;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 use lb_io::http2_pool::Http2Pool;
@@ -40,6 +40,11 @@ use crate::h3_bridge::{
     H3_BODY_CHUNK_MAX, H3_RESP_CHANNEL_DEPTH, H3Request, MAX_REQUEST_BODY_BYTES,
     MAX_RESPONSE_BODY_BYTES, ReqBodyEvent, RespEvent, h3_to_h1_stream_resp, h3_to_h2_stream_resp,
     h3_to_h3_stream_resp, validate_request_pseudo_headers,
+};
+
+use crate::ws_tunnel::{
+    H3TunnelEndpoints, H3WsTunnel, TunnelInbound, WsConnectRequest, WsRelayHandle, WsRelayLauncher,
+    WsUpstreamOutcome,
 };
 
 /// SESSION 2 / P1-A: depth of the per-stream bounded request-body
@@ -114,6 +119,60 @@ pub const QPACK_DECOMPRESSION_FAILED: u64 = 0x0200;
 /// puts a hard ceiling on shutdown latency in production.
 const GRACEFUL_SHUTDOWN_BUDGET: Duration = Duration::from_millis(500);
 
+/// SESSION 28 / WS-over-H3 (RFC 9220) — `H3_REQUEST_CANCELLED` (`0x010c`,
+/// RFC 9114 §8.1). Emitted on the `RESET_STREAM` when a WebSocket tunnel
+/// stream is torn down abnormally (e.g. the gateway can no longer relay).
+/// RFC 9220 §3 maps a WebSocket abnormal close over H3 to this code.
+const H3_REQUEST_CANCELLED: u64 = 0x010c;
+
+/// SESSION 28 / WS-over-H3 Stage C — per-stream WebSocket tunnel state.
+///
+/// Held in the actor's `ws_tunnels` map for a sid that carried a validated
+/// `:protocol=websocket` extended CONNECT. The actor (sync poll loop)
+/// shuttles bytes between the H3 stream and the injected relay via the two
+/// bounded channels of the [`H3WsTunnel`] seam — all non-blocking
+/// `try_send`/`try_recv`, so the actor never awaits.
+struct WsTunnelState {
+    /// Actor→relay (inbound: H3 stream DATA → `proxy_frames` reader).
+    /// `None` once a terminal (clean EOF on client FIN, or `Reset`) has
+    /// been relayed — the sender is dropped so the reader observes it.
+    to_reader: Option<mpsc::Sender<TunnelInbound>>,
+    /// Relay→actor (outbound: `proxy_frames` writer → H3 stream DATA).
+    from_writer: mpsc::Receiver<Bytes>,
+    /// Upstream-handshake readiness — resolves once, BEFORE the `200`
+    /// (the H3 analog of the WS-H1 GHSA / WS-H2 F-S27-1 ordering). `None`
+    /// once consumed.
+    ready: Option<oneshot::Receiver<WsUpstreamOutcome>>,
+    /// Response head still to encode before the tunnel activates (the
+    /// `200` on success) — retried each tick until `send_response`
+    /// accepts it. `None` once sent (or never set: an error response uses
+    /// the inline Progressive path instead).
+    pending_ok: Option<WsPendingOk>,
+    /// `true` once the `200` is on the wire — the tunnel-mode pump runs.
+    activated: bool,
+    /// Unsent tail of the chunk currently being written outbound (the R8
+    /// outbound backpressure point: a non-empty tail stops us pulling more
+    /// from `from_writer`, which parks the relay's `PollSender`).
+    out_pending: Option<Bytes>,
+    /// Set once we FIN the H3 stream outbound (the relay finished).
+    fin_sent: bool,
+    /// Marks the state for removal at the end of the tick.
+    done: bool,
+    /// The relay task (dial + upstream handshake + `proxy_frames`).
+    /// Aborted on teardown so a torn-down tunnel never leaks its task.
+    task: tokio::task::JoinHandle<()>,
+}
+
+/// SESSION 28 / WS-over-H3 Stage C — the success (`200`) response head the
+/// pump sends before activating the tunnel. `head_sent` is a retry latch
+/// for a `send_response` that returns `StreamBlocked`/`Done` under a full
+/// send window.
+struct WsPendingOk {
+    /// Extra response fields (e.g. the upstream-selected
+    /// `sec-websocket-protocol`) to emit alongside `:status 200`.
+    headers: Vec<(String, String)>,
+}
+
 /// Raw UDP packet forwarded from the router to a single actor.
 #[derive(Debug)]
 pub struct InboundPacket {
@@ -182,6 +241,17 @@ pub struct ActorParams {
     /// [`crate::h3_bridge::validate_request_pseudo_headers`]. `false`
     /// (every pre-S27 caller) keeps the H3 front byte-identical (R3).
     pub ws_enabled: bool,
+    /// SESSION 28 / WS-over-H3 (RFC 9220) Stage C: the injected relay
+    /// launcher (dependency inversion — the `lb` binary builds it because
+    /// `lb-quic` cannot import `lb_l7::ws_proxy::proxy_frames`). `Some`
+    /// only on a WebSocket-opted-in listener; the actor calls it on a
+    /// validated `:protocol=websocket` extended CONNECT to dial the H1
+    /// backend, complete the upstream handshake before the `200`, and run
+    /// the single-sourced frame relay over the tunnel. `None` (every
+    /// non-WS listener) ⇒ the actor never builds a tunnel and the H3 front
+    /// is byte-identical (R3). Threaded from
+    /// [`crate::router::RouterParams::ws_relay_launcher`].
+    pub ws_relay_launcher: Option<crate::ws_tunnel::WsRelayLauncher>,
 }
 
 /// Drive one `quiche::Connection` to completion, terminating H3 and
@@ -235,6 +305,12 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
     // SESSION 4 / P1-B: liveness handles for the response producer tasks.
     // Joined opportunistically to reap finished producers.
     let mut resp_tasks: Vec<tokio::task::JoinHandle<()>> = Vec::new();
+    // SESSION 28 / WS-over-H3 Stage C: per-stream WebSocket tunnel state.
+    // Populated when a validated `:protocol=websocket` extended CONNECT
+    // arrives and the relay launcher is injected; drained each tick by
+    // `pump_ws_tunnels`. Empty (always, on a non-WS listener) ⇒ the H3
+    // front is byte-identical (R3).
+    let mut ws_tunnels: HashMap<u64, WsTunnelState> = HashMap::new();
 
     loop {
         // Before waiting: push any outbound bytes from quiche + any
@@ -267,7 +343,15 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
         // pattern; does NOT defeat backpressure (the §1.4.3 gate + the
         // bounded channel still cap in-flight bytes — we only poll the
         // gate more often so a backpressured response resumes promptly).
-        if !body_tx_by_stream.is_empty() || !resp_rx_by_stream.is_empty() {
+        // SESSION 28 / WS-over-H3 Stage C: an active WS tunnel is advanced
+        // only by a `pump_ws_tunnels` tick (nothing wakes the select! when
+        // the relay pushes an outbound frame into `from_writer`), so cap the
+        // wait the same way an active body/response stream does. Bounded
+        // busy-poll: a truly-idle tunnel is reaped by `proxy_frames`' own
+        // idle timeout (default 60 s). Does NOT defeat backpressure — the
+        // bounded channels still cap in-flight bytes; we only poll oftener.
+        if !body_tx_by_stream.is_empty() || !resp_rx_by_stream.is_empty() || !ws_tunnels.is_empty()
+        {
             next_wait = next_wait.min(Duration::from_millis(2));
         }
 
@@ -330,6 +414,8 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
                     params.h3_backend.as_ref(),
                     params.h2_backend.as_ref(),
                     params.ws_enabled,
+                    &mut ws_tunnels,
+                    params.ws_relay_launcher.as_ref(),
                 );
             }
         }
@@ -356,6 +442,14 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
         // Reap finished response producers (liveness only; the actor
         // already observed their events / channel close).
         resp_tasks.retain(|h| !h.is_finished());
+    }
+    // SESSION 28 / WS-over-H3 Stage C: the connection is closing — abort any
+    // live relay tasks so a dead connection never leaves a tunnel relay (and
+    // its pooled upstream TCP socket) running. Natural teardown (the dropped
+    // channels signal the relay) would also stop them, but a backend wedged
+    // past its read-frame budget could linger; the explicit abort bounds it.
+    for (_, st) in ws_tunnels {
+        st.task.abort();
     }
     Ok(())
 }
@@ -974,6 +1068,10 @@ fn poll_h3(
     // SESSION 27 / WS-over-H3 Stage A: gates `:protocol` Extended-CONNECT
     // acceptance in `validate_request_pseudo_headers`. `false` ⇒ unchanged.
     ws_enabled: bool,
+    // SESSION 28 / WS-over-H3 Stage C: per-stream WS tunnel state + the
+    // injected relay launcher. Both inert when no WS tunnel exists (R3).
+    ws_tunnels: &mut HashMap<u64, WsTunnelState>,
+    ws_relay_launcher: Option<&WsRelayLauncher>,
 ) {
     // PASS 1 — re-arm / backpressure drain (see fn doc): every body-phase
     // stream gets a capacity-gated `recv_body` drain this tick, regardless
@@ -1052,26 +1150,52 @@ fn poll_h3(
                             "ROUND8-L7-16: H3 :authority rejected before upstream selection"
                         );
                         // SESSION 25 / INC-5: emit the inline 400 via the
-                        // DECODED Progressive egress (quiche::h3 send_response/
-                        // send_body) — same as every cell. The legacy raw-byte
-                        // `encode_h3_response` + `request_tasks`/`Buffered` path
-                        // is gone (production is now 100% on quiche::h3). Same
-                        // 400 + "bad request" body, byte-for-byte.
-                        let (resp_tx, resp_rx) = mpsc::channel::<RespEvent>(H3_RESP_CHANNEL_DEPTH);
-                        resp_tasks.push(tokio::spawn(async move {
-                            let _ = resp_tx
-                                .send(RespEvent::Head {
-                                    status: 400,
-                                    headers: Vec::new(),
-                                })
-                                .await;
-                            let _ = resp_tx
-                                .send(RespEvent::Body(Bytes::from_static(b"bad request")))
-                                .await;
-                            let _ = resp_tx.send(RespEvent::End).await;
-                        }));
-                        resp_rx_by_stream.insert(sid, resp_rx);
-                        stream_response.insert(sid, StreamTx::progressive());
+                        // DECODED Progressive egress (quiche::h3). SESSION 28:
+                        // single-sourced as `spawn_inline_h3_response` (shared
+                        // with the WS extended-CONNECT rejects). Same 400 +
+                        // "bad request" body, byte-for-byte.
+                        spawn_inline_h3_response(
+                            resp_tasks,
+                            resp_rx_by_stream,
+                            stream_response,
+                            sid,
+                            400,
+                            "bad request",
+                        );
+                        continue;
+                    }
+                }
+
+                // SESSION 28 / WS-over-H3 (RFC 9220) Stage C: intercept a
+                // validated `:protocol=websocket` extended CONNECT BEFORE the
+                // normal request cell is spawned.
+                // `validate_request_pseudo_headers` (under `ws_enabled`)
+                // already guaranteed a `:protocol` implies `:method=CONNECT`
+                // + `:scheme` + `:path` + `:authority`; `:protocol` lands in
+                // `req.extra` (HeaderValue not one of the parsed pseudo
+                // names). Build the bounded tunnel, call the injected relay
+                // launcher (which dials the H1 backend + completes the
+                // upstream RFC 6455 handshake BEFORE the 200 — the H3 analog
+                // of the WS-H1 GHSA / WS-H2 F-S27-1 ordering), and register
+                // the per-stream tunnel state. The `pump_ws_tunnels` tick
+                // then sends the 200 on upstream-ready and relays frames.
+                if ws_enabled {
+                    let ws_protocol = req
+                        .extra
+                        .iter()
+                        .find(|(n, _)| n == ":protocol")
+                        .map(|(_, v)| v.clone());
+                    if let Some(protocol) = ws_protocol {
+                        setup_ws_tunnel(
+                            sid,
+                            req,
+                            &protocol,
+                            ws_relay_launcher,
+                            ws_tunnels,
+                            resp_tasks,
+                            resp_rx_by_stream,
+                            stream_response,
+                        );
                         continue;
                     }
                 }
@@ -1182,6 +1306,14 @@ fn poll_h3(
                 );
             }
             Ok((sid, quiche::h3::Event::Finished)) => {
+                // SESSION 28 / WS-over-H3 Stage C: a WS tunnel stream FIN is
+                // the client closing its WS send half — map it (clean EOF vs
+                // reset-on-finish) onto the tunnel reader, NOT the request-
+                // body path.
+                if let Some(st) = ws_tunnels.get_mut(&sid) {
+                    ws_handle_client_fin(conn, h3, sid, st);
+                    continue;
+                }
                 // F-MD-4 SMUGGLING GUARD. quiche's `poll` can return
                 // `Event::Finished` for a request stream that was actually
                 // RESET *after* its last DATA frame: `recv_body` on a reset
@@ -1219,6 +1351,14 @@ fn poll_h3(
                 pending_trailers.remove(&sid);
             }
             Ok((sid, quiche::h3::Event::Reset(code))) => {
+                // SESSION 28 / WS-over-H3 Stage C: a WS tunnel stream reset is
+                // an abnormal WS drop — surface it to the tunnel reader as
+                // `Reset` (ConnectionReset, distinct from a clean Close), the
+                // reset-vs-EOF mapping.
+                if let Some(st) = ws_tunnels.get_mut(&sid) {
+                    ws_handle_client_reset(sid, st);
+                    continue;
+                }
                 // F-MD-4: the client reset the request stream mid-flight.
                 // Relay as a backend reset (never a clean EOF) + tear down.
                 tracing::debug!(
@@ -1247,6 +1387,19 @@ fn poll_h3(
             }
         }
     }
+
+    // SESSION 28 / WS-over-H3 Stage C: after the event loop, advance every
+    // WS tunnel one tick — resolve upstream readiness (send the 200 or the
+    // error), then relay frames both directions (inbound re-arm + outbound
+    // drain, both bounded — R8). Inert when `ws_tunnels` is empty (R3).
+    pump_ws_tunnels(
+        conn,
+        h3,
+        ws_tunnels,
+        resp_tasks,
+        resp_rx_by_stream,
+        stream_response,
+    );
 }
 
 /// SESSION 24 / INC-2 (test-gauge) — record the per-stream retained
@@ -1274,4 +1427,406 @@ fn record_req_retained(
 /// will own that when the router moves into the main binary path.
 fn select_backend(backends: &Arc<Vec<SocketAddr>>) -> Option<SocketAddr> {
     backends.first().copied()
+}
+
+// ─── SESSION 28 / WS-over-H3 (RFC 9220) Stage C — tunnel-mode helpers ───
+
+/// Spawn an inline H3 response (`status` + a short plain `msg` body) on
+/// `sid` via the DECODED Progressive egress. Single-sources the "small
+/// synthetic response" pattern shared by the inline 400 (:authority
+/// reject) and the WS extended-CONNECT rejects (501 unsupported
+/// `:protocol`, 502 relay-unavailable / upstream-failure). The body is a
+/// `'static` string so the spawned task captures no borrowed state.
+fn spawn_inline_h3_response(
+    resp_tasks: &mut Vec<tokio::task::JoinHandle<()>>,
+    resp_rx_by_stream: &mut HashMap<u64, mpsc::Receiver<RespEvent>>,
+    stream_response: &mut HashMap<u64, StreamTx>,
+    sid: u64,
+    status: u16,
+    msg: &'static str,
+) {
+    let (resp_tx, resp_rx) = mpsc::channel::<RespEvent>(H3_RESP_CHANNEL_DEPTH);
+    resp_tasks.push(tokio::spawn(async move {
+        let _ = resp_tx
+            .send(RespEvent::Head {
+                status,
+                headers: Vec::new(),
+            })
+            .await;
+        let _ = resp_tx
+            .send(RespEvent::Body(Bytes::from_static(msg.as_bytes())))
+            .await;
+        let _ = resp_tx.send(RespEvent::End).await;
+    }));
+    resp_rx_by_stream.insert(sid, resp_rx);
+    stream_response.insert(sid, StreamTx::progressive());
+}
+
+/// Set up a WebSocket-over-H3 tunnel for a validated extended CONNECT.
+///
+/// Enforces the WS-only `:protocol` value (RFC 8441/9220 — unknown
+/// protocol → `501`), requires the injected relay launcher (fail-closed
+/// `502` if absent — the binary pairs `ws_enabled` with a launcher), then
+/// builds the bounded [`H3WsTunnel`] seam, hands the tunnel to the
+/// launcher (which dials the H1 backend + completes the upstream RFC 6455
+/// handshake BEFORE the 200), and registers the per-stream tunnel state.
+/// The `200`/error is sent later by [`pump_ws_tunnels`] once the launcher
+/// signals readiness — the upstream-before-200 ordering (R12, shared with
+/// WS-H1/H2).
+#[allow(clippy::too_many_arguments)]
+fn setup_ws_tunnel(
+    sid: u64,
+    req: H3Request,
+    protocol: &str,
+    ws_relay_launcher: Option<&WsRelayLauncher>,
+    ws_tunnels: &mut HashMap<u64, WsTunnelState>,
+    resp_tasks: &mut Vec<tokio::task::JoinHandle<()>>,
+    resp_rx_by_stream: &mut HashMap<u64, mpsc::Receiver<RespEvent>>,
+    stream_response: &mut HashMap<u64, StreamTx>,
+) {
+    // RFC 8441/9220: `websocket` is the only `:protocol` value the gateway
+    // bootstraps. Any other registered protocol → 501 Not Implemented.
+    if !protocol.eq_ignore_ascii_case("websocket") {
+        tracing::debug!(
+            stream_id = sid,
+            protocol,
+            "WS-H3: unsupported :protocol — 501"
+        );
+        spawn_inline_h3_response(
+            resp_tasks,
+            resp_rx_by_stream,
+            stream_response,
+            sid,
+            501,
+            "unsupported :protocol",
+        );
+        return;
+    }
+    let Some(launcher) = ws_relay_launcher else {
+        // Fail closed: a WS listener always injects a launcher. Reaching
+        // here means a misconfiguration — never tunnel without a relay.
+        tracing::warn!(
+            stream_id = sid,
+            "WS-H3: extended CONNECT but no relay launcher injected — 502"
+        );
+        spawn_inline_h3_response(
+            resp_tasks,
+            resp_rx_by_stream,
+            stream_response,
+            sid,
+            502,
+            "websocket relay unavailable",
+        );
+        return;
+    };
+    // The client's offered subprotocol list (forwarded to the upstream;
+    // the upstream's selection is echoed back in the 200, RFC 8441 §5).
+    let subprotocols = req
+        .extra
+        .iter()
+        .find(|(n, _)| n.eq_ignore_ascii_case("sec-websocket-protocol"))
+        .map(|(_, v)| v.clone());
+    let connect_req = WsConnectRequest {
+        authority: req.authority,
+        path: req.path,
+        subprotocols,
+    };
+    let (tunnel, endpoints) = H3WsTunnel::new();
+    let WsRelayHandle { ready, task } = (launcher)(tunnel, connect_req);
+    let H3TunnelEndpoints {
+        to_reader,
+        from_writer,
+    } = endpoints;
+    tracing::debug!(
+        stream_id = sid,
+        "WS-H3: extended CONNECT accepted; dialing upstream before 200"
+    );
+    ws_tunnels.insert(
+        sid,
+        WsTunnelState {
+            to_reader: Some(to_reader),
+            from_writer,
+            ready: Some(ready),
+            pending_ok: None,
+            activated: false,
+            out_pending: None,
+            fin_sent: false,
+            done: false,
+            task,
+        },
+    );
+}
+
+/// Inbound pump (H3 stream DATA → `proxy_frames` reader). Reads DATA off
+/// the tunnel stream while the bounded `to_reader` channel has capacity; a
+/// full channel STOPS the read so quiche does not extend the QUIC flow-
+/// control window — R8 inbound backpressure, in-flight bytes bounded
+/// independent of message volume. Any `recv_body` error maps to
+/// [`TunnelInbound::Reset`] (abnormal drop, NOT a clean EOF — the
+/// F-MD-4-adjacent guard). No-op before the tunnel is active.
+fn ws_drain_inbound(
+    conn: &mut quiche::Connection,
+    h3: &mut quiche::h3::Connection,
+    sid: u64,
+    st: &mut WsTunnelState,
+) {
+    if !st.activated {
+        return;
+    }
+    // Clone the sender handle so the error arm can drop the original
+    // (`st.to_reader = None`) after delivering the terminal Reset.
+    let Some(tx) = st.to_reader.as_ref().cloned() else {
+        return;
+    };
+    let mut scratch = [0u8; crate::ws_tunnel::H3_WS_TUNNEL_CHUNK_MAX];
+    loop {
+        // Backpressure gate: do not read while the reader channel is full.
+        if tx.capacity() == 0 {
+            return;
+        }
+        match h3.recv_body(conn, sid, &mut scratch) {
+            Ok(0) => return,
+            Ok(n) => {
+                let chunk = Bytes::copy_from_slice(scratch.get(..n).unwrap_or(&[]));
+                // capacity > 0 checked above + the actor is the sole producer.
+                let _ = tx.try_send(TunnelInbound::Data(chunk));
+            }
+            Err(quiche::h3::Error::Done) => return,
+            Err(e) => {
+                tracing::debug!(error = %e, stream_id = sid, "WS-H3: recv_body error; Reset to relay");
+                let _ = tx.try_send(TunnelInbound::Reset);
+                st.to_reader = None;
+                return;
+            }
+        }
+    }
+}
+
+/// The client FIN'd its WS send half. Drain any coalesced DATA, then map
+/// the terminal: a genuine FIN → drop the reader sender (clean EOF →
+/// `proxy_frames` forwards a WS Close to the backend); a Finished-on-reset
+/// (quiche can surface `Event::Finished` for a stream reset after its last
+/// DATA — the migration's F-MD-4 concern, probed with a zero-length
+/// `stream_recv`) → [`TunnelInbound::Reset`] (abnormal drop).
+fn ws_handle_client_fin(
+    conn: &mut quiche::Connection,
+    h3: &mut quiche::h3::Connection,
+    sid: u64,
+    st: &mut WsTunnelState,
+) {
+    // Drain DATA coalesced with the FIN first (no inbound bytes lost).
+    ws_drain_inbound(conn, h3, sid, st);
+    let Some(tx) = st.to_reader.take() else {
+        return; // a terminal was already relayed (e.g. by ws_drain_inbound).
+    };
+    let was_reset = matches!(
+        conn.stream_recv(sid, &mut []),
+        Err(quiche::Error::StreamReset(_))
+    );
+    if was_reset {
+        tracing::debug!(
+            stream_id = sid,
+            "WS-H3 F-MD-4: Finished on a RESET tunnel stream; Reset (not clean EOF)"
+        );
+        let _ = tx.try_send(TunnelInbound::Reset);
+    } else {
+        tracing::debug!(stream_id = sid, "WS-H3: client FIN; clean EOF to relay");
+    }
+    // `tx` dropped here ⇒ the reader observes the terminal.
+}
+
+/// The client RESET the WS tunnel stream. Surface an abnormal drop to the
+/// reader as [`TunnelInbound::Reset`] (distinct from a clean Close — the
+/// reset-vs-EOF mapping).
+fn ws_handle_client_reset(sid: u64, st: &mut WsTunnelState) {
+    if let Some(tx) = st.to_reader.take() {
+        tracing::debug!(
+            stream_id = sid,
+            "WS-H3: client reset tunnel stream; Reset to relay"
+        );
+        let _ = tx.try_send(TunnelInbound::Reset);
+    }
+}
+
+/// Abort a tunnel stream abnormally: `RESET_STREAM` +`STOP_SENDING` with
+/// `H3_REQUEST_CANCELLED` (RFC 9220 §3) and drop the reader sender. Used
+/// when a `send_response`/`send_body` on the tunnel stream fails.
+fn ws_teardown(conn: &mut quiche::Connection, sid: u64, st: &mut WsTunnelState) {
+    st.to_reader = None;
+    if !st.fin_sent {
+        match conn.stream_shutdown(sid, quiche::Shutdown::Write, H3_REQUEST_CANCELLED) {
+            Ok(()) | Err(quiche::Error::Done) => {}
+            Err(e) => tracing::debug!(error = %e, stream_id = sid, "WS-H3 teardown RESET (write)"),
+        }
+        match conn.stream_shutdown(sid, quiche::Shutdown::Read, H3_REQUEST_CANCELLED) {
+            Ok(()) | Err(quiche::Error::Done) => {}
+            Err(e) => tracing::debug!(error = %e, stream_id = sid, "WS-H3 teardown RESET (read)"),
+        }
+        st.fin_sent = true;
+    }
+}
+
+/// Per-tick WebSocket tunnel pump. For each tunnel:
+///   1. resolve upstream readiness — `Ready` queues the 200, `Failed`
+///      (or a dropped sender) emits the inline error + tears down;
+///   2. send the queued 200 head (retry under a full send window);
+///   3. once active, pump inbound ([`ws_drain_inbound`] — Data is edge-
+///      triggered so this re-arms each tick) + outbound (relay →
+///      `send_body`, R8: retain the unsent tail, a full send window stops
+///      us pulling from `from_writer` which parks the relay's `PollSender`);
+///   4. when the relay finishes (`from_writer` closed) FIN the H3 stream
+///      and remove the tunnel.
+///
+/// Inert when `ws_tunnels` is empty (R3).
+fn pump_ws_tunnels(
+    conn: &mut quiche::Connection,
+    h3: &mut quiche::h3::Connection,
+    ws_tunnels: &mut HashMap<u64, WsTunnelState>,
+    resp_tasks: &mut Vec<tokio::task::JoinHandle<()>>,
+    resp_rx_by_stream: &mut HashMap<u64, mpsc::Receiver<RespEvent>>,
+    stream_response: &mut HashMap<u64, StreamTx>,
+) {
+    if ws_tunnels.is_empty() {
+        return;
+    }
+    let sids: Vec<u64> = ws_tunnels.keys().copied().collect();
+    let mut to_remove: Vec<u64> = Vec::new();
+    for sid in sids {
+        let Some(st) = ws_tunnels.get_mut(&sid) else {
+            continue;
+        };
+
+        // (1) Upstream readiness — gates the 200 (upstream-before-200).
+        if let Some(ready) = st.ready.as_mut() {
+            match ready.try_recv() {
+                Ok(WsUpstreamOutcome::Ready { headers }) => {
+                    st.ready = None;
+                    st.pending_ok = Some(WsPendingOk { headers });
+                }
+                Ok(WsUpstreamOutcome::Failed { status }) => {
+                    st.ready = None;
+                    spawn_inline_h3_response(
+                        resp_tasks,
+                        resp_rx_by_stream,
+                        stream_response,
+                        sid,
+                        status,
+                        "websocket upstream failed",
+                    );
+                    to_remove.push(sid);
+                    continue;
+                }
+                Err(oneshot::error::TryRecvError::Empty) => {
+                    // Still dialing — nothing else to advance this tick.
+                    continue;
+                }
+                Err(oneshot::error::TryRecvError::Closed) => {
+                    // Launcher dropped the sender without a verdict — treat
+                    // as a failed upstream (fail closed, no tunnel).
+                    st.ready = None;
+                    spawn_inline_h3_response(
+                        resp_tasks,
+                        resp_rx_by_stream,
+                        stream_response,
+                        sid,
+                        502,
+                        "websocket upstream failed",
+                    );
+                    to_remove.push(sid);
+                    continue;
+                }
+            }
+        }
+
+        // (2) Send the queued 200 head (retry under a full send window).
+        if let Some(ok) = st.pending_ok.as_ref() {
+            let mut h3_headers: Vec<quiche::h3::Header> = Vec::with_capacity(ok.headers.len() + 1);
+            h3_headers.push(quiche::h3::Header::new(b":status", b"200"));
+            for (n, v) in &ok.headers {
+                h3_headers.push(quiche::h3::Header::new(n.as_bytes(), v.as_bytes()));
+            }
+            match h3.send_response(conn, sid, &h3_headers, false) {
+                Ok(()) => {
+                    st.pending_ok = None;
+                    st.activated = true;
+                    tracing::debug!(stream_id = sid, "WS-H3: 200 sent; tunnel active");
+                }
+                Err(quiche::h3::Error::StreamBlocked) | Err(quiche::h3::Error::Done) => {
+                    continue; // retry next tick
+                }
+                Err(e) => {
+                    tracing::debug!(error = %e, stream_id = sid, "WS-H3: send_response(200) failed; tearing down");
+                    ws_teardown(conn, sid, st);
+                    to_remove.push(sid);
+                    continue;
+                }
+            }
+        }
+
+        if !st.activated {
+            continue;
+        }
+
+        // (3a) Inbound re-arm (Data is edge-triggered).
+        ws_drain_inbound(conn, h3, sid, st);
+
+        // (3b) Outbound: relay → H3 stream DATA. R8: retain the unsent tail;
+        // a full send window stops us pulling more from `from_writer`.
+        loop {
+            if st.out_pending.is_none() {
+                match st.from_writer.try_recv() {
+                    Ok(chunk) => st.out_pending = Some(chunk),
+                    Err(mpsc::error::TryRecvError::Empty) => break,
+                    Err(mpsc::error::TryRecvError::Disconnected) => {
+                        // (4) Relay finished → FIN the H3 stream + remove.
+                        if !st.fin_sent {
+                            match h3.send_body(conn, sid, &[], true) {
+                                Ok(_) | Err(quiche::h3::Error::Done) => {}
+                                Err(e) => {
+                                    tracing::debug!(error = %e, stream_id = sid, "WS-H3: FIN send_body");
+                                }
+                            }
+                            st.fin_sent = true;
+                        }
+                        st.done = true;
+                        break;
+                    }
+                }
+            }
+            if let Some(buf) = st.out_pending.as_mut() {
+                match h3.send_body(conn, sid, buf, false) {
+                    Ok(n) if n >= buf.len() => {
+                        st.out_pending = None; // fully sent; loop for the next chunk
+                    }
+                    Ok(0)
+                    | Err(quiche::h3::Error::Done)
+                    | Err(quiche::h3::Error::StreamBlocked) => break, // window full → retain (R8)
+                    Ok(n) => {
+                        let _ = buf.split_to(n); // partial → retain the tail
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::debug!(error = %e, stream_id = sid, "WS-H3: send_body error; tearing down");
+                        ws_teardown(conn, sid, st);
+                        st.done = true;
+                        break;
+                    }
+                }
+            } else {
+                break;
+            }
+        }
+
+        if st.done {
+            to_remove.push(sid);
+        }
+    }
+    for sid in to_remove {
+        if let Some(st) = ws_tunnels.remove(&sid) {
+            // The relay task is already finished on the FIN/Failed paths;
+            // abort is a no-op there and bounds any lingering task on the
+            // send-error teardown path. Dropping `st` drops the channels.
+            st.task.abort();
+        }
+    }
 }

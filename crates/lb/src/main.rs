@@ -956,6 +956,95 @@ fn ws_config_to_runtime(cfg: &WebsocketConfig) -> WsConfig {
     }
 }
 
+/// SESSION 28 / WS-over-H3 (RFC 9220) Stage C — build the relay launcher
+/// closure injected into the QUIC listener.
+///
+/// Dependency inversion: the binary sees BOTH `lb-quic` (the H3 datapath +
+/// the `H3WsTunnel` seam) and `lb-l7` (the single-sourced
+/// `ws_proxy::proxy_frames`), so it can run the relay across the crate
+/// boundary `lb-quic` cannot. Per validated `:protocol=websocket` extended
+/// CONNECT the closure: dials an H1 backend via the shared `TcpPool`,
+/// drives the upstream RFC 6455 client handshake (echoing the negotiated
+/// subprotocol), signals readiness **before** the `200` (the H3 analog of
+/// the WS-H1 GHSA / WS-H2 F-S27-1 "upstream-before-200" ordering), then
+/// runs `proxy_frames` over the tunnel. Dial+handshake is bounded by
+/// `header_budget` (504 on elapse, 502 on refuse). Mirrors the inline dial
+/// in `h1_proxy::handle_ws_upgrade` / `h2_proxy::handle_ws_extended_connect`.
+fn build_ws_h3_launcher(
+    backends: Vec<SocketAddr>,
+    pool: TcpPool,
+    ws_cfg: WsConfig,
+    header_budget: Duration,
+) -> lb_quic::ws_tunnel::WsRelayLauncher {
+    use lb_quic::ws_tunnel::{H3WsTunnel, WsConnectRequest, WsRelayHandle, WsUpstreamOutcome};
+    let ws_proxy = Arc::new(WsProxy::new(ws_cfg));
+    Arc::new(
+        move |tunnel: H3WsTunnel, req: WsConnectRequest| -> WsRelayHandle {
+            let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<WsUpstreamOutcome>();
+            let backend = backends.first().copied();
+            let pool = pool.clone();
+            let ws_proxy = Arc::clone(&ws_proxy);
+            let task = tokio::spawn(async move {
+                let Some(backend_addr) = backend else {
+                    let _ = ready_tx.send(WsUpstreamOutcome::Failed { status: 502 });
+                    return;
+                };
+                let ws_cfg = ws_proxy.config();
+                // Dial + upstream RFC 6455 handshake INLINE, before readiness
+                // (so the H3 client never sees a 200 toward a backend that
+                // never agreed). `take_stream` removes the socket from the
+                // pool — a WS tunnel owns its backend connection for life.
+                let dial = async {
+                    let pooled = pool
+                        .acquire_async(backend_addr)
+                        .await
+                        .map_err(|e| format!("backend dial failed: {e}"))?;
+                    let stream = pooled
+                        .take_stream()
+                        .ok_or_else(|| "pooled stream missing".to_string())?;
+                    lb_l7::ws_proxy::dial_backend_ws(
+                        stream,
+                        backend_addr,
+                        &req.path,
+                        req.subprotocols.as_deref(),
+                        &ws_cfg,
+                    )
+                    .await
+                };
+                match tokio::time::timeout(header_budget, dial).await {
+                    Ok(Ok((backend_ws, negotiated))) => {
+                        let mut headers = Vec::new();
+                        if let Some(p) = negotiated {
+                            headers.push(("sec-websocket-protocol".to_owned(), p));
+                        }
+                        if ready_tx.send(WsUpstreamOutcome::Ready { headers }).is_err() {
+                            // The actor (H3 stream) went away before the 200;
+                            // dropping `backend_ws` closes the upstream.
+                            return;
+                        }
+                        let client_ws = lb_l7::ws_proxy::server_ws(tunnel, &ws_cfg).await;
+                        if let Err(e) = ws_proxy.proxy_frames(client_ws, backend_ws).await {
+                            tracing::debug!(error = %e, "WS-H3: frame proxy ended with error");
+                        }
+                    }
+                    Ok(Err(msg)) => {
+                        tracing::debug!(backend = %backend_addr, error = %msg, "WS-H3: upstream handshake refused — 502");
+                        let _ = ready_tx.send(WsUpstreamOutcome::Failed { status: 502 });
+                    }
+                    Err(_elapsed) => {
+                        tracing::debug!(backend = %backend_addr, "WS-H3: upstream dial/handshake budget elapsed — 504");
+                        let _ = ready_tx.send(WsUpstreamOutcome::Failed { status: 504 });
+                    }
+                }
+            });
+            WsRelayHandle {
+                ready: ready_rx,
+                task,
+            }
+        },
+    )
+}
+
 /// Build a [`H2Proxy`] sharing the same picker/alt_svc/timeouts shape as
 /// the matching [`H1Proxy`]. Used when the `h1s` listener negotiates
 /// `h2` via ALPN.
@@ -1260,6 +1349,28 @@ async fn wire_h3_terminate_backends(
         .with_context(|| format!("listener {} backend 0", listener_cfg.address))?;
     match proto {
         UpstreamProto::H1 => {
+            // SESSION 28 / WS-over-H3 (RFC 9220) Stage C: when this listener
+            // opted into WebSocket (params.ws_enabled, set in spawn_quic from
+            // a `[listeners.websocket]` block with `h3_extended_connect`),
+            // inject the relay launcher built over THESE H1 backends + the
+            // shared pool, so a validated extended CONNECT is relayed to an
+            // H1 WS backend. The H3→H1 backend leg below is the same one the
+            // launcher dials. Off ⇒ no launcher (byte-identical, R3).
+            if params.ws_enabled {
+                if let Some(ws) = listener_cfg.websocket.as_ref() {
+                    let header_budget = listener_cfg.http.as_ref().map_or_else(
+                        || Duration::from_secs(30),
+                        |h| Duration::from_millis(h.header_timeout_ms),
+                    );
+                    let launcher = build_ws_h3_launcher(
+                        addresses.clone(),
+                        pool.clone(),
+                        ws_config_to_runtime(ws),
+                        header_budget,
+                    );
+                    params = params.with_ws_relay_launcher(launcher);
+                }
+            }
             // H3→H1: round-robin across ALL resolved H1 backends via the
             // shared TCP pool (the must-have; the WS-over-H3 backend leg).
             params = params.with_backends(addresses, pool.clone());
@@ -4313,6 +4424,1059 @@ mod tests {
         );
 
         // 8) Clean shutdown via the production token.
+        token.cancel();
+        let _ = tokio::time::timeout(Duration::from_secs(5), listener.shutdown()).await;
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // SESSION 28 / WS-over-H3 (RFC 9220) Stage C — real-binary e2e.
+    //
+    // Drives the PRODUCTION entry point (`spawn_quic`, with a
+    // `[listeners.websocket]` block + an H1 backend ⇒ the relay launcher is
+    // injected by `wire_h3_terminate_backends`). A raw quiche::h3 client
+    // sends an Extended CONNECT (`:protocol=websocket`), the LB dials a real
+    // tokio-tungstenite WS echo backend + completes the upstream RFC 6455
+    // handshake BEFORE the 200, then relays WS frames both directions.
+    // ───────────────────────────────────────────────────────────────────
+
+    /// A real tokio-tungstenite WS echo backend. Accepts connections,
+    /// echoes Text/Binary, answers Ping with Pong, mirrors Close. Returns
+    /// its bound address. Lives for the test (one accept loop, many conns —
+    /// the R13 burst reuses it).
+    fn ws_h3_e2e_spawn_ws_echo_backend() -> SocketAddr {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message;
+        let std_listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        std_listener.set_nonblocking(true).unwrap();
+        let addr = std_listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let listener = TcpListener::from_std(std_listener).unwrap();
+            while let Ok((sock, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let Ok(mut ws) = tokio_tungstenite::accept_async(sock).await else {
+                        return;
+                    };
+                    while let Some(Ok(msg)) = ws.next().await {
+                        match msg {
+                            Message::Text(_) | Message::Binary(_) => {
+                                if ws.send(msg).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Message::Ping(p) => {
+                                let _ = ws.send(Message::Pong(p)).await;
+                            }
+                            Message::Close(c) => {
+                                let _ = ws.send(Message::Close(c)).await;
+                                break;
+                            }
+                            _ => {}
+                        }
+                    }
+                });
+            }
+        });
+        addr
+    }
+
+    /// Encode a single masked client WS frame (RFC 6455 §5.2). `opcode`:
+    /// 0x1 Text, 0x8 Close, 0x9 Ping. Payloads stay < 126 bytes (7-bit len).
+    #[allow(clippy::indexing_slicing)]
+    fn ws_h3_e2e_encode_masked(opcode: u8, payload: &[u8]) -> Vec<u8> {
+        assert!(payload.len() < 126, "e2e WS frames stay small (7-bit len)");
+        let mut f = Vec::with_capacity(payload.len() + 6);
+        f.push(0x80 | opcode); // FIN=1 + opcode
+        f.push(0x80 | (payload.len() as u8)); // MASK=1 + 7-bit length
+        let mask = [0xA1u8, 0xB2, 0xC3, 0xD4];
+        f.extend_from_slice(&mask);
+        for (i, b) in payload.iter().enumerate() {
+            f.push(b ^ mask[i % 4]);
+        }
+        f
+    }
+
+    /// A masked Close frame (code 1000 normal closure).
+    fn ws_h3_e2e_close_frame() -> Vec<u8> {
+        ws_h3_e2e_encode_masked(0x8, &[0x03, 0xE8])
+    }
+
+    /// Parse the FIRST complete WS frame from `buf` (server→client frames
+    /// are unmasked; handles a masked frame defensively too). Returns
+    /// `(opcode, unmasked_payload, consumed_bytes)`, or `None` if `buf`
+    /// holds no complete frame yet.
+    #[allow(clippy::indexing_slicing)]
+    fn ws_h3_e2e_parse_frame(buf: &[u8]) -> Option<(u8, Vec<u8>, usize)> {
+        if buf.len() < 2 {
+            return None;
+        }
+        let opcode = buf[0] & 0x0F;
+        let masked = buf[1] & 0x80 != 0;
+        let len7 = (buf[1] & 0x7F) as usize;
+        let mut idx = 2usize;
+        let plen = match len7.cmp(&126) {
+            std::cmp::Ordering::Less => len7,
+            std::cmp::Ordering::Equal => {
+                if buf.len() < 4 {
+                    return None;
+                }
+                let l = ((buf[2] as usize) << 8) | (buf[3] as usize);
+                idx = 4;
+                l
+            }
+            // 64-bit length (len7 == 127) is never used in this test.
+            std::cmp::Ordering::Greater => return None,
+        };
+        let mask = if masked {
+            if buf.len() < idx + 4 {
+                return None;
+            }
+            let m = [buf[idx], buf[idx + 1], buf[idx + 2], buf[idx + 3]];
+            idx += 4;
+            Some(m)
+        } else {
+            None
+        };
+        if buf.len() < idx + plen {
+            return None;
+        }
+        let mut payload = buf[idx..idx + plen].to_vec();
+        if let Some(m) = mask {
+            for (i, b) in payload.iter_mut().enumerate() {
+                *b ^= m[i % 4];
+            }
+        }
+        Some((opcode, payload, idx + plen))
+    }
+
+    /// Build the `ListenerConfig` for a WS-over-H3 listener: protocol=quic,
+    /// H3-terminate, one H1 backend, `[listeners.websocket]` opted in with
+    /// `h3_extended_connect = true` (⇒ `spawn_quic` injects the launcher).
+    fn ws_h3_e2e_listener_cfg(
+        lb_certs: &ModeBE2eCerts,
+        retry_secret_path: &std::path::Path,
+        backend_addr: SocketAddr,
+    ) -> lb_config::ListenerConfig {
+        lb_config::ListenerConfig {
+            address: "127.0.0.1:0".to_string(),
+            protocol: "quic".to_string(),
+            tls: None,
+            quic: Some(QuicListenerConfig {
+                cert_path: lb_certs.cert.to_string_lossy().into_owned(),
+                key_path: lb_certs.key.to_string_lossy().into_owned(),
+                retry_secret_path: retry_secret_path.to_string_lossy().into_owned(),
+                max_idle_timeout_ms: 15_000,
+                max_recv_udp_payload_size: 1_350,
+                raw_proxy: None,
+            }),
+            alt_svc: None,
+            http: None,
+            h2_security: None,
+            websocket: Some(lb_config::WebsocketConfig {
+                enabled: true,
+                h3_extended_connect: true,
+                ..Default::default()
+            }),
+            grpc: None,
+            drain_timeout_ms: None,
+            drain_jitter_ms: None,
+            backends: vec![lb_config::BackendConfig {
+                address: backend_addr.to_string(),
+                protocol: "h1".to_string(),
+                weight: 1,
+                tls_ca_path: None,
+                tls_verify_hostname: None,
+                tls_verify_peer: true,
+            }],
+        }
+    }
+
+    /// How the WS-over-H3 client driver closes the tunnel after the echo.
+    #[derive(Clone, Copy, Debug)]
+    enum WsH3CloseMode {
+        /// Send a WS Close frame (orderly RFC 6455 close).
+        Clean,
+        /// `RESET_STREAM` the tunnel stream (abnormal drop — the reset-vs-EOF
+        /// negative control).
+        Reset,
+        /// FIN the tunnel stream cleanly (empty `send_body(.., fin=true)`) —
+        /// the client closes its WS send half WITHOUT a WS Close frame.
+        /// Exercises `conn_actor::ws_handle_client_fin` (clean EOF → the relay
+        /// forwards a WS Close to the backend).
+        Fin,
+    }
+
+    /// Drive ONE WS-over-H3 client against the listener at `lb_addr`: QUIC +
+    /// Extended CONNECT (`:protocol=websocket`) → expect a `:status` → send a
+    /// Text frame → await its echo → close per `mode`. Returns
+    /// `(status, echo_ok)`. Single-sources the client driver shared by the
+    /// roundtrip / burst / reset tests (R12).
+    async fn ws_h3_e2e_drive_client(
+        lb_addr: SocketAddr,
+        ca: &std::path::Path,
+        mode: WsH3CloseMode,
+        protocol: &[u8],
+    ) -> (Option<u16>, bool) {
+        use quiche::h3::NameValue;
+        const PAYLOAD: &[u8] = b"hello over h3 ws";
+
+        let client_socket = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let client_local = client_socket.local_addr().unwrap();
+        let mut client_cfg = h3h1_e2e_client_config(ca);
+        let c_scid = modeb_e2e_random_scid();
+        let mut conn = quiche::connect(
+            Some(H3H1_E2E_SNI),
+            &quiche::ConnectionId::from_ref(&c_scid),
+            client_local,
+            lb_addr,
+            &mut client_cfg,
+        )
+        .unwrap();
+
+        let h3_config = quiche::h3::Config::new().unwrap();
+        let mut h3: Option<quiche::h3::Connection> = None;
+        let mut connect_sid: Option<u64> = None;
+        let mut status: Option<u16> = None;
+        let mut sent_frame = false;
+        let mut closed = false;
+        let mut close_drain = 0u32;
+        let mut rx_buf: Vec<u8> = Vec::new();
+        let mut echo_ok = false;
+        let mut out = vec![0u8; H3H1_E2E_MAX_UDP];
+        let mut in_buf = vec![0u8; H3H1_E2E_MAX_UDP];
+        let deadline = tokio::time::Instant::now() + H3H1_E2E_BUDGET;
+
+        loop {
+            if tokio::time::Instant::now() >= deadline || conn.is_closed() {
+                break;
+            }
+            if conn.is_established() && h3.is_none() {
+                h3 = Some(
+                    quiche::h3::Connection::with_transport(&mut conn, &h3_config)
+                        .expect("h3 with_transport"),
+                );
+            }
+            if let Some(h3c) = h3.as_mut() {
+                if connect_sid.is_none() {
+                    let req = [
+                        quiche::h3::Header::new(b":method", b"CONNECT"),
+                        quiche::h3::Header::new(b":protocol", protocol),
+                        quiche::h3::Header::new(b":scheme", b"https"),
+                        quiche::h3::Header::new(b":authority", H3H1_E2E_SNI.as_bytes()),
+                        quiche::h3::Header::new(b":path", b"/chat"),
+                    ];
+                    match h3c.send_request(&mut conn, &req, false) {
+                        Ok(sid) => connect_sid = Some(sid),
+                        Err(quiche::h3::Error::StreamBlocked) => {}
+                        Err(e) => panic!("send_request (extended CONNECT): {e:?}"),
+                    }
+                }
+            }
+            if let (Some(h3c), Some(sid)) = (h3.as_mut(), connect_sid) {
+                if status == Some(200) && !sent_frame {
+                    let frame = ws_h3_e2e_encode_masked(0x1, PAYLOAD);
+                    if let Ok(n) = h3c.send_body(&mut conn, sid, &frame, false) {
+                        if n == frame.len() {
+                            sent_frame = true;
+                        }
+                    }
+                }
+            }
+            if let Some(h3c) = h3.as_mut() {
+                loop {
+                    match h3c.poll(&mut conn) {
+                        Ok((_sid, quiche::h3::Event::Headers { list, .. })) => {
+                            for h in &list {
+                                if h.name() == b":status" {
+                                    status = std::str::from_utf8(h.value())
+                                        .ok()
+                                        .and_then(|s| s.parse().ok());
+                                }
+                            }
+                        }
+                        Ok((sid, quiche::h3::Event::Data)) => {
+                            let mut chunk = [0u8; 4096];
+                            while let Ok(n) = h3c.recv_body(&mut conn, sid, &mut chunk) {
+                                if n == 0 {
+                                    break;
+                                }
+                                rx_buf.extend_from_slice(chunk.get(..n).unwrap_or(&[]));
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(quiche::h3::Error::Done) => break,
+                        Err(_) => break,
+                    }
+                }
+            }
+            while let Some((opcode, payload, consumed)) = ws_h3_e2e_parse_frame(&rx_buf) {
+                rx_buf.drain(..consumed);
+                if opcode == 0x1 && payload == PAYLOAD {
+                    echo_ok = true;
+                }
+            }
+            // A non-200 (501/502/504) means no tunnel was established — return
+            // promptly rather than waiting out the budget.
+            if matches!(status, Some(s) if s != 200) {
+                break;
+            }
+            if echo_ok && !closed {
+                if let Some(sid) = connect_sid {
+                    match mode {
+                        WsH3CloseMode::Clean => {
+                            if let Some(h3c) = h3.as_mut() {
+                                let close = ws_h3_e2e_close_frame();
+                                let _ = h3c.send_body(&mut conn, sid, &close, false);
+                            }
+                        }
+                        WsH3CloseMode::Reset => {
+                            // Abnormal drop: RESET_STREAM + STOP_SENDING with
+                            // H3_REQUEST_CANCELLED (the reset-vs-EOF control).
+                            let _ = conn.stream_shutdown(sid, quiche::Shutdown::Write, 0x010c);
+                            let _ = conn.stream_shutdown(sid, quiche::Shutdown::Read, 0x010c);
+                        }
+                        WsH3CloseMode::Fin => {
+                            // Clean stream FIN (no WS Close frame): the client
+                            // closes its send half. Exercises ws_handle_client_fin.
+                            if let Some(h3c) = h3.as_mut() {
+                                let _ = h3c.send_body(&mut conn, sid, &[], true);
+                            }
+                        }
+                    }
+                    closed = true;
+                }
+            }
+            // After closing, pump a few more ticks so the close/reset reaches
+            // the LB → backend before we drop the connection.
+            if closed {
+                close_drain += 1;
+            }
+            loop {
+                match conn.send(&mut out) {
+                    Ok((n, info)) => {
+                        let _ = client_socket
+                            .send_to(out.get(..n).unwrap_or(&[]), info.to)
+                            .await;
+                    }
+                    Err(quiche::Error::Done) => break,
+                    Err(_) => break,
+                }
+            }
+            if closed && close_drain > 8 {
+                break;
+            }
+            let qto = conn.timeout().unwrap_or(Duration::from_millis(20));
+            let wait = qto.clamp(Duration::from_millis(2), Duration::from_millis(20));
+            match tokio::time::timeout(wait, client_socket.recv_from(&mut in_buf)).await {
+                Ok(Ok((n, from))) => {
+                    let info = quiche::RecvInfo {
+                        from,
+                        to: client_local,
+                    };
+                    let slice = in_buf.get_mut(..n).unwrap_or(&mut []);
+                    let _ = conn.recv(slice, info);
+                }
+                Ok(Err(_)) | Err(_) => conn.on_timeout(),
+            }
+        }
+        (status, echo_ok)
+    }
+
+    /// **WS-over-H3 Stage C — the REAL-BINARY e2e.** Extended CONNECT →
+    /// 200 → bidirectional WS frame relay (echo) → clean close, all through
+    /// `spawn_quic`. Proves the conn_actor tunnel-mode pump + the injected
+    /// launcher + the single-sourced `proxy_frames` work end to end.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn ws_over_h3_extended_connect_echo_roundtrip_through_real_listener() {
+        let lb_certs = modeb_e2e_gen_certs(H3H1_E2E_SNI, "wsh3-lb");
+        let retry_secret_path = lb_certs.dir.join("retry.secret");
+        let backend_addr = ws_h3_e2e_spawn_ws_echo_backend();
+        let listener_cfg = ws_h3_e2e_listener_cfg(&lb_certs, &retry_secret_path, backend_addr);
+
+        lb_config::validate_config(&lb_config::LbConfig {
+            listeners: vec![listener_cfg.clone()],
+            ..Default::default()
+        })
+        .expect("a quic WS-over-H3 listener with an h1 backend must validate");
+
+        let metrics = Arc::new(MetricsRegistry::new());
+        let token = CancellationToken::new();
+        let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
+        let resolver = DnsResolver::new(ResolverConfig::default());
+        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, token.clone())
+            .await
+            .expect("spawn_quic WS-over-H3 must start");
+        let lb_addr = listener.local_addr();
+
+        let (status, echo_ok) =
+            ws_h3_e2e_drive_client(lb_addr, &lb_certs.ca, WsH3CloseMode::Clean, b"websocket").await;
+
+        // THE PROOF: the 200 (extended CONNECT success, NOT a 502) came
+        // back AND a WS Text frame round-tripped through the real relay.
+        assert_eq!(
+            status,
+            Some(200),
+            "extended CONNECT must yield 200 (a 502 ⇒ launcher/upstream-before-200 failed)"
+        );
+        assert!(
+            echo_ok,
+            "the WS Text frame must echo back through the wired tunnel (bidirectional relay)"
+        );
+
+        token.cancel();
+        let _ = tokio::time::timeout(Duration::from_secs(5), listener.shutdown()).await;
+    }
+
+    /// What a reporting WS backend observed at the end of a tunnel.
+    #[derive(Debug, PartialEq, Eq)]
+    enum WsBackendOutcome {
+        /// The backend received a WS Close frame (orderly RFC 6455 close).
+        CleanClose,
+        /// The stream ended (Err/EOF) WITHOUT a Close — an abnormal drop.
+        Abrupt,
+    }
+
+    /// A WS echo backend that also REPORTS, per connection, whether it saw a
+    /// clean WS Close or an abrupt end (Err/EOF without a Close). Lets the
+    /// reset-vs-EOF test assert the mapping on the WIRED tunnel.
+    fn ws_h3_e2e_spawn_reporting_backend() -> (
+        SocketAddr,
+        tokio::sync::mpsc::UnboundedReceiver<WsBackendOutcome>,
+    ) {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::Message;
+        let std_listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        std_listener.set_nonblocking(true).unwrap();
+        let addr = std_listener.local_addr().unwrap();
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let listener = TcpListener::from_std(std_listener).unwrap();
+            while let Ok((sock, _)) = listener.accept().await {
+                let tx = tx.clone();
+                tokio::spawn(async move {
+                    let Ok(mut ws) = tokio_tungstenite::accept_async(sock).await else {
+                        return;
+                    };
+                    let mut saw_close = false;
+                    loop {
+                        match ws.next().await {
+                            Some(Ok(msg @ (Message::Text(_) | Message::Binary(_)))) => {
+                                if ws.send(msg).await.is_err() {
+                                    break;
+                                }
+                            }
+                            Some(Ok(Message::Close(_))) => {
+                                saw_close = true;
+                                break;
+                            }
+                            Some(Ok(_)) => {}
+                            Some(Err(_)) | None => break,
+                        }
+                    }
+                    let _ = tx.send(if saw_close {
+                        WsBackendOutcome::CleanClose
+                    } else {
+                        WsBackendOutcome::Abrupt
+                    });
+                });
+            }
+        });
+        (addr, rx)
+    }
+
+    /// **R13 reset-vs-EOF NEGATIVE CONTROL (wired).** A clean WS Close
+    /// reaches the backend AS a Close; a client `RESET_STREAM` of the tunnel
+    /// stream reaches the backend as an ABRUPT end (NOT a clean Close). The
+    /// contrast is load-bearing: it proves the conn_actor maps a reset to
+    /// `TunnelInbound::Reset` (ConnectionReset → proxy_frames errors → the
+    /// upstream is dropped abruptly), distinct from a clean EOF — the
+    /// F-MD-4-adjacent mapping, re-proven on the WIRED tunnel.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn ws_over_h3_reset_maps_to_abnormal_drop_not_clean_close() {
+        let lb_certs = modeb_e2e_gen_certs(H3H1_E2E_SNI, "wsh3-reset");
+        let retry_secret_path = lb_certs.dir.join("retry.secret");
+        let (backend_addr, mut outcomes) = ws_h3_e2e_spawn_reporting_backend();
+        let listener_cfg = ws_h3_e2e_listener_cfg(&lb_certs, &retry_secret_path, backend_addr);
+
+        let metrics = Arc::new(MetricsRegistry::new());
+        let token = CancellationToken::new();
+        let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
+        let resolver = DnsResolver::new(ResolverConfig::default());
+        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, token.clone())
+            .await
+            .expect("spawn_quic WS-over-H3 must start");
+        let lb_addr = listener.local_addr();
+
+        // POSITIVE CONTROL: a clean WS Close → the backend sees CleanClose.
+        let (status_c, echo_c) =
+            ws_h3_e2e_drive_client(lb_addr, &lb_certs.ca, WsH3CloseMode::Clean, b"websocket").await;
+        assert_eq!(status_c, Some(200), "clean: extended CONNECT must 200");
+        assert!(echo_c, "clean: the frame must echo");
+        let clean = tokio::time::timeout(Duration::from_secs(5), outcomes.recv())
+            .await
+            .expect("clean: backend must report an outcome")
+            .expect("clean: outcomes channel open");
+        assert_eq!(
+            clean,
+            WsBackendOutcome::CleanClose,
+            "a WS Close must reach the backend AS a clean Close"
+        );
+
+        // NEGATIVE CONTROL: a RESET_STREAM → the backend sees an Abrupt end.
+        let (status_r, echo_r) =
+            ws_h3_e2e_drive_client(lb_addr, &lb_certs.ca, WsH3CloseMode::Reset, b"websocket").await;
+        assert_eq!(status_r, Some(200), "reset: extended CONNECT must 200");
+        assert!(echo_r, "reset: the frame must echo before the reset");
+        let reset = tokio::time::timeout(Duration::from_secs(5), outcomes.recv())
+            .await
+            .expect("reset: backend must report an outcome")
+            .expect("reset: outcomes channel open");
+        assert_eq!(
+            reset,
+            WsBackendOutcome::Abrupt,
+            "a client RESET_STREAM must reach the backend as an ABNORMAL drop, NOT a clean Close \
+             (reset-vs-EOF mapping on the wired tunnel)"
+        );
+
+        token.cancel();
+        let _ = tokio::time::timeout(Duration::from_secs(5), listener.shutdown()).await;
+    }
+
+    /// **R13 BURST.** ≥50 sequential extended-CONNECT → echo → close cycles
+    /// against ONE listener + backend. Proves the upgrade+relay+close cycle
+    /// is repeatable with no wedge / leak / cumulative failure.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn ws_over_h3_burst_50_upgrade_relay_close_cycles() {
+        let lb_certs = modeb_e2e_gen_certs(H3H1_E2E_SNI, "wsh3-burst");
+        let retry_secret_path = lb_certs.dir.join("retry.secret");
+        let backend_addr = ws_h3_e2e_spawn_ws_echo_backend();
+        let listener_cfg = ws_h3_e2e_listener_cfg(&lb_certs, &retry_secret_path, backend_addr);
+
+        let metrics = Arc::new(MetricsRegistry::new());
+        let token = CancellationToken::new();
+        let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
+        let resolver = DnsResolver::new(ResolverConfig::default());
+        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, token.clone())
+            .await
+            .expect("spawn_quic WS-over-H3 must start");
+        let lb_addr = listener.local_addr();
+
+        const ITERS: u32 = 50;
+        let mut ok = 0u32;
+        for i in 0..ITERS {
+            let (status, echo) =
+                ws_h3_e2e_drive_client(lb_addr, &lb_certs.ca, WsH3CloseMode::Clean, b"websocket")
+                    .await;
+            assert_eq!(
+                status,
+                Some(200),
+                "burst iter {i}: extended CONNECT must 200"
+            );
+            assert!(echo, "burst iter {i}: the frame must echo");
+            ok += 1;
+        }
+        assert_eq!(
+            ok, ITERS,
+            "all {ITERS} upgrade+relay+close cycles must succeed"
+        );
+
+        token.cancel();
+        let _ = tokio::time::timeout(Duration::from_secs(5), listener.shutdown()).await;
+    }
+
+    /// A WS flood backend: after the client's first (trigger) frame it
+    /// floods `count` `Binary` frames of `frame_len` bytes, bumping `sent`
+    /// per FLUSHED frame. When the relay backpressures (the client stops
+    /// reading) `feed`/`flush` parks, so `sent` PLATEAUS. Returns the bound
+    /// address + the shared `sent` counter.
+    fn ws_h3_e2e_spawn_flood_backend(
+        frame_len: usize,
+        count: u64,
+    ) -> (SocketAddr, std::sync::Arc<std::sync::atomic::AtomicU64>) {
+        use futures_util::{SinkExt, StreamExt};
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use tokio_tungstenite::tungstenite::Message;
+        let std_listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        std_listener.set_nonblocking(true).unwrap();
+        let addr = std_listener.local_addr().unwrap();
+        let sent = std::sync::Arc::new(AtomicU64::new(0));
+        let sent_bg = std::sync::Arc::clone(&sent);
+        tokio::spawn(async move {
+            let listener = TcpListener::from_std(std_listener).unwrap();
+            if let Ok((sock, _)) = listener.accept().await {
+                // Shrink the backend's TCP send buffer so a backend that the
+                // gateway stops reading backpressures PROMPTLY (instead of the
+                // kernel auto-tuning a multi-MB buffer that hides the gateway's
+                // own backpressure). The gateway side caps SO_RCVBUF via the
+                // tiny-buffer pool (see the R8 test).
+                let _ = socket2::SockRef::from(&sock).set_send_buffer_size(16 * 1024);
+                let Ok(mut ws) = tokio_tungstenite::accept_async(sock).await else {
+                    return;
+                };
+                // Wait for the client's trigger frame so the tunnel is active.
+                let _ = ws.next().await;
+                let payload = vec![0xCDu8; frame_len];
+                for _ in 0..count {
+                    if ws.feed(Message::Binary(payload.clone())).await.is_err() {
+                        break;
+                    }
+                    if ws.flush().await.is_err() {
+                        break;
+                    }
+                    sent_bg.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        });
+        (addr, sent)
+    }
+
+    /// A downstream client config with a SMALL per-stream receive window so
+    /// the R8 outbound flood plateaus decisively (the window + the actor's
+    /// bounded tunnel channel are the in-flight bound; everything past it
+    /// stays in quiche's flow-control-bounded buffer / parks the relay).
+    fn ws_h3_e2e_small_window_client_config(lb_ca: &std::path::Path) -> quiche::Config {
+        let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
+        cfg.set_application_protos(&[H3H1_E2E_ALPN]).unwrap();
+        cfg.load_verify_locations_from_file(lb_ca.to_str().unwrap())
+            .unwrap();
+        cfg.verify_peer(true);
+        cfg.set_max_idle_timeout(15_000);
+        cfg.set_max_recv_udp_payload_size(1_350);
+        cfg.set_max_send_udp_payload_size(1_350);
+        // CRITICAL for this test: a stalled client must genuinely
+        // backpressure the gateway. quiche AUTO-TUNES receive windows upward
+        // (defaults: `max_stream_window` 16 MiB, `max_connection_window`
+        // 24 MiB), so a generous `initial_max_data` would let the test CLIENT
+        // silently absorb the whole flood and mask the gateway's
+        // backpressure. Cap BOTH the connection- and stream-level windows
+        // (initial AND auto-tune ceiling) tightly so total in-flight cannot
+        // exceed ~64 KiB. NOTE: this caps the CLIENT's buffer, not the
+        // gateway's — the gateway is bounded by construction regardless.
+        cfg.set_initial_max_data(64 * 1024);
+        cfg.set_initial_max_stream_data_bidi_local(64 * 1024);
+        cfg.set_initial_max_stream_data_bidi_remote(64 * 1024);
+        cfg.set_initial_max_stream_data_uni(64 * 1024);
+        cfg.set_initial_max_streams_bidi(8);
+        cfg.set_initial_max_streams_uni(8);
+        cfg.set_max_stream_window(64 * 1024);
+        cfg.set_max_connection_window(64 * 1024);
+        cfg.set_disable_active_migration(true);
+        cfg
+    }
+
+    /// **R8 WIRED-TUNNEL backpressure (outbound, the CF-S27-2-relevant
+    /// direction).** A backend floods `COUNT` frames at a client that
+    /// WITHHOLDS reads. With end-to-end backpressure the backend PLATEAUS
+    /// far below `COUNT` (the actor's `send_body` returns `Done` on a full
+    /// window ⇒ `out_pending` retains ⇒ `from_writer` fills ⇒ the relay's
+    /// `PollSender` parks ⇒ `proxy_frames` stops reading the backend). When
+    /// the client resumes, every frame arrives (liveness, no loss). The
+    /// plateau is VOLUME-INDEPENDENT — it does not grow with `COUNT`.
+    /// Reverting the bound (buffer instead of backpressure) flips this RED
+    /// (the backend drains the whole flood while the client is stalled).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn ws_over_h3_outbound_backpressure_plateaus_then_drains() {
+        use quiche::h3::NameValue;
+
+        const FRAME_LEN: usize = 2048;
+        const COUNT: u64 = 512; // 1 MiB of flood
+        const CEILING: u64 = 256; // decisive vs 512; well above the true plateau
+
+        let lb_certs = modeb_e2e_gen_certs(H3H1_E2E_SNI, "wsh3-r8");
+        let retry_secret_path = lb_certs.dir.join("retry.secret");
+        let (backend_addr, sent) = ws_h3_e2e_spawn_flood_backend(FRAME_LEN, COUNT);
+        let listener_cfg = ws_h3_e2e_listener_cfg(&lb_certs, &retry_secret_path, backend_addr);
+
+        let metrics = Arc::new(MetricsRegistry::new());
+        let token = CancellationToken::new();
+        // Tiny backend SO_RCVBUF (the gateway side) so the kernel TCP buffer
+        // between backend and gateway is small — the gateway's OWN bounded
+        // relay buffers (from_writer 64 KiB + quiche window) then dominate the
+        // plateau, not OS socket auto-tuning.
+        let tiny_opts = BackendSockOpts {
+            rcvbuf: Some(16 * 1024),
+            sndbuf: Some(16 * 1024),
+            ..backend_opts()
+        };
+        let pool = TcpPool::new(PoolConfig::default(), tiny_opts, Runtime::new());
+        let resolver = DnsResolver::new(ResolverConfig::default());
+        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, token.clone())
+            .await
+            .expect("spawn_quic WS-over-H3 must start");
+        let lb_addr = listener.local_addr();
+
+        let client_socket = tokio::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
+            .await
+            .unwrap();
+        let client_local = client_socket.local_addr().unwrap();
+        let mut client_cfg = ws_h3_e2e_small_window_client_config(&lb_certs.ca);
+        let c_scid = modeb_e2e_random_scid();
+        let mut conn = quiche::connect(
+            Some(H3H1_E2E_SNI),
+            &quiche::ConnectionId::from_ref(&c_scid),
+            client_local,
+            lb_addr,
+            &mut client_cfg,
+        )
+        .unwrap();
+
+        let h3_config = quiche::h3::Config::new().unwrap();
+        let mut h3: Option<quiche::h3::Connection> = None;
+        let mut sid: Option<u64> = None;
+        let mut status: Option<u16> = None;
+        let mut triggered = false;
+        let mut out = vec![0u8; H3H1_E2E_MAX_UDP];
+        let mut in_buf = vec![0u8; H3H1_E2E_MAX_UDP];
+
+        // Helper closures need owned state; inline the transport pump.
+        macro_rules! flush_out {
+            () => {
+                while let Ok((n, info)) = conn.send(&mut out) {
+                    let _ = client_socket
+                        .send_to(out.get(..n).unwrap_or(&[]), info.to)
+                        .await;
+                }
+            };
+        }
+
+        // Phase 0: establish + extended CONNECT + 200 + send the trigger.
+        let setup_deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+        while status != Some(200) || !triggered {
+            assert!(
+                tokio::time::Instant::now() < setup_deadline && !conn.is_closed(),
+                "R8 setup failed: status={status:?} triggered={triggered}"
+            );
+            if conn.is_established() && h3.is_none() {
+                h3 = Some(
+                    quiche::h3::Connection::with_transport(&mut conn, &h3_config)
+                        .expect("h3 with_transport"),
+                );
+            }
+            if let Some(h3c) = h3.as_mut() {
+                if sid.is_none() {
+                    let req = [
+                        quiche::h3::Header::new(b":method", b"CONNECT"),
+                        quiche::h3::Header::new(b":protocol", b"websocket"),
+                        quiche::h3::Header::new(b":scheme", b"https"),
+                        quiche::h3::Header::new(b":authority", H3H1_E2E_SNI.as_bytes()),
+                        quiche::h3::Header::new(b":path", b"/flood"),
+                    ];
+                    if let Ok(s) = h3c.send_request(&mut conn, &req, false) {
+                        sid = Some(s);
+                    }
+                }
+                loop {
+                    match h3c.poll(&mut conn) {
+                        Ok((_s, quiche::h3::Event::Headers { list, .. })) => {
+                            for h in &list {
+                                if h.name() == b":status" {
+                                    status = std::str::from_utf8(h.value())
+                                        .ok()
+                                        .and_then(|s| s.parse().ok());
+                                }
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(quiche::h3::Error::Done) => break,
+                        Err(_) => break,
+                    }
+                }
+                if status == Some(200) && !triggered {
+                    if let Some(s) = sid {
+                        let frame = ws_h3_e2e_encode_masked(0x1, b"go");
+                        if let Ok(n) = h3c.send_body(&mut conn, s, &frame, false) {
+                            if n == frame.len() {
+                                triggered = true;
+                            }
+                        }
+                    }
+                }
+            }
+            flush_out!();
+            let qto = conn.timeout().unwrap_or(Duration::from_millis(20));
+            let wait = qto.clamp(Duration::from_millis(2), Duration::from_millis(20));
+            if let Ok(Ok((n, from))) =
+                tokio::time::timeout(wait, client_socket.recv_from(&mut in_buf)).await
+            {
+                let info = quiche::RecvInfo {
+                    from,
+                    to: client_local,
+                };
+                let _ = conn.recv(in_buf.get_mut(..n).unwrap_or(&mut []), info);
+            } else {
+                conn.on_timeout();
+            }
+        }
+
+        // Phase A: WITHHOLD reads (no recv_body) for a window long enough
+        // for an unbounded relay to drain the whole flood. Keep driving the
+        // transport so ACKs flow, but never read the tunnel body.
+        let withhold_until = tokio::time::Instant::now() + Duration::from_millis(1200);
+        while tokio::time::Instant::now() < withhold_until {
+            flush_out!();
+            let qto = conn.timeout().unwrap_or(Duration::from_millis(20));
+            let wait = qto.clamp(Duration::from_millis(2), Duration::from_millis(20));
+            if let Ok(Ok((n, from))) =
+                tokio::time::timeout(wait, client_socket.recv_from(&mut in_buf)).await
+            {
+                let info = quiche::RecvInfo {
+                    from,
+                    to: client_local,
+                };
+                let _ = conn.recv(in_buf.get_mut(..n).unwrap_or(&mut []), info);
+            } else {
+                conn.on_timeout();
+            }
+        }
+        let plateau = sent.load(std::sync::atomic::Ordering::Relaxed);
+        let cstats = conn.stats();
+        eprintln!(
+            "R8 WS-H3 outbound plateau: backend sent {plateau} / {COUNT} (ceiling {CEILING}); \
+             client recv_bytes={} lost={}",
+            cstats.recv, cstats.lost
+        );
+        assert!(
+            plateau > 0,
+            "non-vacuous: the backend must have pushed at least one frame, got {plateau}"
+        );
+        assert!(
+            plateau < CEILING,
+            "R8 VIOLATION: with the client stalled the backend pushed {plateau} of {COUNT} frames \
+             — the wired tunnel is NOT backpressuring (expected a plateau < {CEILING})"
+        );
+
+        // Phase B: RESUME reading → every frame drains (liveness, no loss).
+        let mut payload_bytes: u64 = 0;
+        let mut rx_buf: Vec<u8> = Vec::new();
+        let drain_deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        while payload_bytes < COUNT * (FRAME_LEN as u64) {
+            assert!(
+                tokio::time::Instant::now() < drain_deadline && !conn.is_closed(),
+                "R8 drain incomplete: got {payload_bytes} / {} bytes (sent={})",
+                COUNT * (FRAME_LEN as u64),
+                sent.load(std::sync::atomic::Ordering::Relaxed)
+            );
+            if let Some(h3c) = h3.as_mut() {
+                loop {
+                    match h3c.poll(&mut conn) {
+                        Ok((s, quiche::h3::Event::Data)) => {
+                            let mut chunk = [0u8; 8192];
+                            while let Ok(n) = h3c.recv_body(&mut conn, s, &mut chunk) {
+                                if n == 0 {
+                                    break;
+                                }
+                                rx_buf.extend_from_slice(chunk.get(..n).unwrap_or(&[]));
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(quiche::h3::Error::Done) => break,
+                        Err(_) => break,
+                    }
+                }
+            }
+            while let Some((opcode, payload, consumed)) = ws_h3_e2e_parse_frame(&rx_buf) {
+                rx_buf.drain(..consumed);
+                if opcode == 0x2 {
+                    payload_bytes += payload.len() as u64;
+                }
+            }
+            flush_out!();
+            let qto = conn.timeout().unwrap_or(Duration::from_millis(20));
+            let wait = qto.clamp(Duration::from_millis(2), Duration::from_millis(20));
+            if let Ok(Ok((n, from))) =
+                tokio::time::timeout(wait, client_socket.recv_from(&mut in_buf)).await
+            {
+                let info = quiche::RecvInfo {
+                    from,
+                    to: client_local,
+                };
+                let _ = conn.recv(in_buf.get_mut(..n).unwrap_or(&mut []), info);
+            } else {
+                conn.on_timeout();
+            }
+        }
+        assert_eq!(
+            payload_bytes,
+            COUNT * (FRAME_LEN as u64),
+            "liveness: every flooded byte must arrive once the client resumes reading"
+        );
+        assert_eq!(
+            sent.load(std::sync::atomic::Ordering::Relaxed),
+            COUNT,
+            "the backend must have flushed all {COUNT} frames once backpressure released"
+        );
+
+        token.cancel();
+        let _ = tokio::time::timeout(Duration::from_secs(5), listener.shutdown()).await;
+    }
+
+    /// A "dead" WS backend: accepts the TCP connection then immediately closes
+    /// it WITHOUT completing the RFC 6455 handshake. The gateway's upstream WS
+    /// handshake (`dial_backend_ws`) therefore fails → the launcher signals
+    /// `Failed{502}` → the actor returns 502 BEFORE any client-visible 200
+    /// (the upstream-before-200 ordering).
+    fn ws_h3_e2e_spawn_dead_backend() -> SocketAddr {
+        let std_listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        std_listener.set_nonblocking(true).unwrap();
+        let addr = std_listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let listener = TcpListener::from_std(std_listener).unwrap();
+            while let Ok((sock, _)) = listener.accept().await {
+                drop(sock); // close immediately — no WS handshake
+            }
+        });
+        addr
+    }
+
+    /// **RFC 9220 §4 — unknown `:protocol` → 501.** An extended CONNECT with
+    /// `:protocol=mqtt` (registered-but-unsupported) is rejected with 501
+    /// BEFORE any backend is dialed; no tunnel is built.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn ws_over_h3_unknown_protocol_yields_501() {
+        let lb_certs = modeb_e2e_gen_certs(H3H1_E2E_SNI, "wsh3-501");
+        let retry_secret_path = lb_certs.dir.join("retry.secret");
+        let backend_addr = ws_h3_e2e_spawn_ws_echo_backend();
+        let listener_cfg = ws_h3_e2e_listener_cfg(&lb_certs, &retry_secret_path, backend_addr);
+
+        let metrics = Arc::new(MetricsRegistry::new());
+        let token = CancellationToken::new();
+        let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
+        let resolver = DnsResolver::new(ResolverConfig::default());
+        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, token.clone())
+            .await
+            .expect("spawn_quic WS-over-H3 must start");
+        let lb_addr = listener.local_addr();
+
+        let (status, echo) =
+            ws_h3_e2e_drive_client(lb_addr, &lb_certs.ca, WsH3CloseMode::Clean, b"mqtt").await;
+        assert_eq!(
+            status,
+            Some(501),
+            "an unsupported :protocol must yield 501 (RFC 9220 §4)"
+        );
+        assert!(!echo, "no tunnel ⇒ no echo");
+
+        token.cancel();
+        let _ = tokio::time::timeout(Duration::from_secs(5), listener.shutdown()).await;
+    }
+
+    /// **RFC 9220 §5 — upstream unreachable → 502, no premature 200.** The
+    /// backend accepts then drops the TCP without a WS handshake, so the
+    /// upstream RFC 6455 handshake fails; the actor returns 502 and NEVER a
+    /// 200 (upstream-before-200 / no false success).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn ws_over_h3_upstream_unreachable_yields_502() {
+        let lb_certs = modeb_e2e_gen_certs(H3H1_E2E_SNI, "wsh3-502");
+        let retry_secret_path = lb_certs.dir.join("retry.secret");
+        let dead = ws_h3_e2e_spawn_dead_backend();
+        let listener_cfg = ws_h3_e2e_listener_cfg(&lb_certs, &retry_secret_path, dead);
+
+        let metrics = Arc::new(MetricsRegistry::new());
+        let token = CancellationToken::new();
+        let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
+        let resolver = DnsResolver::new(ResolverConfig::default());
+        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, token.clone())
+            .await
+            .expect("spawn_quic WS-over-H3 must start");
+        let lb_addr = listener.local_addr();
+
+        let (status, echo) =
+            ws_h3_e2e_drive_client(lb_addr, &lb_certs.ca, WsH3CloseMode::Clean, b"websocket").await;
+        assert_eq!(
+            status,
+            Some(502),
+            "a failed upstream WS handshake must yield 502 (NOT 200 — upstream-before-200)"
+        );
+        assert!(!echo, "no tunnel established ⇒ no echo");
+
+        token.cancel();
+        let _ = tokio::time::timeout(Duration::from_secs(5), listener.shutdown()).await;
+    }
+
+    /// **Client stream-FIN (no WS Close frame) → abnormal close.** The client
+    /// closes its WS send half by FINning the H3 tunnel stream WITHOUT a WS
+    /// Close frame. `conn_actor::ws_handle_client_fin` maps the FIN to a clean
+    /// EOF on the tunnel (NOT a Reset); the relay (tungstenite) then correctly
+    /// surfaces "EOF without closing handshake" as an ABNORMAL closure to the
+    /// backend — per RFC 6455 §7.1.5 the ONLY clean close is the Close-frame
+    /// handshake. This exercises the `ws_handle_client_fin` clean-EOF path and
+    /// proves the gateway does not fabricate a clean Close from a bare FIN.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn ws_over_h3_client_stream_fin_without_close_is_abnormal() {
+        let lb_certs = modeb_e2e_gen_certs(H3H1_E2E_SNI, "wsh3-fin");
+        let retry_secret_path = lb_certs.dir.join("retry.secret");
+        let (backend_addr, mut outcomes) = ws_h3_e2e_spawn_reporting_backend();
+        let listener_cfg = ws_h3_e2e_listener_cfg(&lb_certs, &retry_secret_path, backend_addr);
+
+        let metrics = Arc::new(MetricsRegistry::new());
+        let token = CancellationToken::new();
+        let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
+        let resolver = DnsResolver::new(ResolverConfig::default());
+        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, token.clone())
+            .await
+            .expect("spawn_quic WS-over-H3 must start");
+        let lb_addr = listener.local_addr();
+
+        let (status, echo) =
+            ws_h3_e2e_drive_client(lb_addr, &lb_certs.ca, WsH3CloseMode::Fin, b"websocket").await;
+        assert_eq!(status, Some(200), "fin: extended CONNECT must 200");
+        assert!(echo, "fin: the frame must echo before the stream FIN");
+        let outcome = tokio::time::timeout(Duration::from_secs(5), outcomes.recv())
+            .await
+            .expect("backend must report an outcome")
+            .expect("outcomes channel open");
+        assert_eq!(
+            outcome,
+            WsBackendOutcome::Abrupt,
+            "a bare stream-FIN (no WS Close frame) is an RFC 6455 abnormal closure — the backend \
+             must NOT see a fabricated clean Close"
+        );
+
+        token.cancel();
+        let _ = tokio::time::timeout(Duration::from_secs(5), listener.shutdown()).await;
+    }
+
+    /// **Fail-closed: `ws_enabled` but NO relay launcher → 502.** The binary's
+    /// `spawn_quic` always pairs `ws_enabled` with a launcher; this builds a
+    /// `QuicListener` DIRECTLY with `with_websocket(true)` but no
+    /// `with_ws_relay_launcher`, so a validated extended CONNECT reaches
+    /// `setup_ws_tunnel` with `ws_relay_launcher = None`. It must fail closed
+    /// with 502 (NEVER tunnel without a relay), not panic or hang.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn ws_over_h3_enabled_without_launcher_fails_closed_502() {
+        let lb_certs = modeb_e2e_gen_certs(H3H1_E2E_SNI, "wsh3-nolauncher");
+        let retry_secret_path = lb_certs.dir.join("retry.secret");
+        let backend_addr = ws_h3_e2e_spawn_ws_echo_backend(); // present but never dialed
+
+        let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
+        // Build the listener WITHOUT a relay launcher: ws_enabled + backends,
+        // but no `with_ws_relay_launcher` ⇒ the actor sees `ws_relay_launcher
+        // = None` (the misconfiguration the spawn_quic path can never produce).
+        let params = QuicListenerParams::new(
+            "127.0.0.1:0".parse().unwrap(),
+            lb_certs.cert.clone(),
+            lb_certs.key.clone(),
+            retry_secret_path,
+        )
+        .with_backends(vec![backend_addr], pool)
+        .with_websocket(true);
+
+        let token = CancellationToken::new();
+        let listener = QuicListener::spawn(params, token.clone())
+            .await
+            .expect("listener must bind");
+        let lb_addr = listener.local_addr();
+
+        let (status, echo) =
+            ws_h3_e2e_drive_client(lb_addr, &lb_certs.ca, WsH3CloseMode::Clean, b"websocket").await;
+        assert_eq!(
+            status,
+            Some(502),
+            "ws_enabled without a launcher must fail closed with 502 (never tunnel)"
+        );
+        assert!(!echo, "no relay ⇒ no tunnel ⇒ no echo");
+
         token.cancel();
         let _ = tokio::time::timeout(Duration::from_secs(5), listener.shutdown()).await;
     }

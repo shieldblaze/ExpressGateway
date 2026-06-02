@@ -46,6 +46,7 @@ const SCENARIOS: &[&str] = &[
     "sc7_h3terminate",
     "sc8_ws_h1",
     "sc8b_ws_h2",
+    "sc8c_ws_h3",
 ];
 
 struct Args {
@@ -244,6 +245,7 @@ async fn setup_scenario(
         "sc7_h3terminate" => setup_h3_terminate(args, bin, workdir, cancel).await,
         "sc8_ws_h1" => setup_ws_h1(args, bin, workdir, cancel).await,
         "sc8b_ws_h2" => setup_ws_h2(args, bin, workdir, cancel).await,
+        "sc8c_ws_h3" => setup_ws_h3(args, bin, workdir, cancel).await,
         other => anyhow::bail!("unknown scenario {other} (try --list)"),
     }
 }
@@ -805,6 +807,93 @@ async fn setup_ws_h2(
     let chstats = LoadStats::new();
     stats.push(("ws_churn".into(), Arc::clone(&chstats)));
     tasks.push(tokio::spawn(loadgen::run_ws_h2_churn(
+        listener,
+        sni,
+        ca,
+        churn,
+        frames_per_cycle,
+        Arc::clone(&chstats),
+        cancel.clone(),
+    )));
+
+    Ok(Running {
+        gateway: gw,
+        metrics_addr: metrics,
+        gauges: ws_gauges(),
+        kinds: ws_kinds(),
+        tasks,
+        backend_ctrls: vec![],
+        quic_stop: vec![ws_stop],
+        stats,
+        _tmp: workdir.to_path_buf(),
+    })
+}
+
+/// sc8c_ws_h3 (S28) — WebSocket-over-HTTP/3 soak (RFC 9220 extended CONNECT). A
+/// `quic` H3-terminate front with a `[listeners.websocket]` block carrying
+/// `h3_extended_connect = true` (the WS-over-H3 opt-in) → the same co-located
+/// tungstenite H1 WS echo backend. A quiche::h3 client drives WS via extended
+/// CONNECT; the gateway advertises `SETTINGS_ENABLE_CONNECT_PROTOCOL`, intercepts
+/// it, dials the H1 backend (upstream-before-200), keeps the request stream open
+/// as the tunnel, and runs the single-sourced `proxy_frames` relay over the
+/// bounded `H3WsTunnel`. Same long-lived-relay leak-class question as sc8_ws_h1
+/// (a held opaque relay + per-tunnel relay task must be RECLAIMED on close), over
+/// the H3/quiche datapath. Bounded-state signal: `fds` (each live tunnel pins a
+/// client udp + backend tcp + the gateway relay task) + RSS/VmHWM + panic=0.
+async fn setup_ws_h3(
+    args: &Args,
+    bin: &std::path::Path,
+    workdir: &std::path::Path,
+    cancel: CancellationToken,
+) -> anyhow::Result<Running> {
+    let ws_stop = Arc::new(AtomicBool::new(false));
+    let backend = backends::spawn_ws_h1_backend(Arc::clone(&ws_stop)).await?;
+
+    let metrics = metrics_addr()?;
+    let listener = tcp_addr(gateway::ephemeral_udp_port()?);
+    let front_certs = config_gen::generate_certs(workdir, "soak-front")?;
+    let retry = workdir.join("retry.bin");
+    let ws_idle = env_usize("WS_IDLE_SECS", 120) as u64;
+    let ws_read_frame = env_usize("WS_READ_FRAME_SECS", 30) as u64;
+    let toml = config_gen::quic_h3_terminate_ws(
+        listener,
+        backend,
+        metrics,
+        &front_certs,
+        &retry,
+        ws_idle,
+        ws_read_frame,
+    );
+    let cfg = workdir.join("gateway.toml");
+    std::fs::write(&cfg, toml)?;
+    let gw = spawn_gateway(bin, &cfg, metrics, workdir).await?;
+
+    let sni = "soak-front".to_string();
+    let ca = front_certs.ca.clone();
+
+    let sustained = env_usize("WS_SUSTAINED", 8) * args.scale;
+    let churn = env_usize("WS_CHURN", 8) * args.scale;
+    let frames_per_cycle = env_usize("WS_CHURN_FRAMES", 4);
+
+    let mut tasks = Vec::new();
+    let mut stats = Vec::new();
+
+    // Sustained long-lived bidirectional echo (held-tunnel pressure).
+    let load = LoadStats::new();
+    stats.push(("ws_h3_sustained".into(), Arc::clone(&load)));
+    tasks.push(tokio::spawn(loadgen::run_ws_h3_load(
+        listener,
+        sni.clone(),
+        ca.clone(),
+        sustained,
+        Arc::clone(&load),
+        cancel.clone(),
+    )));
+
+    // Open/close churn (tunnel + relay-task RECLAIM — the F-S20-2 probe over H3).
+    let chstats = LoadStats::new();
+    stats.push(("ws_h3_churn".into(), Arc::clone(&chstats)));
+    tasks.push(tokio::spawn(loadgen::run_ws_h3_churn(
         listener,
         sni,
         ca,

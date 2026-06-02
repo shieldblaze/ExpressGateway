@@ -532,6 +532,7 @@ async fn bring_up(certs: &TestCerts, backend_addr: SocketAddr) -> World {
         quic_modeb_metrics: None,
         // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
         ws_enabled: false,
+        ws_relay_launcher: None,
     };
     let actor = tokio::spawn(run_raw_proxy_actor_for_test(params));
 

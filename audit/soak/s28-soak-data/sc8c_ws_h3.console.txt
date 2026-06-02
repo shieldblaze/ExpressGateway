@@ -1,0 +1,85 @@
+[eg-soak] scenario=sc8c_ws_h3 duration=720s sample=10s scale=1 bin=/home/ubuntu/Code/eg-target/release/expressgateway
+[eg-soak] gateway ready pid=1082967 metrics=127.0.0.1:33287 — soaking 720s
+[sc8c_ws_h3] t=     0s rss=    8.1MB fds=  11 thr= 10 | panic_total=0
+[sc8c_ws_h3] t=    10s rss=   21.2MB fds=  24 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=    20s rss=   21.9MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=    30s rss=   22.5MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=    40s rss=   22.1MB fds=  20 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=    50s rss=   22.4MB fds=  20 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=    60s rss=   22.2MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=    70s rss=   22.1MB fds=  20 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=    80s rss=   22.5MB fds=  20 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=    90s rss=   23.5MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   100s rss=   22.9MB fds=  20 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   110s rss=   22.6MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   120s rss=   22.6MB fds=  22 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   130s rss=   22.7MB fds=  20 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   140s rss=   22.6MB fds=  20 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   150s rss=   22.9MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   160s rss=   23.1MB fds=  20 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   170s rss=   22.9MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   180s rss=   22.8MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   190s rss=   24.0MB fds=  20 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   200s rss=   22.9MB fds=  20 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   210s rss=   22.7MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   220s rss=   23.0MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   230s rss=   22.9MB fds=  22 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   240s rss=   22.7MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   250s rss=   22.8MB fds=  20 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   260s rss=   22.8MB fds=  22 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   270s rss=   22.9MB fds=  20 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   280s rss=   23.0MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   290s rss=   23.2MB fds=  22 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   300s rss=   22.1MB fds=  19 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   310s rss=   22.9MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   320s rss=   23.6MB fds=  20 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   330s rss=   22.9MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   340s rss=   22.2MB fds=  20 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   350s rss=   22.6MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   360s rss=   22.9MB fds=  19 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   370s rss=   22.9MB fds=  20 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   380s rss=   22.9MB fds=  22 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   390s rss=   23.0MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   400s rss=   23.6MB fds=  24 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   410s rss=   23.0MB fds=  22 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   420s rss=   23.5MB fds=  19 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   430s rss=   23.6MB fds=  23 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   440s rss=   24.1MB fds=  22 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   450s rss=   23.4MB fds=  20 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   460s rss=   23.8MB fds=  22 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   470s rss=   22.7MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   480s rss=   22.6MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   490s rss=   22.9MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   500s rss=   22.6MB fds=  20 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   510s rss=   22.6MB fds=  19 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   520s rss=   22.9MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   530s rss=   22.6MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   540s rss=   23.0MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   550s rss=   23.2MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   560s rss=   22.9MB fds=  20 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   570s rss=   22.9MB fds=  20 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   580s rss=   22.9MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   590s rss=   22.9MB fds=  22 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   600s rss=   22.8MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   610s rss=   23.0MB fds=  20 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   620s rss=   23.0MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   630s rss=   22.3MB fds=  22 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   640s rss=   22.9MB fds=  20 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   650s rss=   22.6MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   660s rss=   22.8MB fds=  24 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   670s rss=   22.4MB fds=  20 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   680s rss=   22.4MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   690s rss=   22.8MB fds=  20 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   700s rss=   22.7MB fds=  21 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   710s rss=   23.6MB fds=  20 thr=  9 | panic_total=0
+[sc8c_ws_h3] t=   720s rss=   22.2MB fds=  21 thr=  9 | panic_total=0
+=== SOAK sc8c_ws_h3 — BOUNDED (720s, 73 samples) ===
+      rss_kb [BOUNDED] rss_kb: bounded — last-third median 23404 vs first-third 23394 (+0.0%, within band 10% or non-monotone 52%) — first=8276 last=22704 min=8276 max=24716
+    vmhwm_kb [BOUNDED] vmhwm_kb: bounded — last-third median 25016 vs first-third 24072 (+3.9%, within band 10% or non-monotone 100%) — first=8276 last=25016 min=8276 max=25016
+         fds [BOUNDED] fds: bounded — last-third median 21 vs first-third 21 (+0.0%, within band 10% or non-monotone 60%) — first=11 last=21 min=11 max=24
+     threads [BOUNDED] threads: bounded — last-third median 9 vs first-third 9 (+0.0%, within band 10% or non-monotone 100%) — first=10 last=9 min=9 max=10
+  panic_total [BOUNDED] panic_total: stayed zero across the run — first=0 last=0 min=0 max=0
+  load:
+    ws_h3_sustained: ok=239980 err=0
+    ws_h3_churn: ok=357808 err=0
+[eg-soak] DONE scenario=sc8c_ws_h3 samples=73 overall=BOUNDED

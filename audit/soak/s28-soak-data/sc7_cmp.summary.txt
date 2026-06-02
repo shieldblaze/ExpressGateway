@@ -1,0 +1,9 @@
+=== SOAK sc7_h3terminate — BOUNDED (25s, 4 samples) ===
+      rss_kb [INCONCLUSIVE] rss_kb: only 4 steady-state samples (< 8 required) — first=8140 last=19252 min=8140 max=19252
+    vmhwm_kb [INCONCLUSIVE] vmhwm_kb: only 4 steady-state samples (< 8 required) — first=8140 last=19544 min=8140 max=19544
+         fds [INCONCLUSIVE] fds: only 4 steady-state samples (< 8 required) — first=11 last=11 min=11 max=12
+     threads [INCONCLUSIVE] threads: only 4 steady-state samples (< 8 required) — first=9 last=9 min=9 max=9
+  panic_total [BOUNDED] panic_total: stayed zero across the run — first=0 last=0 min=0 max=0
+  load:
+    h3_load: ok=176 err=0
+    h3_reset_flood: ok=400336 err=0

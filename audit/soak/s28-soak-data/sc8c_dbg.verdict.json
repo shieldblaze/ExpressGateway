@@ -1,0 +1,103 @@
+{
+  "scenario": "sc8c_ws_h3",
+  "label": "sc8c_dbg",
+  "duration_secs": 25,
+  "sample_secs": 10,
+  "scale": 1,
+  "samples": 4,
+  "overall": "BOUNDED",
+  "columns": [
+    {
+      "column": "rss_kb",
+      "kind": "trend",
+      "verdict": "INCONCLUSIVE",
+      "n": 4,
+      "first": 8168.0,
+      "last": 21388.0,
+      "min": 8168.0,
+      "max": 21388.0,
+      "first_third_median": 0.0,
+      "last_third_median": 0.0,
+      "rel_growth": 0.0,
+      "slope_per_sample": 4252.0,
+      "monotone_frac": 1.0,
+      "note": "rss_kb: only 4 steady-state samples (< 8 required)"
+    },
+    {
+      "column": "vmhwm_kb",
+      "kind": "trend",
+      "verdict": "INCONCLUSIVE",
+      "n": 4,
+      "first": 8168.0,
+      "last": 21388.0,
+      "min": 8168.0,
+      "max": 21388.0,
+      "first_third_median": 0.0,
+      "last_third_median": 0.0,
+      "rel_growth": 0.0,
+      "slope_per_sample": 4252.0,
+      "monotone_frac": 1.0,
+      "note": "vmhwm_kb: only 4 steady-state samples (< 8 required)"
+    },
+    {
+      "column": "fds",
+      "kind": "trend",
+      "verdict": "INCONCLUSIVE",
+      "n": 4,
+      "first": 11.0,
+      "last": 11.0,
+      "min": 11.0,
+      "max": 11.0,
+      "first_third_median": 0.0,
+      "last_third_median": 0.0,
+      "rel_growth": 0.0,
+      "slope_per_sample": 0.0,
+      "monotone_frac": 1.0,
+      "note": "fds: only 4 steady-state samples (< 8 required)"
+    },
+    {
+      "column": "threads",
+      "kind": "trend",
+      "verdict": "INCONCLUSIVE",
+      "n": 4,
+      "first": 10.0,
+      "last": 9.0,
+      "min": 9.0,
+      "max": 10.0,
+      "first_third_median": 0.0,
+      "last_third_median": 0.0,
+      "rel_growth": 0.0,
+      "slope_per_sample": -0.3,
+      "monotone_frac": 0.6666666666666666,
+      "note": "threads: only 4 steady-state samples (< 8 required)"
+    },
+    {
+      "column": "panic_total",
+      "kind": "counter_must_be_zero",
+      "verdict": "BOUNDED",
+      "n": 4,
+      "first": 0.0,
+      "last": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "first_third_median": 0.0,
+      "last_third_median": 0.0,
+      "rel_growth": 0.0,
+      "slope_per_sample": 0.0,
+      "monotone_frac": 1.0,
+      "note": "panic_total: stayed zero across the run"
+    }
+  ],
+  "load": [
+    {
+      "name": "ws_h3_sustained",
+      "ok": 268,
+      "err": 40
+    },
+    {
+      "name": "ws_h3_churn",
+      "ok": 55,
+      "err": 40
+    }
+  ]
+}

@@ -498,6 +498,7 @@ async fn s19_b4_datagrams_round_trip_byte_identical() {
         quic_modeb_metrics: None,
         // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
         ws_enabled: false,
+        ws_relay_launcher: None,
     };
 
     // 9) Run the actor; wait for the echoed datagrams, then cancel.

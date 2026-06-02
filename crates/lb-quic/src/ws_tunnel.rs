@@ -57,11 +57,13 @@
 
 use std::io;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use bytes::Bytes;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
+use tokio::task::JoinHandle;
 use tokio_util::sync::PollSender;
 
 /// Per-direction channel depth. With [`H3_WS_TUNNEL_CHUNK_MAX`] this caps
@@ -102,6 +104,83 @@ pub struct H3TunnelEndpoints {
     /// on the H3 stream; channel-closed ⇒ writer finished ⇒ FIN the stream.
     pub from_writer: mpsc::Receiver<Bytes>,
 }
+
+/// SESSION 28 / WS-over-H3 (RFC 9220) Stage C — the validated extended
+/// CONNECT target the actor hands the injected relay launcher.
+///
+/// Built from the request the actor already validated
+/// ([`crate::h3_bridge::validate_request_pseudo_headers`] guarantees
+/// `:method=CONNECT` + `:protocol` + `:scheme` + `:path` + `:authority`
+/// under `ws_enabled`). The launcher (in the `lb` binary) uses `path` +
+/// `subprotocols` to drive the upstream RFC 6455 client handshake.
+#[derive(Debug, Clone)]
+pub struct WsConnectRequest {
+    /// `:authority` of the extended CONNECT (the WS target host).
+    pub authority: String,
+    /// `:path` of the extended CONNECT — the WS resource path, forwarded
+    /// verbatim onto the upstream RFC 6455 `GET` request line.
+    pub path: String,
+    /// The client's `sec-websocket-protocol` offer (a comma-separated
+    /// list), if present. Forwarded to the upstream so a real subprotocol
+    /// negotiation happens on the H1 leg; the upstream's selection is
+    /// echoed back in the `200` (RFC 8441 §5 / RFC 6455 §1.3).
+    pub subprotocols: Option<String>,
+}
+
+/// SESSION 28 / WS-over-H3 Stage C — the launcher's readiness verdict,
+/// gating the H3 response the actor sends. This is the H3 analog of the
+/// WS-H1 GHSA fix / WS-H2 F-S27-1: the upstream RFC 6455 handshake
+/// completes (or fails) **before** any client-visible `2xx`, so a client
+/// is never committed to WS framing toward a backend that never agreed.
+#[derive(Debug)]
+pub enum WsUpstreamOutcome {
+    /// The upstream handshake completed. The actor sends `200` (extended
+    /// CONNECT success, RFC 9220) and begins tunnel-mode relay. `headers`
+    /// carries any response field to echo — e.g. the upstream-selected
+    /// `sec-websocket-protocol`.
+    Ready {
+        /// Extra response header fields to emit alongside `:status 200`.
+        headers: Vec<(String, String)>,
+    },
+    /// The upstream dial/handshake failed. The actor sends `status`
+    /// (`502` refused/unreachable, `504` dial/handshake timeout) and
+    /// tears the stream down. No tunnel byte ever flows.
+    Failed {
+        /// HTTP status the actor returns to the H3 client.
+        status: u16,
+    },
+}
+
+/// SESSION 28 / WS-over-H3 Stage C — what the injected launcher returns:
+/// a readiness signal + the relay task handle.
+///
+/// The actor polls `ready` each tick (non-blocking `try_recv`); on
+/// [`WsUpstreamOutcome::Ready`] it sends the `200` and activates the
+/// tunnel pump; on [`WsUpstreamOutcome::Failed`] it sends the error and
+/// tears down. `task` is the spawned relay (dial + handshake +
+/// `proxy_frames`); the actor aborts it on teardown so a torn-down tunnel
+/// never leaks its relay task.
+pub struct WsRelayHandle {
+    /// Upstream-handshake readiness — resolves once, before the `200`.
+    pub ready: oneshot::Receiver<WsUpstreamOutcome>,
+    /// The relay task (dial + upstream handshake + `proxy_frames` over the
+    /// tunnel). Aborted by the actor on teardown.
+    pub task: JoinHandle<()>,
+}
+
+/// SESSION 28 / WS-over-H3 Stage C — the dependency-inversion seam.
+///
+/// `lb-quic` cannot import `lb_l7::ws_proxy::proxy_frames` (the
+/// `lb-l7 → lb-quic` dependency would form a cycle), so the relay is
+/// **injected** as this closure from the `lb` binary (which sees both
+/// crates), MIRRORING the existing
+/// `config_factory: Arc<dyn Fn()->Result<quiche::Config,_>>` threaded
+/// through the same `QuicListenerParams → RouterParams → ActorParams`
+/// chain. The closure dials the H1 backend, completes the upstream
+/// RFC 6455 handshake **before** signalling readiness, then runs the
+/// single-sourced `proxy_frames` over the [`H3WsTunnel`] (R12 — the relay
+/// is NOT duplicated in `lb-quic`).
+pub type WsRelayLauncher = Arc<dyn Fn(H3WsTunnel, WsConnectRequest) -> WsRelayHandle + Send + Sync>;
 
 /// The `proxy_frames`-side handle: a bounded `AsyncRead + AsyncWrite` over
 /// one H3 bidi stream. Cheap to construct; not `Clone` (a tunnel is owned
