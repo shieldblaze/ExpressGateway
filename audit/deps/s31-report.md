@@ -226,7 +226,34 @@ cells + both QUIC modes + WS matrix + gRPC-H3 (R3). The ≥50-iter F-MD-4 burst 
 tests are part of these 1512 and passed ×3 → first-order R8/R13 confirmation on 0.29 (explicit
 evidence-capturing re-proofs follow).
 
-## Fresh h3spec diff vs baseline — (RUNNING)
+## Fresh h3spec diff vs baseline — ZERO DELTA (no regression, no closures)
+
+Fresh h3spec 0.1.13 against the migrated H3-terminate front on 0.29.1 (`scripts/s31-h3spec.sh 029`,
+completed run `b602ys3cl`, log `audit/deps/s31-h3spec-029.log`):
+
+**0.29.1 result: 49 examples, 12 failures — BYTE-IDENTICAL to the 0.28 baseline.**
+
+| | 0.28 baseline (S26) | 0.29.1 (S31) | delta |
+|---|---|---|---|
+| examples | 49 | 49 | 0 |
+| failures | 12 (#1–12) | 12 (#1–12) | **0** |
+| passing | 37 | 37 | 0 |
+
+The 12 failures are the SAME list, in the same order: transport-param receive validation (#1–8),
+reserved-bit PROTOCOL_VIOLATION (#9–10), QPACK encoder/decoder stream error (#11/#12). **Zero
+closed, zero NEW failures → zero regression (R3 satisfied).** Exactly as the diff-level research
+predicted (`transport_params.rs` was a +6/−2 const rename, no QPACK file changed). The 37 passing
+checks — including the pseudo-header (#12–15/#22), frame-seq, QPACK static-table, and Huffman gains
+from the S23–S26 migration — are all unchanged.
+
+**CF-QUICHE-UPGRADE verdict: re-verified-at-0.29.1, NARROWED, NOT closed.** These 12 remain
+quiche-internal validation gaps in 0.29.1; closing them would require either a still-newer quiche
+that adds the checks, an upstream fix, or hand-rolling (which the S23–S26 migration deliberately
+deleted). The carry note stays open with the updated status "12 unchanged at 0.29.1". This upgrade
+is a maintenance/safety bump, not an h3spec-conformance improvement — and that was the expectation.
+
+## R8 re-proofs — (RUNNING, driver `bmzeho5kb`)
+## R13 F-MD-4 bursts — (RUNNING, driver `bmzeho5kb`)
 ## Fresh h3spec diff vs baseline — (Phase 2, TBD)
 ## R8 re-proofs — (Phase 2, TBD)
 ## R13 F-MD-4 bursts — (Phase 2, TBD)

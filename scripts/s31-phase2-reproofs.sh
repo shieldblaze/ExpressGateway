@@ -13,8 +13,10 @@ mkdir -p "$OUT"
 
 run() { # run <logfile> <test-name-filters...>
   local log="$1"; shift
-  echo "=== cargo test --workspace --all-features [$*] $(date -u +%FT%TZ) ===" | tee -a "$log"
-  cargo test --workspace --all-features "$@" -- --nocapture --test-threads=1 >> "$log" 2>&1
+  echo "=== cargo test --workspace --all-features -- [$*] $(date -u +%FT%TZ) ===" | tee -a "$log"
+  # libtest accepts MULTIPLE positional filters (OR'd) AFTER `--`; cargo itself
+  # accepts only ONE TESTNAME before `--`, so the filters must go after `--`.
+  cargo test --workspace --all-features -- --nocapture --test-threads=1 "$@" >> "$log" 2>&1
   local rc=${PIPESTATUS[0]}
   echo "RC=$rc" | tee -a "$log"
   return $rc
