@@ -397,8 +397,49 @@ sc5_modea / sc4_modeb / sc7_h3terminate / sc8c_ws_h3 BOUNDED (panic=0); sc9_grpc
 pre-existing churn RSS growth IDENTICAL to 0.28 (no regression). panic=0 across all; ~7M+ RPCs
 total err≈0. **No memory/behavior regression introduced by the upgrade.**
 
-## h2spec-intact confirm — (promote path, running next)
-## Promote decision — GO (pending h2spec + coverage); upgrade is no-regression vs 0.28
+## h2spec-intact confirm — PASS (no transitive break)
+
+h2spec 2.6.0 strict (`-t -k -S -o 3`) against the 0.29 release gateway (h1s TLS+ALPN h2 listener,
+`audit/deps/s31-h2spec-029.log`): **147 tests, 146 passed, 1 skipped, 0 failed** — IDENTICAL to the
+S22 baseline (146/147, 0 failed). quiche does not touch the H2 stack and the bump confirms no
+transitive H2 regression (R11). ✓
+
+## Scoped coverage (0.29/1.88) — (RUNNING `b1tu740gq`, lb-quic H3 surface)
+
+Since the upgrade made ZERO production source changes, coverage is scoped to the quiche
+H3-integration surface (lb-quic: conn_actor / h3_bridge / h3_config) — the highest-risk code for
+the bump — to confirm the 0.29 integration stays well-exercised. Target ≥80% (S26 ref: h3_bridge
+86%, conn_actor 91%, h3_config 100%).
+
+## Promote decision — GO (pending coverage ≥80%)
+
+Per R11, all gates green on quiche 0.29.1 / Rust 1.88:
+- ×3 gate: 1512/0/18 ×3, clippy+fmt clean (atomic).
+- h3spec: 12==12, zero regression (CF-QUICHE-UPGRADE re-verified-narrowed, not closed — as expected).
+- R8: re-proven (body-size-independent, backpressure both ways, 4 quiche paths).
+- R13 F-MD-4: re-proven (reset-vs-EOF intact, ≥180 burst iters, live negative control).
+- Re-soak: 4 BOUNDED + sc9 churn growth proven PRE-EXISTING (0.28≡0.29), no regression introduced.
+- h2spec: 146/147, 0 failed (no H2 transitive break).
+- Isolation: only quiche's subtree moved; no forbidden #222 crate bumped.
+- coverage: pending (this run).
+
+→ **PROMOTE** with `--no-ff` once coverage confirms ≥80%. The honest promote message names: the
+version delta (quiche 0.28.0→0.29.1, tokio-quiche 0.18.0→0.19.0), the MSRV bump 1.85→1.88 (the
+single real adaptation), h3spec unchanged (12), CF-QUICHE-UPGRADE narrowed, and the NEW pre-existing
+CF-GRPC-H3-CHURN-RSS (not introduced by this upgrade).
+
+## CARRY-FORWARD / handoff — remaining #222 tiers (separate sessions)
+
+- **NEW: CF-GRPC-H3-CHURN-RSS** — gRPC-H3 connection-churn RSS staircase to ~82 MB over 30 min /
+  2M cycles (glibc-arena working-set growth; fds/threads flat, panic=0; NOT a quiche-version issue,
+  identical on 0.28 and 0.29). Own fix session (investigate conn_actor connection-lifecycle reclaim
+  / consider a churn-friendly allocator). NOT part of CF-QUICHE-UPGRADE.
+- **Remaining #222 tiers** (each its own session): hyper 1.10.1 + h2 0.4.14 (H2 crown-jewel
+  re-verify; check poll_capacity/upgrade vs CF-S27-2); tokio-tungstenite 0.24→0.29 (WS matrix);
+  rand 0.8→0.10 + socket2 0.5→0.6 + toml 0.8→1.x + rcgen 0.13→0.14 (breaking-API bumps);
+  the routine patch group (http/serde_json/libc/rustls/pki-types). PR #214 (GH Actions, low risk).
+- CF-QUICHE-UPGRADE: re-verified at 0.29.1 (12 h3spec findings unchanged) + CF-QUICHE-FRAME-
+  COMPLETENESS (§7.1 no-CL) unchanged — still open, needs a future quiche that adds the validation.
 
 ## h2spec-intact confirm — (TBD)
 ## Fresh h3spec diff vs baseline — (Phase 2, TBD)
