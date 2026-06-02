@@ -190,8 +190,23 @@ existing 4.5.0 pin (no new foundations version). (2) socket2 dep edges for the L
 `quinn`/`quinn-udp`/`hyper-util` re-unified 0.6.3 → 0.5.10 — both socket2 versions were already in
 the lock before and after; no socket2 crate upgrade, and these are not on our quiche path.
 
-### Source changes required: (build/lint probe RUNNING — TBD)
-### ×3 gate on 0.29/1.88: (TBD)
+### Source changes required: ZERO production changes (research confirmed)
+
+- **`cargo build --workspace --all-features` on 1.88 = clean** (`BUILD_RC=0`). quiche 0.29.1 +
+  tokio-quiche 0.19.0 + the reworked BoringSSL build (boring/boring-sys 4.21.2) all compile with
+  **zero production source edits**. The BoringSSL build-system overhaul watch-item did NOT bite.
+- **5 new Rust-1.88 clippy lints** (surfaced by the toolchain bump, NOT by quiche), all mechanical
+  (owner-authorized; verified no logic smuggled in):
+  - 3× `uninlined_format_args` (clippy --fix): `pool.rs:881` (test), `h1h3_md_streaming_verify.rs:698`
+    (test), `reload_zero_drop.rs:1388` (test) — inline the format var.
+  - 1× `io_other_error` (clippy --fix): `grpc_h3_e2e.rs:835` (test) → `std::io::Error::other(_)`.
+  - 1× `doc_overindented_list_items` (manual): `h2_proxy.rs:948-950` — canonical markdown list
+    indentation in a doc comment (no code).
+  - Re-ran `clippy --workspace --all-targets --all-features -- -D warnings` → exit 0.
+- **KEEP-surface untouched**: 4 lint fixes are in tests, 1 is a doc comment — no production logic
+  changed. The diff-level F-MD-4 / R8 safety claims are re-proven empirically in Phase 2.
+
+### ×3 gate on 0.29/1.88: RUNNING (`scripts/s31-gate.sh 029-1.88`, task bgw3c3ka4)
 ## Fresh h3spec diff vs baseline — (Phase 2, TBD)
 ## R8 re-proofs — (Phase 2, TBD)
 ## R13 F-MD-4 bursts — (Phase 2, TBD)
