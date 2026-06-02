@@ -330,8 +330,20 @@ TAIL is flat = bounded. VmHWM is a peak-only gauge (monotone by construction —
 false-DRIFT). Confounders vs S29's "sc9 no-leak at 1.18M RPCs": this run was 5-scenario CONCURRENT
 (saturation) and did 2.25M RPCs (~2×), so a higher, later-plateauing working set is expected.
 
-**Per R2 / "attribution ≠ symptom": re-running sc9 in ISOLATION (no concurrent saturation) to
-confirm.** (RUNNING `bvr4s2eyh`, `audit/soak/s31-soak-sc9-isolated/`.)
+**Per R2 / "attribution ≠ symptom": re-ran sc9 in ISOLATION.**
+
+Run 2 (isolated, 900s, `audit/soak/s31-soak-sc9-isolated/`): overall DRIFT again, BUT —
+fds flat (11→12), threads flat, panic=0, 2.5M RPCs (1,493,500+1,006,392), err=2 (0.00008%).
+RSS: warmup → **41,032 KB plateau held flat t=465→825 (~6 min)** → stepped to **54,968 KB at
+t=840 and held flat t=840→900 (~1 min)**. Two plateaus; fds/threads flat throughout (12/9). The
+**~41 MB plateau is IDENTICAL to Run 1's ~41 MB despite more RPCs** — a leak cannot produce a fixed
+work-independent ceiling. The shape (flat plateaus + flat fds/threads) is allocator-arena
+working-set establishment (bounded by peak concurrency), not a per-request leak. But the 2nd
+plateau held only ~1 min — too short to declare a final ceiling for a PROMOTE gate (R8/R11).
+
+Run 3 (isolated, **1800s** definitive bounded test, `audit/soak/s31-soak-sc9-1800/`): RUNNING
+`blfmky9eg`. Verdict rule: RSS plateauing + holding flat for the last ≥15 min ⇒ BOUNDED (allocator
+working set); continued stepping ⇒ real 0.29 leak (blocker). fds/threads/panic must stay flat/0.
 
 ## h2spec-intact confirm — (TBD)
 ## Fresh h3spec diff vs baseline — (Phase 2, TBD)
