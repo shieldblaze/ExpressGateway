@@ -5437,6 +5437,50 @@ mod tests {
         let _ = tokio::time::timeout(Duration::from_secs(5), listener.shutdown()).await;
     }
 
+    /// **Fail-closed: `ws_enabled` but NO relay launcher → 502.** The binary's
+    /// `spawn_quic` always pairs `ws_enabled` with a launcher; this builds a
+    /// `QuicListener` DIRECTLY with `with_websocket(true)` but no
+    /// `with_ws_relay_launcher`, so a validated extended CONNECT reaches
+    /// `setup_ws_tunnel` with `ws_relay_launcher = None`. It must fail closed
+    /// with 502 (NEVER tunnel without a relay), not panic or hang.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn ws_over_h3_enabled_without_launcher_fails_closed_502() {
+        let lb_certs = modeb_e2e_gen_certs(H3H1_E2E_SNI, "wsh3-nolauncher");
+        let retry_secret_path = lb_certs.dir.join("retry.secret");
+        let backend_addr = ws_h3_e2e_spawn_ws_echo_backend(); // present but never dialed
+
+        let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
+        // Build the listener WITHOUT a relay launcher: ws_enabled + backends,
+        // but no `with_ws_relay_launcher` ⇒ the actor sees `ws_relay_launcher
+        // = None` (the misconfiguration the spawn_quic path can never produce).
+        let params = QuicListenerParams::new(
+            "127.0.0.1:0".parse().unwrap(),
+            lb_certs.cert.clone(),
+            lb_certs.key.clone(),
+            retry_secret_path,
+        )
+        .with_backends(vec![backend_addr], pool)
+        .with_websocket(true);
+
+        let token = CancellationToken::new();
+        let listener = QuicListener::spawn(params, token.clone())
+            .await
+            .expect("listener must bind");
+        let lb_addr = listener.local_addr();
+
+        let (status, echo) =
+            ws_h3_e2e_drive_client(lb_addr, &lb_certs.ca, WsH3CloseMode::Clean, b"websocket").await;
+        assert_eq!(
+            status,
+            Some(502),
+            "ws_enabled without a launcher must fail closed with 502 (never tunnel)"
+        );
+        assert!(!echo, "no relay ⇒ no tunnel ⇒ no echo");
+
+        token.cancel();
+        let _ = tokio::time::timeout(Duration::from_secs(5), listener.shutdown()).await;
+    }
+
     // CODE-2-03 Wave 2c proof: the three lifecycle signal kinds render
     // to the canonical signal names so /admin logs are greppable.
     #[test]
