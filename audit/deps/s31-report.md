@@ -2,7 +2,14 @@
 
 **Branch:** `feature/quiche-0.29-upgrade-s31` (off `main` @ `c09ecbab`, S30 promoted, SPEC COMPLETE)
 **Scope:** quiche + tokio-quiche ONLY — ISOLATED from Dependabot PR #222's other 16 crates.
-**Status:** IN PROGRESS (Phase 0).
+**Status:** ✅ **SESSION 31 COMPLETE — quiche 0.29.1 + tokio-quiche 0.19.0 (MSRV 1.85→1.88), 0
+h3spec findings closed (12 unchanged, re-verified no-regression), re-soak clean (sc9 churn growth
+proven PRE-EXISTING, not a 0.29 regression), PROMOTED.**
+
+One-line verdict: a low-churn, no-production-source-change upgrade; the only real adaptation was the
+quiche-0.29-forced MSRV bump 1.85→1.88 (+5 mechanical lint fixes). Every R11 gate green on
+0.29.1/1.88. CF-QUICHE-UPGRADE re-verified-narrowed (the 12 h3spec gaps persist — they need a
+future quiche that adds the validation). NEW pre-existing finding filed: CF-GRPC-H3-CHURN-RSS.
 
 ---
 
@@ -404,14 +411,25 @@ h2spec 2.6.0 strict (`-t -k -S -o 3`) against the 0.29 release gateway (h1s TLS+
 S22 baseline (146/147, 0 failed). quiche does not touch the H2 stack and the bump confirms no
 transitive H2 regression (R11). ✓
 
-## Scoped coverage (0.29/1.88) — (RUNNING `b1tu740gq`, lb-quic H3 surface)
+## Scoped coverage (0.29/1.88) — PASS (H3 surface all ≥80%)
 
 Since the upgrade made ZERO production source changes, coverage is scoped to the quiche
 H3-integration surface (lb-quic: conn_actor / h3_bridge / h3_config) — the highest-risk code for
-the bump — to confirm the 0.29 integration stays well-exercised. Target ≥80% (S26 ref: h3_bridge
-86%, conn_actor 91%, h3_config 100%).
+the bump. `cargo llvm-cov` instrumented, accumulating lb-quic's own tests + the `lb` crate's WS-H3 /
+gRPC-H3 e2e tests (which drive conn_actor's tunnel + inline paths). lcov `audit/deps/s31-cov.lcov`,
+summary `audit/deps/s31-cov-summary.txt`:
 
-## Promote decision — GO (pending coverage ≥80%)
+| module | line cov | fn cov |
+|---|---|---|
+| conn_actor.rs | **82.54%** (714/865) | 94.87% (37/39) |
+| h3_bridge.rs | **84.40%** (1504/1782) | 94.07% (111/118) |
+| h3_config.rs | **100%** (29/29) | 100% (5/5) |
+
+All ≥80% (R11). Comparable to S26 (h3_bridge 86%, conn_actor 91%, h3_config 100%) — the small
+deltas are test-scope (lb-quic + lb only, not the full workspace), not a coverage regression
+(no production code changed). The full ×3 gate (1512 tests) additionally exercises these paths.
+
+## Promote decision — GO ✅ (all R11 gates green)
 
 Per R11, all gates green on quiche 0.29.1 / Rust 1.88:
 - ×3 gate: 1512/0/18 ×3, clippy+fmt clean (atomic).
@@ -421,9 +439,9 @@ Per R11, all gates green on quiche 0.29.1 / Rust 1.88:
 - Re-soak: 4 BOUNDED + sc9 churn growth proven PRE-EXISTING (0.28≡0.29), no regression introduced.
 - h2spec: 146/147, 0 failed (no H2 transitive break).
 - Isolation: only quiche's subtree moved; no forbidden #222 crate bumped.
-- coverage: pending (this run).
+- coverage: conn_actor 82.54% / h3_bridge 84.40% / h3_config 100% — all ≥80% ✓.
 
-→ **PROMOTE** with `--no-ff` once coverage confirms ≥80%. The honest promote message names: the
+→ **PROMOTE** with `--no-ff`. The honest promote message names: the
 version delta (quiche 0.28.0→0.29.1, tokio-quiche 0.18.0→0.19.0), the MSRV bump 1.85→1.88 (the
 single real adaptation), h3spec unchanged (12), CF-QUICHE-UPGRADE narrowed, and the NEW pre-existing
 CF-GRPC-H3-CHURN-RSS (not introduced by this upgrade).
