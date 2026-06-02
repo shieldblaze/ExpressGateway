@@ -132,6 +132,45 @@ WS relay core (pre-existing, shared, R12) + WS-over-H2 (RFC 8441) verified to th
 F-S27-1 FIXED, F-S27-3 FIXED, lenient-accept FIXED, F-S27-2 → WS-over-H2 gated off-by-default +
 CF-S27-2 carried. Real-wire e2e ✓, R8 (H1 bounded+backpressure) ✓, R13 burst ✓, RFC 8441 conformance ✓.
 
+---
+
+## PHASE 2 — WS-over-H3 (RFC 9220) — PARTIAL (Stages A+B landed; Stage C carried to S28)
+
+F-S26-1 (prerequisite) FIXED + verified first (`ef54a9d3`): the binary's `spawn_quic` now wires the
+H3-terminate→backend relay (h1 via `with_backends` / h2 / h3 by `BackendConfig.protocol`); startup
+validation rejects raw_proxy+backends and mixed protocol families; real-binary test
+`spawn_quic_h3_terminate_forwards_to_h1_backend_through_real_listener` (non-vacuous, ×3); R3 preserved
+(Mode B + backendless H3-terminate byte-identical). This closed a real operability gap (H3-terminate
+backends were un-configurable in the shipped binary) and unblocked the WS-over-H3 real path.
+
+### Stage A — config + validator (R3-safe) `d1c45d3f`
+- RFC-confirmed (RFC 8441 §4 / RFC 9220 §3): extended CONNECT = `:method=CONNECT` + `:protocol` +
+  `:scheme` + `:path` + `:authority` (the INVERSE of classic CONNECT, which omits :scheme/:path).
+- `validate_request_pseudo_headers` split: classic CONNECT rules unchanged; extended CONNECT requires
+  the full set; `:protocol` accepted ONLY under `ws_enabled` (off ⇒ byte-identical to today's #14
+  reject — the load-bearing R3 control). `:protocol`-on-non-CONNECT + duplicate-`:protocol` rejected.
+- `enable_extended_connect(true)` gated on `ws_enabled` (an H3 SETTINGS entry, not a transport param —
+  R3 at transport untouched). `WsConfig`/`ws_enabled` threaded QuicListenerParams→RouterParams→ActorParams.
+- New `WebsocketConfig.h3_extended_connect` (opt-in, default off) — a NEWNESS gate for a brand-new
+  feature on the freshly-migrated stack, NOT a DoS gate (H3 backpressures by construction; documented).
+  `validate_websocket_block` now permits the block on a `quic` listener.
+- Tests: 7 new validator + 2 h3_config + 2 lb-config; 8 existing R3 validator tests carried (pass false).
+
+### Stage B — bounded tunnel adapter (standalone) `3bdd77fb` (+ clippy gate-fix `1e87a4dc`)
+- New `crates/lb-quic/src/ws_tunnel.rs`: `H3WsTunnel` (AsyncRead+AsyncWrite) ↔ `H3TunnelEndpoints`,
+  two bounded mpsc channels (depth 8 × 8 KiB ≈ 64 KiB/dir, matching `H3_BODY_CHANNEL_DEPTH`).
+- **R8 proven in isolation:** the write side uses `tokio_util::PollSender::poll_reserve` → the writer
+  PARKS when the actor stops draining (no unbounded buffer — the property WS-over-H2 lacked, CF-S27-2).
+  Reset → `io::ErrorKind::ConnectionReset` (the F-MD-4-adjacent close-vs-reset distinction); EOF on
+  inbound-sender drop; empty-chunk-not-EOF; write-after-actor-gone → BrokenPipe. 9 unit tests ×3.
+
+### Stage C — CARRIED to S28 (owner decision: honest-PARTIAL)
+Sharpened estimate ~1 session-equivalent + verify + soak on top; the actor tunnel-mode pump + the
+upstream-before-200 ordering are the risk; doesn't fit the S27 tail. Design APPROVED (closure-injection
+`ws_relay_launcher` mirroring `config_factory`, resolving the lb-l7↔lb-quic dependency cycle) and
+documented in `s27-ws-h3-plan.md` + `s28-handoff.md`. Building blocks for S28 already on main:
+validator (A), `ws_tunnel.rs` adapter (B), F-S26-1 binary wiring, `h3_extended_connect` flag.
+
 ### F-S26-1 characterization (the gating dependency)
 
 **Verdict: case (a) — "schema + library API both exist; the binary's config→params
