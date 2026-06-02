@@ -1386,8 +1386,7 @@ mod drain_tests {
             let body = drain_h1_expected_body();
             // Complete, byte-identical, NO Connection: close header.
             let resp_head = format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
-                DRAIN_H1_BODY_LEN
+                "HTTP/1.1 200 OK\r\nContent-Length: {DRAIN_H1_BODY_LEN}\r\n\r\n"
             );
             sock.write_all(resp_head.as_bytes()).unwrap();
             sock.write_all(&body).unwrap();

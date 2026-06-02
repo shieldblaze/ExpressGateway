@@ -697,9 +697,8 @@ async fn h1h3_fmd4_truncation_burst_current_thread() {
     eprintln!("H1H3_FMD4_BURST iters={ITERS} baseline={baseline} after_burst={after_burst}");
     assert_eq!(
         after_burst, baseline,
-        "SMUGGLING under burst: {} truncated uploads moved complete {baseline}→{after_burst} \
-         — at least one truncated request was relayed as complete (F-MD-4 race)",
-        ITERS
+        "SMUGGLING under burst: {ITERS} truncated uploads moved complete {baseline}→{after_burst} \
+         — at least one truncated request was relayed as complete (F-MD-4 race)"
     );
 }
 

@@ -945,9 +945,9 @@ struct ProxyService {
 /// split so the caller can pick the right client status WITHOUT having
 /// emitted a `200` first:
 ///
-///   * `Timeout`  → `504` (dial unreachable / never produced a response),
-///   * `Refused`  → `502` (upstream answered non-101, or the handshake
-///                  otherwise failed structurally).
+/// * `Timeout` → `504` (dial unreachable / never produced a response),
+/// * `Refused` → `502` (upstream answered non-101, or the handshake
+///   otherwise failed structurally).
 enum WsDialErr {
     Timeout(String),
     Refused(String),
