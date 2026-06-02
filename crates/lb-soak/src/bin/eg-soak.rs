@@ -43,6 +43,7 @@ const SCENARIOS: &[&str] = &[
     "sc5_modea",
     "sc6_413teardown",
     "sc7_h3terminate",
+    "sc8_ws_h1",
 ];
 
 struct Args {
@@ -239,6 +240,7 @@ async fn setup_scenario(
         "sc5_modea" => setup_quic(args, bin, workdir, cancel, false).await,
         "sc6_413teardown" => setup_413(args, bin, workdir, cancel).await,
         "sc7_h3terminate" => setup_h3_terminate(args, bin, workdir, cancel).await,
+        "sc8_ws_h1" => setup_ws_h1(args, bin, workdir, cancel).await,
         other => anyhow::bail!("unknown scenario {other} (try --list)"),
     }
 }
@@ -653,6 +655,94 @@ async fn setup_h3_terminate(
     })
 }
 
+/// sc8_ws_h1 (S27) — WebSocket-over-HTTP/1.1 soak. An `h1` front with a
+/// `[listeners.websocket]` block (enabled) → a co-located tungstenite WS echo
+/// backend. The binary wires the WS relay on the H1 path (`build_h1_proxy` →
+/// `with_websocket`), so an upgrade is intercepted and the long-lived
+/// `WsProxy::proxy_frames` relay runs end-to-end — this drives the REAL relay
+/// (unlike sc7's backendless H3 front).
+///
+/// The soak-class risk for a long-lived opaque relay is a connection / fd /
+/// memory LEAK under churn (cf. S20's F-S20-2 idle-reclaim leak). Two drivers
+/// create the pressure:
+///   * sustained: many LONG-LIVED WS clients each looping a bidirectional echo
+///     (held connection + relay task for the whole run).
+///   * churn: clients that repeatedly open→echo→CLEAN-close, exercising
+///     connection + relay-task RECLAIM (the F-S20-2 probe).
+///
+/// Bounded-state signal: the OS file-descriptor count (`fds`). Every live WS
+/// tunnel pins a client fd + a backend fd + the gateway relay task, so a
+/// connection / relay-task LEAK (the F-S20-2 class) ratchets `fds` up
+/// monotonically; a reclaimed tunnel returns its fds, so a bounded `fds` series
+/// IS the no-leak proof. RSS/VmHWM corroborate the memory bound and
+/// `panic_total` must stay zero. (`accept_inflight` is scraped for visibility
+/// but is a low-baseline sawtooth under churn — see `ws_gauges` for why `fds`,
+/// not `accept_inflight`, is the leak discriminant.)
+async fn setup_ws_h1(
+    args: &Args,
+    bin: &std::path::Path,
+    workdir: &std::path::Path,
+    cancel: CancellationToken,
+) -> anyhow::Result<Running> {
+    // WS echo backend (tungstenite). Stopped on teardown via the AtomicBool.
+    let ws_stop = Arc::new(AtomicBool::new(false));
+    let backend = backends::spawn_ws_h1_backend(Arc::clone(&ws_stop)).await?;
+
+    let metrics = metrics_addr()?;
+    let listener = tcp_addr(gateway::ephemeral_port()?);
+    // Generous WS idle close (1001) so sustained echo clients stay up and the
+    // churn clients control their own open→close cadence; a tight read-frame
+    // watchdog still bounds a wedged half. Overridable for targeted tuning.
+    let ws_idle = env_usize("WS_IDLE_SECS", 120) as u64;
+    let ws_read_frame = env_usize("WS_READ_FRAME_SECS", 30) as u64;
+    let toml = config_gen::h1_front_ws(listener, backend, metrics, ws_idle, ws_read_frame);
+    let cfg = workdir.join("gateway.toml");
+    std::fs::write(&cfg, toml)?;
+    let gw = spawn_gateway(bin, &cfg, metrics, workdir).await?;
+
+    // WS load shape — overridable via env for targeted repro/tuning.
+    let sustained = env_usize("WS_SUSTAINED", 8) * args.scale;
+    let churn = env_usize("WS_CHURN", 8) * args.scale;
+    let frames_per_cycle = env_usize("WS_CHURN_FRAMES", 4);
+
+    let mut tasks = Vec::new();
+    let mut stats = Vec::new();
+
+    // Sustained long-lived bidirectional echo (held-tunnel pressure).
+    let load = LoadStats::new();
+    stats.push(("ws_sustained".into(), Arc::clone(&load)));
+    tasks.push(tokio::spawn(loadgen::run_ws_h1_load(
+        listener,
+        sustained,
+        Arc::clone(&load),
+        cancel.clone(),
+    )));
+
+    // Open/close churn (connection + relay RECLAIM — the F-S20-2 probe).
+    let chstats = LoadStats::new();
+    stats.push(("ws_churn".into(), Arc::clone(&chstats)));
+    tasks.push(tokio::spawn(loadgen::run_ws_h1_churn(
+        listener,
+        churn,
+        frames_per_cycle,
+        Arc::clone(&chstats),
+        cancel.clone(),
+    )));
+
+    Ok(Running {
+        gateway: gw,
+        metrics_addr: metrics,
+        gauges: ws_gauges(),
+        kinds: ws_kinds(),
+        tasks,
+        backend_ctrls: vec![],
+        // Reuse the AtomicBool stop-vec to end the WS backend on teardown.
+        quic_stop: vec![ws_stop],
+        stats,
+        _tmp: workdir.to_path_buf(),
+    })
+}
+
 async fn spawn_gateway(
     bin: &std::path::Path,
     cfg: &std::path::Path,
@@ -669,6 +759,29 @@ fn tcp_gauges() -> Vec<String> {
     vec!["accept_inflight".into(), "panic_total".into()]
 }
 fn tcp_kinds() -> Vec<(String, MetricKind)> {
+    vec![("panic_total".into(), MetricKind::CounterMustBeZero)]
+}
+/// sc8_ws_h1 connection-leak signal: the OS file-descriptor count (`fds`, a
+/// `BASE_COLUMN`, Trend-analyzed). Every live WS tunnel pins a client fd + a
+/// backend fd + the gateway's relay task, so a connection / relay-task LEAK (the
+/// F-S20-2 class) ratchets `fds` up monotonically and is caught there; a
+/// reclaimed tunnel returns its fds, so a bounded `fds` series IS the no-leak
+/// proof. RSS/VmHWM corroborate the memory bound, and `panic_total` (must stay
+/// zero) is universal.
+///
+/// `accept_inflight` is deliberately NOT in the analyzed set here: under
+/// open/close CHURN it is a SAWTOOTH at a low integer baseline (live tunnels
+/// constantly opening + closing between 15 s samples, dipping to 0 mid-cycle),
+/// which the relative-growth Trend analyzer mis-flags (a 0→2 wiggle reads as
+/// "+200%" once the first-third median lands on a 0 trough). The reliable
+/// connection-resource bound is `fds`, which does not have the low-baseline
+/// sawtooth pathology. The gauge is still scraped into the CSV (the gateway
+/// exposes it) — it is just not the leak DISCRIMINANT. This mirrors sc7's
+/// posture (OS footprint + `panic_total`, no per-connection state gauge).
+fn ws_gauges() -> Vec<String> {
+    vec!["panic_total".into()]
+}
+fn ws_kinds() -> Vec<(String, MetricKind)> {
     vec![("panic_total".into(), MetricKind::CounterMustBeZero)]
 }
 /// H3-terminate has NO dedicated Prometheus state-table family: the

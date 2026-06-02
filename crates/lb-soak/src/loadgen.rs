@@ -131,6 +131,216 @@ async fn h1_keepalive_burst(target: SocketAddr, seed: u64, burst: usize) -> anyh
     Ok(served)
 }
 
+// ── WebSocket-over-HTTP/1.1 load (S27 sc8_ws_h1) ──────────────────────────────
+//
+// The WS relay (`WsProxy::proxy_frames`) is a LONG-LIVED bidirectional opaque
+// tunnel — the soak-class risk is a connection/fd/memory LEAK under churn (cf.
+// S20's F-S20-2 idle-reclaim leak on the passthrough path). Two complementary
+// drivers exercise that bound:
+//
+//   * `run_ws_h1_load` — many concurrent, LONG-LIVED WS clients each running a
+//     continuous bidirectional echo (send a frame → read its echo, loop). This
+//     is the sustained relay pressure: every client holds an upgraded
+//     connection + the gateway's per-tunnel relay task for the whole run, so
+//     the live-connection bound (accept_inflight / fds / RSS) must plateau, not
+//     climb.
+//   * `run_ws_h1_churn` — clients that repeatedly OPEN a WS, do a short echo,
+//     then CLEANLY CLOSE — open→relay→close cycling. This drives connection +
+//     relay-task RECLAIM (the F-S20-2 probe): if a closed WS tunnel's fd /
+//     connection-table slot / relay task is not released, the count ratchets up
+//     across cycles. A bounded verdict here is the leak-class proof.
+
+/// One sustained WS connection: handshake, then loop send→echo-verify until the
+/// cancel fires or an error. Returns the count of verified round-trips. Each
+/// frame is non-trivial (a seeded, non-repeating payload) so a short-circuit
+/// echo cannot pass.
+async fn ws_h1_echo_loop(
+    target: SocketAddr,
+    seed: u64,
+    cancel: &CancellationToken,
+    stats: &LoadStats,
+) -> anyhow::Result<()> {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let url = format!("ws://{target}/soak");
+    let (mut ws, _resp) = tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio_tungstenite::connect_async(url),
+    )
+    .await??;
+
+    // Cycle a few payload sizes so the relay sees small + multi-frame bodies.
+    let mut i = seed;
+    while !cancel.is_cancelled() {
+        i = i.wrapping_add(1);
+        let len = BODY_SIZES[(i as usize) % BODY_SIZES.len()].max(1);
+        let payload: Vec<u8> = (0..len).map(|k| ((k as u64 + i) % 251) as u8).collect();
+        if tokio::time::timeout(
+            Duration::from_secs(5),
+            ws.send(Message::Binary(payload.clone())),
+        )
+        .await
+        .is_err()
+        {
+            anyhow::bail!("ws send timeout");
+        }
+        // Read until the echo of THIS payload (drain stray Pongs).
+        let echoed = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match ws.next().await {
+                    Some(Ok(Message::Binary(b))) => return Some(b),
+                    Some(Ok(Message::Close(_))) | None => return None,
+                    Some(Ok(_)) => continue, // Pong / Text — keep waiting
+                    Some(Err(_)) => return None,
+                }
+            }
+        })
+        .await?;
+        match echoed {
+            Some(b) if b == payload => stats.ok(),
+            Some(_) => {
+                stats.err();
+                anyhow::bail!("ws echo mismatch");
+            }
+            None => anyhow::bail!("ws closed mid-echo"),
+        }
+        // A short pace so a single client doesn't monopolise the box; the point
+        // is sustained churn, not throughput.
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    let _ = ws.close(None).await;
+    Ok(())
+}
+
+/// Sustained WS-over-H1 load: `concurrency` LONG-LIVED clients, each looping a
+/// bidirectional echo until the cancel fires. A dropped connection is
+/// re-established (so the sustained pressure persists across transient errors).
+pub async fn run_ws_h1_load(
+    target: SocketAddr,
+    concurrency: usize,
+    stats: Arc<LoadStats>,
+    cancel: CancellationToken,
+) {
+    let mut workers = Vec::new();
+    for w in 0..concurrency {
+        let stats = Arc::clone(&stats);
+        let cancel = cancel.clone();
+        workers.push(tokio::spawn(async move {
+            let mut seed = (w as u64).wrapping_mul(7);
+            while !cancel.is_cancelled() {
+                seed = seed.wrapping_add(101);
+                if let Err(e) = ws_h1_echo_loop(target, seed, &cancel, &stats).await {
+                    if std::env::var("WS_DEBUG").is_ok() {
+                        eprintln!("[ws_h1_load err] {e}");
+                    }
+                    stats.err();
+                    // Brief backoff so a closed port can't hot-spin.
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            }
+        }));
+    }
+    for w in workers {
+        let _ = w.await;
+    }
+}
+
+/// One open→echo→close WS cycle: handshake, run `frames` echo round-trips, then
+/// cleanly Close. Returns the verified-round-trip count. This is the unit of
+/// CHURN — a closed tunnel's fd / connection slot / relay task must be reclaimed.
+async fn ws_h1_open_close_cycle(
+    target: SocketAddr,
+    seed: u64,
+    frames: usize,
+) -> anyhow::Result<usize> {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    let url = format!("ws://{target}/soak");
+    let (mut ws, _resp) = tokio::time::timeout(
+        Duration::from_secs(5),
+        tokio_tungstenite::connect_async(url),
+    )
+    .await??;
+
+    let mut served = 0usize;
+    for f in 0..frames {
+        let len = BODY_SIZES[((seed as usize).wrapping_add(f)) % BODY_SIZES.len()].max(1);
+        let payload: Vec<u8> = (0..len).map(|k| ((k as u64 + seed) % 251) as u8).collect();
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            ws.send(Message::Binary(payload.clone())),
+        )
+        .await??;
+        let echoed = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match ws.next().await {
+                    Some(Ok(Message::Binary(b))) => return Some(b),
+                    Some(Ok(Message::Close(_))) | None => return None,
+                    Some(Ok(_)) => continue,
+                    Some(Err(_)) => return None,
+                }
+            }
+        })
+        .await?;
+        match echoed {
+            Some(b) if b == payload => served += 1,
+            _ => anyhow::bail!("ws churn echo mismatch / early close"),
+        }
+    }
+    // CLEAN close — the whole point is to exercise the gateway's tunnel-teardown
+    // + reclaim path, not an abrupt RST.
+    let _ = tokio::time::timeout(Duration::from_secs(3), ws.close(None)).await;
+    // Drain the closing handshake so the peer Close is acknowledged.
+    let _ = tokio::time::timeout(Duration::from_secs(2), async {
+        while let Some(Ok(_)) = ws.next().await {}
+    })
+    .await;
+    Ok(served)
+}
+
+/// WS-over-H1 open/close CHURN: `concurrency` workers each repeatedly open a WS,
+/// run a short echo burst, then cleanly close — exercising connection + relay
+/// RECLAIM (the F-S20-2 leak-class probe). `stats.ok()` counts each verified
+/// round-trip; a failed cycle is one `err` + a brief backoff.
+pub async fn run_ws_h1_churn(
+    target: SocketAddr,
+    concurrency: usize,
+    frames_per_cycle: usize,
+    stats: Arc<LoadStats>,
+    cancel: CancellationToken,
+) {
+    let mut workers = Vec::new();
+    for w in 0..concurrency {
+        let stats = Arc::clone(&stats);
+        let cancel = cancel.clone();
+        workers.push(tokio::spawn(async move {
+            let mut seed = (w as u64).wrapping_mul(13).wrapping_add(1);
+            while !cancel.is_cancelled() {
+                seed = seed.wrapping_add(53);
+                match ws_h1_open_close_cycle(target, seed, frames_per_cycle).await {
+                    Ok(n) => {
+                        for _ in 0..n {
+                            stats.ok();
+                        }
+                    }
+                    Err(e) => {
+                        if std::env::var("WS_DEBUG").is_ok() {
+                            eprintln!("[ws_h1_churn err] {e}");
+                        }
+                        stats.err();
+                        tokio::time::sleep(Duration::from_millis(50)).await;
+                    }
+                }
+            }
+        }));
+    }
+    for w in workers {
+        let _ = w.await;
+    }
+}
+
 /// H2-over-TLS load (front is `h1s`, ALPN selects h2). Each worker establishes
 /// a TLS+H2 connection, issues a batch of (concurrent) request streams, then
 /// closes.
@@ -1172,6 +1382,55 @@ mod tests {
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
         let _ = std::fs::remove_dir_all(&dir);
         r.expect("4 concurrent streams must echo end-to-end via the partial-write re-send loop");
+    }
+
+    /// sc8_ws_h1 self-test: the WS open/close cycle must complete a real RFC
+    /// 6455 echo round-trip against the tungstenite echo backend (non-vacuous —
+    /// it byte-verifies the echo, so a broken handshake or a wrong echo fails).
+    /// Proves the churn driver drives a genuine WS tunnel, not a no-op.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ws_h1_open_close_cycle_echoes() {
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let backend = crate::backends::spawn_ws_h1_backend(Arc::clone(&stop))
+            .await
+            .unwrap();
+        // Let the accept loop start.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let served = ws_h1_open_close_cycle(backend, 1, 3).await;
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        let n = served.expect("a clean WS open→echo→close cycle must round-trip");
+        assert_eq!(n, 3, "all 3 echo frames must be verified");
+    }
+
+    /// The sustained echo loop must record `ok`s and exit cleanly when the
+    /// cancel fires (no hang). Proves `run_ws_h1_load`'s unit of work is live.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn ws_h1_echo_loop_counts_and_cancels() {
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let backend = crate::backends::spawn_ws_h1_backend(Arc::clone(&stop))
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let cancel = CancellationToken::new();
+        let stats = LoadStats::new();
+        let c2 = cancel.clone();
+        let s2 = Arc::clone(&stats);
+        let h = tokio::spawn(async move { ws_h1_echo_loop(backend, 5, &c2, &s2).await });
+        // Let a couple of round-trips happen, then cancel.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        cancel.cancel();
+        let r = tokio::time::timeout(Duration::from_secs(5), h)
+            .await
+            .expect("echo loop must exit promptly after cancel")
+            .expect("join");
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        r.expect("the echo loop must end cleanly on cancel, not error");
+        assert!(
+            stats.ok_count() >= 1,
+            "the sustained echo loop must verify at least one round-trip"
+        );
     }
 
     // ── H3 client self-tests (S26 / INC-D) ───────────────────────────────────

@@ -47,6 +47,13 @@ rcgen = { version = "0.13", features = ["pem"] }
 tokio-rustls = { workspace = true }
 rustls = { workspace = true }
 rustls-pki-types = { workspace = true }
+# S27 WS soak (sc8_ws_h1): a real RFC 6455 WebSocket load client + a co-located
+# tungstenite echo backend. `connect` adds the client `connect_async`; the
+# workspace base already carries `handshake`. `futures-util` provides the
+# Sink/Stream combinators the WS client/backend drive frames with. Both are
+# existing workspace deps — no new crate enters the tree.
+tokio-tungstenite = { workspace = true, features = ["connect"] }
+futures-util = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }

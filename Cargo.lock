@@ -1685,6 +1685,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytes",
+ "futures-util",
  "http 1.4.0",
  "http-body-util",
  "hyper",
@@ -1698,6 +1699,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-rustls",
+ "tokio-tungstenite",
  "tokio-util",
  "tracing",
 ]

@@ -166,6 +166,58 @@ pub async fn spawn_h2_backend(ctrl: Arc<BackendControl>) -> anyhow::Result<Socke
     Ok(addr)
 }
 
+/// Spawn an HTTP/1.1 WebSocket echo origin (S27 sc8_ws_h1). Each accepted TCP
+/// connection completes the RFC 6455 handshake via `tokio_tungstenite::
+/// accept_async`, then echoes every inbound Text/Binary frame back verbatim;
+/// Ping/Pong are handled by tungstenite's auto-state-machine and a Close ends
+/// the per-connection task cleanly. This is the far end of the gateway's WS
+/// relay (`WsProxy::proxy_frames`) — the long-lived bidirectional opaque tunnel
+/// whose connection/fd/memory bound the soak proves.
+///
+/// Mirrors `tests/ws_proxy_e2e.rs::spawn_echo_backend`. `stop` ends the accept
+/// loop (the soak signals it on teardown so the backend never outlives the run).
+pub async fn spawn_ws_h1_backend(stop: Arc<AtomicBool>) -> anyhow::Result<SocketAddr> {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+    let addr = listener.local_addr()?;
+    tokio::spawn(async move {
+        loop {
+            if stop.load(Ordering::Relaxed) {
+                return;
+            }
+            let accept = tokio::time::timeout(Duration::from_millis(200), listener.accept()).await;
+            let Ok(Ok((sock, _))) = accept else {
+                continue;
+            };
+            tokio::spawn(async move {
+                use futures_util::{SinkExt, StreamExt};
+                use tokio_tungstenite::tungstenite::Message;
+                let ws = match tokio_tungstenite::accept_async(sock).await {
+                    Ok(w) => w,
+                    Err(_) => return,
+                };
+                let (mut tx, mut rx) = ws.split();
+                while let Some(Ok(msg)) = rx.next().await {
+                    // The echo lives inside the match arm (not a guard) for
+                    // the rust-1.95.0 clippy::collapsible_match reason
+                    // documented in tests/ws_proxy_e2e.rs.
+                    #[allow(clippy::collapsible_match)]
+                    match msg {
+                        Message::Text(_) | Message::Binary(_) => {
+                            if tx.send(msg).await.is_err() {
+                                break;
+                            }
+                        }
+                        Message::Close(_) => break,
+                        _ => {}
+                    }
+                }
+                let _ = tx.close().await;
+            });
+        }
+    });
+    Ok(addr)
+}
+
 /// Per-stream echo bookkeeping: (queued bytes still to echo, peer-FIN-seen,
 /// FIN-sent).
 type EchoState = (Vec<u8>, bool, bool);
