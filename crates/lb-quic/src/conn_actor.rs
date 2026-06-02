@@ -182,6 +182,17 @@ pub struct ActorParams {
     /// [`crate::h3_bridge::validate_request_pseudo_headers`]. `false`
     /// (every pre-S27 caller) keeps the H3 front byte-identical (R3).
     pub ws_enabled: bool,
+    /// SESSION 28 / WS-over-H3 (RFC 9220) Stage C: the injected relay
+    /// launcher (dependency inversion — the `lb` binary builds it because
+    /// `lb-quic` cannot import `lb_l7::ws_proxy::proxy_frames`). `Some`
+    /// only on a WebSocket-opted-in listener; the actor calls it on a
+    /// validated `:protocol=websocket` extended CONNECT to dial the H1
+    /// backend, complete the upstream handshake before the `200`, and run
+    /// the single-sourced frame relay over the tunnel. `None` (every
+    /// non-WS listener) ⇒ the actor never builds a tunnel and the H3 front
+    /// is byte-identical (R3). Threaded from
+    /// [`crate::router::RouterParams::ws_relay_launcher`].
+    pub ws_relay_launcher: Option<crate::ws_tunnel::WsRelayLauncher>,
 }
 
 /// Drive one `quiche::Connection` to completion, terminating H3 and

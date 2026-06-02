@@ -103,6 +103,15 @@ pub struct QuicListenerParams {
     /// Extended-CONNECT accept path. `false` by default (set via
     /// [`Self::with_websocket`]) keeps the H3 front byte-identical (R3).
     pub ws_enabled: bool,
+    /// SESSION 28 / WS-over-H3 (RFC 9220) Stage C: the injected WebSocket
+    /// relay launcher (dependency inversion — the `lb` binary builds it
+    /// because `lb-quic` cannot import `lb_l7::ws_proxy::proxy_frames`).
+    /// Set via [`Self::with_ws_relay_launcher`] alongside
+    /// [`Self::with_websocket`]; threaded into
+    /// [`crate::router::RouterParams::ws_relay_launcher`] → each actor.
+    /// `None` (every non-WS listener) keeps the H3 front byte-identical
+    /// (R3). Mirrors how the `config_factory` closure is threaded.
+    pub ws_relay_launcher: Option<crate::ws_tunnel::WsRelayLauncher>,
 }
 
 impl std::fmt::Debug for QuicListenerParams {
@@ -123,6 +132,7 @@ impl std::fmt::Debug for QuicListenerParams {
             .field("dgram_queue_cap", &self.dgram_queue_cap)
             .field("quic_modeb_metrics_set", &self.quic_modeb_metrics.is_some())
             .field("ws_enabled", &self.ws_enabled)
+            .field("ws_relay_launcher_set", &self.ws_relay_launcher.is_some())
             .finish()
     }
 }
@@ -159,6 +169,9 @@ impl QuicListenerParams {
             // — enabled via `with_websocket`. R3: the H3 settings frame +
             // pseudo-header acceptance stay byte-identical until then.
             ws_enabled: false,
+            // SESSION 28 / WS-over-H3 Stage C: no relay launcher by default
+            // — injected via `with_ws_relay_launcher` on a WS listener.
+            ws_relay_launcher: None,
         }
     }
 
@@ -228,6 +241,21 @@ impl QuicListenerParams {
     #[must_use]
     pub const fn with_websocket(mut self, enabled: bool) -> Self {
         self.ws_enabled = enabled;
+        self
+    }
+
+    /// SESSION 28 / WS-over-H3 (RFC 9220) Stage C: inject the WebSocket
+    /// relay launcher. The `lb` binary builds it (it sees both `lb-quic`
+    /// and `lb-l7`, the latter holding the single-sourced
+    /// `proxy_frames`); the listener threads it into
+    /// [`crate::router::RouterParams::ws_relay_launcher`] → each actor.
+    /// Set this alongside [`Self::with_websocket(true)`] on a
+    /// WebSocket-opted-in listener; without it a validated extended
+    /// CONNECT has no relay to run (the actor answers `502`). `None`
+    /// listeners are byte-identical to the pre-S28 H3 front (R3).
+    #[must_use]
+    pub fn with_ws_relay_launcher(mut self, launcher: crate::ws_tunnel::WsRelayLauncher) -> Self {
+        self.ws_relay_launcher = Some(launcher);
         self
     }
 }
@@ -346,6 +374,10 @@ impl QuicListener {
             quic_modeb_metrics: params.quic_modeb_metrics.clone(),
             // SESSION 27 / WS-over-H3 Stage A: the WebSocket opt-in.
             ws_enabled: params.ws_enabled,
+            // SESSION 28 / WS-over-H3 Stage C: the injected relay launcher
+            // (cloned so the `QuicListenerParams` — which is `Clone` — can
+            // outlive `spawn`). `None` ⇒ byte-identical H3 front (R3).
+            ws_relay_launcher: params.ws_relay_launcher.clone(),
         };
         let router_handle = router::spawn(router_params);
         let handle = tokio::spawn(async move {

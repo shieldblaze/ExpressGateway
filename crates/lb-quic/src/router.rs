@@ -102,6 +102,13 @@ pub struct RouterParams {
     /// `false` (every pre-S27 caller) keeps the H3 front byte-identical
     /// (R3 — SETTINGS frame unchanged, `:protocol` rejected as today).
     pub ws_enabled: bool,
+    /// SESSION 28 / WS-over-H3 (RFC 9220) Stage C: the injected WebSocket
+    /// relay launcher, threaded verbatim from
+    /// [`crate::listener::QuicListenerParams::ws_relay_launcher`] into each
+    /// spawned actor's [`crate::conn_actor::ActorParams::ws_relay_launcher`].
+    /// `None` (every non-WS listener) keeps the H3 termination path
+    /// byte-identical (R3). Cheap to clone (an `Arc`-backed closure).
+    pub ws_relay_launcher: Option<crate::ws_tunnel::WsRelayLauncher>,
     /// Maximum number of concurrent QUIC connections served by this
     /// router. When the per-CID dispatch table is at this cap, new
     /// Initial packets are dropped (legitimate clients retry; a
@@ -406,6 +413,10 @@ fn spawn_new_connection(
         // and accepts `:protocol` Extended CONNECT. `false` ⇒ byte-identical
         // H3 front (R3).
         ws_enabled: params.ws_enabled,
+        // SESSION 28 / WS-over-H3 Stage C: thread the injected relay
+        // launcher so the actor can run the frame relay on a validated
+        // extended CONNECT. `None` ⇒ no tunnel ever built (R3).
+        ws_relay_launcher: params.ws_relay_launcher.clone(),
     };
     // CODE-2-08: wrap the two DashMap entries in a CidEntryGuard so
     // cleanup runs unconditionally — clean exit, async-cancel
@@ -516,6 +527,7 @@ mod tests {
             raw_quic_backend: None,
             quic_modeb_metrics: None,
             ws_enabled: false,
+            ws_relay_launcher: None,
             // TEST-001: reduced cap so the dashmap only needs 4 entries
             // to be saturated. cap_entries = 2 * 2 = 4.
             max_connections: 2,
@@ -734,6 +746,7 @@ mod tests {
             raw_quic_backend: None,
             quic_modeb_metrics: None,
             ws_enabled: false,
+            ws_relay_launcher: None,
             max_connections: MAX_CONNECTIONS,
             cancel: cancel.clone(),
         };
