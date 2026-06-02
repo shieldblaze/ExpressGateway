@@ -107,6 +107,98 @@ async fn handle(
         .unwrap_or_else(|_| Response::new(Full::new(Bytes::from_static(b"ok")))))
 }
 
+/// Response body that yields the echoed request bytes (one DATA frame) then a
+/// `grpc-status: 0` trailing HEADERS — the gRPC happy-path shape that drives
+/// the gateway's H3 response-trailer egress (the S29 F-S29-1 path) end to end.
+struct GrpcEchoBody {
+    data: Option<Bytes>,
+    trailer_sent: bool,
+}
+impl hyper::body::Body for GrpcEchoBody {
+    type Data = Bytes;
+    type Error = std::convert::Infallible;
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<hyper::body::Frame<Bytes>, Self::Error>>> {
+        if let Some(d) = self.data.take() {
+            return std::task::Poll::Ready(Some(Ok(hyper::body::Frame::data(d))));
+        }
+        if !self.trailer_sent {
+            self.trailer_sent = true;
+            let mut t = hyper::HeaderMap::new();
+            t.insert("grpc-status", hyper::header::HeaderValue::from_static("0"));
+            t.insert("grpc-message", hyper::header::HeaderValue::from_static(""));
+            return std::task::Poll::Ready(Some(Ok(hyper::body::Frame::trailers(t))));
+        }
+        std::task::Poll::Ready(None)
+    }
+}
+
+/// gRPC service handler: echo the framed request body back verbatim (the
+/// gateway is opaque — no gRPC parsing) + a `grpc-status: 0` trailer.
+async fn grpc_handle(
+    req: Request<Incoming>,
+    ctrl: Arc<BackendControl>,
+) -> Result<Response<GrpcEchoBody>, std::convert::Infallible> {
+    let body = req
+        .into_body()
+        .collect()
+        .await
+        .map(|b| b.to_bytes())
+        .unwrap_or_default();
+    let slow = ctrl.slow();
+    if !slow.is_zero() {
+        tokio::time::sleep(slow).await;
+    }
+    ctrl.served.fetch_add(1, Ordering::Relaxed);
+    Ok(Response::builder()
+        .status(200)
+        .header("content-type", "application/grpc")
+        .body(GrpcEchoBody {
+            data: Some(body),
+            trailer_sent: false,
+        })
+        .unwrap_or_else(|_| {
+            Response::new(GrpcEchoBody {
+                data: None,
+                trailer_sent: true,
+            })
+        }))
+}
+
+/// Spawn an HTTP/2 gRPC echo origin on an ephemeral loopback port (S29
+/// sc9_grpc_h3). Echoes the framed request body + a `grpc-status: 0` trailing
+/// HEADERS — the far end of the gateway's opaque gRPC-over-H3 relay whose
+/// per-RPC stream/fd/memory bound the soak proves.
+pub async fn spawn_grpc_h2_backend(ctrl: Arc<BackendControl>) -> anyhow::Result<SocketAddr> {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+    let addr = listener.local_addr()?;
+    tokio::spawn(async move {
+        loop {
+            if ctrl.stopped() {
+                return;
+            }
+            let accept = tokio::time::timeout(Duration::from_millis(200), listener.accept()).await;
+            let Ok(Ok((stream, _))) = accept else {
+                continue;
+            };
+            if ctrl.should_drop() {
+                drop(stream);
+                continue;
+            }
+            let ctrl2 = Arc::clone(&ctrl);
+            tokio::spawn(async move {
+                let svc = service_fn(move |req| grpc_handle(req, Arc::clone(&ctrl2)));
+                let _ = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
+                    .serve_connection(TokioIo::new(stream), svc)
+                    .await;
+            });
+        }
+    });
+    Ok(addr)
+}
+
 /// Spawn an HTTP/1.1 origin on an ephemeral loopback port. Returns its address.
 pub async fn spawn_h1_backend(ctrl: Arc<BackendControl>) -> anyhow::Result<SocketAddr> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await?;

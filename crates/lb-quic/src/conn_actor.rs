@@ -520,18 +520,31 @@ fn drain_resp_channels(
 ) {
     let sids: Vec<u64> = resp_rx_by_stream.keys().copied().collect();
     for sid in sids {
-        // The cell spawn site inserts an empty `Progressive` StreamTx
-        // alongside the receiver, so this entry exists. INC-5: `Progressive`
-        // is the only variant.
-        let StreamTx::Progressive {
+        // SESSION 29 (gRPC-over-H3 large-response trailer drop): the cell
+        // spawn site inserts the `Progressive` StreamTx alongside the
+        // receiver, but `drain_streams_to_conn`'s `retain` REMOVES it the
+        // instant the stream goes terminal (clean trailer/FIN sent, or
+        // RESET). A stale receiver can outlive it (a buffered `End` /
+        // channel-close not yet consumed). We MUST NOT re-create a fresh
+        // StreamTx for such a stream: a fresh `or_insert_with` would replay
+        // the leftover `End`/`Disconnected`, fire a spurious `ended`-FIN +
+        // RESET-branch, and `stream_shutdown` would DISCARD a large
+        // response's still-buffered trailer+FIN (small responses raced
+        // clear before the reset; large ones silently lost the trailing
+        // `grpc-status` HEADERS — gRPC-fatal). So `get_mut`, not
+        // `entry().or_insert_with()`: a missing StreamTx means the stream
+        // already terminated correctly — drop the stale receiver and skip.
+        let Some(StreamTx::Progressive {
             queue,
             ended,
             reset,
             fin_sent,
             ..
-        } = stream_response
-            .entry(sid)
-            .or_insert_with(StreamTx::progressive);
+        }) = stream_response.get_mut(&sid)
+        else {
+            resp_rx_by_stream.remove(&sid);
+            continue;
+        };
         if *fin_sent || *reset || *ended {
             // Terminal already decided; nothing more to pull. (Keep
             // the receiver until the stream is dropped by

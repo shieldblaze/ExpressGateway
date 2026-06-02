@@ -1645,6 +1645,7 @@ dependencies = [
  "hyper",
  "lb-balancer",
  "lb-core",
+ "lb-grpc",
  "lb-h3-testcodec",
  "lb-io",
  "lb-observability",

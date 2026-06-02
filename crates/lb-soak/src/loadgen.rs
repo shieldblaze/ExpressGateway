@@ -2123,6 +2123,324 @@ pub async fn run_ws_h3_churn(
     }
 }
 
+// ── gRPC-over-HTTP/3 load (S29 sc9_grpc_h3) ──────────────────────────────────
+
+/// Build one gRPC length-prefixed frame: a 1-byte compression flag (0) + a
+/// 4-byte big-endian length + the message.
+fn frame_grpc(payload: &[u8]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(5 + payload.len());
+    v.push(0u8);
+    v.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+    v.extend_from_slice(payload);
+    v
+}
+
+/// Poll quiche::h3 events for one request stream: capture `:status`, the
+/// `grpc-status` trailer (from the trailing HEADERS), the response body bytes,
+/// and the FIN (`Event::Finished`).
+fn grpc_h3_drain(
+    h3: &mut quiche::h3::Connection,
+    conn: &mut quiche::Connection,
+    sid: u64,
+    status: &mut Option<u16>,
+    grpc_status: &mut Option<i32>,
+    body: &mut Vec<u8>,
+    finished: &mut bool,
+) {
+    use quiche::h3::NameValue;
+    loop {
+        match h3.poll(conn) {
+            Ok((s, quiche::h3::Event::Headers { list, .. })) if s == sid => {
+                for h in &list {
+                    if h.name() == b":status" {
+                        *status = std::str::from_utf8(h.value())
+                            .ok()
+                            .and_then(|v| v.parse().ok());
+                    } else if h.name() == b"grpc-status" {
+                        *grpc_status = std::str::from_utf8(h.value())
+                            .ok()
+                            .and_then(|v| v.parse().ok());
+                    }
+                }
+            }
+            Ok((s, quiche::h3::Event::Data)) if s == sid => {
+                let mut chunk = [0u8; 8192];
+                while let Ok(n) = h3.recv_body(conn, s, &mut chunk) {
+                    if n == 0 {
+                        break;
+                    }
+                    body.extend_from_slice(chunk.get(..n).unwrap_or(&[]));
+                }
+            }
+            Ok((s, quiche::h3::Event::Finished)) if s == sid => *finished = true,
+            Ok(_) => {}
+            Err(quiche::h3::Error::Done) | Err(_) => break,
+        }
+    }
+}
+
+/// One gRPC-over-H3 session on a fresh QUIC connection. With `until_cancel` it
+/// keeps issuing unary RPCs (one request stream each) until cancelled
+/// (sustained pressure on the per-RPC response-trailer egress); else it issues
+/// exactly `rpcs` then closes (open/close churn — the stream/fd reclaim probe).
+/// Each RPC: POST + `content-type: application/grpc` + a framed message; the
+/// gateway proxies to the H2 gRPC backend and relays the echo + a trailing
+/// `grpc-status: 0`. Verifies status 200, the echoed message byte-identical,
+/// and `grpc-status: 0` (the trailer the S29 fix preserves) — so a regression
+/// of F-S29-1 under load would surface as `err()`, not a silent pass.
+#[allow(clippy::too_many_arguments)]
+async fn grpc_h3_unary_session(
+    target: SocketAddr,
+    sni: &str,
+    ca_path: &std::path::Path,
+    seed: u64,
+    rpcs: usize,
+    until_cancel: bool,
+    stats: &LoadStats,
+    cancel: &CancellationToken,
+) -> anyhow::Result<()> {
+    let socket = UdpSocket::bind(("127.0.0.1", 0)).await?;
+    let local = socket.local_addr()?;
+    let mut cfg = quic_client_config(ca_path)?;
+    let scid = random_cid();
+    let scid_ref = quiche::ConnectionId::from_ref(&scid);
+    let mut conn = quiche::connect(Some(sni), &scid_ref, local, target, &mut cfg)
+        .map_err(|e| anyhow::anyhow!("connect: {e:?}"))?;
+    let mut out = vec![0u8; MAX_UDP];
+    let mut inb = vec![0u8; MAX_UDP];
+
+    // Handshake.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+    flush(&mut conn, &socket, &mut out).await?;
+    while !conn.is_established() {
+        if tokio::time::Instant::now() > deadline {
+            anyhow::bail!("handshake timeout");
+        }
+        recv_one(
+            &mut conn,
+            &socket,
+            local,
+            &mut inb,
+            Duration::from_millis(50),
+        )
+        .await;
+        flush(&mut conn, &socket, &mut out).await?;
+        if conn.is_closed() {
+            anyhow::bail!("closed during handshake");
+        }
+    }
+    let h3cfg = quiche::h3::Config::new().map_err(|e| anyhow::anyhow!("h3::Config: {e:?}"))?;
+    let mut h3 = quiche::h3::Connection::with_transport(&mut conn, &h3cfg)
+        .map_err(|e| anyhow::anyhow!("h3 with_transport: {e:?}"))?;
+    flush(&mut conn, &socket, &mut out).await?;
+
+    let mut i = 0usize;
+    while (until_cancel && !cancel.is_cancelled()) || (!until_cancel && i < rpcs) {
+        if conn.is_closed() {
+            anyhow::bail!("conn closed mid-session");
+        }
+        // ~2-4 KiB message (varies) so each response carries real body + trailer.
+        let len = 2048 + (((seed as usize).wrapping_add(i)) % 2048);
+        let payload: Vec<u8> = (0..len)
+            .map(|k| ((k as u64).wrapping_add(seed).wrapping_add(i as u64) % 251) as u8)
+            .collect();
+        let framed = frame_grpc(&payload);
+
+        let headers = [
+            quiche::h3::Header::new(b":method", b"POST"),
+            quiche::h3::Header::new(b":scheme", b"https"),
+            quiche::h3::Header::new(b":authority", sni.as_bytes()),
+            quiche::h3::Header::new(b":path", b"/echo.Echo/Unary"),
+            quiche::h3::Header::new(b"content-type", b"application/grpc"),
+            quiche::h3::Header::new(b"te", b"trailers"),
+        ];
+        // Open the request stream (HEADERS, no FIN — body follows).
+        let sid = loop {
+            match h3.send_request(&mut conn, &headers, false) {
+                Ok(s) => break s,
+                Err(quiche::h3::Error::StreamBlocked) | Err(quiche::h3::Error::Done) => {
+                    flush(&mut conn, &socket, &mut out).await?;
+                    recv_one(
+                        &mut conn,
+                        &socket,
+                        local,
+                        &mut inb,
+                        Duration::from_millis(10),
+                    )
+                    .await;
+                }
+                Err(e) => anyhow::bail!("send_request: {e:?}"),
+            }
+            if conn.is_closed() {
+                anyhow::bail!("closed before request");
+            }
+        };
+        // Send the framed message + FIN (track the offset; send_body may
+        // accept partially when the stream send window is tight).
+        let send_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let mut off = 0usize;
+        while off < framed.len() {
+            match h3.send_body(&mut conn, sid, framed.get(off..).unwrap_or(&[]), true) {
+                Ok(n) => off += n,
+                Err(quiche::h3::Error::Done) => {
+                    flush(&mut conn, &socket, &mut out).await?;
+                    recv_one(
+                        &mut conn,
+                        &socket,
+                        local,
+                        &mut inb,
+                        Duration::from_millis(5),
+                    )
+                    .await;
+                }
+                Err(e) => anyhow::bail!("send_body: {e:?}"),
+            }
+            if tokio::time::Instant::now() > send_deadline {
+                anyhow::bail!("send timeout");
+            }
+        }
+        flush(&mut conn, &socket, &mut out).await?;
+
+        // Read the response: status + body + grpc-status trailer + FIN.
+        let mut status = None;
+        let mut grpc_status = None;
+        let mut body = Vec::new();
+        let mut finished = false;
+        let rsp_deadline = tokio::time::Instant::now() + Duration::from_secs(8);
+        while !finished {
+            if tokio::time::Instant::now() > rsp_deadline {
+                anyhow::bail!("response timeout (sid {sid})");
+            }
+            recv_one(
+                &mut conn,
+                &socket,
+                local,
+                &mut inb,
+                Duration::from_millis(20),
+            )
+            .await;
+            grpc_h3_drain(
+                &mut h3,
+                &mut conn,
+                sid,
+                &mut status,
+                &mut grpc_status,
+                &mut body,
+                &mut finished,
+            );
+            flush(&mut conn, &socket, &mut out).await?;
+            if conn.is_closed() {
+                anyhow::bail!("closed mid-response");
+            }
+        }
+        if status != Some(200) {
+            anyhow::bail!("status {status:?}");
+        }
+        if grpc_status != Some(0) {
+            anyhow::bail!("grpc-status {grpc_status:?} (F-S29-1 trailer drop?)");
+        }
+        if body != framed {
+            anyhow::bail!("echo mismatch ({} vs {} bytes)", body.len(), framed.len());
+        }
+        stats.ok();
+        i += 1;
+    }
+    let _ = conn.close(true, 0x100, b"done");
+    let _ = flush(&mut conn, &socket, &mut out).await;
+    Ok(())
+}
+
+/// Sustained gRPC-over-H3 load: `concurrency` workers, each holding a QUIC
+/// connection and issuing unary RPCs back-to-back until cancelled.
+pub async fn run_grpc_h3_load(
+    target: SocketAddr,
+    sni: String,
+    ca: PathBuf,
+    concurrency: usize,
+    stats: Arc<LoadStats>,
+    cancel: CancellationToken,
+) {
+    let mut workers = Vec::new();
+    for w in 0..concurrency {
+        let (sni, ca, stats, cancel) =
+            (sni.clone(), ca.clone(), Arc::clone(&stats), cancel.clone());
+        workers.push(tokio::spawn(async move {
+            let mut seed = (w as u64).wrapping_mul(17).wrapping_add(3);
+            while !cancel.is_cancelled() {
+                seed = seed.wrapping_add(101);
+                if let Err(e) = grpc_h3_unary_session(
+                    target,
+                    &sni,
+                    &ca,
+                    seed,
+                    usize::MAX,
+                    true,
+                    &stats,
+                    &cancel,
+                )
+                .await
+                {
+                    if !cancel.is_cancelled() {
+                        stats.err();
+                        eprintln!("[grpc_h3_load err] {e}");
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            }
+        }));
+    }
+    for w in workers {
+        let _ = w.await;
+    }
+}
+
+/// gRPC-over-H3 churn: `concurrency` workers, each opening a connection, doing
+/// `rpcs_per_cycle` unary RPCs, closing, and repeating — the per-RPC stream +
+/// connection/fd reclaim probe (the leak class the F-S29-1 fix also touches:
+/// the stale-receiver cleanup + the eliminated post-response busy-loop).
+pub async fn run_grpc_h3_churn(
+    target: SocketAddr,
+    sni: String,
+    ca: PathBuf,
+    concurrency: usize,
+    rpcs_per_cycle: usize,
+    stats: Arc<LoadStats>,
+    cancel: CancellationToken,
+) {
+    let mut workers = Vec::new();
+    for w in 0..concurrency {
+        let (sni, ca, stats, cancel) =
+            (sni.clone(), ca.clone(), Arc::clone(&stats), cancel.clone());
+        workers.push(tokio::spawn(async move {
+            let mut seed = (w as u64).wrapping_mul(29).wrapping_add(7);
+            while !cancel.is_cancelled() {
+                seed = seed.wrapping_add(53);
+                if let Err(e) = grpc_h3_unary_session(
+                    target,
+                    &sni,
+                    &ca,
+                    seed,
+                    rpcs_per_cycle,
+                    false,
+                    &stats,
+                    &cancel,
+                )
+                .await
+                {
+                    if !cancel.is_cancelled() {
+                        stats.err();
+                        eprintln!("[grpc_h3_churn err] {e}");
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        }));
+    }
+    for w in workers {
+        let _ = w.await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -47,6 +47,7 @@ const SCENARIOS: &[&str] = &[
     "sc8_ws_h1",
     "sc8b_ws_h2",
     "sc8c_ws_h3",
+    "sc9_grpc_h3",
 ];
 
 struct Args {
@@ -246,6 +247,7 @@ async fn setup_scenario(
         "sc8_ws_h1" => setup_ws_h1(args, bin, workdir, cancel).await,
         "sc8b_ws_h2" => setup_ws_h2(args, bin, workdir, cancel).await,
         "sc8c_ws_h3" => setup_ws_h3(args, bin, workdir, cancel).await,
+        "sc9_grpc_h3" => setup_grpc_h3(args, bin, workdir, cancel).await,
         other => anyhow::bail!("unknown scenario {other} (try --list)"),
     }
 }
@@ -654,6 +656,90 @@ async fn setup_h3_terminate(
         kinds: h3term_kinds(),
         tasks,
         backend_ctrls: vec![],
+        quic_stop: vec![],
+        stats,
+        _tmp: workdir.to_path_buf(),
+    })
+}
+
+/// sc9_grpc_h3 (S29) — gRPC-over-HTTP/3 soak. A `quic` H3-terminate front → an
+/// H2 gRPC echo backend (`[[listeners.backends]] protocol = "h2"`). A quiche::h3
+/// client sends opaque gRPC (framed messages + a trailing `grpc-status` HEADERS)
+/// as ordinary H3 POSTs; the gateway proxies to the H2 backend and relays the
+/// echo + the trailer back over the H3 response egress — the F-S29-1 path.
+/// Unlike sc7's BACKENDLESS inline-400 H3 front, this drives the REAL
+/// backend-proxied response-trailer path the S29 fix corrected.
+///
+/// Leak-class signal: `fds` (each in-flight RPC pins a client udp + a pooled
+/// backend tcp) + RSS/VmHWM + `panic_total == 0`. Two drivers create the
+/// pressure: a SUSTAINED driver (workers holding a QUIC conn and issuing unary
+/// RPCs back-to-back — per-RPC response-trailer egress + the terminal cleanup
+/// the fix touched), and a CHURN driver (workers that open, do N RPCs, then
+/// CLEAN-close — exercising stream + connection/fd RECLAIM, the leak class the
+/// F-S29-1 fix also touched via the stale-receiver cleanup + the eliminated
+/// post-response busy-loop). In-client every RPC verifies `grpc-status: 0` + the
+/// echoed message, so a trailer-drop regression under load surfaces as `err()`,
+/// never a silent pass.
+async fn setup_grpc_h3(
+    args: &Args,
+    bin: &std::path::Path,
+    workdir: &std::path::Path,
+    cancel: CancellationToken,
+) -> anyhow::Result<Running> {
+    let ctrl = BackendControl::new();
+    let backend = backends::spawn_grpc_h2_backend(Arc::clone(&ctrl)).await?;
+
+    let metrics = metrics_addr()?;
+    let listener = tcp_addr(gateway::ephemeral_udp_port()?);
+    let front_certs = config_gen::generate_certs(workdir, "soak-front")?;
+    let retry = workdir.join("retry.bin");
+    let toml = config_gen::quic_h3_terminate_h2(listener, backend, metrics, &front_certs, &retry);
+    let cfg = workdir.join("gateway.toml");
+    std::fs::write(&cfg, toml)?;
+    let gw = spawn_gateway(bin, &cfg, metrics, workdir).await?;
+
+    let sni = "soak-front".to_string();
+    let ca = front_certs.ca.clone();
+
+    let sustained = env_usize("GRPC_SUSTAINED", 6) * args.scale;
+    let churn = env_usize("GRPC_CHURN", 6) * args.scale;
+    let rpcs_per_cycle = env_usize("GRPC_CHURN_RPCS", 4);
+
+    let mut tasks = Vec::new();
+    let mut stats = Vec::new();
+
+    // Sustained: held QUIC conns issuing unary RPCs back-to-back.
+    let load = LoadStats::new();
+    stats.push(("grpc_h3_sustained".into(), Arc::clone(&load)));
+    tasks.push(tokio::spawn(loadgen::run_grpc_h3_load(
+        listener,
+        sni.clone(),
+        ca.clone(),
+        sustained,
+        Arc::clone(&load),
+        cancel.clone(),
+    )));
+
+    // Churn: open → N RPCs → close (stream + connection/fd reclaim).
+    let chstats = LoadStats::new();
+    stats.push(("grpc_h3_churn".into(), Arc::clone(&chstats)));
+    tasks.push(tokio::spawn(loadgen::run_grpc_h3_churn(
+        listener,
+        sni,
+        ca,
+        churn,
+        rpcs_per_cycle,
+        Arc::clone(&chstats),
+        cancel.clone(),
+    )));
+
+    Ok(Running {
+        gateway: gw,
+        metrics_addr: metrics,
+        gauges: h3term_gauges(),
+        kinds: h3term_kinds(),
+        tasks,
+        backend_ctrls: vec![ctrl],
         quic_stop: vec![],
         stats,
         _tmp: workdir.to_path_buf(),

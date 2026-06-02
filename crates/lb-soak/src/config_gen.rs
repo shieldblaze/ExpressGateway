@@ -314,6 +314,37 @@ pub fn quic_h3_terminate_ws(
     )
 }
 
+/// `quic` H3-terminate front → an HTTP/2 backend (the gRPC origin). The S29
+/// `sc9_grpc_h3` scenario: a quiche::h3 client sends opaque gRPC (5-byte
+/// length-prefixed messages + a trailing `grpc-status` HEADERS) as ordinary H3
+/// POSTs; the gateway terminates H3 and proxies to the H2 gRPC backend,
+/// relaying the trailing HEADERS + FIN back over the H3 response egress (the
+/// `drain_resp_channels` path the S29 F-S29-1 fix corrected). Leak-class
+/// signal: per-RPC stream open/close + the response-trailer terminal cleanup
+/// (the stale-receiver respawn the fix removed) under sustained load + churn —
+/// `fds` (each in-flight RPC pins a client udp + a pooled backend tcp) +
+/// RSS/VmHWM + panic=0, with `grpc-status:0` verified in-client throughout.
+#[must_use]
+pub fn quic_h3_terminate_h2(
+    listener: SocketAddr,
+    backend: SocketAddr,
+    metrics: SocketAddr,
+    front_certs: &Certs,
+    retry_secret: &Path,
+) -> String {
+    format!(
+        "{rt}[[listeners]]\naddress = \"{listener}\"\nprotocol = \"quic\"\n\n\
+         [listeners.quic]\ncert_path = \"{cert}\"\nkey_path = \"{key}\"\nretry_secret_path = \"{retry}\"\n\n\
+         [[listeners.backends]]\naddress = \"{backend}\"\nprotocol = \"h2\"\nweight = 1\n\n\
+         {obs}",
+        rt = runtime_block(),
+        cert = front_certs.cert.display(),
+        key = front_certs.key.display(),
+        retry = retry_secret.display(),
+        obs = observability_block(metrics),
+    )
+}
+
 /// Mode A QUIC passthrough — a top-level `[passthrough]` block routing flows to
 /// `backend`. TLS is end-to-end client↔backend; the gateway never decrypts.
 ///

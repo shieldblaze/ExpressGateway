@@ -1,9 +1,0 @@
-=== SOAK sc8c_ws_h3 — DRIFT (finding) (60s, 13 samples) ===
-      rss_kb [ DRIFT] rss_kb: drift — last-third median 23942 vs first-third 18186 (+31.7%), monotone 100% , slope 760.0979/sample — first=8160 last=24708 min=8160 max=24708
-    vmhwm_kb [ DRIFT] vmhwm_kb: drift — last-third median 23942 vs first-third 18186 (+31.7%), monotone 100% , slope 760.0979/sample — first=8160 last=24708 min=8160 max=24708
-         fds [BOUNDED] fds: bounded — last-third median 11 vs first-third 11 (+0.0%, within band 10% or non-monotone 100%) — first=11 last=11 min=11 max=11
-     threads [BOUNDED] threads: bounded — last-third median 9 vs first-third 9 (+0.0%, within band 10% or non-monotone 91%) — first=10 last=9 min=9 max=10
-  panic_total [BOUNDED] panic_total: stayed zero across the run — first=0 last=0 min=0 max=0
-  load:
-    ws_h3_sustained: ok=612 err=96
-    ws_h3_churn: ok=138 err=96
