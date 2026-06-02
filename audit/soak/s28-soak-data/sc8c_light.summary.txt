@@ -1,9 +1,0 @@
-=== SOAK sc8c_ws_h3 — BOUNDED (25s, 4 samples) ===
-      rss_kb [INCONCLUSIVE] rss_kb: only 4 steady-state samples (< 8 required) — first=8132 last=14712 min=8132 max=14712
-    vmhwm_kb [INCONCLUSIVE] vmhwm_kb: only 4 steady-state samples (< 8 required) — first=8132 last=14712 min=8132 max=14712
-         fds [INCONCLUSIVE] fds: only 4 steady-state samples (< 8 required) — first=11 last=11 min=11 max=11
-     threads [INCONCLUSIVE] threads: only 4 steady-state samples (< 8 required) — first=10 last=9 min=9 max=10
-  panic_total [BOUNDED] panic_total: stayed zero across the run — first=0 last=0 min=0 max=0
-  load:
-    ws_h3_sustained: ok=82 err=10
-    ws_h3_churn: ok=13 err=10
