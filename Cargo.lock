@@ -1402,6 +1402,7 @@ dependencies = [
  "rustls",
  "rustls-pemfile",
  "rustls-pki-types",
+ "socket2 0.5.10",
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",

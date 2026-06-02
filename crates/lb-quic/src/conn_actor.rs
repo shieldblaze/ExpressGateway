@@ -350,9 +350,7 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
         // busy-poll: a truly-idle tunnel is reaped by `proxy_frames`' own
         // idle timeout (default 60 s). Does NOT defeat backpressure — the
         // bounded channels still cap in-flight bytes; we only poll oftener.
-        if !body_tx_by_stream.is_empty()
-            || !resp_rx_by_stream.is_empty()
-            || !ws_tunnels.is_empty()
+        if !body_tx_by_stream.is_empty() || !resp_rx_by_stream.is_empty() || !ws_tunnels.is_empty()
         {
             next_wait = next_wait.min(Duration::from_millis(2));
         }
@@ -1489,7 +1487,11 @@ fn setup_ws_tunnel(
     // RFC 8441/9220: `websocket` is the only `:protocol` value the gateway
     // bootstraps. Any other registered protocol → 501 Not Implemented.
     if !protocol.eq_ignore_ascii_case("websocket") {
-        tracing::debug!(stream_id = sid, protocol, "WS-H3: unsupported :protocol — 501");
+        tracing::debug!(
+            stream_id = sid,
+            protocol,
+            "WS-H3: unsupported :protocol — 501"
+        );
         spawn_inline_h3_response(
             resp_tasks,
             resp_rx_by_stream,
@@ -1535,7 +1537,10 @@ fn setup_ws_tunnel(
         to_reader,
         from_writer,
     } = endpoints;
-    tracing::debug!(stream_id = sid, "WS-H3: extended CONNECT accepted; dialing upstream before 200");
+    tracing::debug!(
+        stream_id = sid,
+        "WS-H3: extended CONNECT accepted; dialing upstream before 200"
+    );
     ws_tunnels.insert(
         sid,
         WsTunnelState {
@@ -1635,7 +1640,10 @@ fn ws_handle_client_fin(
 /// reset-vs-EOF mapping).
 fn ws_handle_client_reset(sid: u64, st: &mut WsTunnelState) {
     if let Some(tx) = st.to_reader.take() {
-        tracing::debug!(stream_id = sid, "WS-H3: client reset tunnel stream; Reset to relay");
+        tracing::debug!(
+            stream_id = sid,
+            "WS-H3: client reset tunnel stream; Reset to relay"
+        );
         let _ = tx.try_send(TunnelInbound::Reset);
     }
 }
@@ -1732,8 +1740,7 @@ fn pump_ws_tunnels(
 
         // (2) Send the queued 200 head (retry under a full send window).
         if let Some(ok) = st.pending_ok.as_ref() {
-            let mut h3_headers: Vec<quiche::h3::Header> =
-                Vec::with_capacity(ok.headers.len() + 1);
+            let mut h3_headers: Vec<quiche::h3::Header> = Vec::with_capacity(ok.headers.len() + 1);
             h3_headers.push(quiche::h3::Header::new(b":status", b"200"));
             for (n, v) in &ok.headers {
                 h3_headers.push(quiche::h3::Header::new(n.as_bytes(), v.as_bytes()));

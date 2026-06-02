@@ -81,6 +81,10 @@ ring = "0.17"
 # needed (only the default `handshake` from the workspace pin).
 tokio-tungstenite = { workspace = true }
 futures-util = { workspace = true }
+# R8 wired-tunnel backpressure test: shrink the backend↔gateway TCP socket
+# buffers (SO_SNDBUF) so the test measures the GATEWAY's backpressure, not the
+# kernel's auto-tuned (multi-MB) socket buffers.
+socket2 = { workspace = true }
 
 [features]
 # S15 A2-8: feature flag mirroring `lb-quic`'s `quic-terminate` /

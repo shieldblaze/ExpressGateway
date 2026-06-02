@@ -180,8 +180,7 @@ pub struct WsRelayHandle {
 /// RFC 6455 handshake **before** signalling readiness, then runs the
 /// single-sourced `proxy_frames` over the [`H3WsTunnel`] (R12 — the relay
 /// is NOT duplicated in `lb-quic`).
-pub type WsRelayLauncher =
-    Arc<dyn Fn(H3WsTunnel, WsConnectRequest) -> WsRelayHandle + Send + Sync>;
+pub type WsRelayLauncher = Arc<dyn Fn(H3WsTunnel, WsConnectRequest) -> WsRelayHandle + Send + Sync>;
 
 /// The `proxy_frames`-side handle: a bounded `AsyncRead + AsyncWrite` over
 /// one H3 bidi stream. Cheap to construct; not `Clone` (a tunnel is owned

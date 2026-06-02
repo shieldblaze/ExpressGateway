@@ -513,10 +513,13 @@ pub async fn dial_backend_ws(
             }
         }
     }
-    let (backend_ws, resp) =
-        tokio_tungstenite::client_async_with_config(builder, stream, Some(cfg.tungstenite_config()))
-            .await
-            .map_err(|e| format!("upstream handshake failed: {e}"))?;
+    let (backend_ws, resp) = tokio_tungstenite::client_async_with_config(
+        builder,
+        stream,
+        Some(cfg.tungstenite_config()),
+    )
+    .await
+    .map_err(|e| format!("upstream handshake failed: {e}"))?;
     // RFC 6455 §1.3 / RFC 8441 §5: surface the upstream-selected subprotocol
     // so the caller can echo it in the extended CONNECT 200 response.
     let negotiated = resp
