@@ -3428,6 +3428,140 @@ mod tests {
         );
     }
 
+    // F-S26-1 coverage — `wire_h3_terminate_backends` H2 + H3 dispatch
+    // arms (main.rs ~1267 H2 / ~1278 H3). Only the H1 arm had an e2e;
+    // these unit-drive the H2/H3 arms from a ListenerConfig and assert the
+    // RIGHT QuicListenerParams backend field is set. Literal `127.0.0.1`
+    // addresses resolve via the real DnsResolver WITHOUT network I/O, so
+    // the test is deterministic and offline.
+
+    /// Build an H3-terminate `ListenerConfig` (protocol=quic, no raw_proxy)
+    /// carrying a single backend with the given `protocol` + tls knobs.
+    fn h3_terminate_cfg_with_backend(
+        backend: lb_config::BackendConfig,
+    ) -> lb_config::ListenerConfig {
+        lb_config::ListenerConfig {
+            address: "127.0.0.1:0".to_string(),
+            protocol: "quic".to_string(),
+            tls: None,
+            quic: Some(quic_cfg_with_raw_proxy(None)),
+            alt_svc: None,
+            http: None,
+            h2_security: None,
+            websocket: None,
+            grpc: None,
+            drain_timeout_ms: None,
+            drain_jitter_ms: None,
+            backends: vec![backend],
+        }
+    }
+
+    #[tokio::test]
+    async fn wire_h3_terminate_backends_dispatches_h2_arm() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let cfg = h3_terminate_cfg_with_backend(lb_config::BackendConfig {
+            address: "127.0.0.1:3001".to_string(),
+            protocol: "h2".to_string(),
+            weight: 1,
+            tls_ca_path: None,
+            tls_verify_hostname: None,
+            tls_verify_peer: true,
+        });
+        let params = quic_listener_params_from_config(bind, cfg.quic.as_ref().unwrap(), None, None);
+        let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
+        let resolver = DnsResolver::new(ResolverConfig::default());
+        let metrics = Arc::new(MetricsRegistry::new());
+        let params = wire_h3_terminate_backends(params, &cfg, &pool, &resolver, &metrics)
+            .await
+            .expect("h2 arm must wire");
+        assert!(
+            params.h2_backend.is_some(),
+            "an h2 backend must wire with_h2_backend (the H3→H2 arm)"
+        );
+        assert!(
+            params.h3_backend.is_none(),
+            "h2 backend must NOT set the h3_backend slot"
+        );
+        assert!(
+            params.backends.is_empty(),
+            "h2 backend must NOT populate the H1 backend list"
+        );
+    }
+
+    #[tokio::test]
+    async fn wire_h3_terminate_backends_dispatches_h3_arm() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        // tls_verify_peer=false ⇒ build_h3_upstream_pool accepts it without a
+        // CA bundle (the uniform-verify-off opt-out), keeping the test offline.
+        let cfg = h3_terminate_cfg_with_backend(lb_config::BackendConfig {
+            address: "127.0.0.1:3002".to_string(),
+            protocol: "h3".to_string(),
+            weight: 1,
+            tls_ca_path: None,
+            tls_verify_hostname: Some("h3.backend.test".to_string()),
+            tls_verify_peer: false,
+        });
+        let params = quic_listener_params_from_config(bind, cfg.quic.as_ref().unwrap(), None, None);
+        let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
+        let resolver = DnsResolver::new(ResolverConfig::default());
+        let metrics = Arc::new(MetricsRegistry::new());
+        let params = wire_h3_terminate_backends(params, &cfg, &pool, &resolver, &metrics)
+            .await
+            .expect("h3 arm must wire");
+        let (_, addr, sni) = params
+            .h3_backend
+            .as_ref()
+            .expect("an h3 backend must wire with_h3_backend (the H3→H3 arm)");
+        assert_eq!(
+            addr.to_string(),
+            "127.0.0.1:3002",
+            "the resolved H3 backend address must be threaded through"
+        );
+        assert_eq!(
+            sni, "h3.backend.test",
+            "the tls_verify_hostname override must become the upstream SNI"
+        );
+        assert!(
+            params.h2_backend.is_none(),
+            "h3 backend must NOT set the h2_backend slot"
+        );
+        assert!(
+            params.backends.is_empty(),
+            "h3 backend must NOT populate the H1 backend list"
+        );
+    }
+
+    /// The H1 arm (must-have, the WS-over-H3 backend leg) — assert
+    /// `with_backends` is wired (it has an e2e via
+    /// `spawn_quic_h3_terminate_forwards_to_h1_backend_through_real_listener`,
+    /// but this unit-pins the dispatch arm directly + the SNI/h2/h3 slots
+    /// stay clear).
+    #[tokio::test]
+    async fn wire_h3_terminate_backends_dispatches_h1_arm() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let cfg = h3_terminate_cfg_with_backend(lb_config::BackendConfig {
+            address: "127.0.0.1:3003".to_string(),
+            protocol: "h1".to_string(),
+            weight: 1,
+            tls_ca_path: None,
+            tls_verify_hostname: None,
+            tls_verify_peer: true,
+        });
+        let params = quic_listener_params_from_config(bind, cfg.quic.as_ref().unwrap(), None, None);
+        let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
+        let resolver = DnsResolver::new(ResolverConfig::default());
+        let metrics = Arc::new(MetricsRegistry::new());
+        let params = wire_h3_terminate_backends(params, &cfg, &pool, &resolver, &metrics)
+            .await
+            .expect("h1 arm must wire");
+        assert_eq!(
+            params.backends,
+            vec!["127.0.0.1:3003".parse::<SocketAddr>().unwrap()],
+            "an h1 backend must populate the H1 backend list (with_backends)"
+        );
+        assert!(params.h2_backend.is_none() && params.h3_backend.is_none());
+    }
+
     #[test]
     fn build_raw_quic_backend_rejects_unparseable_addr() {
         let mut rp = raw_proxy_block();

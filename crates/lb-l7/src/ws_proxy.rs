@@ -813,4 +813,148 @@ mod tests {
         flood.abort();
         relay.abort();
     }
+
+    /// R10 coverage — the write-wedge liveness guard `close_backpressure`
+    /// (lines ~436-453) reached via the forwarding-`send().await` timeout
+    /// arm (~370-372, the ClientToBackend direction). This is the
+    /// single-direction WEDGED-WRITE mirror of the read-frame watchdog
+    /// (`ReadFrameTimeout`): when a peer stops draining so a forward
+    /// `send()` cannot complete within `read_frame_timeout`, the relay must
+    /// emit a `Close 1008 (Policy, "ws backpressure/write timeout")` to the
+    /// OTHER side and tear down `Ok(())` — reclaiming the connection rather
+    /// than hanging the task forever. (This is the always-on liveness guard,
+    /// NOT the gated F-S27-2 H2 DoS surface.)
+    ///
+    /// Deterministic: the backend NEVER reads and its pipe is tiny, so the
+    /// client's flood toward the backend wedges the relay's
+    /// `backend_tx.send()` well past the SHORT `read_frame_timeout`
+    /// (200 ms) — and the generous `idle_timeout` (30 s) guarantees the
+    /// idle envelope cannot fire first, so the Close we observe is the
+    /// write-timeout 1008, not the 1001 idle close.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn close_backpressure_1008_on_forward_write_timeout() {
+        // SHORT read-frame budget (the write-wedge trigger) + GENEROUS idle
+        // (so the both-silent envelope cannot pre-empt it). SMALL
+        // max_message_size so the relay's bounded write buffer
+        // (max_message_size + default write_buffer_size) is small — a flood
+        // past it forces `backend_tx.send()` to actually PARK (not just
+        // buffer), which is what trips the read_frame timeout.
+        let cfg = WsConfig {
+            idle_timeout: Duration::from_secs(30),
+            read_frame_timeout: Duration::from_millis(200),
+            max_message_size: 16 * 1024,
+            enabled: true,
+            ..WsConfig::default()
+        };
+
+        // client socket: client_proxy_io <-> client_observer_io.
+        // backend socket: backend_proxy_io <-> backend_observer_io.
+        // A TINY backend pipe so a couple of forwarded messages fill it and
+        // the relay's `backend_tx.send()` cannot complete (backend never
+        // reads) → exceeds read_frame_timeout → close_backpressure.
+        let (client_proxy_io, client_observer_io): (DuplexStream, DuplexStream) = duplex(4096);
+        let (backend_proxy_io, backend_observer_io): (DuplexStream, DuplexStream) = duplex(256);
+
+        let proxy = Arc::new(WsProxy::new(cfg));
+        let client_ws_proxy = server_ws(client_proxy_io, &cfg).await;
+        let backend_ws_proxy = client_ws(backend_proxy_io, &cfg).await;
+        // The client observer drives the flood toward the backend AND reads
+        // back the relay's frames (so the 1008 the relay writes to the
+        // client side is observable — that direction's pipe is drained).
+        // Role::Client so its outbound frames are MASKED (RFC 6455) — the
+        // relay's client-facing half is Role::Server and rejects unmasked
+        // client frames. `_backend_observer_io` is intentionally NEVER read:
+        // that wedges the relay's forward `backend_tx.send()`.
+        let client_observer = client_ws(client_observer_io, &cfg).await;
+        // Split so the flood (write half) and the Close-observe (read half)
+        // run CONCURRENTLY on the one client socket — the writer will
+        // eventually wedge once the relay stops draining (relay is itself
+        // parked on backend_tx.send), and the reader independently picks up
+        // the relay's 1008.
+        let (mut obs_tx, mut obs_rx) = client_observer.split();
+
+        let relay_done = tokio::spawn(async move {
+            // Returns Ok(()) from the close_backpressure arm.
+            proxy.proxy_frames(client_ws_proxy, backend_ws_proxy).await
+        });
+
+        // Flood from the client toward the backend, far past the relay's
+        // bounded write buffer (max_message_size 16 KiB + default write
+        // buffer ≈ 144 KiB ⇒ ~144 × 1 KiB msgs). With the backend never
+        // draining its 256 B pipe, once that buffer fills the relay's
+        // `backend_tx.send()` PARKS > read_frame_timeout → close_backpressure.
+        // Tolerate the eventual `feed` wedge (the client pipe backs up once
+        // the relay stops reading) — that is expected, not a failure.
+        let flood = tokio::spawn(async move {
+            let payload = vec![0xABu8; 1024];
+            for _ in 0..4096u32 {
+                if obs_tx.feed(Message::Binary(payload.clone())).await.is_err()
+                    || obs_tx.flush().await.is_err()
+                {
+                    break;
+                }
+            }
+        });
+
+        // Read back the relay's 1008. close_backpressure writes a
+        // Close(Policy, "ws backpressure/write timeout") to the client side.
+        let observe = tokio::spawn(async move {
+            loop {
+                match obs_rx.next().await {
+                    Some(Ok(Message::Close(Some(frame)))) => return Some(frame),
+                    Some(Ok(_)) => {} // skip any queued data frames
+                    Some(Err(_)) | None => return None,
+                }
+            }
+        });
+
+        // DELAYED backend drainer: the backend must NOT read during the
+        // flood (so the relay's `backend_tx.send()` wedges and trips
+        // close_backpressure at ~200 ms), but MUST drain shortly AFTER so
+        // close_backpressure's own best-effort `backend_tx.send(Close(None))`
+        // (line ~450, NOT timeout-wrapped) can complete and the relay
+        // returns. 500 ms > the 200 ms read_frame budget guarantees the trip
+        // has already happened before draining starts (deterministic order).
+        let backend_drainer = tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            let mut backend = server_ws(backend_observer_io, &cfg).await;
+            while let Some(Ok(_)) = backend.next().await {}
+        });
+
+        // The relay must finish (Ok) within a window << idle_timeout (30 s)
+        // but consistent with the 200 ms write budget having fired. A
+        // generous outer cap keeps the test bounded without being a
+        // correctness timeout.
+        let result = tokio::time::timeout(Duration::from_secs(8), relay_done)
+            .await
+            .expect("proxy_frames must return within the bound (close_backpressure tears down)")
+            .expect("relay task panicked");
+        assert!(
+            result.is_ok(),
+            "close_backpressure returns Ok(()) (clean teardown), got {result:?}"
+        );
+
+        flood.abort();
+        backend_drainer.abort();
+
+        // The client side must have received the Close 1008 with the
+        // write-timeout reason — proving close_backpressure (not the idle
+        // 1001 path) fired.
+        let frame = tokio::time::timeout(Duration::from_secs(2), observe)
+            .await
+            .expect("observer task must finish")
+            .expect("observer task panicked")
+            .expect("client observer must receive the Close frame from close_backpressure");
+        assert_eq!(
+            frame.code,
+            CloseCode::Policy,
+            "write-wedge teardown must emit Close 1008 (Policy Violation), got {:?}",
+            frame.code
+        );
+        assert!(
+            frame.reason.contains("backpressure/write timeout"),
+            "Close reason must name the write-timeout guard, got {:?}",
+            frame.reason
+        );
+    }
 }
