@@ -94,6 +94,14 @@ pub struct RouterParams {
     /// (the B4/B5 helpers are NOT given the metrics — their signatures are
     /// unchanged). Cheap to clone (an `Arc`-backed `prometheus` bundle).
     pub quic_modeb_metrics: Option<lb_observability::QuicModeBMetrics>,
+    /// SESSION 27 / WS-over-H3 (RFC 9220) Stage A: whether this listener
+    /// opted into WebSocket (a `[listeners.websocket]` block was present).
+    /// Threaded verbatim from
+    /// [`crate::listener::QuicListenerParams::ws_enabled`] into each
+    /// spawned actor's [`crate::conn_actor::ActorParams::ws_enabled`].
+    /// `false` (every pre-S27 caller) keeps the H3 front byte-identical
+    /// (R3 — SETTINGS frame unchanged, `:protocol` rejected as today).
+    pub ws_enabled: bool,
     /// Maximum number of concurrent QUIC connections served by this
     /// router. When the per-CID dispatch table is at this cap, new
     /// Initial packets are dropped (legitimate clients retry; a
@@ -393,6 +401,11 @@ fn spawn_new_connection(
         // relay actor can bump them at its lifetime/per-pass sites. `None`
         // on the H3 path (no churn — R3).
         quic_modeb_metrics: params.quic_modeb_metrics.clone(),
+        // SESSION 27 / WS-over-H3 Stage A: thread the listener's WebSocket
+        // opt-in so the actor advertises SETTINGS_ENABLE_CONNECT_PROTOCOL
+        // and accepts `:protocol` Extended CONNECT. `false` ⇒ byte-identical
+        // H3 front (R3).
+        ws_enabled: params.ws_enabled,
     };
     // CODE-2-08: wrap the two DashMap entries in a CidEntryGuard so
     // cleanup runs unconditionally — clean exit, async-cancel
@@ -502,6 +515,7 @@ mod tests {
             h2_backend: None,
             raw_quic_backend: None,
             quic_modeb_metrics: None,
+            ws_enabled: false,
             // TEST-001: reduced cap so the dashmap only needs 4 entries
             // to be saturated. cap_entries = 2 * 2 = 4.
             max_connections: 2,
@@ -719,6 +733,7 @@ mod tests {
             h2_backend: None,
             raw_quic_backend: None,
             quic_modeb_metrics: None,
+            ws_enabled: false,
             max_connections: MAX_CONNECTIONS,
             cancel: cancel.clone(),
         };

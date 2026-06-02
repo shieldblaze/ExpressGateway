@@ -24,6 +24,42 @@ This section aggregates the Round-4 audit-driven work landing on
 
 ### Protocol
 
+- **S27 — WebSocket proxying over HTTP/2 (RFC 8441) + HTTP/3 (RFC 9220).** WebSocket proxying is
+  delivered over **HTTP/1.1 (RFC 6455)** and **HTTP/2 Extended CONNECT (RFC 8441, gated
+  off-by-default)**; the **HTTP/3 (RFC 9220)** groundwork landed (config + validator + bounded tunnel
+  adapter), the actor relay wiring carried to S28. The opaque bidirectional relay (`WsProxy::proxy_frames`)
+  is single-sourced across transports.
+  - **F-S27-1 (SECURITY, HIGH) — FIXED.** WS-over-H2 `handle_ws_extended_connect` no longer emits
+    `200` before the upstream WS handshake completes (the H2 analog of the H1 GHSA fixed in
+    ROUND8-L7-01 — false-success + a request-smuggling window). It now dials + completes the upstream
+    handshake first: upstream-refused → **502**, dial/handshake-budget → **504**, `200` only on success.
+    Regression test with a load-bearing negative control (`tests/ws_h2_upgrade_defer.rs`).
+  - **F-S27-2 (SECURITY, HIGH) — WS-over-H2 gated OFF-by-default** (new
+    `[listeners.websocket].h2_extended_connect`, default `false`). The H2 upgraded-stream write leg
+    buffers **unbounded** when a client stalls (hyper's `UpgradedSendStreamTask` →
+    `h2::SendStream::send_data` accepts data regardless of the flow-control window) — a memory-
+    exhaustion DoS. Opt-in for trusted clients with a documented caveat; the window-aware backpressure
+    fix is carried as **CF-S27-2**. WS-over-H1 (TCP-socket backpressure) and WS-over-H3 (bounded
+    adapter) are unaffected — both R8-bounded.
+  - **F-S27-3 (LOW) — FIXED**: WS-over-H2 upstream handshake now injects the child `traceparent`/
+    `tracestate` (H1 parity). **RFC 8441 §4**: extended CONNECT now requires `:scheme`+`:path`
+    (malformed → 400, was a silent `/` default).
+  - **F-S26-1 — FIXED (operability).** The production binary now config-wires an H3-terminate→backend
+    relay (`[[listeners.backends]]` dispatched by `protocol`: h1/h2/h3); previously these backends were
+    silently unreachable on the `quic` path. Startup validation rejects `raw_proxy`+`backends` and
+    mixed backend-protocol families.
+  - **WS-over-H3 (RFC 9220) groundwork (Stages A+B), carried to S28 for the relay wiring**:
+    `h3::Config::enable_extended_connect` gated on a per-listener websocket block; app-layer
+    `:protocol` extended-CONNECT validation (R3-safe — non-WS listeners byte-identical); a bounded
+    `AsyncRead/AsyncWrite` H3-stream tunnel adapter (`lb-quic/src/ws_tunnel.rs`, R8-backpressured +
+    reset-vs-clean-EOF mapping, 9 unit tests).
+  - **WS soak** (`lb-soak` `sc8_ws_h1` + `sc8b_ws_h2`): the long-lived relay is BOUNDED under sustained
+    bidirectional load + heavy open/close churn over H1 + H2 (panic=0; no fd/connection/RSS drift; H1
+    5.4M churn cycles + H2 192K, zero echo-integrity errors).
+  - Validated: `--workspace --all-features` ×3 = **1484/0/18**, clippy `-D warnings` + fmt clean,
+    session-code coverage **83.9%** (≥80%, scoped, independently re-measured). See
+    `audit/websockets/s27-report.md`. SESSION 27 PARTIAL — WS-over-H3 Stage C + CF-S27-2 + gRPC-over-H3
+    carried to S28.
 - **CF-S22-QUICHE-H3-MIGRATION (S23–S26)** — the HTTP/3 termination front
   (server ingress+egress + the H3 upstream client) now rides
   `quiche::h3::Connection`; the hand-rolled H3 frame/QPACK layer is removed

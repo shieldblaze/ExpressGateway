@@ -347,7 +347,12 @@ async fn spawn_h2_ws_proxy(backend: SocketAddr) -> SocketAddr {
     let picker = RoundRobinAddrs::new(vec![backend]).unwrap();
     let proxy = Arc::new(
         H2Proxy::new(pool(), Arc::new(picker), None, timeouts(), false)
-            .with_websocket(Arc::new(WsProxy::new(WsConfig::default()))),
+            .with_websocket(Arc::new(WsProxy::new(WsConfig::default())))
+            // S27 INC-5: WS-over-H2 extended CONNECT is gated off-by-default
+            // (F-S27-2). This authority-guard test exercises the WS fork, so
+            // it must opt in — otherwise the extended CONNECT is rejected at
+            // the h2 layer (PROTOCOL_ERROR) before reaching the guard.
+            .with_h2_extended_connect(true),
     );
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

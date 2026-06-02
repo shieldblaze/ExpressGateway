@@ -1,0 +1,190 @@
+//! INC-2V Task C probe: does an extended-CONNECT client that NEVER drives
+//! the upgrade (never reads/writes frames) cause an unbounded hold of the
+//! established `backend_ws` (pooled TCP socket)?
+//!
+//! Scenario: a real WS echo backend (so the upstream handshake succeeds and
+//! the gateway returns 200 + spawns the splice task). The client opens the
+//! extended CONNECT, asserts 200, then goes COMPLETELY IDLE (no DATA, no
+//! read) while holding the H2 stream open. We measure how long the backend
+//! connection stays alive by having the backend report when its socket is
+//! finally closed/reset. If the relay's idle/read-frame watchdog reclaims
+//! it, the backend sees EOF within ~read_frame_timeout. If nothing reclaims
+//! it, the backend is held until the test's outer ceiling.
+//!
+//! NOT part of the committed suite — run to capture evidence, then removed.
+
+#![cfg(test)]
+
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, Instant};
+
+use bytes::Bytes;
+use lb_io::Runtime;
+use lb_io::pool::{PoolConfig, TcpPool};
+use lb_io::sockopts::BackendSockOpts;
+use lb_l7::h1_proxy::{HttpTimeouts, RoundRobinAddrs};
+use lb_l7::h2_proxy::H2Proxy;
+use lb_l7::ws_proxy::{WsConfig, WsProxy};
+use lb_security::{TicketRotator, build_server_config};
+use parking_lot::Mutex;
+use rustls::ClientConfig;
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
+use tokio::net::{TcpListener, TcpStream};
+use tokio_rustls::{TlsAcceptor, TlsConnector};
+use tokio_tungstenite::tungstenite::Message;
+use futures_util::StreamExt;
+
+const SAN_HOST: &str = "expressgateway.test";
+
+fn make_cert_for(san: &str) -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>) {
+    let g = rcgen::generate_simple_self_signed(vec![san.to_string()]).unwrap();
+    (
+        vec![CertificateDer::from(g.cert.der().to_vec())],
+        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(g.key_pair.serialize_der())),
+    )
+}
+fn build_client_cfg(ta: CertificateDer<'static>) -> Arc<ClientConfig> {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(ta).unwrap();
+    let mut cfg = ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(Arc::new(roots))
+        .with_no_client_auth();
+    cfg.alpn_protocols = vec![b"h2".to_vec()];
+    Arc::new(cfg)
+}
+fn build_pool() -> TcpPool {
+    TcpPool::new(PoolConfig::default(), BackendSockOpts::default(), Runtime::new())
+}
+
+/// Echo backend that records when its socket reaches EOF (relay torn down).
+/// `closed_at_ms` is set to elapsed-ms-since-`start` when the backend read
+/// returns 0 (peer closed) — i.e. when the gateway dropped `backend_ws`.
+async fn spawn_eof_reporting_backend(start: Instant, closed_at_ms: Arc<AtomicU64>) -> SocketAddr {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let local = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((sock, _)) = listener.accept().await else {
+                return;
+            };
+            let closed_at_ms = Arc::clone(&closed_at_ms);
+            tokio::spawn(async move {
+                let ws = match tokio_tungstenite::accept_async(sock).await {
+                    Ok(w) => w,
+                    Err(_) => return,
+                };
+                let (mut _tx, mut rx) = ws.split();
+                // Block reading: returns None on clean close / Err on reset.
+                while let Some(item) = rx.next().await {
+                    match item {
+                        Ok(Message::Text(_) | Message::Binary(_)) => {}
+                        _ => break,
+                    }
+                }
+                closed_at_ms.store(
+                    start.elapsed().as_millis() as u64,
+                    Ordering::SeqCst,
+                );
+            });
+        }
+    });
+    local
+}
+
+async fn spawn_gateway(
+    backend: SocketAddr,
+    read_frame_timeout: Duration,
+    idle_timeout: Duration,
+) -> (SocketAddr, CertificateDer<'static>) {
+    let pool = build_pool();
+    let picker = Arc::new(RoundRobinAddrs::new(vec![backend]).unwrap());
+    let h2 = Arc::new(
+        H2Proxy::new(pool, picker as _, None, HttpTimeouts::default(), true).with_websocket(
+            Arc::new(WsProxy::new(WsConfig {
+                idle_timeout,
+                read_frame_timeout,
+                max_message_size: 1024 * 1024,
+                enabled: true,
+                ..WsConfig::default()
+            })),
+        ),
+    );
+    let (chain, key) = make_cert_for(SAN_HOST);
+    let ta = chain[0].clone();
+    let rot = TicketRotator::new(Duration::from_secs(86_400), Duration::from_secs(3_600)).unwrap();
+    let alpn: &[&[u8]] = &[b"h2", b"http/1.1"];
+    let cfg = build_server_config(Arc::new(Mutex::new(rot)), chain, key, alpn).unwrap();
+    let acceptor = TlsAcceptor::from(cfg);
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let local = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((sock, peer)) = listener.accept().await else {
+                return;
+            };
+            let acceptor = acceptor.clone();
+            let h2 = Arc::clone(&h2);
+            tokio::spawn(async move {
+                let Ok(tls) = acceptor.accept(sock).await else {
+                    return;
+                };
+                if tls.get_ref().1.alpn_protocol().as_deref() == Some(b"h2".as_ref()) {
+                    let _ = h2.serve_connection(tls, peer).await;
+                }
+            });
+        }
+    });
+    (local, ta)
+}
+
+#[tokio::test]
+async fn idle_client_hold_probe() {
+    let start = Instant::now();
+    let closed_at = Arc::new(AtomicU64::new(0));
+    let backend = spawn_eof_reporting_backend(start, Arc::clone(&closed_at)).await;
+    // Short read-frame watchdog (2s) so we can observe reclamation quickly.
+    let (gw, ta) = spawn_gateway(backend, Duration::from_secs(30), Duration::from_secs(60)).await;
+
+    let sock = TcpStream::connect(gw).await.unwrap();
+    let connector = TlsConnector::from(build_client_cfg(ta));
+    let sn = ServerName::try_from(SAN_HOST).unwrap();
+    let tls = connector.connect(sn, sock).await.unwrap();
+    let (h2c, conn) = h2::client::handshake(tls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
+    let mut h2c = h2c.ready().await.unwrap();
+    let uri: http::Uri = format!("https://{SAN_HOST}/chat").parse().unwrap();
+    let mut req = http::Request::builder()
+        .method(http::Method::CONNECT)
+        .uri(uri)
+        .body(())
+        .unwrap();
+    req.extensions_mut()
+        .insert(h2::ext::Protocol::from_static("websocket"));
+    let (resp_fut, _send) = h2c.send_request(req, false).unwrap();
+    let resp = resp_fut.await.unwrap();
+    let t_200 = start.elapsed().as_millis() as u64;
+    eprintln!("HOLDPROBE: got status {} at t={}ms", resp.status(), t_200);
+    assert_eq!(resp.status(), http::StatusCode::OK);
+
+    // Client now goes COMPLETELY IDLE: never sends a frame, never reads.
+    // Keep _send (the request stream) and resp body alive so the H2 stream
+    // is NOT closed by the client. Hold for 6s and see if/when the backend
+    // observed EOF (relay teardown). read_frame_timeout=2s should reclaim.
+    let _keep = (_send, resp.into_body());
+    tokio::time::sleep(Duration::from_secs(4)).await;
+    let closed = closed_at.load(Ordering::SeqCst);
+    eprintln!(
+        "HOLDPROBE: backend observed EOF at t={}ms (0 = NEVER closed within 6s window)",
+        closed
+    );
+    // Diagnostic only — we report the number; the verdict is written up in
+    // the audit doc. (No hard assert: this probe characterizes behavior.)
+    let _ = Bytes::new();
+}

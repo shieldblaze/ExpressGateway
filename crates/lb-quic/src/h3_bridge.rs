@@ -464,14 +464,38 @@ impl H3Request {
 ///   name (§4.3)
 /// * **#15** no pseudo-header appears after a regular field (§4.3)
 ///
+/// SESSION 27 / WS-over-H3 (RFC 9220) Stage A — `ws_enabled` gates the
+/// RFC 8441/9220 Extended CONNECT acceptance:
+/// * When `ws_enabled` is `true` AND `:protocol` is present, the request
+///   is an Extended CONNECT: it MUST be `:method=CONNECT` and MUST carry
+///   `:scheme` + `:path` + `:authority` (RFC 8441 §4: "On requests that
+///   contain the :protocol pseudo-header field, the :scheme and :path
+///   pseudo-header fields of the target URI MUST also be included"). This
+///   is the OPPOSITE of a classic CONNECT (which omits `:scheme`/`:path`).
+/// * When `ws_enabled` is `false`, `:protocol` is an unregistered request
+///   pseudo-header and is rejected exactly as before (#14) — so a WS
+///   Extended CONNECT against a non-WS listener is byte-identically
+///   rejected (R3). quiche does not validate request pseudo-headers
+///   (mod.rs delegates to the application), so this is the sole authority.
+///
+/// (`:protocol` value semantics — only "websocket" is supported; an
+/// unknown value SHOULD draw 501 per RFC 9220 §3 — are decided by the
+/// CONNECT handler, NOT here: this function's job is the pseudo-header
+/// well-formedness envelope, leaving the relay/handshake layer to map an
+/// unsupported protocol to its status.)
+///
 /// # Errors
 /// Returns a static reason string naming the RFC clause violated.
-pub fn validate_request_pseudo_headers(headers: &[(String, String)]) -> Result<(), &'static str> {
+pub fn validate_request_pseudo_headers(
+    headers: &[(String, String)],
+    ws_enabled: bool,
+) -> Result<(), &'static str> {
     let mut method: Option<&str> = None;
     let mut scheme: Option<&str> = None;
     let mut seen_path = false;
     let mut seen_authority = false;
     let mut seen_host = false;
+    let mut seen_protocol = false;
     let mut seen_regular = false;
 
     for (name, value) in headers {
@@ -506,9 +530,21 @@ pub fn validate_request_pseudo_headers(headers: &[(String, String)]) -> Result<(
                     }
                     seen_authority = true;
                 }
+                // SESSION 27 / WS-over-H3 (RFC 8441/9220): the `:protocol`
+                // pseudo-header is REGISTERED only when this listener
+                // opted into WebSocket. When WS is off it falls through to
+                // the prohibited/unknown arm below — byte-identical R3
+                // reject. When on, it must not be duplicated (§4.3.1).
+                ":protocol" if ws_enabled => {
+                    if seen_protocol {
+                        return Err("h3 duplicate :protocol pseudo-header (RFC 9114 §4.3.1)");
+                    }
+                    seen_protocol = true;
+                }
                 // #14 — any other `:`-prefixed name (the response-only
-                // `:status`, or an unregistered pseudo-header) is
-                // prohibited in a request (RFC 9114 §4.3).
+                // `:status`, an unregistered pseudo-header, or `:protocol`
+                // on a non-WS listener) is prohibited in a request
+                // (RFC 9114 §4.3).
                 _ => {
                     return Err("h3 prohibited/unknown request pseudo-header (RFC 9114 §4.3)");
                 }
@@ -525,12 +561,27 @@ pub fn validate_request_pseudo_headers(headers: &[(String, String)]) -> Result<(
 
     // #13 — mandatory pseudo-headers. RFC 9114 §4.3.1: a normal request
     // MUST include exactly one each of :method, :scheme and :path. §4.4:
-    // a CONNECT request omits :scheme and :path and MUST include
-    // :authority. (CONNECT is not otherwise supported by the gateway, but
-    // the validation is kept RFC-correct so a future CONNECT path is not
-    // pre-broken here.)
+    // a classic CONNECT omits :scheme and :path and MUST include
+    // :authority. RFC 8441/9220 Extended CONNECT (`:method=CONNECT` +
+    // `:protocol`, WS only) INVERTS that: it MUST carry :scheme + :path +
+    // :authority. The `:protocol` arm above only fires under `ws_enabled`,
+    // so `seen_protocol` already encodes the gate.
     match method {
         None => Err("h3 missing mandatory :method pseudo-header (RFC 9114 §4.3.1)"),
+        Some("CONNECT") if seen_protocol => {
+            // RFC 8441 §4 / RFC 9220: Extended CONNECT MUST include the
+            // target URI's :scheme + :path, plus :authority. (`:protocol`
+            // without CONNECT is caught by the non-CONNECT arm below.)
+            if scheme.is_none() {
+                Err("h3 websocket extended CONNECT missing :scheme (RFC 8441 §4)")
+            } else if !seen_path {
+                Err("h3 websocket extended CONNECT missing :path (RFC 8441 §4)")
+            } else if !seen_authority {
+                Err("h3 websocket extended CONNECT missing :authority (RFC 8441 §4)")
+            } else {
+                Ok(())
+            }
+        }
         Some("CONNECT") => {
             if scheme.is_some() || seen_path {
                 Err("h3 CONNECT request must omit :scheme/:path (RFC 9114 §4.4)")
@@ -541,6 +592,13 @@ pub fn validate_request_pseudo_headers(headers: &[(String, String)]) -> Result<(
             }
         }
         Some(_) => {
+            // A `:protocol` on a non-CONNECT method is malformed — RFC 8441
+            // ties Extended CONNECT to `:method=CONNECT`. (Only reachable
+            // under `ws_enabled`; otherwise `:protocol` was already
+            // rejected above.)
+            if seen_protocol {
+                return Err("h3 :protocol pseudo-header requires :method=CONNECT (RFC 8441 §4)");
+            }
             let Some(scheme) = scheme else {
                 return Err("h3 missing mandatory :scheme pseudo-header (RFC 9114 §4.3.1)");
             };
@@ -2965,7 +3023,7 @@ mod tests {
             (":authority", "example.com"),
             ("user-agent", "h3spec"),
         ]);
-        assert!(validate_request_pseudo_headers(&ok).is_ok());
+        assert!(validate_request_pseudo_headers(&ok, false).is_ok());
         // Minimal valid https request: :method/:scheme/:path + :authority
         // (§4.3.1 makes :authority-or-Host mandatory for http/https).
         let min = h(&[
@@ -2974,7 +3032,7 @@ mod tests {
             (":path", "/"),
             (":authority", "h"),
         ]);
-        assert!(validate_request_pseudo_headers(&min).is_ok());
+        assert!(validate_request_pseudo_headers(&min, false).is_ok());
     }
 
     #[test]
@@ -2983,7 +3041,7 @@ mod tests {
         // :authority nor Host is malformed (RFC 9114 §4.3.1).
         let neither = h(&[(":method", "GET"), (":scheme", "https"), (":path", "/")]);
         assert!(
-            validate_request_pseudo_headers(&neither).is_err(),
+            validate_request_pseudo_headers(&neither, false).is_err(),
             "https request with no :authority and no Host must be rejected"
         );
         // The Host field is the §4.3.1 alternative to :authority.
@@ -2994,7 +3052,7 @@ mod tests {
             ("host", "example.com"),
         ]);
         assert!(
-            validate_request_pseudo_headers(&with_host).is_ok(),
+            validate_request_pseudo_headers(&with_host, false).is_ok(),
             "Host is a valid alternative to :authority (§4.3.1)"
         );
     }
@@ -3008,25 +3066,25 @@ mod tests {
             (":scheme", "https"),
             (":path", "/"),
         ]);
-        assert!(validate_request_pseudo_headers(&dup_method).is_err());
+        assert!(validate_request_pseudo_headers(&dup_method, false).is_err());
         let dup_path = h(&[
             (":method", "GET"),
             (":scheme", "https"),
             (":path", "/"),
             (":path", "/x"),
         ]);
-        assert!(validate_request_pseudo_headers(&dup_path).is_err());
+        assert!(validate_request_pseudo_headers(&dup_path, false).is_err());
     }
 
     #[test]
     fn pseudo_13_missing_mandatory_rejected() {
         // #13 — mandatory pseudo-headers absent (RFC 9114 §4.3.1).
         let no_method = h(&[(":scheme", "https"), (":path", "/")]);
-        assert!(validate_request_pseudo_headers(&no_method).is_err());
+        assert!(validate_request_pseudo_headers(&no_method, false).is_err());
         let no_path = h(&[(":method", "GET"), (":scheme", "https")]);
-        assert!(validate_request_pseudo_headers(&no_path).is_err());
+        assert!(validate_request_pseudo_headers(&no_path, false).is_err());
         let no_scheme = h(&[(":method", "GET"), (":path", "/")]);
-        assert!(validate_request_pseudo_headers(&no_scheme).is_err());
+        assert!(validate_request_pseudo_headers(&no_scheme, false).is_err());
     }
 
     #[test]
@@ -3039,14 +3097,14 @@ mod tests {
             (":path", "/"),
             (":status", "200"),
         ]);
-        assert!(validate_request_pseudo_headers(&status_in_req).is_err());
+        assert!(validate_request_pseudo_headers(&status_in_req, false).is_err());
         let unknown = h(&[
             (":method", "GET"),
             (":scheme", "https"),
             (":path", "/"),
             (":madeup", "x"),
         ]);
-        assert!(validate_request_pseudo_headers(&unknown).is_err());
+        assert!(validate_request_pseudo_headers(&unknown, false).is_err());
     }
 
     #[test]
@@ -3058,7 +3116,7 @@ mod tests {
             ("user-agent", "h3spec"),
             (":path", "/"),
         ]);
-        assert!(validate_request_pseudo_headers(&after).is_err());
+        assert!(validate_request_pseudo_headers(&after, false).is_err());
     }
 
     // ── SESSION 22 (h3spec #11/#21): request-stream frame sequencing ──
@@ -3067,15 +3125,165 @@ mod tests {
     fn pseudo_connect_request_rules() {
         // RFC 9114 §4.4: CONNECT omits :scheme/:path and needs :authority.
         let ok = h(&[(":method", "CONNECT"), (":authority", "example.com:443")]);
-        assert!(validate_request_pseudo_headers(&ok).is_ok());
+        assert!(validate_request_pseudo_headers(&ok, false).is_ok());
         let bad_has_path = h(&[
             (":method", "CONNECT"),
             (":authority", "example.com:443"),
             (":path", "/"),
         ]);
-        assert!(validate_request_pseudo_headers(&bad_has_path).is_err());
+        assert!(validate_request_pseudo_headers(&bad_has_path, false).is_err());
         let bad_no_authority = h(&[(":method", "CONNECT")]);
-        assert!(validate_request_pseudo_headers(&bad_no_authority).is_err());
+        assert!(validate_request_pseudo_headers(&bad_no_authority, false).is_err());
+    }
+
+    // ── SESSION 27 / WS-over-H3 (RFC 8441/9220) Extended CONNECT ──────────
+
+    /// A well-formed RFC 8441/9220 Extended CONNECT (`:method=CONNECT` +
+    /// `:protocol` + `:scheme` + `:path` + `:authority`) is ACCEPTED when
+    /// the listener opted into WebSocket (`ws_enabled = true`).
+    #[test]
+    fn pseudo_ws_extended_connect_accepted_when_enabled() {
+        let ext = h(&[
+            (":method", "CONNECT"),
+            (":protocol", "websocket"),
+            (":scheme", "https"),
+            (":path", "/chat"),
+            (":authority", "example.com:443"),
+        ]);
+        assert!(
+            validate_request_pseudo_headers(&ext, true).is_ok(),
+            "extended CONNECT with :scheme+:path+:authority must be accepted under ws_enabled"
+        );
+    }
+
+    /// R3 — the EXACT same Extended CONNECT is REJECTED when WS is off:
+    /// `:protocol` is an unregistered request pseudo-header (#14), so the
+    /// byte-identical behaviour of a non-WS listener is preserved. This is
+    /// the load-bearing R3 control for the gating.
+    #[test]
+    fn pseudo_ws_extended_connect_rejected_when_disabled() {
+        let ext = h(&[
+            (":method", "CONNECT"),
+            (":protocol", "websocket"),
+            (":scheme", "https"),
+            (":path", "/chat"),
+            (":authority", "example.com:443"),
+        ]);
+        let err = validate_request_pseudo_headers(&ext, false)
+            .expect_err("extended CONNECT must be rejected when ws_enabled=false (R3)");
+        assert!(
+            err.contains("prohibited/unknown request pseudo-header"),
+            "ws-off reject must be the unchanged #14 path, got: {err}"
+        );
+    }
+
+    /// RFC 8441 §4 — under `ws_enabled`, an Extended CONNECT MISSING
+    /// `:scheme` or `:path` is malformed (the inverse of classic CONNECT).
+    #[test]
+    fn pseudo_ws_extended_connect_requires_scheme_and_path() {
+        let no_scheme = h(&[
+            (":method", "CONNECT"),
+            (":protocol", "websocket"),
+            (":path", "/chat"),
+            (":authority", "example.com:443"),
+        ]);
+        assert!(
+            validate_request_pseudo_headers(&no_scheme, true)
+                .is_err_and(|e| e.contains("missing :scheme")),
+            "extended CONNECT without :scheme must be rejected (RFC 8441 §4)"
+        );
+        let no_path = h(&[
+            (":method", "CONNECT"),
+            (":protocol", "websocket"),
+            (":scheme", "https"),
+            (":authority", "example.com:443"),
+        ]);
+        assert!(
+            validate_request_pseudo_headers(&no_path, true)
+                .is_err_and(|e| e.contains("missing :path")),
+            "extended CONNECT without :path must be rejected (RFC 8441 §4)"
+        );
+        let no_authority = h(&[
+            (":method", "CONNECT"),
+            (":protocol", "websocket"),
+            (":scheme", "https"),
+            (":path", "/chat"),
+        ]);
+        assert!(
+            validate_request_pseudo_headers(&no_authority, true)
+                .is_err_and(|e| e.contains("missing :authority")),
+            "extended CONNECT without :authority must be rejected (RFC 8441 §4)"
+        );
+    }
+
+    /// `:protocol` on a non-CONNECT method is malformed (RFC 8441 ties
+    /// `:protocol` to `:method=CONNECT`), even under `ws_enabled`.
+    #[test]
+    fn pseudo_ws_protocol_requires_connect_method() {
+        let proto_on_get = h(&[
+            (":method", "GET"),
+            (":protocol", "websocket"),
+            (":scheme", "https"),
+            (":path", "/chat"),
+            (":authority", "example.com:443"),
+        ]);
+        assert!(
+            validate_request_pseudo_headers(&proto_on_get, true)
+                .is_err_and(|e| e.contains("requires :method=CONNECT")),
+            ":protocol on a non-CONNECT method must be rejected (RFC 8441 §4)"
+        );
+    }
+
+    /// A classic CONNECT (no `:protocol`) keeps its RFC 9114 §4.4 rules
+    /// EVEN under `ws_enabled` (omit :scheme/:path, need :authority) — the
+    /// WS gate must not relax the classic-CONNECT envelope.
+    #[test]
+    fn pseudo_classic_connect_unchanged_under_ws_enabled() {
+        let ok = h(&[(":method", "CONNECT"), (":authority", "example.com:443")]);
+        assert!(validate_request_pseudo_headers(&ok, true).is_ok());
+        let bad_has_path = h(&[
+            (":method", "CONNECT"),
+            (":authority", "example.com:443"),
+            (":path", "/"),
+        ]);
+        assert!(
+            validate_request_pseudo_headers(&bad_has_path, true)
+                .is_err_and(|e| e.contains("must omit :scheme/:path")),
+            "a classic CONNECT (no :protocol) with :path must still be rejected under ws_enabled"
+        );
+    }
+
+    /// #12 parity — a duplicated `:protocol` under `ws_enabled` is rejected.
+    #[test]
+    fn pseudo_ws_duplicate_protocol_rejected() {
+        let dup = h(&[
+            (":method", "CONNECT"),
+            (":protocol", "websocket"),
+            (":protocol", "websocket"),
+            (":scheme", "https"),
+            (":path", "/chat"),
+            (":authority", "example.com:443"),
+        ]);
+        assert!(
+            validate_request_pseudo_headers(&dup, true)
+                .is_err_and(|e| e.contains("duplicate :protocol")),
+            "a duplicated :protocol must be rejected (RFC 9114 §4.3.1)"
+        );
+    }
+
+    /// A normal (non-CONNECT) request is unaffected by `ws_enabled` — the
+    /// WS gate only adds a `:protocol` acceptance arm; it does not change
+    /// the plain-request envelope.
+    #[test]
+    fn pseudo_normal_request_unchanged_under_ws_enabled() {
+        let ok = h(&[
+            (":method", "GET"),
+            (":scheme", "https"),
+            (":path", "/"),
+            (":authority", "example.com"),
+        ]);
+        assert!(validate_request_pseudo_headers(&ok, true).is_ok());
+        assert!(validate_request_pseudo_headers(&ok, false).is_ok());
     }
 
     /// S6 I2 — `H3ReqStreamBody` frame contract: chunks → DATA frames

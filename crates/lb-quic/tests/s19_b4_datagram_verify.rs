@@ -442,6 +442,8 @@ async fn build_rig(certs: TestCerts, backend_addr: SocketAddr) -> Rig {
         h2_backend: None,
         raw_quic_backend: Some(raw_backend),
         quic_modeb_metrics: None,
+        // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
+        ws_enabled: false,
     };
     let actor = tokio::spawn(run_raw_proxy_actor_for_test(params));
 

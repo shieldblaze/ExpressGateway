@@ -95,6 +95,14 @@ pub struct QuicListenerParams {
     /// [`RouterParams::quic_modeb_metrics`]. `None` ⇒ no Mode-B metrics
     /// (and always `None` on the H3 path).
     pub quic_modeb_metrics: Option<lb_observability::QuicModeBMetrics>,
+    /// SESSION 27 / WS-over-H3 (RFC 9220) Stage A: whether this listener
+    /// opted into WebSocket (the binary sets this from a present
+    /// `[listeners.websocket]` block). Threaded to
+    /// [`crate::router::RouterParams::ws_enabled`] → each actor. Gates the
+    /// `SETTINGS_ENABLE_CONNECT_PROTOCOL` advertisement + the `:protocol`
+    /// Extended-CONNECT accept path. `false` by default (set via
+    /// [`Self::with_websocket`]) keeps the H3 front byte-identical (R3).
+    pub ws_enabled: bool,
 }
 
 impl std::fmt::Debug for QuicListenerParams {
@@ -114,6 +122,7 @@ impl std::fmt::Debug for QuicListenerParams {
             .field("raw_quic_backend_set", &self.raw_quic_backend.is_some())
             .field("dgram_queue_cap", &self.dgram_queue_cap)
             .field("quic_modeb_metrics_set", &self.quic_modeb_metrics.is_some())
+            .field("ws_enabled", &self.ws_enabled)
             .finish()
     }
 }
@@ -146,6 +155,10 @@ impl QuicListenerParams {
             raw_quic_backend: None,
             dgram_queue_cap: 1_024,
             quic_modeb_metrics: None,
+            // SESSION 27 / WS-over-H3: WebSocket opt-in is OFF by default
+            // — enabled via `with_websocket`. R3: the H3 settings frame +
+            // pseudo-header acceptance stay byte-identical until then.
+            ws_enabled: false,
         }
     }
 
@@ -199,6 +212,22 @@ impl QuicListenerParams {
         self.raw_quic_backend = Some(backend);
         self.dgram_queue_cap = dgram_queue_cap;
         self.quic_modeb_metrics = quic_modeb_metrics;
+        self
+    }
+
+    /// SESSION 27 / WS-over-H3 (RFC 9220) Stage A: opt this listener into
+    /// WebSocket. Sets `ws_enabled`, which the listener threads into
+    /// [`crate::router::RouterParams::ws_enabled`] → each per-connection
+    /// actor. With it set, the H3 server advertises
+    /// `SETTINGS_ENABLE_CONNECT_PROTOCOL` and
+    /// [`crate::h3_bridge::validate_request_pseudo_headers`] accepts an
+    /// RFC 8441/9220 Extended CONNECT (`:method=CONNECT` + `:protocol`).
+    /// Without it the H3 front is byte-identical to a non-WS listener
+    /// (R3). The actual frame relay is wired in a later stage; this knob
+    /// only governs the handshake-acceptance surface.
+    #[must_use]
+    pub const fn with_websocket(mut self, enabled: bool) -> Self {
+        self.ws_enabled = enabled;
         self
     }
 }
@@ -315,6 +344,8 @@ impl QuicListener {
             // SESSION 19 / Mode B (B6): the `quic_modeb_*` handles (always
             // `None` on the H3 path — no metric churn, R3).
             quic_modeb_metrics: params.quic_modeb_metrics.clone(),
+            // SESSION 27 / WS-over-H3 Stage A: the WebSocket opt-in.
+            ws_enabled: params.ws_enabled,
         };
         let router_handle = router::spawn(router_params);
         let handle = tokio::spawn(async move {

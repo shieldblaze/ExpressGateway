@@ -105,6 +105,75 @@ pub fn h1_front(
     )
 }
 
+/// `h1` front (plain TCP HTTP/1.1) with a `[listeners.websocket]` block ENABLED
+/// → an H1 WebSocket backend. The S27 sc8_ws_h1 scenario: the binary wires
+/// `with_websocket` on the H1 path (`build_h1_proxy`), so a WS upgrade arriving
+/// here is intercepted, the gateway dials the backend, and the long-lived
+/// `WsProxy::proxy_frames` relay runs. The block carries the canonical knobs
+/// (idle/read-frame/ping caps) so the soak OBSERVES them bounding state.
+///
+/// `idle_timeout_seconds` is the WS idle close (1001) — kept generous so the
+/// sustained echo clients stay up and the churn clients control their own
+/// open→close cadence (we are proving connection RECLAIM on clean close, not
+/// idle-reap). The backend speaks plain HTTP/1.1 (`backend_proto = "h1"`).
+#[must_use]
+pub fn h1_front_ws(
+    listener: SocketAddr,
+    backend: SocketAddr,
+    metrics: SocketAddr,
+    idle_timeout_seconds: u64,
+    read_frame_timeout_seconds: u64,
+) -> String {
+    format!(
+        "{rt}[[listeners]]\naddress = \"{listener}\"\nprotocol = \"h1\"\n\n\
+         [listeners.websocket]\n\
+         enabled = true\n\
+         idle_timeout_seconds = {idle}\n\
+         read_frame_timeout_seconds = {rft}\n\n\
+         [[listeners.backends]]\naddress = \"{backend}\"\nprotocol = \"h1\"\nweight = 1\n\n\
+         {obs}",
+        rt = runtime_block(),
+        idle = idle_timeout_seconds,
+        rft = read_frame_timeout_seconds,
+        obs = observability_block(metrics),
+    )
+}
+
+/// `h1s` front (TLS, ALPN advertises `h2` then `http/1.1`) with a
+/// `[listeners.websocket]` block ENABLED **and `h2_extended_connect = true`** →
+/// an H1 WebSocket backend. The S27 sc8b_ws_h2 scenario: an H2 client drives WS
+/// via RFC 8441 extended CONNECT; the gateway (`build_h2_proxy`) advertises
+/// `SETTINGS_ENABLE_CONNECT_PROTOCOL`, intercepts the extended CONNECT, and runs
+/// the same relay onto an H1 WS backend. `h2_extended_connect` is OFF by default
+/// (CF-S27-2), so the soak must explicitly opt in to exercise the H2 path.
+#[must_use]
+pub fn h1s_front_ws(
+    listener: SocketAddr,
+    backend: SocketAddr,
+    metrics: SocketAddr,
+    certs: &Certs,
+    idle_timeout_seconds: u64,
+    read_frame_timeout_seconds: u64,
+) -> String {
+    format!(
+        "{rt}[[listeners]]\naddress = \"{listener}\"\nprotocol = \"h1s\"\n\n\
+         [listeners.tls]\ncert_path = \"{cert}\"\nkey_path = \"{key}\"\n\n\
+         [listeners.websocket]\n\
+         enabled = true\n\
+         h2_extended_connect = true\n\
+         idle_timeout_seconds = {idle}\n\
+         read_frame_timeout_seconds = {rft}\n\n\
+         [[listeners.backends]]\naddress = \"{backend}\"\nprotocol = \"h1\"\nweight = 1\n\n\
+         {obs}",
+        rt = runtime_block(),
+        cert = certs.cert.display(),
+        key = certs.key.display(),
+        idle = idle_timeout_seconds,
+        rft = read_frame_timeout_seconds,
+        obs = observability_block(metrics),
+    )
+}
+
 /// `h1s` front (TLS, ALPN advertises `h2` then `http/1.1` — an H2 client
 /// negotiates HTTP/2) → backend speaking `backend_proto`. Covers the H2→H1 and
 /// H2→H2 cells.
@@ -341,6 +410,43 @@ mod tests {
             "F-S26-1: the binary ignores backends on the quic path — emit none"
         );
         assert!(toml.contains("metrics_bind = \"127.0.0.1:9090\""));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn h1_front_ws_has_enabled_websocket_block_and_backend() {
+        let toml = h1_front_ws(addr(8080), addr(3000), addr(9090), 120, 30);
+        assert!(toml.contains("protocol = \"h1\""));
+        assert!(
+            toml.contains("[listeners.websocket]"),
+            "WS soak front must carry a websocket block"
+        );
+        assert!(
+            toml.contains("enabled = true"),
+            "the websocket block must be enabled"
+        );
+        assert!(toml.contains("idle_timeout_seconds = 120"));
+        assert!(toml.contains("read_frame_timeout_seconds = 30"));
+        assert!(
+            toml.contains("[[listeners.backends]]"),
+            "WS front must have an H1 WS backend (the relay's far end)"
+        );
+        assert!(toml.contains("metrics_bind = \"127.0.0.1:9090\""));
+    }
+
+    #[test]
+    fn h1s_front_ws_opts_in_h2_extended_connect() {
+        let dir = std::env::temp_dir().join(format!("lb-soak-wsh2-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let certs = generate_certs(&dir, "soak.test").unwrap();
+        let toml = h1s_front_ws(addr(8443), addr(3000), addr(9090), &certs, 120, 30);
+        assert!(toml.contains("protocol = \"h1s\""));
+        assert!(toml.contains("[listeners.tls]"));
+        assert!(toml.contains("[listeners.websocket]"));
+        assert!(
+            toml.contains("h2_extended_connect = true"),
+            "WS-over-H2 soak must opt in to RFC 8441 extended CONNECT (off by default)"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

@@ -1,0 +1,73 @@
+================================================================
+INC-2V INDEPENDENT LOAD-BEARING PROOF (verifier, not ws-eng)
+================================================================
+Step 1: reverted ONLY crates/lb-l7/src/h2_proxy.rs to the pre-fix
+        version (git checkout e0e5a21b -- ...). The regression
+        suite tests/ws_h2_upgrade_defer.rs is UNCHANGED.
+        Expectation: it must go RED (client sees premature 200).
+----------------------------------------------------------------
+   Compiling lb-l7 v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-l7)
+   Compiling lb-integration-tests v0.1.0 (/home/ubuntu/Code/ExpressGateway)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.15s
+     Running tests/ws_h2_upgrade_defer.rs (/home/ubuntu/Code/eg-target/debug/deps/ws_h2_upgrade_defer-9ebdd193418803b4)
+
+running 3 tests
+test no_smuggled_data_forwarded_on_failure ... FAILED
+test client_sees_502_when_backend_rejects_ws ... FAILED
+test client_sees_504_on_handshake_timeout ... FAILED
+
+failures:
+
+---- no_smuggled_data_forwarded_on_failure stdout ----
+
+thread 'no_smuggled_data_forwarded_on_failure' panicked at tests/ws_h2_upgrade_defer.rs:343:5:
+assertion `left == right` failed: upstream refusal must yield 502, got 200 OK
+  left: 200
+ right: 502
+
+---- client_sees_502_when_backend_rejects_ws stdout ----
+
+thread 'client_sees_502_when_backend_rejects_ws' panicked at tests/ws_h2_upgrade_defer.rs:273:5:
+assertion `left == right` failed: upstream non-101 must yield 502, got 200 OK (a 200 here is F-S27-1: false-success / premature 200)
+  left: 200
+ right: 502
+
+---- client_sees_504_on_handshake_timeout stdout ----
+
+thread 'client_sees_504_on_handshake_timeout' panicked at tests/ws_h2_upgrade_defer.rs:295:5:
+assertion `left == right` failed: upstream that never answers within the bounded budget must yield 504, got 200 OK
+  left: 200
+ right: 504
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    client_sees_502_when_backend_rejects_ws
+    client_sees_504_on_handshake_timeout
+    no_smuggled_data_forwarded_on_failure
+
+test result: FAILED. 0 passed; 3 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+error: test failed, to rerun pass `--test ws_h2_upgrade_defer`
+================================================================
+
+================================================================
+Step 2: restored the fix (git checkout HEAD -- h2_proxy.rs).
+        Expectation: regression suite GREEN again.
+----------------------------------------------------------------
+   Compiling lb-l7 v0.1.0 (/home/ubuntu/Code/ExpressGateway/crates/lb-l7)
+   Compiling lb-integration-tests v0.1.0 (/home/ubuntu/Code/ExpressGateway)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.63s
+     Running tests/ws_h2_upgrade_defer.rs (/home/ubuntu/Code/eg-target/debug/deps/ws_h2_upgrade_defer-9ebdd193418803b4)
+
+running 3 tests
+test client_sees_502_when_backend_rejects_ws ... ok
+test client_sees_504_on_handshake_timeout ... ok
+test no_smuggled_data_forwarded_on_failure ... ok
+
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+
+================================================================
+VERDICT: regression suite is LOAD-BEARING — RED on pre-fix,
+         GREEN on fix. F-S27-1 independently CONFIRMED CLOSED.
+================================================================

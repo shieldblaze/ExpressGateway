@@ -713,6 +713,27 @@ pub struct WebsocketConfig {
     /// when *both* directions are silent. Defaults to 30 seconds.
     #[serde(default = "default_ws_read_frame_timeout_seconds")]
     pub read_frame_timeout_seconds: u64,
+    /// RFC 8441 WebSocket-over-HTTP/2 (extended CONNECT). OFF by default:
+    /// the H2 upgraded-stream write path lacks true end-to-end backpressure
+    /// (a non-reading client can force unbounded gateway memory; see
+    /// CF-S27-2). Enable only for trusted client populations until the
+    /// window-aware fix lands. When `false` (the default) the H2 listener
+    /// neither advertises `SETTINGS_ENABLE_CONNECT_PROTOCOL` nor intercepts
+    /// an inbound extended CONNECT. WS-over-HTTP/1.1 (RFC 6455) and the
+    /// future WS-over-HTTP/3 are UNAFFECTED by this gate.
+    #[serde(default)]
+    pub h2_extended_connect: bool,
+    /// SESSION 27 — RFC 9220 WebSocket-over-HTTP/3 (extended CONNECT).
+    /// OFF by default, mirroring [`Self::h2_extended_connect`]: when
+    /// `false` the QUIC/H3 listener neither advertises
+    /// `SETTINGS_ENABLE_CONNECT_PROTOCOL` nor accepts a `:protocol`
+    /// extended CONNECT (the `:protocol` pseudo-header is rejected exactly
+    /// as today — R3). Distinct from the H2 gate because the H3 datapath
+    /// is a separate listener type with its own backpressure story;
+    /// opting one in does not opt the other in. WS-over-HTTP/1.1 (RFC
+    /// 6455) is unaffected.
+    #[serde(default)]
+    pub h3_extended_connect: bool,
 }
 
 impl Default for WebsocketConfig {
@@ -724,6 +745,10 @@ impl Default for WebsocketConfig {
             ping_rate_limit_per_window: default_ws_ping_rate_limit_per_window(),
             ping_rate_limit_window_seconds: default_ws_ping_rate_limit_window_seconds(),
             read_frame_timeout_seconds: default_ws_read_frame_timeout_seconds(),
+            // OFF by default — H2-only DoS gate (CF-S27-2).
+            h2_extended_connect: false,
+            // OFF by default — H3 WS opt-in (S27, separate from H2's gate).
+            h3_extended_connect: false,
         }
     }
 }
@@ -1497,10 +1522,14 @@ fn validate_websocket_block(
     protocol: &str,
     listener: &ListenerConfig,
 ) -> Result<(), ConfigError> {
-    if listener.websocket.is_some() && !matches!(protocol, "h1" | "h1s") {
+    // WS-over-H1/H1s (RFC 6455) + WS-over-H2 (RFC 8441, on h1s via ALPN)
+    // are H1/H1s listeners; WS-over-H3 (RFC 9220, SESSION 27) rides the
+    // `quic` listener via H3 extended CONNECT. Any other protocol with a
+    // websocket block is a misconfig.
+    if listener.websocket.is_some() && !matches!(protocol, "h1" | "h1s" | "quic") {
         return Err(ConfigError::Validation(format!(
             "listener {i} has [listeners.websocket] but protocol is {protocol:?}; \
-             WebSocket requires protocol=\"h1\" or \"h1s\""
+             WebSocket requires protocol=\"h1\", \"h1s\", or \"quic\""
         )));
     }
     if let Some(ws) = listener.websocket.as_ref() {
@@ -1694,6 +1723,50 @@ fn validate_quic_listener(i: usize, listener: &ListenerConfig) -> Result<(), Con
         return Err(ConfigError::Validation(format!(
             "listener {i} has [listeners.tls] but protocol is \"quic\""
         )));
+    }
+    // F-S26-1: a QUIC listener is EITHER Mode B (terminate-and-
+    // re-originate raw QUIC via `[listeners.quic.raw_proxy]`) OR
+    // H3-terminate-and-forward (decode H3 → relay to `[[listeners.
+    // backends]]`). Configuring both is a genuine conflict — raw_proxy
+    // hands every accepted connection to the raw-proxy actor, so the
+    // H3-terminate backend list would be silently ignored. Reject it at
+    // startup rather than do something surprising.
+    if quic.raw_proxy.is_some() && !listener.backends.is_empty() {
+        return Err(ConfigError::Validation(format!(
+            "listener {i} sets both [listeners.quic.raw_proxy] (Mode B raw-QUIC \
+             proxy) and [[listeners.backends]] (H3-terminate forwarding); these \
+             are mutually exclusive — remove one"
+        )));
+    }
+    // F-S26-1: the H3-terminate forwarding path wires exactly ONE
+    // backend protocol family onto the listener (the library's
+    // `with_h2_backend` / `with_h3_backend` take a single address; the
+    // H1 `with_backends` takes the resolved vector). The router's
+    // dispatch precedence is h2 > h3 > h1, so a mixed-protocol backend
+    // list would silently drop the lower-precedence backends. Require a
+    // single family so an operator misconfig fails loudly at startup.
+    if quic.raw_proxy.is_none() && !listener.backends.is_empty() {
+        let mut saw_h1 = false;
+        let mut saw_h2 = false;
+        let mut saw_h3 = false;
+        for b in &listener.backends {
+            match b.protocol.as_str() {
+                "tcp" | "h1" => saw_h1 = true,
+                "h2" => saw_h2 = true,
+                "h3" => saw_h3 = true,
+                // Unknown protocols are already rejected by
+                // `validate_backend_list`; nothing to do here.
+                _ => {}
+            }
+        }
+        let families = usize::from(saw_h1) + usize::from(saw_h2) + usize::from(saw_h3);
+        if families > 1 {
+            return Err(ConfigError::Validation(format!(
+                "listener {i} (protocol=\"quic\", H3-terminate) mixes backend \
+                 protocol families (h1/tcp, h2, h3); a QUIC listener forwards to \
+                 exactly one backend protocol — split the listeners or pick one"
+            )));
+        }
     }
     Ok(())
 }
@@ -2160,6 +2233,162 @@ protocol = "h1"
         assert!(validate_config(&config).is_err());
     }
 
+    // F-S26-1: a QUIC listener with a single h1 backend and NO raw_proxy
+    // is the H3-terminate → H1 forwarding shape — it must VALIDATE (this
+    // is the config the binary now wires; previously backends were
+    // "allowed but ignored" on the quic path).
+    #[test]
+    fn validate_quic_h3_terminate_with_h1_backend_ok() {
+        let config = LbConfig {
+            listeners: vec![ListenerConfig {
+                address: "0.0.0.0:443".into(),
+                protocol: "quic".into(),
+                tls: None,
+                quic: Some(QuicListenerConfig {
+                    cert_path: "/x".into(),
+                    key_path: "/y".into(),
+                    retry_secret_path: "/z".into(),
+                    max_idle_timeout_ms: 30_000,
+                    max_recv_udp_payload_size: 1_350,
+                    raw_proxy: None,
+                }),
+                alt_svc: None,
+                http: None,
+                h2_security: None,
+                websocket: None,
+                grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
+                backends: vec![BackendConfig {
+                    address: "127.0.0.1:3000".into(),
+                    protocol: "h1".into(),
+                    weight: 1,
+                    tls_ca_path: None,
+                    tls_verify_hostname: None,
+                    tls_verify_peer: true,
+                }],
+            }],
+            runtime: None,
+            observability: None,
+            admin: None,
+            security: None,
+            passthrough: None,
+        };
+        assert!(
+            validate_config(&config).is_ok(),
+            "a quic H3-terminate listener with a single h1 backend must validate"
+        );
+    }
+
+    // F-S26-1: a QUIC listener that sets BOTH a raw_proxy (Mode B) and
+    // backends (H3-terminate forwarding) is a genuine conflict — reject.
+    #[test]
+    fn validate_quic_raw_proxy_with_backends_rejected() {
+        let config = LbConfig {
+            listeners: vec![ListenerConfig {
+                address: "0.0.0.0:443".into(),
+                protocol: "quic".into(),
+                tls: None,
+                quic: Some(QuicListenerConfig {
+                    cert_path: "/x".into(),
+                    key_path: "/y".into(),
+                    retry_secret_path: "/z".into(),
+                    max_idle_timeout_ms: 30_000,
+                    max_recv_udp_payload_size: 1_350,
+                    raw_proxy: Some(RawQuicProxyConfig {
+                        backend_addr: "127.0.0.1:4443".into(),
+                        sni: "backend.test".into(),
+                        backend_ca_path: None,
+                        dgram_queue_cap: 1024,
+                        max_relay_streams: 256,
+                    }),
+                }),
+                alt_svc: None,
+                http: None,
+                h2_security: None,
+                websocket: None,
+                grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
+                backends: vec![BackendConfig {
+                    address: "127.0.0.1:3000".into(),
+                    protocol: "h1".into(),
+                    weight: 1,
+                    tls_ca_path: None,
+                    tls_verify_hostname: None,
+                    tls_verify_peer: true,
+                }],
+            }],
+            runtime: None,
+            observability: None,
+            admin: None,
+            security: None,
+            passthrough: None,
+        };
+        let err = validate_config(&config).unwrap_err();
+        assert!(
+            matches!(&err, ConfigError::Validation(m) if m.contains("mutually exclusive")),
+            "raw_proxy + backends must be rejected as mutually exclusive, got: {err:?}"
+        );
+    }
+
+    // F-S26-1: a QUIC listener whose H3-terminate backends mix protocol
+    // families (h1 + h2) is ambiguous given the single-address h2/h3
+    // forwarding API — reject so the misconfig fails loudly.
+    #[test]
+    fn validate_quic_h3_terminate_mixed_backend_families_rejected() {
+        let config = LbConfig {
+            listeners: vec![ListenerConfig {
+                address: "0.0.0.0:443".into(),
+                protocol: "quic".into(),
+                tls: None,
+                quic: Some(QuicListenerConfig {
+                    cert_path: "/x".into(),
+                    key_path: "/y".into(),
+                    retry_secret_path: "/z".into(),
+                    max_idle_timeout_ms: 30_000,
+                    max_recv_udp_payload_size: 1_350,
+                    raw_proxy: None,
+                }),
+                alt_svc: None,
+                http: None,
+                h2_security: None,
+                websocket: None,
+                grpc: None,
+                drain_timeout_ms: None,
+                drain_jitter_ms: None,
+                backends: vec![
+                    BackendConfig {
+                        address: "127.0.0.1:3000".into(),
+                        protocol: "h1".into(),
+                        weight: 1,
+                        tls_ca_path: None,
+                        tls_verify_hostname: None,
+                        tls_verify_peer: true,
+                    },
+                    BackendConfig {
+                        address: "127.0.0.1:3001".into(),
+                        protocol: "h2".into(),
+                        weight: 1,
+                        tls_ca_path: None,
+                        tls_verify_hostname: None,
+                        tls_verify_peer: true,
+                    },
+                ],
+            }],
+            runtime: None,
+            observability: None,
+            admin: None,
+            security: None,
+            passthrough: None,
+        };
+        let err = validate_config(&config).unwrap_err();
+        assert!(
+            matches!(&err, ConfigError::Validation(m) if m.contains("backend protocol families")),
+            "mixed backend families on a quic listener must be rejected, got: {err:?}"
+        );
+    }
+
     #[test]
     fn validate_backend_unknown_protocol_rejected() {
         let config = LbConfig {
@@ -2524,6 +2753,36 @@ address = "127.0.0.1:3000"
         assert!(ws.enabled);
         assert_eq!(ws.idle_timeout_seconds, 30);
         assert_eq!(ws.max_message_size_bytes, 1_048_576);
+        // CF-S27-2: WS-over-H2 (RFC 8441 extended CONNECT) is OFF unless the
+        // operator explicitly sets `h2_extended_connect = true`. Omitting it
+        // (as above) must default to `false`.
+        assert!(
+            !ws.h2_extended_connect,
+            "h2_extended_connect must default to false (CF-S27-2: WS-over-H2 opt-in)"
+        );
+        validate_config(&config).unwrap();
+    }
+
+    #[test]
+    fn parse_websocket_h2_extended_connect_opt_in() {
+        // When the operator opts in, the flag round-trips as `true`.
+        let input = r#"
+[[listeners]]
+address = "0.0.0.0:80"
+protocol = "h1"
+
+[listeners.websocket]
+h2_extended_connect = true
+
+[[listeners.backends]]
+address = "127.0.0.1:3000"
+"#;
+        let config = parse_config(input).unwrap();
+        let ws = config.listeners[0].websocket.as_ref().unwrap();
+        assert!(
+            ws.h2_extended_connect,
+            "h2_extended_connect = true must parse as the opt-in"
+        );
         validate_config(&config).unwrap();
     }
 
@@ -2551,6 +2810,66 @@ address = "127.0.0.1:3000"
             passthrough: None,
         };
         assert!(validate_config(&config).is_err());
+    }
+
+    // SESSION 27 / WS-over-H3 (RFC 9220): a `quic` listener may now carry
+    // a `[listeners.websocket]` block (it was previously rejected — only
+    // h1/h1s were allowed). h3_extended_connect defaults OFF.
+    #[test]
+    fn validate_websocket_on_quic_listener_ok() {
+        let input = r#"
+[[listeners]]
+address = "0.0.0.0:443"
+protocol = "quic"
+
+[listeners.quic]
+cert_path = "/c"
+key_path = "/k"
+retry_secret_path = "/r"
+
+[listeners.websocket]
+"#;
+        let config = parse_config(input).unwrap();
+        let ws = config.listeners[0]
+            .websocket
+            .as_ref()
+            .expect("websocket block present on quic listener");
+        assert!(
+            !ws.h3_extended_connect,
+            "h3_extended_connect must default OFF (S27 gate, like h2_extended_connect)"
+        );
+        validate_config(&config)
+            .expect("a quic listener with a websocket block must validate (WS-over-H3)");
+    }
+
+    // SESSION 27: `h3_extended_connect = true` round-trips as the opt-in
+    // and the config validates.
+    #[test]
+    fn parse_websocket_h3_extended_connect_opt_in() {
+        let input = r#"
+[[listeners]]
+address = "0.0.0.0:443"
+protocol = "quic"
+
+[listeners.quic]
+cert_path = "/c"
+key_path = "/k"
+retry_secret_path = "/r"
+
+[listeners.websocket]
+h3_extended_connect = true
+"#;
+        let config = parse_config(input).unwrap();
+        let ws = config.listeners[0].websocket.as_ref().unwrap();
+        assert!(
+            ws.h3_extended_connect,
+            "h3_extended_connect = true must parse as the opt-in"
+        );
+        assert!(
+            !ws.h2_extended_connect,
+            "the H2 gate is independent and stays OFF"
+        );
+        validate_config(&config).unwrap();
     }
 
     #[test]

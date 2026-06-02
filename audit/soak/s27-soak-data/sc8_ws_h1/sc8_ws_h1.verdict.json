@@ -1,0 +1,103 @@
+{
+  "columns": [
+    {
+      "column": "rss_kb",
+      "first": 7184.0,
+      "first_third_median": 15300.0,
+      "kind": "trend",
+      "last": 15292.0,
+      "last_third_median": 15260.0,
+      "max": 16524.0,
+      "min": 7184.0,
+      "monotone_frac": 0.47692307692307695,
+      "n": 73,
+      "note": "rss_kb: bounded — last-third median 15260 vs first-third 15300 (-0.3%, within band 10% or non-monotone 48%)",
+      "rel_growth": -0.00261437908496732,
+      "slope_per_sample": -3.293267926103747,
+      "verdict": "BOUNDED"
+    },
+    {
+      "column": "vmhwm_kb",
+      "first": 7184.0,
+      "first_third_median": 16508.0,
+      "kind": "trend",
+      "last": 16708.0,
+      "last_third_median": 16708.0,
+      "max": 16708.0,
+      "min": 7184.0,
+      "monotone_frac": 0.9846153846153847,
+      "n": 73,
+      "note": "vmhwm_kb: bounded — last-third median 16708 vs first-third 16508 (+1.2%, within band 10% or non-monotone 98%)",
+      "rel_growth": 0.0121153380179307,
+      "slope_per_sample": 5.304247990815155,
+      "verdict": "BOUNDED"
+    },
+    {
+      "column": "fds",
+      "first": 11.0,
+      "first_third_median": 41.0,
+      "kind": "trend",
+      "last": 39.0,
+      "last_third_median": 41.5,
+      "max": 43.0,
+      "min": 11.0,
+      "monotone_frac": 0.5846153846153846,
+      "n": 73,
+      "note": "fds: bounded — last-third median 41.5 vs first-third 41 (+1.2%, within band 10% or non-monotone 58%)",
+      "rel_growth": 0.012195121951219513,
+      "slope_per_sample": 0.004425425320947709,
+      "verdict": "BOUNDED"
+    },
+    {
+      "column": "threads",
+      "first": 10.0,
+      "first_third_median": 9.0,
+      "kind": "trend",
+      "last": 9.0,
+      "last_third_median": 9.0,
+      "max": 10.0,
+      "min": 9.0,
+      "monotone_frac": 1.0,
+      "n": 73,
+      "note": "threads: bounded — last-third median 9 vs first-third 9 (+0.0%, within band 10% or non-monotone 100%)",
+      "rel_growth": 0.0,
+      "slope_per_sample": 0.0,
+      "verdict": "BOUNDED"
+    },
+    {
+      "column": "panic_total",
+      "first": 0.0,
+      "first_third_median": 0.0,
+      "kind": "counter_must_be_zero",
+      "last": 0.0,
+      "last_third_median": 0.0,
+      "max": 0.0,
+      "min": 0.0,
+      "monotone_frac": 1.0,
+      "n": 73,
+      "note": "panic_total: stayed zero across the run",
+      "rel_growth": 0.0,
+      "slope_per_sample": 0.0,
+      "verdict": "BOUNDED"
+    }
+  ],
+  "duration_secs": 360,
+  "label": "sc8_ws_h1",
+  "load": [
+    {
+      "err": 0,
+      "name": "ws_sustained",
+      "ok": 137075
+    },
+    {
+      "err": 0,
+      "name": "ws_churn",
+      "ok": 5436016
+    }
+  ],
+  "overall": "BOUNDED",
+  "sample_secs": 5,
+  "samples": 73,
+  "scale": 1,
+  "scenario": "sc8_ws_h1"
+}

@@ -1,0 +1,24 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
+     Running tests/fs27_1_repro.rs (/home/ubuntu/Code/eg-target/debug/deps/fs27_1_repro-9e4e08cdad337dfb)
+
+running 2 tests
+PROOF observed extended-CONNECT status = 200 OK
+F-S27-1 OBSERVED extended-CONNECT status = 200 OK
+
+thread 'client_must_not_see_200_when_upstream_rejects_ws' panicked at tests/fs27_1_repro.rs:221:5:
+assertion `left != right` failed: F-S27-1: client must NOT receive 200 when the upstream WS handshake is rejected (got 200 OK); a fixed gateway returns 502/504 and never signals success before the upstream handshake completes
+  left: 200
+ right: 200
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+PROOF round-trip over the promised tunnel got_echo = false
+test proof_200_is_premature_tunnel_is_dead ... ok
+test client_must_not_see_200_when_upstream_rejects_ws ... FAILED
+
+failures:
+
+failures:
+    client_must_not_see_200_when_upstream_rejects_ws
+
+test result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.05s
+
+error: test failed, to rerun pass `--test fs27_1_repro`

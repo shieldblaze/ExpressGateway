@@ -219,6 +219,17 @@ pub struct H2Proxy {
     /// binary; the counter logic itself runs whenever a registry is
     /// supplied (the proof test supplies its own).
     glitches_metrics: Option<Arc<lb_observability::MetricsRegistry>>,
+    /// CF-S27-2 (F-S27-2 owner disposition) — per-listener opt-in for
+    /// RFC 8441 WebSocket-over-HTTP/2 (extended CONNECT). OFF by default.
+    /// When `false` this proxy neither advertises
+    /// `SETTINGS_ENABLE_CONNECT_PROTOCOL` nor intercepts an inbound
+    /// extended CONNECT (it falls through to normal H2 handling, which
+    /// rejects a `CONNECT` with no backend tunnel). The shared `WsProxy`
+    /// relay is unchanged; this gate is purely the H2 advertise+intercept
+    /// layer. WS-over-H1 / WS-over-H3 are unaffected. The H2 upgraded-stream
+    /// write path lacks true end-to-end backpressure (memory-exhaustion DoS,
+    /// CF-S27-2) — hence default-OFF until the window-aware fix lands.
+    h2_extended_connect_enabled: bool,
 }
 
 /// F-SEC-1 (CVE-2023-44487-adjacent) — clean-close I/O wrapper that
@@ -502,6 +513,7 @@ impl H2Proxy {
             header_underscore_policy: crate::h1_proxy::HeaderUnderscorePolicy::Reject,
             glitches_threshold: None,
             glitches_metrics: None,
+            h2_extended_connect_enabled: false,
         }
     }
 
@@ -539,6 +551,7 @@ impl H2Proxy {
             header_underscore_policy: crate::h1_proxy::HeaderUnderscorePolicy::Reject,
             glitches_threshold: None,
             glitches_metrics: None,
+            h2_extended_connect_enabled: false,
         }
     }
 
@@ -654,9 +667,25 @@ impl H2Proxy {
 
     /// Enable WebSocket upgrade handling on this proxy. Fluent; returns
     /// `self` for chaining off [`Self::with_security`] or [`Self::new`].
+    ///
+    /// NOTE: enabling the relay does NOT by itself enable WS-over-H2. The
+    /// RFC 8441 extended-CONNECT advertise+intercept is gated separately by
+    /// [`Self::with_h2_extended_connect`] (default OFF; CF-S27-2). WS-over-H1
+    /// / WS-over-H3 are unaffected by that gate.
     #[must_use]
     pub fn with_websocket(mut self, ws: Arc<WsProxy>) -> Self {
         self.ws = Some(ws);
+        self
+    }
+
+    /// CF-S27-2 — per-listener opt-in for RFC 8441 WebSocket-over-HTTP/2
+    /// (extended CONNECT). Default OFF. When `false`, this proxy does not
+    /// advertise `SETTINGS_ENABLE_CONNECT_PROTOCOL` and does not intercept an
+    /// inbound extended CONNECT (it falls through to normal H2 handling).
+    /// Fluent; chain off [`Self::with_websocket`].
+    #[must_use]
+    pub fn with_h2_extended_connect(mut self, enabled: bool) -> Self {
+        self.h2_extended_connect_enabled = enabled;
         self
     }
 
@@ -799,9 +828,19 @@ impl H2Proxy {
         builder.timer(TokioTimer::new());
         self.security.apply(&mut builder);
         // RFC 8441 extended CONNECT — enables SETTINGS_ENABLE_CONNECT_PROTOCOL
-        // advertisement so clients can bootstrap WebSocket over H2. Safe
-        // to always enable: clients that do not use it pay no cost.
-        builder.enable_connect_protocol();
+        // advertisement so clients can bootstrap WebSocket over H2.
+        //
+        // CF-S27-2 — GATED OFF by default. The H2 upgraded-stream write path
+        // lacks true end-to-end backpressure (a non-reading client can force
+        // unbounded gateway memory; see CF-S27-2), so we only advertise the
+        // capability when the listener has explicitly opted in via
+        // `with_h2_extended_connect(true)`. When off, the SETTINGS bit is
+        // never sent and the intercept fork (handle_inner) is also disabled,
+        // so a hostile client that sends extended CONNECT anyway is NOT
+        // tunneled — it falls through to normal H2 handling.
+        if self.h2_extended_connect_enabled {
+            builder.enable_connect_protocol();
+        }
         // F-SEC-1: wrap `io` so connection teardown drains pending
         // inbound bytes before the FIN, guaranteeing the queued RFC
         // 9113 §6.8 GOAWAY (already written by h2 before poll_shutdown)
@@ -901,6 +940,19 @@ struct ProxyService {
     glitch: Option<GlitchConnState>,
 }
 
+/// F-S27-1 — outcome of the inline upstream WS dial+handshake in
+/// `handle_ws_extended_connect`. Mirrors the H1 sibling's `ProxyErr`
+/// split so the caller can pick the right client status WITHOUT having
+/// emitted a `200` first:
+///
+///   * `Timeout`  → `504` (dial unreachable / never produced a response),
+///   * `Refused`  → `502` (upstream answered non-101, or the handshake
+///                  otherwise failed structurally).
+enum WsDialErr {
+    Timeout(String),
+    Refused(String),
+}
+
 impl hyper::service::Service<Request<IncomingBody>> for ProxyService {
     type Response = Response<ClientRespBody>;
     type Error = hyper::Error;
@@ -993,14 +1045,20 @@ impl H2Proxy {
         }
 
         // RFC 8441 extended CONNECT intercept. Only fires when this
-        // listener was configured with a `WsProxy`; everything else
-        // continues through the regular H2 request path.
-        if self
-            .ws
-            .as_ref()
-            .is_some_and(|w| w.config().enabled && is_h2_extended_connect(&req))
+        // listener was configured with a `WsProxy` AND has explicitly opted
+        // in to WS-over-H2 (CF-S27-2; default OFF). When the gate is off, an
+        // inbound `CONNECT` + `:protocol = websocket` is NOT tunneled — it
+        // falls through to the regular H2 request path below, where a
+        // `CONNECT` selects no backend tunnel and is rejected (no 200 / no
+        // relay). The gate holds even against a hostile client that sends
+        // the pseudo-header without the (un-advertised) SETTINGS bit.
+        if self.h2_extended_connect_enabled
+            && self
+                .ws
+                .as_ref()
+                .is_some_and(|w| w.config().enabled && is_h2_extended_connect(&req))
         {
-            return self.handle_ws_extended_connect(req);
+            return self.handle_ws_extended_connect(req).await;
         }
         if let Some(gp) = self
             .grpc
@@ -1280,12 +1338,29 @@ impl H2Proxy {
 
     /// Handle an RFC 8441 extended-CONNECT WebSocket bootstrap.
     ///
-    /// Returns `200 OK` with an empty body; hyper flips the inbound
-    /// stream into a bidirectional byte channel once the response
-    /// headers reach the wire. A detached task picks up the upgraded
-    /// stream, dials the backend over HTTP/1.1, drives the client-side
-    /// RFC 6455 handshake, and runs the bidirectional frame forwarder.
-    fn handle_ws_extended_connect(
+    /// F-S27-1 (SEC, HIGH) — defer the client `200` until the upstream is
+    /// proven good, exactly like the H1 sibling's ROUND8-L7-01 "defer 101"
+    /// restructure (`h1_proxy::handle_ws_upgrade`). The dial + upstream
+    /// RFC 6455 client handshake now run **inline, BEFORE** any
+    /// client-visible response, bounded by the same
+    /// [`HttpTimeouts::header`] budget H1 uses (its semantics — "time to
+    /// get the upstream's handshake response" — is exactly that budget).
+    ///
+    ///   * dial failure / handshake-budget elapsed → `504` (no 200 emitted),
+    ///   * upstream answers non-101 / handshake refused → `502` (no 200),
+    ///   * upstream `101` → build `200 OK` and spawn a SPLICE-ONLY task that
+    ///     awaits `hyper::upgrade::on` (resolves once the 200 hits the wire),
+    ///     wraps the upgraded client IO as `server_ws`, and runs
+    ///     `proxy_frames` over the ALREADY-ESTABLISHED `backend_ws`.
+    ///
+    /// Before this fix the dial + handshake lived in a detached task whose
+    /// failure arms only `tracing::debug!; return;`, so a backend that
+    /// refused the WS handshake still left the H2 client holding a `200`
+    /// (false success) — and any DATA the client pipelined behind the
+    /// extended CONNECT could be relayed toward a backend that never agreed
+    /// to the upgrade. Dialing inline closes both the false-success and the
+    /// smuggle window.
+    async fn handle_ws_extended_connect(
         &self,
         mut req: Request<IncomingBody>,
     ) -> Response<ClientRespBody> {
@@ -1303,62 +1378,149 @@ impl H2Proxy {
         }
         let backend_addr = backend.addr;
 
-        let upgrade_fut = hyper::upgrade::on(&mut req);
-        let path_and_query = req
+        // INC-4 Fix 1 (RFC 8441 §4 conformance) — a WebSocket extended
+        // CONNECT MUST carry `:scheme` and `:path` (in addition to
+        // `:authority`). hyper surfaces these as the request URI's scheme and
+        // path-and-query. Previously a request missing either was accepted and
+        // `:path` was silently defaulted to "/", which is non-conformant
+        // (INC-2V flagged this PARTIAL). Reject a malformed extended CONNECT
+        // with a clean 400 BEFORE any backend dial, instead of defaulting or
+        // tunneling. (`is_h2_extended_connect` already established this is
+        // `:method=CONNECT` + `:protocol=websocket`.)
+        //
+        // Reachability (measured, tests/ws_h2_conformance.rs):
+        //   * MISSING :scheme reaches here and is rejected by THIS check
+        //     (hyper's h2 server does not require :scheme for extended
+        //     CONNECT) → clean 400, no dial. Load-bearing.
+        //   * MISSING :path is additionally enforced by hyper's h2 codec,
+        //     which RST_STREAMs a path-less extended CONNECT before dispatch;
+        //     this check is therefore defense-in-depth for that field (and
+        //     the single point that also closes the prior silent `/` default).
+        let Some(path_and_query) = req
             .uri()
             .path_and_query()
-            .map_or_else(|| "/".to_owned(), std::string::ToString::to_string);
+            .map(std::string::ToString::to_string)
+        else {
+            tracing::debug!("ws/h2: extended CONNECT missing :path — 400 (RFC 8441 §4)");
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "malformed websocket extended CONNECT: missing :path (RFC 8441 §4)",
+            );
+        };
+        if req.uri().scheme().is_none() {
+            tracing::debug!("ws/h2: extended CONNECT missing :scheme — 400 (RFC 8441 §4)");
+            return error_response(
+                StatusCode::BAD_REQUEST,
+                "malformed websocket extended CONNECT: missing :scheme (RFC 8441 §4)",
+            );
+        }
+
+        // INC-4 Fix 2 (ROUND8-OPS-06 R12 parity) — propagate the W3C trace
+        // context onto the upstream WS handshake, mirroring the H1 sibling
+        // (`dial_upstream_ws`). `H2Proxy::handle` already injected the CHILD
+        // `traceparent` (+ forwarded `tracestate`) onto the inbound request's
+        // header map via `RequestTrace::inject_upstream` before this handler
+        // ran, so we read the now-child values straight off `req.headers()`
+        // and re-emit them on the tungstenite `ClientRequestBuilder` (which
+        // takes header pairs, not a `HeaderMap`). The LB span is thus the
+        // upstream's parent.
+        let child_traceparent = req
+            .headers()
+            .get(lb_observability::tracing_propagation::TRACEPARENT_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+        let tracestate = req
+            .headers()
+            .get(lb_observability::tracing_propagation::TRACESTATE_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned);
+
         let ws_cfg = ws_proxy.config();
         let pool = self.pool.clone();
 
-        tokio::spawn(async move {
-            let upgraded = match upgrade_fut.await {
-                Ok(u) => u,
-                Err(e) => {
-                    tracing::debug!(error = %e, "ws/h2: upgrade failed");
-                    return;
-                }
-            };
-
-            // CODE-2-09 follow-on: async dial via
-            // `TcpPool::acquire_async`. Eliminates the
-            // `spawn_blocking(pool.acquire)` site so an H2 extended-
-            // CONNECT WebSocket upgrade no longer parks a blocking-pool
-            // thread for the dial.
-            let pooled = match pool.acquire_async(backend_addr).await {
-                Ok(p) => p,
-                Err(e) => {
-                    tracing::debug!(error = %e, backend = %backend_addr, "ws/h2: backend dial failed");
-                    return;
-                }
-            };
-            let Some(upstream_stream) = pooled.take_stream() else {
-                tracing::debug!("ws/h2: pooled stream missing");
-                return;
-            };
-
-            let uri = match format!("ws://{backend_addr}{path_and_query}").parse() {
-                Ok(u) => u,
-                Err(e) => {
-                    tracing::debug!(error = %e, "ws/h2: upstream uri build failed");
-                    return;
-                }
-            };
-            let builder = tokio_tungstenite::tungstenite::client::ClientRequestBuilder::new(uri);
-            let (backend_ws, _resp) = match tokio_tungstenite::client_async_with_config(
+        // ── Dial + upstream RFC 6455 handshake INLINE, before any 200. ──
+        // Bounded by the H1 header-receipt budget (mirror of H1's
+        // `self.timeouts.header`): an outer `timeout` AND the inner async
+        // both feed the same 504/502 mapping below.
+        let upstream_dial = async move {
+            let pooled = pool
+                .acquire_async(backend_addr)
+                .await
+                .map_err(|e| WsDialErr::Timeout(format!("backend dial failed: {e}")))?;
+            let upstream_stream = pooled
+                .take_stream()
+                .ok_or_else(|| WsDialErr::Refused("pooled stream missing".to_owned()))?;
+            let uri = format!("ws://{backend_addr}{path_and_query}")
+                .parse()
+                .map_err(|e| WsDialErr::Refused(format!("upstream uri build failed: {e}")))?;
+            let mut builder =
+                tokio_tungstenite::tungstenite::client::ClientRequestBuilder::new(uri);
+            // INC-4 Fix 2 — ROUND8-OPS-06: propagate the child W3C trace
+            // context onto the upstream WS handshake (mirror H1's
+            // `dial_upstream_ws`). The builder takes header pairs, not a
+            // `HeaderMap`, so we use the pre-rendered child header values.
+            if let Some(tp) = child_traceparent {
+                builder = builder.with_header(
+                    lb_observability::tracing_propagation::TRACEPARENT_HEADER,
+                    tp,
+                );
+            }
+            if let Some(ts) = tracestate {
+                builder = builder
+                    .with_header(lb_observability::tracing_propagation::TRACESTATE_HEADER, ts);
+            }
+            let (backend_ws, _resp) = tokio_tungstenite::client_async_with_config(
                 builder,
                 upstream_stream,
                 Some(ws_cfg.tungstenite_config()),
             )
             .await
-            {
-                Ok(pair) => pair,
+            .map_err(|e| WsDialErr::Refused(format!("upstream handshake failed: {e}")))?;
+            Ok::<_, WsDialErr>(backend_ws)
+        };
+
+        let backend_ws = match tokio::time::timeout(self.timeouts.header, upstream_dial).await {
+            Ok(Ok(ws)) => ws,
+            Ok(Err(WsDialErr::Refused(msg))) => {
+                tracing::debug!(backend = %backend_addr, error = %msg, "ws/h2: upstream handshake refused — returning 502 (no 200 emitted)");
+                return error_response(
+                    StatusCode::BAD_GATEWAY,
+                    "websocket upstream handshake failed",
+                );
+            }
+            Ok(Err(WsDialErr::Timeout(msg))) => {
+                tracing::debug!(backend = %backend_addr, error = %msg, "ws/h2: upstream dial failure — returning 504 (no 200 emitted)");
+                return error_response(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "websocket upstream dial timeout",
+                );
+            }
+            Err(_elapsed) => {
+                tracing::debug!(backend = %backend_addr, "ws/h2: upstream handshake budget elapsed — returning 504 (no 200 emitted)");
+                return error_response(
+                    StatusCode::GATEWAY_TIMEOUT,
+                    "websocket upstream handshake timeout",
+                );
+            }
+        };
+
+        // Upstream is established. ONLY NOW arm the hyper upgrade future and
+        // build the client 200. The detached task no longer dials — it
+        // splices the already-established upstream WS to the post-upgrade
+        // client stream (the upgrade future resolves after the 200 hits the
+        // wire). Holding `backend_ws` open across that brief window is
+        // intentional and mirrors the H1 sibling's `run_h1_ws_splice_task`.
+        let upgrade_fut = hyper::upgrade::on(&mut req);
+        tokio::spawn(async move {
+            let upgraded = match upgrade_fut.await {
+                Ok(u) => u,
                 Err(e) => {
-                    tracing::debug!(error = %e, backend = %backend_addr, "ws/h2: upstream handshake failed");
+                    // Dropping `backend_ws` here closes the pooled TCP
+                    // socket via its `Drop`, so we never leak it.
+                    tracing::debug!(error = %e, "ws/h2: hyper upgrade failed after upstream established");
                     return;
                 }
             };
-
             let client_ws = ws_proxy::server_ws(TokioIo::new(upgraded), &ws_cfg).await;
             if let Err(e) = ws_proxy.proxy_frames(client_ws, backend_ws).await {
                 tracing::debug!(error = %e, "ws/h2: frame proxy ended with error");

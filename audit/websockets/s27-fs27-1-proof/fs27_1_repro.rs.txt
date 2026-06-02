@@ -1,0 +1,393 @@
+//! F-S27-1 negative-control reproducer (SESSION 27, INDEPENDENT VERIFIER).
+//!
+//! Mirrors the H1 sibling `crates/lb-l7/tests/round8_ws_upgrade_defer.rs`
+//! (`client_sees_502_when_backend_rejects_ws`) but over the WS-over-H2
+//! (RFC 8441 extended CONNECT) path.
+//!
+//! Premise: the picker points at a REAL, pickable, H1-protocol backend
+//! address (so the SYNCHRONOUS guards at h2_proxy.rs:1292-1303 — ws
+//! disabled / no backend / non-H1 backend — all PASS). That backend is a
+//! raw `TcpListener` that accepts the TCP connection and answers the
+//! upstream RFC 6455 handshake with a NON-101 response (`HTTP/1.1 200 OK`),
+//! i.e. it REJECTS the WebSocket. The upstream WS handshake therefore
+//! cannot succeed.
+//!
+//! CORRECT (fixed) behaviour, per the H1 sibling: the client must receive
+//! a failure status (502/504) and NEVER a success 200, because the
+//! upstream handshake failed.
+//!
+//! This test ASSERTS THE CORRECT (post-fix) CONTRACT. On CURRENT main it
+//! is EXPECTED TO FAIL (the gateway answers 200 prematurely), which is the
+//! proof of F-S27-1. It also prints the observed status to stderr.
+//!
+//! NOT part of the committed suite — written here only to capture red
+//! output, then removed from tests/ (evidence lives under audit/).
+
+#![cfg(test)]
+
+use std::net::SocketAddr;
+use std::sync::Arc;
+use std::time::Duration;
+
+use bytes::Bytes;
+use lb_io::Runtime;
+use lb_io::pool::{PoolConfig, TcpPool};
+use lb_io::sockopts::BackendSockOpts;
+use lb_l7::h1_proxy::{HttpTimeouts, RoundRobinAddrs};
+use lb_l7::h2_proxy::H2Proxy;
+use lb_l7::ws_proxy::{WsConfig, WsProxy};
+use lb_security::{TicketRotator, build_server_config};
+use parking_lot::Mutex;
+use rustls::ClientConfig;
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
+use tokio_rustls::{TlsAcceptor, TlsConnector};
+
+const SAN_HOST: &str = "expressgateway.test";
+const STEP_TIMEOUT: Duration = Duration::from_secs(5);
+
+fn make_cert_for(san: &str) -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>) {
+    let generated = rcgen::generate_simple_self_signed(vec![san.to_string()]).unwrap();
+    let cert_der = generated.cert.der().to_vec();
+    let key_der = generated.key_pair.serialize_der();
+    (
+        vec![CertificateDer::from(cert_der)],
+        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_der)),
+    )
+}
+
+fn build_client_cfg(trust_anchor: CertificateDer<'static>) -> Arc<ClientConfig> {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(trust_anchor).unwrap();
+    let mut cfg = ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_root_certificates(Arc::new(roots))
+        .with_no_client_auth();
+    cfg.alpn_protocols = vec![b"h2".to_vec()];
+    Arc::new(cfg)
+}
+
+fn build_pool() -> TcpPool {
+    TcpPool::new(
+        PoolConfig::default(),
+        BackendSockOpts {
+            nodelay: true,
+            keepalive: false,
+            rcvbuf: None,
+            sndbuf: None,
+            quickack: false,
+            tcp_fastopen_connect: false,
+        },
+        Runtime::new(),
+    )
+}
+
+/// Faux backend: a real, pickable H1-address TCP listener that accepts the
+/// connection, reads the inbound upstream WS handshake, and answers with a
+/// deliberate NON-101 (`200 OK`) — i.e. it REJECTS the WebSocket. This is
+/// the H2 analog of the H1 sibling's `client_sees_502_when_backend_rejects_ws`.
+async fn spawn_rejecting_backend() -> SocketAddr {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let local = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut sock, _)) = listener.accept().await else {
+                return;
+            };
+            tokio::spawn(async move {
+                let mut buf = [0u8; 2048];
+                let _ = sock.read(&mut buf).await;
+                // Non-101: reject the WS handshake.
+                let _ = sock
+                    .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+                    .await;
+            });
+        }
+    });
+    local
+}
+
+async fn spawn_h2_ws_gateway(backend_addr: SocketAddr) -> (SocketAddr, CertificateDer<'static>) {
+    let pool = build_pool();
+    let picker = Arc::new(RoundRobinAddrs::new(vec![backend_addr]).unwrap());
+    let h2_proxy = Arc::new(
+        H2Proxy::new(pool, picker as _, None, HttpTimeouts::default(), true).with_websocket(
+            Arc::new(WsProxy::new(WsConfig {
+                idle_timeout: Duration::from_secs(30),
+                max_message_size: 1024 * 1024,
+                enabled: true,
+                ..WsConfig::default()
+            })),
+        ),
+    );
+
+    let (cert_chain, key) = make_cert_for(SAN_HOST);
+    let trust_anchor = cert_chain[0].clone();
+    let rot = TicketRotator::new(Duration::from_secs(86_400), Duration::from_secs(3_600)).unwrap();
+    let rot_arc = Arc::new(Mutex::new(rot));
+    let alpn: &[&[u8]] = &[b"h2", b"http/1.1"];
+    let server_cfg = build_server_config(rot_arc, cert_chain, key, alpn).unwrap();
+    let acceptor = TlsAcceptor::from(server_cfg);
+
+    let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let local = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        loop {
+            let Ok((sock, peer)) = listener.accept().await else {
+                return;
+            };
+            let acceptor = acceptor.clone();
+            let h2 = Arc::clone(&h2_proxy);
+            tokio::spawn(async move {
+                let Ok(tls) = acceptor.accept(sock).await else {
+                    return;
+                };
+                let alpn = tls.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
+                if alpn.as_deref() == Some(b"h2".as_ref()) {
+                    let _ = h2.serve_connection(tls, peer).await;
+                }
+            });
+        }
+    });
+
+    (local, trust_anchor)
+}
+
+/// Drive the raw-h2 extended CONNECT and return the status the CLIENT
+/// observed for the extended-CONNECT response.
+async fn extended_connect_status(
+    gateway: SocketAddr,
+    trust_anchor: CertificateDer<'static>,
+    path: &str,
+) -> http::StatusCode {
+    let sock = TcpStream::connect(gateway).await.unwrap();
+    let connector = TlsConnector::from(build_client_cfg(trust_anchor));
+    let sn = ServerName::try_from(SAN_HOST).unwrap();
+    let tls = connector.connect(sn, sock).await.unwrap();
+    assert_eq!(
+        tls.get_ref().1.alpn_protocol(),
+        Some(b"h2".as_ref()),
+        "client must negotiate ALPN h2"
+    );
+
+    let (h2, conn) = tokio::time::timeout(STEP_TIMEOUT, h2::client::handshake(tls))
+        .await
+        .expect("h2 handshake timed out")
+        .expect("h2 handshake failed");
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
+    let mut h2 = tokio::time::timeout(STEP_TIMEOUT, h2.ready())
+        .await
+        .expect("h2 ready timed out")
+        .expect("h2 connection not ready");
+
+    let uri: http::Uri = format!("https://{SAN_HOST}{path}").parse().unwrap();
+    let mut req = http::Request::builder()
+        .method(http::Method::CONNECT)
+        .uri(uri)
+        .body(())
+        .unwrap();
+    req.extensions_mut()
+        .insert(h2::ext::Protocol::from_static("websocket"));
+
+    let (resp_fut, _send_stream) = h2
+        .send_request(req, false)
+        .expect("send extended CONNECT failed");
+
+    let resp = tokio::time::timeout(STEP_TIMEOUT, resp_fut)
+        .await
+        .expect("extended CONNECT response timed out")
+        .expect("extended CONNECT response errored");
+    let _ = Bytes::new(); // keep bytes dep used
+    resp.status()
+}
+
+/// POST-FIX CONTRACT (what INC-2 must make true). On CURRENT main this is
+/// EXPECTED TO FAIL because the gateway answers 200 before the upstream
+/// handshake (which here is rejected) is even attempted.
+#[tokio::test]
+async fn client_must_not_see_200_when_upstream_rejects_ws() {
+    let backend = spawn_rejecting_backend().await;
+    let (gw, anchor) = spawn_h2_ws_gateway(backend).await;
+
+    let status = extended_connect_status(gw, anchor, "/chat").await;
+    eprintln!("F-S27-1 OBSERVED extended-CONNECT status = {status}");
+
+    assert_ne!(
+        status,
+        http::StatusCode::OK,
+        "F-S27-1: client must NOT receive 200 when the upstream WS handshake \
+         is rejected (got {status}); a fixed gateway returns 502/504 and never \
+         signals success before the upstream handshake completes"
+    );
+    assert!(
+        status == http::StatusCode::BAD_GATEWAY || status == http::StatusCode::GATEWAY_TIMEOUT,
+        "F-S27-1: required failure status is 502 or 504, got {status}"
+    );
+}
+
+/// NON-VACUITY / LOAD-BEARING control. Proves the 200 is a genuine
+/// premature-success signal — not an artifact — by showing the tunnel the
+/// 200 promised is in fact DEAD: after the client receives 200, attempting
+/// a real WS round-trip over the H2 stream fails (the rejecting backend
+/// never spoke RFC 6455, so there is nobody to echo). On a CORRECTLY
+/// ordered gateway the client never reaches this state because it gets
+/// 502/504 instead of 200. This pairs with `ws_h2_e2e.rs`, which uses the
+/// IDENTICAL machinery + a 101-capable backend and DOES round-trip — so the
+/// only difference is upstream-handshake success, yet the client sees 200
+/// either way: the defect.
+#[tokio::test]
+async fn proof_200_is_premature_tunnel_is_dead() {
+    use bytes::Buf;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+    use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+
+    // Minimal H2 stream adapter (same shape as ws_h2_e2e.rs).
+    struct Adapter {
+        send: h2::SendStream<Bytes>,
+        recv: h2::RecvStream,
+        leftover: Bytes,
+    }
+    impl AsyncRead for Adapter {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &mut ReadBuf<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            if !self.leftover.is_empty() {
+                let n = self.leftover.len().min(buf.remaining());
+                let chunk = self.leftover.split_to(n);
+                buf.put_slice(&chunk);
+                return Poll::Ready(Ok(()));
+            }
+            match self.recv.poll_data(cx) {
+                Poll::Pending => Poll::Pending,
+                Poll::Ready(None) => Poll::Ready(Ok(())),
+                Poll::Ready(Some(Ok(mut data))) => {
+                    let len = data.len();
+                    let _ = self.recv.flow_control().release_capacity(len);
+                    let n = len.min(buf.remaining());
+                    buf.put_slice(&data[..n]);
+                    data.advance(n);
+                    self.leftover = data;
+                    Poll::Ready(Ok(()))
+                }
+                Poll::Ready(Some(Err(e))) => {
+                    Poll::Ready(Err(std::io::Error::other(format!("h2 recv: {e}"))))
+                }
+            }
+        }
+    }
+    impl AsyncWrite for Adapter {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            cx: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            self.send.reserve_capacity(buf.len());
+            match self.send.poll_capacity(cx) {
+                Poll::Pending => Poll::Pending,
+                Poll::Ready(None) => {
+                    Poll::Ready(Err(std::io::Error::other("h2 send closed before capacity")))
+                }
+                Poll::Ready(Some(Ok(cap))) => {
+                    let n = cap.min(buf.len());
+                    if n == 0 {
+                        cx.waker().wake_by_ref();
+                        return Poll::Pending;
+                    }
+                    let chunk = Bytes::copy_from_slice(&buf[..n]);
+                    match self.send.send_data(chunk, false) {
+                        Ok(()) => Poll::Ready(Ok(n)),
+                        Err(e) => Poll::Ready(Err(std::io::Error::other(format!("h2 send: {e}")))),
+                    }
+                }
+                Poll::Ready(Some(Err(e))) => {
+                    Poll::Ready(Err(std::io::Error::other(format!("h2 cap: {e}"))))
+                }
+            }
+        }
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<std::io::Result<()>> {
+            match self.send.send_data(Bytes::new(), true) {
+                Ok(()) => Poll::Ready(Ok(())),
+                Err(e) => Poll::Ready(Err(std::io::Error::other(format!("h2 shutdown: {e}")))),
+            }
+        }
+    }
+
+    let backend = spawn_rejecting_backend().await;
+    let (gw, anchor) = spawn_h2_ws_gateway(backend).await;
+
+    let sock = TcpStream::connect(gw).await.unwrap();
+    let connector = TlsConnector::from(build_client_cfg(anchor));
+    let sn = ServerName::try_from(SAN_HOST).unwrap();
+    let tls = connector.connect(sn, sock).await.unwrap();
+    let (h2c, conn) = h2::client::handshake(tls).await.unwrap();
+    tokio::spawn(async move {
+        let _ = conn.await;
+    });
+    let mut h2c = h2c.ready().await.unwrap();
+    let uri: http::Uri = format!("https://{SAN_HOST}/chat").parse().unwrap();
+    let mut req = http::Request::builder()
+        .method(http::Method::CONNECT)
+        .uri(uri)
+        .body(())
+        .unwrap();
+    req.extensions_mut()
+        .insert(h2::ext::Protocol::from_static("websocket"));
+    let (resp_fut, send) = h2c.send_request(req, false).unwrap();
+    let resp = resp_fut.await.unwrap();
+    let status = resp.status();
+    eprintln!("PROOF observed extended-CONNECT status = {status}");
+    assert_eq!(
+        status,
+        http::StatusCode::OK,
+        "characterising CURRENT main: it answers 200 even though upstream rejected"
+    );
+
+    // The 200 promised a live WS tunnel. Drive a real client WS round-trip
+    // over it. With the upstream handshake rejected, there is no echo peer:
+    // the round-trip must NOT succeed (timeout / error / clean None). If a
+    // genuine Text echo came back the 200 would have been honest and this
+    // would NOT be a finding — so a non-echo here is the load-bearing proof.
+    let adapter = Adapter {
+        send,
+        recv: resp.into_body(),
+        leftover: Bytes::new(),
+    };
+    let mut ws = tokio_tungstenite::WebSocketStream::from_raw_socket(
+        adapter,
+        tokio_tungstenite::tungstenite::protocol::Role::Client,
+        Some(WsConfig::default().tungstenite_config()),
+    )
+    .await;
+    use futures_util::{SinkExt, StreamExt};
+    let _ = ws
+        .send(tokio_tungstenite::tungstenite::Message::Text(
+            "ping-into-the-void".into(),
+        ))
+        .await;
+    let echo = tokio::time::timeout(Duration::from_secs(2), ws.next()).await;
+    let got_echo = matches!(
+        echo,
+        Ok(Some(Ok(tokio_tungstenite::tungstenite::Message::Text(ref s)))) if s == "ping-into-the-void"
+    );
+    eprintln!("PROOF round-trip over the promised tunnel got_echo = {got_echo}");
+    assert!(
+        !got_echo,
+        "the 200 promised a live tunnel but the upstream rejected the WS \
+         handshake — no echo can legitimately come back; got one => not a finding"
+    );
+}
