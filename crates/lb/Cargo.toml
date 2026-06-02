@@ -73,7 +73,7 @@ tokio-util = { workspace = true }
 # S15 A2 verify gate (i) quic_passthrough_e2e: real quiche client +
 # real quiche server backend, rcgen-issued cert. ring is pulled in
 # for SystemRandom (16-byte SCID material).
-rcgen = { version = "0.13", features = ["pem"] }
+rcgen = { version = "0.14", features = ["pem"] }
 ring = "0.17"
 # SESSION 28 / WS-over-H3 (RFC 9220) Stage C e2e: a real tokio-tungstenite
 # WS echo backend behind the spawned QUIC listener. The client side is raw
