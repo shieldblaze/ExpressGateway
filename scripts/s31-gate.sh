@@ -22,14 +22,24 @@ BRC=${PIPESTATUS[0]}
 echo "BUILD_RC=$BRC" | tee -a "$LOG"
 if [ "$BRC" -ne 0 ]; then echo "S31-GATE-${LABEL}-DONE rc=99 (build fail)" | tee -a "$LOG"; exit 99; fi
 
+# --no-fail-fast: cargo test defaults to fail-fast at the BINARY level — it stops
+# running further test binaries after the first binary reports a failure. With the
+# known CF-FCAP1-FLAKE (h2h1_md_streaming_verify, binary #~83 of 240 under 8-core
+# saturation), a fail-fast run TRUNCATES the suite and never reaches the lb-quic H3
+# tests (h3_*, s16_*, s19_*, grpc_h3 all sort AFTER h2h1) — exactly the tests a
+# quiche upgrade must exercise. --no-fail-fast runs ALL binaries every pass and
+# reports the COMPLETE failure set (strictly more rigorous; R15: a truncated run is
+# an incomplete job). Known saturation flakes are then classified by isolation (R2).
 for i in 1 2 3; do
   echo "=== STAGE TEST PASS $i $(date -u +%FT%TZ) ===" | tee -a "$LOG"
-  cargo test --workspace --all-features >> "$LOG.pass$i" 2>&1
+  cargo test --workspace --all-features --no-fail-fast >> "$LOG.pass$i" 2>&1
   RC=${PIPESTATUS[0]}
-  PASS=$(grep -oE '[0-9]+ passed' "$LOG.pass$i" | awk '{s+=$1} END{print s}')
-  FAIL=$(grep -oE '[0-9]+ failed' "$LOG.pass$i" | awk '{s+=$1} END{print s}')
-  IGN=$(grep -oE '[0-9]+ ignored' "$LOG.pass$i" | awk '{s+=$1} END{print s}')
-  echo "PASS$i rc=$RC passed=$PASS failed=$FAIL ignored=$IGN" | tee -a "$LOG"
+  PASS=$(grep -E 'test result:' "$LOG.pass$i" | grep -oE '[0-9]+ passed' | awk '{s+=$1} END{print s}')
+  FAIL=$(grep -E 'test result:' "$LOG.pass$i" | grep -oE '[0-9]+ failed' | awk '{s+=$1} END{print s}')
+  IGN=$(grep -E 'test result:' "$LOG.pass$i" | grep -oE '[0-9]+ ignored' | awk '{s+=$1} END{print s}')
+  BINS=$(grep -cE 'test result:' "$LOG.pass$i")
+  echo "PASS$i rc=$RC binaries=$BINS passed=$PASS failed=$FAIL ignored=$IGN" | tee -a "$LOG"
+  echo "  failing tests:" | tee -a "$LOG"; grep -E '^test .* \.\.\. FAILED|FAILED$' "$LOG.pass$i" | grep -oE 'test [A-Za-z0-9_:]+' | sort -u | tee -a "$LOG"
 done
 
 echo "=== STAGE clippy $(date -u +%FT%TZ) ===" | tee -a "$LOG"

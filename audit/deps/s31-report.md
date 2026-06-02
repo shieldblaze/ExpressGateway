@@ -14,6 +14,22 @@
 - Locked baseline versions: **quiche 0.28.0**, **tokio-quiche 0.18.0** (Cargo.lock).
 - ×3 baseline gate on 0.28 reference: RUNNING (`scripts/s31-gate.sh baseline-0.28`).
 
+#### Methodology fix: `--no-fail-fast` (gate completeness)
+
+First baseline run truncated at **83 of 240 test binaries** (493 passed) because `cargo test`
+defaults to **fail-fast at the binary level** — it stops launching further test binaries after
+the first one fails. The trigger was the known **CF-FCAP1-FLAKE**
+(`fcap1_h2_over_cap_upload_yields_413`, `lb-integration-tests::h2h1_md_streaming_verify`,
+60.02s timeout race under 8-core saturation). S26's reference gate ran all 240 binaries / 1454
+passed only because it happened to be flake-free that pass.
+
+This is a **blocker for a quiche upgrade**: `h2h1` sorts before every critical lb-quic H3 test
+(`grpc_h3`, `h3_*`, `s16_*`, `s19_*`, `quic_router_leak`, `round8_h3_authority_enforced`), so a
+fail-fast truncation would hide any real H3 regression behind the flake. Fix: add
+`--no-fail-fast` to `scripts/s31-gate.sh` so every pass runs all 240 binaries and reports the
+COMPLETE failure set (strictly MORE rigorous; R15 — a truncated run is an incomplete job). Known
+saturation flakes are then classified by isolation (R2: never weaken an assertion).
+
 ### h3spec baseline (the 0.28 reference for the 0.29 diff)
 
 Source: `audit/h3spec/s26-h3spec-final.log` (S26 = the migrated quiche::h3 stack on 0.28,
