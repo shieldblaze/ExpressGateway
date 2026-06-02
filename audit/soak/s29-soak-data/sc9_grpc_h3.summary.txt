@@ -1,0 +1,9 @@
+=== SOAK sc9_grpc_h3 — DRIFT (finding) (900s, 181 samples) ===
+      rss_kb [ DRIFT] rss_kb: drift — last-third median 47132 vs first-third 37738 (+24.9%), monotone 79% , slope 78.2700/sample — first=20136 last=47464 min=20136 max=47464
+    vmhwm_kb [ DRIFT] vmhwm_kb: drift — last-third median 47132 vs first-third 37752 (+24.8%), monotone 91% , slope 75.9412/sample — first=20136 last=47464 min=20136 max=47464
+         fds [BOUNDED] fds: bounded — last-third median 12 vs first-third 12 (+0.0%, within band 10% or non-monotone 99%) — first=11 last=12 min=11 max=13
+     threads [BOUNDED] threads: bounded — last-third median 9 vs first-third 9 (+0.0%, within band 10% or non-monotone 100%) — first=10 last=9 min=9 max=10
+  panic_total [BOUNDED] panic_total: stayed zero across the run — first=0 last=0 min=0 max=0
+  load:
+    grpc_h3_sustained: ok=682834 err=0
+    grpc_h3_churn: ok=499572 err=0

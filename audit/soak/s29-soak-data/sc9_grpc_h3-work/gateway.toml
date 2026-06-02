@@ -1,0 +1,20 @@
+[runtime]
+drain_timeout_ms = 5000
+readiness_settle_ms = 100
+
+[[listeners]]
+address = "127.0.0.1:33873"
+protocol = "quic"
+
+[listeners.quic]
+cert_path = "audit/soak/s29-soak-data/sc9_grpc_h3-work/cert.pem"
+key_path = "audit/soak/s29-soak-data/sc9_grpc_h3-work/key.pem"
+retry_secret_path = "audit/soak/s29-soak-data/sc9_grpc_h3-work/retry.bin"
+
+[[listeners.backends]]
+address = "127.0.0.1:45773"
+protocol = "h2"
+weight = 1
+
+[observability]
+metrics_bind = "127.0.0.1:36005"
