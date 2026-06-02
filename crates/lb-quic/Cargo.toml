@@ -66,6 +66,12 @@ lb-io = { path = "../lb-io", optional = true }
 # test-only `lb-h3-testcodec` dev-dependency, used by the H3 e2e test rigs
 # that still hand-roll wire bytes (`h3_h1_stream_body*_e2e.rs`, etc.).
 lb-h3-testcodec = { path = "../lb-h3-testcodec" }
+# S29: the gRPC-over-H3 conformance e2e (`tests/grpc_h3_e2e.rs`) reuses
+# the existing gRPC frame codec (5-byte length-prefix) to play both sides
+# of the RPC at the byte level — no tonic/prost dev-dep. `lb-grpc` is a
+# leaf crate (bytes/http/thiserror, zero lb-* deps) so this dev-edge adds
+# no cycle, and the production `lb-quic` build links zero gRPC symbols.
+lb-grpc = { path = "../lb-grpc" }
 rcgen = { version = "0.13", features = ["pem"] }
 tokio = { workspace = true, features = ["full", "test-util"] }
 # CODE-2-11: proptest harness for the long/short header parse path.
