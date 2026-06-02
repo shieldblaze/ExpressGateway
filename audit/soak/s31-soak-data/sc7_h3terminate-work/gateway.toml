@@ -1,0 +1,15 @@
+[runtime]
+drain_timeout_ms = 5000
+readiness_settle_ms = 100
+
+[[listeners]]
+address = "127.0.0.1:56365"
+protocol = "quic"
+
+[listeners.quic]
+cert_path = "audit/soak/s31-soak-data/sc7_h3terminate-work/cert.pem"
+key_path = "audit/soak/s31-soak-data/sc7_h3terminate-work/key.pem"
+retry_secret_path = "audit/soak/s31-soak-data/sc7_h3terminate-work/retry.bin"
+
+[observability]
+metrics_bind = "127.0.0.1:41487"

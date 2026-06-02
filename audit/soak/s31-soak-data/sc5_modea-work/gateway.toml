@@ -1,0 +1,14 @@
+[runtime]
+drain_timeout_ms = 5000
+readiness_settle_ms = 100
+
+[passthrough]
+bind_addr = "127.0.0.1:47743"
+backends = ["127.0.0.1:42059"]
+retry_secret_path = "audit/soak/s31-soak-data/sc5_modea-work/retry.bin"
+max_quic_connections = 100000
+mint_retry = false
+flow_idle_timeout_ms = 10000
+
+[observability]
+metrics_bind = "127.0.0.1:40259"

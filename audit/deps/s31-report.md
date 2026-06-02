@@ -296,7 +296,43 @@ exactly in this area — re-proven SAFE:
 E1, E2, all H3 cells, gRPC-H3, WS-H3, Mode B; the live clean-FIN discriminator proves non-vacuity.
 CF-QUICHE-FRAME-COMPLETENESS (§7.1 no-CL gap) persists unchanged on 0.29 (carry note, as predicted).
 
-## Re-soak — (TBD)
+## Re-soak (0.29) — 4 BOUNDED + sc9 DRIFT investigated → warmup-plateau artifact
+
+Run 1: 5 quiche scenarios CONCURRENTLY, 900s, sample=15s (61 samples), scale=1
+(`scripts/soak/run-soak.sh`, completed `btgxeg1hn`, data `audit/soak/s31-soak-data/`).
+run-soak failures=0; all 5 completed.
+
+| scenario | overall | panic | fds | threads | load (ok/err) |
+|---|---|---|---|---|---|
+| sc5_modea | BOUNDED | 0 | flat | flat | — |
+| sc4_modeb | BOUNDED | 0 | flat | flat | — |
+| sc7_h3terminate | BOUNDED | 0 | flat | flat | — |
+| sc8c_ws_h3 | BOUNDED | 0 | flat | flat | — |
+| **sc9_grpc_h3** | **DRIFT** | 0 | **flat (11→12)** | flat (10→9) | sustained 1,331,228/0 + churn 919,752/0 = **2.25M RPCs, 0 err** |
+
+**sc9 DRIFT analysis — memory-only (rss_kb +46.7%, vmhwm_kb +47.4%), NOT a resource leak:**
+fds flat (11→12), threads flat, panic=0, 2.25M RPCs err=0. The RSS time-series is a classic
+**warmup-ramp-then-plateau**, not a linear leak:
+
+```
+sample  1: 8400 KB (boot)     sample 36: 41360 KB   ← plateau reached
+sample  6: 25012 KB (ramp)    sample 41: 41400 KB
+sample 11: 27816 KB           sample 46: 41488 KB
+sample 21: 33484 KB (step)    sample 51: 41560 KB
+sample 31: 34256 KB           sample 56: 41640 KB
+sample 36: 41360 KB           sample 61: 41708 KB   ← +0.8% over the last ~6 min (FLAT)
+```
+
+The working set establishes over ~9 min (warmup), then plateaus at ~41 MB for the last ~6 min
+(samples 36→61: +348 KB total ≈ 14 KB/sample ≈ flat). The analyzer's first-third-vs-last-third
+heuristic compares the warmup median (28.3 MB) to the plateau (41.5 MB) → +46.7% DRIFT, but the
+TAIL is flat = bounded. VmHWM is a peak-only gauge (monotone by construction — a documented
+false-DRIFT). Confounders vs S29's "sc9 no-leak at 1.18M RPCs": this run was 5-scenario CONCURRENT
+(saturation) and did 2.25M RPCs (~2×), so a higher, later-plateauing working set is expected.
+
+**Per R2 / "attribution ≠ symptom": re-running sc9 in ISOLATION (no concurrent saturation) to
+confirm.** (RUNNING `bvr4s2eyh`, `audit/soak/s31-soak-sc9-isolated/`.)
+
 ## h2spec-intact confirm — (TBD)
 ## Fresh h3spec diff vs baseline — (Phase 2, TBD)
 ## R8 re-proofs — (Phase 2, TBD)
