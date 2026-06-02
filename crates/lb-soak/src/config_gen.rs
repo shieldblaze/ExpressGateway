@@ -276,6 +276,44 @@ pub fn quic_h3_terminate(
     )
 }
 
+/// `quic` H3-terminate front with a `[listeners.websocket]` block carrying
+/// `h3_extended_connect = true` (the WS-over-H3 opt-in) → an H1 WebSocket
+/// backend. The S28 sc8c_ws_h3 scenario: a quiche::h3 client drives WS via
+/// RFC 9220 extended CONNECT; the gateway advertises
+/// `SETTINGS_ENABLE_CONNECT_PROTOCOL`, intercepts the extended CONNECT, dials
+/// the H1 backend (upstream-before-200), and runs the single-sourced
+/// `proxy_frames` relay over the bounded `H3WsTunnel`. Same long-lived-relay
+/// leak-class question as sc8_ws_h1, over the H3/quiche datapath.
+#[must_use]
+pub fn quic_h3_terminate_ws(
+    listener: SocketAddr,
+    backend: SocketAddr,
+    metrics: SocketAddr,
+    front_certs: &Certs,
+    retry_secret: &Path,
+    idle_timeout_seconds: u64,
+    read_frame_timeout_seconds: u64,
+) -> String {
+    format!(
+        "{rt}[[listeners]]\naddress = \"{listener}\"\nprotocol = \"quic\"\n\n\
+         [listeners.quic]\ncert_path = \"{cert}\"\nkey_path = \"{key}\"\nretry_secret_path = \"{retry}\"\n\n\
+         [listeners.websocket]\n\
+         enabled = true\n\
+         h3_extended_connect = true\n\
+         idle_timeout_seconds = {idle}\n\
+         read_frame_timeout_seconds = {rft}\n\n\
+         [[listeners.backends]]\naddress = \"{backend}\"\nprotocol = \"h1\"\nweight = 1\n\n\
+         {obs}",
+        rt = runtime_block(),
+        cert = front_certs.cert.display(),
+        key = front_certs.key.display(),
+        retry = retry_secret.display(),
+        idle = idle_timeout_seconds,
+        rft = read_frame_timeout_seconds,
+        obs = observability_block(metrics),
+    )
+}
+
 /// Mode A QUIC passthrough — a top-level `[passthrough]` block routing flows to
 /// `backend`. TLS is end-to-end client↔backend; the gateway never decrypts.
 ///

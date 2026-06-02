@@ -158,14 +158,72 @@ Bounded both directions, message-volume-independent:
 
 ---
 
-## Phase 1 — launcher threading (off=no-op proof)
-*(pending)*
+## Phase 1 — launcher threading (off=no-op proof) — DONE (commit `6c0e68f5`)
+- Added the seam types to `ws_tunnel.rs`: `WsConnectRequest`, `WsUpstreamOutcome`,
+  `WsRelayHandle`, `WsRelayLauncher = Arc<dyn Fn(H3WsTunnel, WsConnectRequest) ->
+  WsRelayHandle + Send + Sync>`.
+- Threaded `Option<WsRelayLauncher>` through `QuicListenerParams`
+  (`with_ws_relay_launcher` builder + Debug) → `RouterParams` → `ActorParams`,
+  default `None`, mirroring `config_factory`.
+- **off=no-op (R3):** field `None` everywhere by default; lb-quic **205 tests
+  pass** (router/listener/actor/Mode-B/H3) with the field threaded; clippy clean.
 
-## Phase 2 — tunnel-mode pump (R8 wired proof, reset-vs-EOF)
-*(pending)*
+## Phase 2 — tunnel-mode pump (the real risk) — DONE (commits `b7b0dab2`, `110af41f`)
+- `conn_actor.rs`: `poll_h3` intercepts a validated `:protocol=websocket` extended
+  CONNECT → builds the bounded `H3WsTunnel`, calls the injected launcher, registers
+  `WsTunnelState`. Unknown `:protocol` → 501; no launcher → 502 (fail closed).
+  `spawn_inline_h3_response` single-sources the inline error path (refactored the
+  pre-existing 400 :authority reject onto it).
+- `pump_ws_tunnels` each tick: (1) resolve upstream readiness (`Ready` → queue 200;
+  `Failed` → inline 502/504 + teardown) — **upstream-before-200** ordering (R12);
+  (2) send the 200 (retry under a full window); (3) inbound `recv_body → to_reader`
+  (R8: stop on full channel = QUIC flow control) + outbound `from_writer →
+  send_body` (R8: retain unsent tail = parks the relay `PollSender`); (4) relay done
+  → FIN + remove. Relay tasks aborted on actor exit (no leak).
+- Reset-vs-EOF: client FIN → drop `to_reader` (clean EOF → WS Close); client Reset /
+  Finished-on-reset (probed via `stream_recv`) → `TunnelInbound::Reset`
+  (ConnectionReset, not a clean End).
+- `lb-l7 ws_proxy.rs`: `pub dial_backend_ws` (upstream RFC 6455 handshake →
+  WebSocketStream + negotiated subprotocol), keeping tokio-tungstenite out of the
+  binary. `lb main.rs`: `build_ws_h3_launcher` injects the closure in
+  `wire_h3_terminate_backends` H1 arm when `ws_enabled` (dial+handshake under the
+  header budget, 504/502 on fail, `proxy_frames` on success). Off ⇒ no launcher (R3).
+- **R8 wired-tunnel proof** (`ws_over_h3_outbound_backpressure_plateaus_then_drains`):
+  a 512-frame flood at a withholding client → the gateway backpressures the backend,
+  which PLATEAUS at ~63 (NOT 512 — volume-independent), then all 512 drain on resume
+  (liveness, no loss). Confounder found+controlled: the kernel's auto-tuned (multi-MB)
+  TCP socket buffers between backend↔gateway otherwise absorb the flood and mask the
+  gateway's backpressure (the gateway received only 11.7KB while the kernel held the
+  rest — a TEST artifact, not a gateway bug); fixed by shrinking SO_SNDBUF/SO_RCVBUF.
+- No design problem surfaced — the approved closure-injection design held.
 
 ## Phase 3 — e2e + RFC 9220 conformance + R13 + soak + promote
-*(pending)*
+**Real-binary e2e + R13 + reset-vs-EOF (all through `spawn_quic`, author!=verifier
+via the binding gate):**
+- `ws_over_h3_extended_connect_echo_roundtrip_through_real_listener` — the linchpin:
+  extended CONNECT → 200 → bidirectional WS Text echo → clean close. PASS.
+- `ws_over_h3_reset_maps_to_abnormal_drop_not_clean_close` — R13 reset-vs-EOF
+  NEGATIVE CONTROL: a reporting backend confirms clean Close → `CleanClose`, client
+  RESET_STREAM → `Abrupt` (load-bearing contrast). PASS.
+- `ws_over_h3_burst_50_upgrade_relay_close_cycles` — R13 burst: 50 cycles, no
+  wedge/leak. PASS.
+- `ws_over_h3_outbound_backpressure_plateaus_then_drains` — R8 wired (above). PASS.
+
+**RFC 9220 conformance:** `audit/websockets/s28-rfc9220-conformance.md` — SETTINGS
+gating, `:protocol` accept (case-insensitive, websocket-only → 501 else), §4
+`:scheme`/`:path`/`:authority` mandatory, §5 200-establishes-tunnel, error handling
+(502/504, upstream-before-200), reset mapping, subprotocol negotiation, R8 bound.
+
+**upstream-before-200 cross-transport (R12):** all three WS transports defer the
+client-visible success until the upstream RFC 6455 handshake completes —
+WS-H1 (`h1_proxy::handle_ws_upgrade`, the ROUND8-L7-01 "defer 101" / GHSA fix),
+WS-H2 (`h2_proxy::handle_ws_extended_connect`, F-S27-1 "defer 200"), WS-H3
+(`build_ws_h3_launcher` signals readiness via a oneshot BEFORE `pump_ws_tunnels`
+sends the 200; failure → 502/504, no 200). The relay (`proxy_frames`) is the same
+single source across all three (R12, no divergence).
+
+- WS-over-H3 soak (sc8c_ws_h3): *(see soak section below)*
+- Binding ×3 gate + scoped coverage: *(see Phase 3 baseline below)*
 
 ## Verdict
-*(pending)*
+*(pending — see soak + final gate)*
