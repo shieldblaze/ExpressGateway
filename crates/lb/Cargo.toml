@@ -75,6 +75,12 @@ tokio-util = { workspace = true }
 # for SystemRandom (16-byte SCID material).
 rcgen = { version = "0.13", features = ["pem"] }
 ring = "0.17"
+# SESSION 28 / WS-over-H3 (RFC 9220) Stage C e2e: a real tokio-tungstenite
+# WS echo backend behind the spawned QUIC listener. The client side is raw
+# quiche::h3 + hand-crafted WS frames, so the `connect` feature is not
+# needed (only the default `handshake` from the workspace pin).
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
 
 [features]
 # S15 A2-8: feature flag mirroring `lb-quic`'s `quic-terminate` /
