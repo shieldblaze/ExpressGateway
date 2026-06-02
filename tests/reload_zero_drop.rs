@@ -1385,9 +1385,8 @@ mod drain_tests {
             let _ = sock.read(&mut req); // consume the GET
             let body = drain_h1_expected_body();
             // Complete, byte-identical, NO Connection: close header.
-            let resp_head = format!(
-                "HTTP/1.1 200 OK\r\nContent-Length: {DRAIN_H1_BODY_LEN}\r\n\r\n"
-            );
+            let resp_head =
+                format!("HTTP/1.1 200 OK\r\nContent-Length: {DRAIN_H1_BODY_LEN}\r\n\r\n");
             sock.write_all(resp_head.as_bytes()).unwrap();
             sock.write_all(&body).unwrap();
             sock.flush().unwrap();
