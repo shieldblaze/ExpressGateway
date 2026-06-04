@@ -2785,16 +2785,16 @@ fn classify_accept_error(err: &std::io::Error) -> AcceptErrorKind {
 /// CODE-2-06: next backoff delay given the previous one. Doubles up
 /// to a 1 s cap with ±25 % jitter so two listeners can't lockstep.
 fn next_accept_backoff(prev: Duration) -> Duration {
-    use rand::Rng;
+    use rand::RngExt;
     let base = if prev.is_zero() {
         Duration::from_millis(10)
     } else {
         prev.saturating_mul(2)
     };
     let capped = base.min(Duration::from_secs(1));
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let jitter_ms = capped.as_millis() as i64 / 4;
-    let delta = rng.gen_range(-jitter_ms..=jitter_ms);
+    let delta = rng.random_range(-jitter_ms..=jitter_ms);
     let final_ms = (capped.as_millis() as i64 + delta).max(1) as u64;
     Duration::from_millis(final_ms)
 }
@@ -3272,9 +3272,9 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                         if ceil == 0 {
                             Duration::ZERO
                         } else {
-                            use rand::Rng;
+                            use rand::RngExt;
                             Duration::from_millis(
-                                rand::thread_rng().gen_range(0..ceil),
+                                rand::rng().random_range(0..ceil),
                             )
                         }
                     };
