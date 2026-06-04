@@ -147,11 +147,68 @@ assertion weakened (R2). Held surface intact (quiche 0.29.1, tokio-quiche 0.19.0
 
 **PHASE 1 COMPLETE** ✅ — 7 crates in, prometheus 0.14 carried.
 
-## PHASE 2 — breaking-API group
-_<pending>_
+## PHASE 2 — breaking-API group  →  **4 of 4 IN, 0 dropped**
+
+dep-eng authored 4 attributable commits (one per crate, ordered socket2→toml→rand→rcgen), each with
+a targeted `cargo test -p <affected>` confirm + held-surface guard. Lead reviewed the full source
+diff: **purely mechanical, no smuggled logic** (R5). Held surface (quiche 0.29.1 / tokio-quiche
+0.19.0 / foundations 4.5.0 / tokio 1.51.1 / aya 0.13.1) unchanged after every bump.
+
+| crate | old | new | commit | adaptation |
+|---|---|---|---|---|
+| socket2 | 0.5.10 | **0.6.3** | `1028a550` | `set_nodelay`→`set_tcp_nodelay` ×3 (lb-io/sockopts.rs:97,150,206) — same TCP_NODELAY sockopt, renamed |
+| toml | 0.8.23 | **1.1.2** | `2eaafc5d` | `.parse::<toml::Value>()`→`::<toml::Table>()` (lb-controlplane/lib.rs:234) — toml 1.0 `FromStr for Value` now parses a *bare value* not a *document*; `Table::from_str` restores document-parse intent |
+| rand | 0.8.5 | **0.10.1** | `0b36fab5` | `thread_rng()`→`rng()`, `gen_range`→`random_range`, `use rand::Rng`→`{Rng, RngExt}` (random_range moved to RngExt ext-trait); 7 sites; `ring::rand` untouched; seeded-StdRng determinism intact |
+| rcgen | 0.13.2 | **0.14.8** | `8a96940d` | `CertifiedKey.key_pair`→`signing_key` ×9 (struct now `CertifiedKey<S: SigningKey>`); 30 `KeyPair::generate()` locals + `self_signed(&key_pair)` unchanged; 6 Cargo.toml spec bumps |
+
+**Staged-gating win:** the toml break compiled clean under `cargo check` but **panicked 7
+lb-controlplane tests at runtime** — caught only because dep-eng ran `cargo test` per the Phase-1
+lesson (plain check skips test targets). Two other changes (socket2 `set_tcp_nodelay`, rand
+`RngExt`) were beyond the plan's prediction but pure mechanical renames the compiler pointed to.
+
+Per-crate targeted tests all **0 failed** (lb-io, lb, lb-config, lb-controlplane, lb-balancer,
+lb-security, lb-quic, lb-l7). Note: rcgen's lb-quic test needs `--features test-gauges` to compile
+`grpc_h3_e2e` (pre-existing cfg-gate, rcgen-unrelated; the `--all-features` binding gate covers it).
+Side effects (benign, attributable): toml 1.x pulled toml_parser/winnow1 + GC'd orphaned socket2
+0.5.10; rcgen pulled x509-parser/asn1-rs ecosystem — no held-surface move.
+
+### Phase 2 binding gate (lead-run, independent of author dep-eng) — **GREEN** (commit 4b68a539)
+First gate attempt on `8a96940d` **FAILED** (clippy + test exit 101) — `error[E0609]: no field
+key_pair on CertifiedKey` at **20 more sites in the root `tests/` directory** (`lb-integration-tests`
+package). My Phase-2 plan grep covered `crates/*/tests` but not the root `tests/` dir, and dep-eng's
+per-crate `cargo test -p` doesn't compile the root package — so the incomplete rename slipped to the
+gate. **The full `--all-targets` gate caught exactly what per-crate testing structurally can't.**
+Not a drop — completed the rename (fixup commit `4b68a539`, `cargo test --workspace --no-run` exit 0,
+empty-proof: zero `.key_pair` field accesses remain). Lesson saved:
+`dep-bump-compile-confirm-all-targets`.
+
+Re-gate on `4b68a539`: fmt 0 · clippy 0 · test ×3 = **1512/0/18 / 1512/0/18 / 1512/0/18** (zero
+failures, no fcap1 flake this run, no ENOSPC). The full suite — h2spec, WS matrix, gRPC-H3, all root
+integration tests — green with all 4 adaptations. Held surface intact.
+
+> Disk note: cumulative gate cruft filled eg-target to 44G → ENOSPC during the fixup; CF-DISK-1
+> reclaim (drop `debug/incremental` + `debug/deps` executables, keep `.rlib`s) → 4.2G; re-gate built
+> back to 28G/17G-free. Reclaim between phase gates. Memory: `s33-box-15gb-ram-cap-cargo-jobs`.
+
+**PHASE 2 COMPLETE** ✅ — socket2 0.6.3, toml 1.1.2, rand 0.10.1, rcgen 0.14.8 all in, 0 dropped.
 
 ## PHASE 3 — H2 stack + WS library
-_<pending>_
+_<pending Phase 2>_
+
+**Pre-scope (lead, read-only):**
+- hyper 1.9→1.10.1 + h2 0.4.13→0.4.14: caret `cargo update` (no spec edit). Gate = **h2spec strict
+  146/147** (`/home/ubuntu/.cargo/bin/h2spec` via `tests/h2spec_server_conformance.rs`) MUST hold
+  (crown jewel) + H2 cells. CF-S27-2 check: note whether h2 0.4.14 poll_capacity / hyper 1.10.1
+  changes the WS-H2 closed-window send_data picture (do NOT un-gate regardless).
+- tokio-tungstenite 0.24→0.29 (**highest adaptation risk** — 5-ver jump). Surface we use:
+  `WebSocketStream`(+`from_raw_socket`), `client_async`/`client_async_with_config`/`accept_async`,
+  `Message::{Binary,Text,Close}`, `CloseFrame`, `protocol::frame::coding::CloseCode`,
+  `WebSocketConfig`, `tungstenite::client::ClientRequestBuilder`, `handshake::derive_accept_key`,
+  `protocol::Role`. Likely breaks across 0.24→0.29: `Message::Text`→`Utf8Bytes`,
+  `Message::Binary`→`Bytes` (payload type change → `.into()` at construction/match),
+  `CloseFrame` (owned, `reason: Utf8Bytes`), `WebSocketConfig` field/builder churn. Re-verify the
+  WS matrix (H1/H2/H3) real-wire + R8 bound + upgrade/relay/close burst ≥50 + reset mapping (R13).
+  WS regression → **drop tokio-tungstenite** (pin 0.24), keep the rest.
 
 ## PHASE 4 — full re-validation + promote
 _<pending>_
