@@ -46,8 +46,11 @@ BOUNDED in Phase 4; only sc9 DRIFT is expected/carried.
 
 ### Baseline R1 (reference, this box/toolchain)
 - fmt: PASS · clippy `--all-targets --all-features -D warnings`: PASS
-- test `--workspace --all-features --no-fail-fast` ×3: _<filled when complete>_
-  (S31 reference on same commit: 1512/0/18.)
+- test `--workspace --all-features --no-fail-fast` ×3: **GREEN — 1512/0/18 ×3** (exit 0 ×3, zero
+  FAILED). Exact match to S31 reference on same commit. Box reproduces green → any post-bump failure
+  is attributable to its bump. Logs: `audit/deps/s33-gate-baseline/`.
+
+**PHASE 0 COMPLETE** ✅
 
 ### In-scope crate inventory (Cargo.lock, pre-bump)
 | crate | current | target | route |
@@ -88,8 +91,61 @@ dashmap 6.1.0) → bumps partially consolidate the tree.
 
 ---
 
-## PHASE 1 — routine patch group
-_<pending>_
+## PHASE 1 — routine patch group  →  **7 of 8 IN, 1 dropped**
+
+dep-eng authored; verifier gates independently (below). Method: `cargo update --precise` per crate
+(attributable, no transitive cascade); spec edits for 0.x-minor; **dual-version** retry for the two
+that `--precise` couldn't move.
+
+| crate | old | new | verdict |
+|---|---|---|---|
+| http | 1.4.0 | **1.4.1** | ✅ in |
+| serde_json | 1.0.149 | **1.0.150** | ✅ in |
+| libc | 0.2.184 | **0.2.186** | ✅ in |
+| rustls | 0.23.38 | **0.23.40** | ✅ in |
+| rustls-pki-types | 1.14.0 | **1.14.1** | ✅ in |
+| dashmap | 6.1.0 | **6.2.1** | ✅ in |
+| object | 0.36.7 | **0.37.3** | ✅ in (dual-version: lb-l4-xdp→0.37.3, aya keeps 0.36.7; read API stable, 0 code change) |
+| prometheus | 0.13.4 | ~~0.14.0~~ | ❌ **DROPPED — carried** |
+
+**prometheus 0.14 drop (genuine, guard-confirmed):** prometheus is shared with `foundations`, a
+transitive of the **HELD** `tokio-quiche 0.19.0` (pulled via a version *range*, not a hard pin).
+Taking prometheus 0.14 forces `foundations 4.5.0 → 5.7.1` → `tokio 1.51.1 → 1.52.3` +
+tonic/opentelemetry/prost/governor of the held QUIC telemetry stack. No second consumer pins
+foundations 4.5.0, so it can't fork the way object forks against aya's hard `^0.36`. Disturbing the
+held surface is a blocker (R3) → **prometheus 0.14 carried forward** (CF: revisit when quiche/
+tokio-quiche unhold, or pin foundations). object, by contrast, forks cleanly (aya's `^0.36` keeps
+0.36.7 alive as the second consumer).
+
+Code changes: **none** (object read API stable; loader.rs untouched). `cargo check --workspace
+--all-features` exit 0. Held surface verified unchanged: quiche 0.29.1 (registry), tokio-quiche
+0.19.0, foundations 4.5.0, tokio 1.51.1, aya 0.13.1. Commits: `97132c9f` (6) + `ed08ef7c` (object).
+
+### Phase 1 binding gate (verifier, independent) — **GREEN** (commit ed08ef7c)
+fmt clean · clippy `--all-targets --all-features -D warnings` clean · `cargo test --workspace
+--all-features --no-fail-fast` ×3:
+
+| run | passed | failed | ignored |
+|---|---|---|---|
+| 1 | 1512 | 0 | 18 |
+| 2 | 1512 | 0 | 18 |
+| 3 | 1511 | **1** | 18 |
+
+The single run-3 failure = **CF-FCAP1-FLAKE** (known pre-existing, isolation-proven). Test
+`h2h3_fcap1_over_cap_upload_never_complete`: a **vacuity** failure — the upload stalled on QUIC
+flow-control at 67026399 B, **82465 B short** of the 67108864 B cap, so the over-cap Reset arm
+wasn't reached (harness backpressure-masking, `fcap1-overcap-arm-backpressure-masked`). Confirmed
+NOT a regression: passed runs 1&2; **isolation re-run 3/3 PASS** (forwarded 67075774 / 67067184 /
+67108864 B — reaches the cap uncontended). None of the 7 bumps touch QUIC flow-control. No
+assertion weakened (R2). Held surface intact (quiche 0.29.1, tokio-quiche 0.19.0, foundations
+4.5.0, tokio 1.51.1). Logs: `audit/deps/s33-gate-phase1/`, `audit/deps/s33-fcap1-iso-{1,2,3}.log`.
+
+> **Box constraint found (baked into the gate runner):** 15 GiB RAM / 0 swap → default ~8-way
+> `--all-features` test compile OOMs (SIGKILL → cargo exit 101 / 0 tests — looks like a compile
+> error). Fix: `CARGO_BUILD_JOBS=4`. The first gate attempt died this way; re-run with the cap was
+> clean. Memory: `s33-box-15gb-ram-cap-cargo-jobs`.
+
+**PHASE 1 COMPLETE** ✅ — 7 crates in, prometheus 0.14 carried.
 
 ## PHASE 2 — breaking-API group
 _<pending>_

@@ -4,6 +4,10 @@
 set -u
 LABEL="${1:?usage: s33-run-gate.sh <label>}"
 export CARGO_TARGET_DIR=/home/ubuntu/Code/eg-target
+# Box is 15GiB RAM / 0 swap — default ~8-way --all-features test compile OOMs (SIGKILL ->
+# cargo exit 101 / 0 tests, looks like a compile error but is the OOM killer). Cap build
+# jobs to bound peak link/codegen memory. See memory s33-box-15gb-ram-cap-cargo-jobs.
+export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}"
 cd /home/ubuntu/Code/ExpressGateway || exit 99
 OUT="audit/deps/s33-gate-${LABEL}"
 mkdir -p "$OUT"
