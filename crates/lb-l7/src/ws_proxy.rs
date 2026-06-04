@@ -350,9 +350,7 @@ impl WsProxy {
                         if client_ping_log.len() > ping_max {
                             let frame = CloseFrame {
                                 code: CloseCode::Policy,
-                                reason: Utf8Bytes::from_static(
-                                    "ping flood: rate limit exceeded",
-                                ),
+                                reason: Utf8Bytes::from_static("ping flood: rate limit exceeded"),
                             };
                             let _ = client_tx.send(Message::Close(Some(frame))).await;
                             let _ = client_tx.close().await;
@@ -949,7 +947,10 @@ mod tests {
         let flood = tokio::spawn(async move {
             let payload = vec![0xABu8; 1024];
             for _ in 0..4096u32 {
-                if obs_tx.feed(Message::Binary(payload.clone().into())).await.is_err()
+                if obs_tx
+                    .feed(Message::Binary(payload.clone().into()))
+                    .await
+                    .is_err()
                     || obs_tx.flush().await.is_err()
                 {
                     break;

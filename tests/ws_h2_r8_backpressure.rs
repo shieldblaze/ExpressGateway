@@ -331,7 +331,9 @@ async fn open_ws_windowed(
 /// O(1) at all times.
 async fn round_trip_n(ws: &mut WebSocketStream<H2StreamAdapter>, n: u64) {
     for i in 0..n {
-        ws.send(Message::Text(format!("m{i}").into())).await.unwrap();
+        ws.send(Message::Text(format!("m{i}").into()))
+            .await
+            .unwrap();
         let echo = tokio::time::timeout(Duration::from_secs(10), ws.next())
             .await
             .expect("echo timed out")

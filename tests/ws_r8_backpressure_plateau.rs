@@ -163,7 +163,11 @@ async fn spawn_flood_backend_tcp(pushed: Arc<AtomicU64>) -> SocketAddr {
                     // gateway recv window fill and this flush parks → `pushed`
                     // plateaus at the true number of frames the gateway
                     // accepted.
-                    if ws.feed(Message::Binary(payload.clone().into())).await.is_err() {
+                    if ws
+                        .feed(Message::Binary(payload.clone().into()))
+                        .await
+                        .is_err()
+                    {
                         break;
                     }
                     if ws.flush().await.is_err() {

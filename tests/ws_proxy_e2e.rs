@@ -321,7 +321,10 @@ async fn ws_binary_message_roundtrip() {
     // a short-circuit.
     let payload: Vec<u8> = (0..4096).map(|i| (i & 0xff) as u8).collect();
     let mut client = connect_ws_client(gw, "/bin").await;
-    client.send(Message::Binary(payload.clone().into())).await.unwrap();
+    client
+        .send(Message::Binary(payload.clone().into()))
+        .await
+        .unwrap();
     let msg = tokio::time::timeout(Duration::from_secs(3), client.next())
         .await
         .unwrap()
@@ -359,7 +362,10 @@ async fn ws_ping_pong_keepalive() {
     let mut pongs = 0usize;
     let start = tokio::time::Instant::now();
     for i in 0..5 {
-        client.send(Message::Ping(vec![i as u8].into())).await.unwrap();
+        client
+            .send(Message::Ping(vec![i as u8].into()))
+            .await
+            .unwrap();
         if let Ok(Some(Ok(msg))) =
             tokio::time::timeout(Duration::from_millis(300), client.next()).await
         {
