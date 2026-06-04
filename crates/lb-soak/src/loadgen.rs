@@ -187,7 +187,7 @@ async fn ws_h1_echo_loop(
         let payload: Vec<u8> = (0..len).map(|k| ((k as u64 + i) % 251) as u8).collect();
         if tokio::time::timeout(
             Duration::from_secs(5),
-            ws.send(Message::Binary(payload.clone())),
+            ws.send(Message::Binary(payload.clone().into())),
         )
         .await
         .is_err()
@@ -198,7 +198,7 @@ async fn ws_h1_echo_loop(
         let echoed = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 match ws.next().await {
-                    Some(Ok(Message::Binary(b))) => return WsEcho::Bytes(b),
+                    Some(Ok(Message::Binary(b))) => return WsEcho::Bytes(b.to_vec()),
                     Some(Ok(Message::Close(_))) | None => return WsEcho::Closed,
                     Some(Ok(_)) => continue, // Pong / Text — keep waiting
                     Some(Err(_)) => return WsEcho::Closed,
@@ -285,7 +285,7 @@ async fn ws_h1_open_close_cycle(
         let payload: Vec<u8> = (0..len).map(|k| ((k as u64 + seed) % 251) as u8).collect();
         tokio::time::timeout(
             Duration::from_secs(5),
-            ws.send(Message::Binary(payload.clone())),
+            ws.send(Message::Binary(payload.clone().into())),
         )
         .await??;
         let echoed = tokio::time::timeout(Duration::from_secs(5), async {
@@ -557,7 +557,7 @@ async fn ws_h2_open_close_cycle(
         let payload: Vec<u8> = (0..len).map(|k| ((k as u64 + seed) % 251) as u8).collect();
         tokio::time::timeout(
             Duration::from_secs(5),
-            ws.send(Message::Binary(payload.clone())),
+            ws.send(Message::Binary(payload.clone().into())),
         )
         .await??;
         let echoed = tokio::time::timeout(Duration::from_secs(5), async {
@@ -609,7 +609,7 @@ async fn ws_h2_echo_loop(
         let payload: Vec<u8> = (0..len).map(|k| ((k as u64 + i) % 251) as u8).collect();
         if tokio::time::timeout(
             Duration::from_secs(5),
-            ws.send(Message::Binary(payload.clone())),
+            ws.send(Message::Binary(payload.clone().into())),
         )
         .await
         .is_err()
@@ -620,7 +620,7 @@ async fn ws_h2_echo_loop(
         let echoed = tokio::time::timeout(Duration::from_secs(5), async {
             loop {
                 match ws.next().await {
-                    Some(Ok(Message::Binary(b))) => return WsEcho::Bytes(b),
+                    Some(Ok(Message::Binary(b))) => return WsEcho::Bytes(b.to_vec()),
                     Some(Ok(Message::Close(_))) | None => return WsEcho::Closed,
                     Some(Ok(_)) => continue,
                     Some(Err(_)) => return WsEcho::Closed,

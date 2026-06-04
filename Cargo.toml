@@ -111,7 +111,7 @@ rustls-pemfile = "2"
 tokio-util = { version = "0.7", default-features = false, features = ["rt"] }
 # Item 2: WebSocket proxy path (PROMPT.md §14). 0.24 keeps us on the same
 # rustls 0.23 + tokio-rustls 0.26 stack already pinned above.
-tokio-tungstenite = { version = "0.24", default-features = false, features = ["handshake"] }
+tokio-tungstenite = { version = "0.29", default-features = false, features = ["handshake"] }
 # Item 2: `StreamExt` + `SinkExt` combinators over `tokio-tungstenite`'s
 # `WebSocketStream`. `std` is the only default we need; we keep the pull
 # light and skip the `compat` layer.

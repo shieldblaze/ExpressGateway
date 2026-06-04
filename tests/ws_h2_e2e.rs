@@ -423,7 +423,7 @@ async fn ws_over_h2_text_binary_roundtrip_then_close() {
     //    echo cannot pass by accident.
     let payload: Vec<u8> = (0..4096).map(|i| (i & 0xff) as u8).collect();
     client
-        .send(Message::Binary(payload.clone()))
+        .send(Message::Binary(payload.clone().into()))
         .await
         .expect("send Binary over WS-over-H2 failed");
     let msg = tokio::time::timeout(STEP_TIMEOUT, client.next())

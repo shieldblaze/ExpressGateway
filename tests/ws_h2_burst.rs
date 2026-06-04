@@ -269,10 +269,10 @@ async fn one_cycle(gw: SocketAddr, ta: CertificateDer<'static>) {
         .expect("text echo timeout")
         .expect("stream ended")
         .expect("text echo err");
-    assert!(matches!(echo, Message::Text(ref s) if s == "ping"));
+    assert!(matches!(echo, Message::Text(ref s) if s.as_str() == "ping"));
 
     let payload: Vec<u8> = (0..1024).map(|i| (i & 0xff) as u8).collect();
-    ws.send(Message::Binary(payload.clone())).await.unwrap();
+    ws.send(Message::Binary(payload.clone().into())).await.unwrap();
     let echo = tokio::time::timeout(STEP_TIMEOUT, ws.next())
         .await
         .expect("bin echo timeout")

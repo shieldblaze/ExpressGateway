@@ -44,6 +44,7 @@ use hyper::{Method, Request};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::Utf8Bytes;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Role, WebSocketConfig};
 
@@ -160,18 +161,23 @@ impl WsConfig {
     #[must_use]
     pub fn tungstenite_config(self) -> WebSocketConfig {
         let defaults = WebSocketConfig::default();
-        WebSocketConfig {
-            max_message_size: Some(self.max_message_size),
-            max_frame_size: Some(self.max_message_size),
+        // tungstenite 0.29 made `WebSocketConfig` `#[non_exhaustive]`, so the
+        // struct literal is no longer permitted; the chaining setters
+        // (`max_message_size`/`max_frame_size`/`max_write_buffer_size`) take the
+        // identical `Option<usize>`/`usize` values and start from
+        // `WebSocketConfig::default()`, leaving every other field at its
+        // default — byte-for-byte the same configuration as the prior literal.
+        defaults
+            .max_message_size(Some(self.max_message_size))
+            .max_frame_size(Some(self.max_message_size))
             // One in-flight message + the write-buffer headroom. Saturating
             // so a pathological `max_message_size` near `usize::MAX` cannot
             // wrap (it would just stay unbounded, never smaller than the
             // default write buffer).
-            max_write_buffer_size: self
-                .max_message_size
-                .saturating_add(defaults.write_buffer_size),
-            ..defaults
-        }
+            .max_write_buffer_size(
+                self.max_message_size
+                    .saturating_add(defaults.write_buffer_size),
+            )
     }
 }
 
@@ -305,7 +311,7 @@ impl WsProxy {
                     // Idle elapsed — emit 1001 Going Away to both sides.
                     let away = CloseFrame {
                         code: CloseCode::Away,
-                        reason: std::borrow::Cow::Borrowed("idle timeout"),
+                        reason: Utf8Bytes::from_static("idle timeout"),
                     };
                     let _ = client_tx.send(Message::Close(Some(away.clone()))).await;
                     let _ = backend_tx.send(Message::Close(Some(away))).await;
@@ -317,7 +323,7 @@ impl WsProxy {
                     // and propagate a clean Close to the upstream half.
                     let frame = CloseFrame {
                         code: CloseCode::Policy,
-                        reason: std::borrow::Cow::Borrowed("ws read frame timeout"),
+                        reason: Utf8Bytes::from_static("ws read frame timeout"),
                     };
                     let _ = client_tx.send(Message::Close(Some(frame))).await;
                     let _ = client_tx.close().await;
@@ -344,7 +350,7 @@ impl WsProxy {
                         if client_ping_log.len() > ping_max {
                             let frame = CloseFrame {
                                 code: CloseCode::Policy,
-                                reason: std::borrow::Cow::Borrowed(
+                                reason: Utf8Bytes::from_static(
                                     "ping flood: rate limit exceeded",
                                 ),
                             };
@@ -443,7 +449,7 @@ where
 {
     let frame = CloseFrame {
         code: CloseCode::Policy,
-        reason: std::borrow::Cow::Borrowed("ws backpressure/write timeout"),
+        reason: Utf8Bytes::from_static("ws backpressure/write timeout"),
     };
     let _ = client_tx.send(Message::Close(Some(frame))).await;
     let _ = client_tx.close().await;
@@ -835,7 +841,7 @@ mod tests {
             let payload = vec![0xCDu8; MSG_BYTES];
             for _ in 0..FLOOD {
                 if backend
-                    .feed(Message::Binary(payload.clone()))
+                    .feed(Message::Binary(payload.clone().into()))
                     .await
                     .is_err()
                 {
@@ -943,7 +949,7 @@ mod tests {
         let flood = tokio::spawn(async move {
             let payload = vec![0xABu8; 1024];
             for _ in 0..4096u32 {
-                if obs_tx.feed(Message::Binary(payload.clone())).await.is_err()
+                if obs_tx.feed(Message::Binary(payload.clone().into())).await.is_err()
                     || obs_tx.flush().await.is_err()
                 {
                     break;

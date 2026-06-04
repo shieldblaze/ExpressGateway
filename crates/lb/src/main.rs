@@ -5018,7 +5018,7 @@ mod tests {
                 let _ = ws.next().await;
                 let payload = vec![0xCDu8; frame_len];
                 for _ in 0..count {
-                    if ws.feed(Message::Binary(payload.clone())).await.is_err() {
+                    if ws.feed(Message::Binary(payload.clone().into())).await.is_err() {
                         break;
                     }
                     if ws.flush().await.is_err() {

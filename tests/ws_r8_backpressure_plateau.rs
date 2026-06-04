@@ -145,11 +145,9 @@ async fn spawn_flood_backend_tcp(pushed: Arc<AtomicU64>) -> SocketAddr {
             };
             let pushed = Arc::clone(&pushed);
             tokio::spawn(async move {
-                let cfg = tokio_tungstenite::tungstenite::protocol::WebSocketConfig {
-                    write_buffer_size: 0,
-                    max_write_buffer_size: MSG_BYTES + 1024,
-                    ..tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
-                };
+                let cfg = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
+                    .write_buffer_size(0)
+                    .max_write_buffer_size(MSG_BYTES + 1024);
                 let mut ws =
                     match tokio_tungstenite::accept_async_with_config(sock, Some(cfg)).await {
                         Ok(w) => w,
@@ -165,7 +163,7 @@ async fn spawn_flood_backend_tcp(pushed: Arc<AtomicU64>) -> SocketAddr {
                     // gateway recv window fill and this flush parks → `pushed`
                     // plateaus at the true number of frames the gateway
                     // accepted.
-                    if ws.feed(Message::Binary(payload.clone())).await.is_err() {
+                    if ws.feed(Message::Binary(payload.clone().into())).await.is_err() {
                         break;
                     }
                     if ws.flush().await.is_err() {
