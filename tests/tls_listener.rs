@@ -26,7 +26,7 @@ const ECHO_PAYLOAD: &[u8] = b"hello-tls";
 fn make_cert() -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>) {
     let generated = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
     let cert_der = generated.cert.der().to_vec();
-    let key_der = generated.key_pair.serialize_der();
+    let key_der = generated.signing_key.serialize_der();
     (
         vec![CertificateDer::from(cert_der)],
         PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_der)),

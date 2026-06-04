@@ -54,7 +54,7 @@ const SAN_HOST: &str = "expressgateway.test";
 fn make_cert_for(san: &str) -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>) {
     let generated = rcgen::generate_simple_self_signed(vec![san.to_string()]).unwrap();
     let cert_der = generated.cert.der().to_vec();
-    let key_der = generated.key_pair.serialize_der();
+    let key_der = generated.signing_key.serialize_der();
     (
         vec![CertificateDer::from(cert_der)],
         PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_der)),
