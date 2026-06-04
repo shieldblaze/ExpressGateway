@@ -231,7 +231,7 @@ impl ConfigManager {
             ));
         }
         config
-            .parse::<toml::Value>()
+            .parse::<toml::Table>()
             .map_err(|e| ControlPlaneError::InvalidConfig(format!("invalid TOML: {e}")))?;
         Ok(())
     }
