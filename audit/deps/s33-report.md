@@ -192,10 +192,83 @@ integration tests — green with all 4 adaptations. Held surface intact.
 
 **PHASE 2 COMPLETE** ✅ — socket2 0.6.3, toml 1.1.2, rand 0.10.1, rcgen 0.14.8 all in, 0 dropped.
 
-## PHASE 3 — H2 stack + WS library
-_<pending Phase 2>_
+## PHASE 3 — H2 stack + WS library  →  **both increments IN**
 
-**Pre-scope (lead, read-only):**
+| crate | old | new | commit | adaptation |
+|---|---|---|---|---|
+| hyper | 1.9.0 | **1.10.1** | `847a0a22` | caret update, **zero code change**; pulled h2 0.4.14 |
+| h2 | 0.4.13 | **0.4.14** | (same) | — |
+| tokio-tungstenite | 0.24.0 | **0.29.0** | `bffe34b3` | mechanical 0.29 API rewrap (below); +tungstenite 0.29; root spec only (members `workspace=true`) |
+
+**hyper/h2:** lock delta = 2 version lines, no cascade; held surface intact. H2 conformance green
+(h2spec generic + strict OK; h2_proxy_e2e 5/0; h2_validation_before_forward 3/0).
+
+**tokio-tungstenite 0.29 — NOT dropped, adapted (lead-reviewed diff: pure API surface, R8 relay
+logic untouched):**
+1. `WebSocketConfig` now `#[non_exhaustive]` → struct-literal replaced by chaining setters
+   (`.max_message_size`/`.max_frame_size`/`.max_write_buffer_size`) with **byte-identical values**
+   from `default()` → the F-S27-2/R8 `max_write_buffer_size` bound is unchanged (ws_proxy.rs
+   `tungstenite_config`, ws_r8_backpressure_plateau.rs).
+2. `CloseFrame.reason` `Cow<str>` → `Utf8Bytes`: `Cow::Borrowed(lit)` → `Utf8Bytes::from_static(lit)`
+   (same zero-copy static literals/codes; ws_proxy.rs ×4 + ws_proxy_e2e.rs).
+3. `CloseFrame` owned (lost lifetime + `into_owned()`): `CloseFrame<'_>`→`CloseFrame`,
+   `Some(f.into_owned())`→`Some(f)` (ws_proxy_e2e.rs).
+4. `Message::Binary/Text/Ping` payload `Vec<u8>`/`String` → `Bytes`/`Utf8Bytes`: `.into()` at
+   construction (loadgen.rs, **lb/main.rs:5021** prod WS broadcast — pure type wrap), `.to_vec()`/
+   `.as_str()` on receive (`Bytes: PartialEq<Vec<u8>>` + `Utf8Bytes: Deref<str>` verified).
+
+**Lead diff review:** the WS relay select-loop / backpressure detection / feed-flush logic is **not in
+the diff** — only config/close-reason/payload-type wrapping changed. **R8 preserved** (proven by the
+passing `ws_r8_backpressure_plateau` which depends on the exact migrated config values, + the 13.2s
+`ws_h2_r8_backpressure`). dep-eng WS-test run: lb-l7/lb-quic 0-failed; root ws_h2_e2e 1/0, ws_h2_burst
+1/0, ws_h2_conformance 4/0, ws_h2_upgrade_defer 3/0, ws_h2_r8_backpressure 1/0, ws_r8_backpressure_plateau
+1/0, ws_proxy_e2e 7/0. Held surface intact after both increments.
+
+### Phase 3 binding gate (lead-run) — _<pending gate on bffe34b3>_
+### CF-S27-2 check (hyper 1.10.1 H2-upgrade backpressure) — **FINDING: UNCHANGED, still gated**
+S30 found WS-over-H2 unviable: hyper's H2 CONNECT-upgrade write path sends **unconditionally on a
+closed window** → unbounded h2 buffering (F-S27-2 DoS); WS-H2 stays gated. **Checked hyper 1.10.1
+`proto/h2/upgrade.rs` (registry source) — the bug is STILL PRESENT, confirming S30's "identical in
+1.10.1":**
+- `UpgradedSendStreamTask::tick` (still named `tick`) does, on a zero window:
+  `'capacity: loop { match poll_capacity(cx) { … Poll::Pending => break 'capacity } }` — the
+  **`Pending` is swallowed by `break 'capacity`**, then control falls through to
+  `me.rx.poll_next` → `me.h2_tx.send_data(SendBuf::Cursor(cursor), false)` **regardless of the
+  closed window**. Exact S30 mechanism, same site.
+- The 1.10.x `mpsc::channel(1)` bridge between `H2Upgraded::poll_write` and the task does **NOT**
+  fix it: because the task never parks on the closed window, it keeps draining the cap-1 channel
+  and feeding h2's send buffer, which buffers unbounded (`h2 share.rs`). The bridge bounds only the
+  one in-flight chunk, not h2's window-less buffer.
+
+⇒ **CF-S27-2 is NOT resolved by the hyper 1.9→1.10.1 bump.** WS-H2 correctly stays gated (no change
+this session). *(Methodology note: my first read saw the `if capacity()==0 { poll_capacity }` gate
+and wrongly inferred a fix — the bug is in how `Pending` is handled, not whether the gate exists;
+reading the full `tick` body + heeding the s30 prior corrected it. feedback-symptom-not-attribution.)*
+s30 memory re-confirmed (left as-is, already correct).
+
+### Phase 3 binding gate (lead-run) — **GREEN** (gate on bffe34b3; fmt fixed → tip 2ea6c181)
+clippy 0 · test ×3 = **1512/0/18 · 1512/0/18 · 1511/1/18** (run-3 fail = CF-FCAP1-FLAKE, the same
+over-cap vacuity test, passed runs 1&2, Phase-1 isolation-confirmed 3/3 — known, not a regression).
+No ENOSPC. **fmt initially FAILED** (dep-eng's `.into()`/`Utf8Bytes` edits pushed method chains past
+100 chars; `--no-run` doesn't check fmt) → fixed with `cargo fmt --all` (whitespace-only, identical
+tokens, commit `2ea6c181`, fmt clean at tip). The full suite (h2spec, WS matrix, gRPC-H3, root
+integration tests) green with both bumps. Held surface intact.
+
+### Phase 3 behavioral re-verify (lead-run targeted) — **GREEN** (both owner-relevant gates)
+- **h2spec strict (crown jewel):** `h2spec_server_conformance_strict_passes` PASSED — the test runs
+  the full `h2spec -S` suite and asserts exit 0 (0 failures); h2spec is a fixed conformance suite
+  (the bump adds/removes no cases), so passing = the documented **146 passed / 1 skipped / 0 failed**
+  holds under **hyper 1.10.1 / h2 0.4.14**. R11 crown-jewel intact, no regression. Log:
+  `audit/deps/s33-h2spec-strict.log` (21985-byte h2spec stdout captured by the harness).
+- **R13 WS close/reset burst:** `ws_proxy_e2e` (upgrade + relay + close + reset-mapping) run **×50 →
+  50/50 PASS, 0 fail** → tokio-tungstenite 0.29 adaptation is stable, reset/close mapping intact, no
+  flake introduced. WS matrix (H1/H2/H3) green in the binding gate.
+
+**PHASE 3 COMPLETE** ✅ — hyper 1.10.1 + h2 0.4.14 + tokio-tungstenite 0.29 all in (0 dropped);
+h2spec crown jewel + WS R8/R13 intact; CF-S27-2 unchanged (still gated).
+
+---
+### (original pre-scope, kept for reference)
 - hyper 1.9→1.10.1 + h2 0.4.13→0.4.14: caret `cargo update` (no spec edit). Gate = **h2spec strict
   146/147** (`/home/ubuntu/.cargo/bin/h2spec` via `tests/h2spec_server_conformance.rs`) MUST hold
   (crown jewel) + H2 cells. CF-S27-2 check: note whether h2 0.4.14 poll_capacity / hyper 1.10.1
@@ -211,7 +284,28 @@ _<pending Phase 2>_
   WS regression → **drop tokio-tungstenite** (pin 0.24), keep the rest.
 
 ## PHASE 4 — full re-validation + promote
-_<pending>_
+_<pending Phase 3>_
+
+**Re-soak plan (lead pre-scope).** `scripts/soak/run-soak.sh <dur> <out> [sample] [scale]
+[scenarios…]` (needs `eg-soak` + gateway release binaries built first). 12 scenarios:
+| mission surface | scenario | expect |
+|---|---|---|
+| H1/H2 base | sc1_h1h1, sc1b_h1h2, sc2_h2h2 | BOUNDED |
+| slowloris / 413 | sc3_slowloris, sc6_413teardown | BOUNDED |
+| **Mode B** | sc4_modeb | BOUNDED |
+| **Mode A** | sc5_modea | BOUNDED |
+| **H3** | sc7_h3terminate | BOUNDED |
+| **WS matrix** | sc8_ws_h1, sc8b_ws_h2, sc8c_ws_h3 | BOUNDED (R8) |
+| **gRPC-H3** | sc9_grpc_h3 | **DRIFT — KNOWN sc9 carried baseline** (quiche collected leak; NOT a new finding) |
+
+Datapath deps changed → soak is load-bearing: rustls/socket2 (all TLS+socket paths), hyper/h2
+(H1/H2/WS-H2), tokio-tungstenite (WS, R8), rand (LB select). **Batch** the run (8-core can't
+co-locate all 12 — S20/S21 lesson; over-saturation false-positives), ≥900s/scenario, sample 15s,
+read verdict only from the completed run (R15). Every scenario BOUNDED **except sc9 DRIFT** = pass.
+
+Other Phase-4 gates: ×3 (--no-fail-fast); standalone h2spec 146/147; WS matrix real-wire + R8/R13;
+gRPC-H3 4-call-types+trailers (grpc_h3_e2e 16); F-MD-4 (h2h3_md_streaming_verify); clippy/fmt; cov
+≥80%. PROMOTE per R11 if all green (sc9 DRIFT expected).
 
 ## VERDICT
 _<pending>_
