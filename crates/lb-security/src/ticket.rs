@@ -740,7 +740,7 @@ mod tests {
         // dev-dep for this crate) and feed both into `build_server_config`.
         let generated = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
         let cert_der: Vec<u8> = generated.cert.der().to_vec();
-        let key_der: Vec<u8> = generated.key_pair.serialize_der();
+        let key_der: Vec<u8> = generated.signing_key.serialize_der();
         let cert_chain = vec![CertificateDer::from(cert_der)];
         let key = PrivateKeyDer::Pkcs8(rustls_pki_types::PrivatePkcs8KeyDer::from(key_der));
 
@@ -794,7 +794,7 @@ mod tests {
     fn write_self_signed(dir: &Path, cn: &str) -> (PathBuf, PathBuf) {
         let generated = rcgen::generate_simple_self_signed(vec![cn.to_string()]).unwrap();
         let cert_pem = generated.cert.pem();
-        let key_pem = generated.key_pair.serialize_pem();
+        let key_pem = generated.signing_key.serialize_pem();
         let cert_path = dir.join(format!("{cn}.crt"));
         let key_path = dir.join(format!("{cn}.key"));
         std::fs::write(&cert_path, cert_pem).unwrap();
@@ -838,7 +838,7 @@ mod tests {
         let key = dir.join("dummy.key");
         std::fs::write(&cert, b"").unwrap();
         let generated = rcgen::generate_simple_self_signed(vec!["dummy".to_string()]).unwrap();
-        std::fs::write(&key, generated.key_pair.serialize_pem()).unwrap();
+        std::fs::write(&key, generated.signing_key.serialize_pem()).unwrap();
         let err = TlsConfigBundle::load_from_paths(&cert, &key, &[]).unwrap_err();
         assert_eq!(err.reason(), "empty_chain");
     }

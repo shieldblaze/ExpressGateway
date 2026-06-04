@@ -185,7 +185,7 @@ h2 = "0.4"
 quiche = { workspace = true }
 tokio-util = { workspace = true }
 ring = "0.17"
-rcgen = { version = "0.13", features = ["pem"] }
+rcgen = { version = "0.14", features = ["pem"] }
 # Item 2: integration tests for the WebSocket proxy. `connect` gives us
 # `connect_async` (which dials over raw TCP, no TLS needed for the ws://
 # echo tests). Stays on the same 0.24 pin as the workspace dep.

@@ -57,7 +57,7 @@ fn write_test_cert() -> (CertTempFile, CertTempFile) {
     let generated =
         rcgen::generate_simple_self_signed(vec![TEST_SNI.to_string()]).expect("rcgen self-signed");
     let cert_pem = generated.cert.pem();
-    let key_pem = generated.key_pair.serialize_pem();
+    let key_pem = generated.signing_key.serialize_pem();
     let dir = std::env::temp_dir();
     let subsec = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

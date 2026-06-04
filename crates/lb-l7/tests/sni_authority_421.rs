@@ -43,7 +43,7 @@ const ATTACKER_HOST: &str = "b.test";
 fn self_signed_for(sni: &str) -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>) {
     let generated = rcgen::generate_simple_self_signed(vec![sni.to_owned()]).unwrap();
     let cert_der: Vec<u8> = generated.cert.der().to_vec();
-    let key_der: Vec<u8> = generated.key_pair.serialize_der();
+    let key_der: Vec<u8> = generated.signing_key.serialize_der();
     let chain = vec![CertificateDer::from(cert_der)];
     let key = PrivateKeyDer::Pkcs8(rustls_pki_types::PrivatePkcs8KeyDer::from(key_der));
     (chain, key)
