@@ -76,7 +76,7 @@ serde_json = "1"
 toml = "0.8"
 # Networking
 bytes = "1"
-socket2 = { version = "0.5", features = ["all"] }
+socket2 = { version = "0.6", features = ["all"] }
 libc = "0.2"
 # Logging
 tracing = "0.1"

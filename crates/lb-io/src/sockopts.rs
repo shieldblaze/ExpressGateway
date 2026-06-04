@@ -94,7 +94,7 @@ pub fn apply_listener(socket: &TcpListener, cfg: &ListenerSockOpts) -> io::Resul
         sock.set_send_buffer_size(sz)?;
     }
     if cfg.nodelay {
-        sock.set_nodelay(true)?;
+        sock.set_tcp_nodelay(true)?;
     }
     if cfg.keepalive {
         sock.set_keepalive(true)?;
@@ -147,7 +147,7 @@ pub fn apply_listener(socket: &TcpListener, cfg: &ListenerSockOpts) -> io::Resul
 pub fn apply_connected(socket: &TcpStream, cfg: &BackendSockOpts) -> io::Result<()> {
     let sock = SockRef::from(socket);
     if cfg.nodelay {
-        sock.set_nodelay(true)?;
+        sock.set_tcp_nodelay(true)?;
     }
     if cfg.keepalive {
         sock.set_keepalive(true)?;
@@ -203,7 +203,7 @@ pub fn apply_connected_tokio(
 ) -> io::Result<()> {
     let sock = SockRef::from(socket);
     if cfg.nodelay {
-        sock.set_nodelay(true)?;
+        sock.set_tcp_nodelay(true)?;
     }
     if cfg.keepalive {
         sock.set_keepalive(true)?;
