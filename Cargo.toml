@@ -61,7 +61,10 @@ members = [
 [workspace.package]
 license = "GPL-3.0-only"
 edition = "2024"
-rust-version = "1.85"
+# MSRV moved to 1.88 at S31 (quiche 0.29.1 + tokio-quiche 0.19 hard-require it);
+# see the MSRV-pin notes above. Member crates inherit this via rust-version =
+# { workspace = true } (root lb-integration-tests already declares 1.88).
+rust-version = "1.88"
 
 [workspace.dependencies]
 # Async runtime

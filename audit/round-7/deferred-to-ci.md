@@ -189,3 +189,28 @@ steps:
 | 20   | 4-hour soak — out of session budget                |
 | 23   | trivy/grype not installed                          |
 | 25   | docker-compose / docker daemon not available       |
+
+---
+
+## S34 — CI reconciliation additions
+
+Two items the S34 CI reconciliation makes explicit (referenced by the CI gates):
+
+### D-6 carve-out: `lb-l4-xdp/src/loader.rs` line coverage
+The D-6 per-module gate (`scripts/ci/coverage-check.sh`) requires every charter
+hot-path module ≥ 80% line coverage. `loader.rs` is carved out **by name**: it
+performs the privileged XDP `bpf()` load / map-population syscalls, which a unit
+harness cannot exercise without root (full-suite line coverage measures 50.7%).
+The load path is instead **smoke-validated** by the `D2-xdp-verifier-smoke` job,
+which loads the real committed object into the runner-kernel verifier. Closing
+the remaining loader line-coverage needs a privileged/root coverage run
+(self-hosted). Every OTHER hot-path module is enforced ≥ 80%, so a regression
+elsewhere still turns D-6 red.
+
+### F-ESC-1: full XDP verifier matrix (kernels 5.15 / 6.1 / 6.6)
+`D2-xdp-verifier-smoke` validates the XDP object loads on the **runner's own**
+6.x kernel only. The full 5.15 / 6.1 / 6.6 verifier matrix needs to boot a VM
+per kernel (vmtest / QEMU-KVM); GitHub hosted runners provide **no nested
+virtualization (`/dev/kvm`)**, so that matrix cannot run honestly on
+`ubuntu-latest`. It is escalated to self-hosted / D-1-class hardware (see
+`D1-soak-runbook.md`). This is named, not silently dropped.

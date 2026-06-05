@@ -20,6 +20,15 @@
 //! * [`loadgen`]    — sustained load drivers per datapath.
 //! * [`chaos`]      — the chaos injectors.
 
+// Panic-freedom (S34): lb-soak was the only crate missing this deny block, so
+// the Panic Freedom Audit CI gate (which globs crates/*/src/lib.rs) failed.
+// Scoped to the panic-freedom triad — the gate's actual intent — rather than
+// the full pedantic set the product crates carry, since lb-soak is a black-box
+// test harness (no missing_docs/indexing_slicing churn). Test modules keep
+// using unwrap/expect freely via the cfg_attr(test) allow, exactly as the
+// product crates do; the eg-soak binary keeps its own allow.
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 // Test-harness ergonomics: several config/load builders legitimately carry many
 // parameters (cert paths, addrs, caps). Matches the product crates' posture.
 #![allow(clippy::too_many_arguments)]

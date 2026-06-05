@@ -24,9 +24,9 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  # MSRV — matches rust-toolchain.toml. cargo-deny needs its own newer
-  # toolchain (see the gate-07 job).
-  RUST_MSRV: "1.85"
+  # MSRV — matches rust-toolchain.toml (moved 1.85 -> 1.88 at S31 for quiche
+  # 0.29.1). cargo-deny needs its own newer toolchain (see the gate-07 job).
+  RUST_MSRV: "1.88"
 
 jobs:
 
@@ -46,11 +46,11 @@ jobs:
           curl -fsSL "https://github.com/EmbarkStudios/cargo-deny/releases/download/${VER}/cargo-deny-${VER}-x86_64-unknown-linux-musl.tar.gz" \
             | tar -xz --strip-components=1 -C /usr/local/bin --wildcards '*/cargo-deny'
           cargo-deny --version
+      # Explicit subcommand list (S34): this is now the SINGLE cargo-deny gate
+      # (the duplicate ci.yml `deny` job was removed). The explicit list keeps a
+      # future cargo-deny "check" default from silently shrinking the gate.
       - name: cargo-deny check
-        run: cargo-deny check
-      # NOTE: deny.toml currently carries 6 stale ignore entries
-      # (advisory-not-detected) and 2 unmatched license allowances.
-      # Not gate-failing, but prune them — see audit note 2026-05-16.
+        run: cargo-deny check licenses advisories bans sources
 
   # ---------------------------------------------------------------
   # Build + clippy + fmt gate (fast feedback; not one of the seven
@@ -72,10 +72,20 @@ jobs:
       - run: cargo build --workspace
 
   # ---------------------------------------------------------------
-  # D-6 — hot-path coverage >= 80%
-  # The 80% threshold applies to the hot-path modules enumerated in
-  # audit/round-8/coverage-scope.md, NOT the whole workspace. Adjust
-  # the --package / --ignore-filename-regex flags to match that file.
+  # D-6 — hot-path coverage, PER-MODULE >= 80% (per audit/coverage-scope.md).
+  #
+  # The charter's metric is PER-MODULE line coverage on the named hot-path
+  # modules, NOT a whole-package aggregate. The old job applied
+  # --fail-under-lines 80 to a 7-package aggregate — a metric that never
+  # matched the charter (an average hides an under-covered hot module) and that
+  # also EXCLUDED the root integration suite, so hot paths like
+  # lb-quic::listener were under-counted (71% vs the real 87%). This job now:
+  #   (1) runs the FULL workspace test suite under instrumentation (so the
+  #       integration tests actually exercise the hot paths), and
+  #   (2) enforces >= 80% PER hot-path module via scripts/ci/coverage-check.sh,
+  #       with lb-l4-xdp/src/loader.rs carved out by name (XDP load needs root;
+  #       smoke-validated by D2-xdp-verifier-smoke). A new hot-path module under
+  #       80% turns this RED.
   # ---------------------------------------------------------------
   D6-coverage:
     runs-on: ubuntu-latest
@@ -87,94 +97,138 @@ jobs:
           toolchain: ${{ env.RUST_MSRV }}
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
+      - name: Free runner disk (instrumented --workspace build is ~28 GB)
+        # The full-workspace instrumented coverage target is large; reclaim the
+        # preinstalled toolchains the gateway build does not use so it fits.
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+            /usr/local/lib/android /opt/hostedtoolcache/CodeQL \
+            /usr/share/swift 2>/dev/null || true
+          df -h /
       - run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev llvm
       - name: Install cargo-llvm-cov + nextest
         run: |
           curl -fsSL https://github.com/taiki-e/cargo-llvm-cov/releases/latest/download/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C ~/.cargo/bin
           curl -fsSL https://get.nexte.st/latest/linux | tar -xz -C ~/.cargo/bin
-      - name: Coverage (hot-path scope)
-        # TODO: replace the package list with the hot-path crates named
-        # in audit/round-8/coverage-scope.md. Example below covers the
-        # request/packet path crates.
+      - name: Coverage (full workspace suite, --all-features)
+        # --ignore-run-fail: D-6 is the COVERAGE gate, not the pass/fail gate
+        # (that is the CI "Test" job). Measure what the suite covers even if a
+        # test flakes; coverage-check.sh below is the actual verdict.
         run: |
           cargo llvm-cov nextest \
-            --package lb-l7 --package lb-h1 --package lb-h2 --package lb-h3 \
-            --package lb-l4-xdp --package lb-balancer --package lb-io \
-            --package lb-quic \
-            --fail-under-lines 80 \
+            --workspace --all-features --ignore-run-fail \
             --lcov --output-path coverage.lcov
+      - name: Enforce per-module hot-path threshold (charter metric)
+        run: bash scripts/ci/coverage-check.sh coverage.lcov
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: coverage-lcov
           path: coverage.lcov
 
   # ---------------------------------------------------------------
-  # D-4 — HTTP/2 + HTTP/3 conformance (h2spec, h3spec)
-  # Boots the gateway with an H1/H2/H3 listener in front of a stub
-  # backend, then runs the conformance suites against it.
+  # D-4 — HTTP/2 + HTTP/3 conformance (h2spec --strict, h3spec).
+  #
+  # Boots the REAL gateway with two listeners in front of a stub backend:
+  #   * an `h1s` listener (TLS, ALPN h2/http1.1) on TCP :8443  -> h2spec
+  #   * a  `quic` listener (H3-terminate, quiche::h3) on UDP :8444 -> h3spec
+  # Config keys verified against the lb-config schema (the soak harness's
+  # config_gen + the S26 h3spec config). Tool versions are PINNED so the
+  # h3spec waiver list (CF-QUICHE-UPGRADE) stays exact.
   # ---------------------------------------------------------------
   D4-conformance:
     runs-on: ubuntu-latest
     needs: build-and-lint
+    env:
+      H2SPEC_VER: "v2.6.0"
+      H3SPEC_VER: "v0.1.13"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with: { toolchain: "${{ env.RUST_MSRV }}" }
       - uses: Swatinem/rust-cache@v2
-      - run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev llvm nghttp2-client
+      - run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev llvm iproute2
       - run: cargo build -p lb
-      - name: Stub backend + test certs
+      - name: Stub backend + test cert/key + QUIC retry secret
         run: |
-          # Minimal upstream the gateway proxies to.
-          python3 -m http.server 3000 &
-          python3 -m http.server 3001 &
-          # Self-signed cert/key for the TLS (H2/H3) listener.
+          # Minimal H1 upstream the gateway proxies to (both listeners).
+          python3 -m http.server 3000 >/tmp/backend.log 2>&1 &
+          echo $! > backend.pid
+          # Self-signed cert (DNS + IP SANs); h2spec uses -k and h3spec uses -n
+          # so cert *validation* is skipped — this is protocol conformance, not
+          # PKI — but the cert must still load into rustls + BoringSSL.
           openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem \
-            -days 1 -nodes -subj "/CN=localhost" -addext "subjectAltName=DNS:localhost"
-      - name: Write conformance config
-        # TODO: confirm key names against crates/lb-config/src/lib.rs.
-        # The default.toml ships an L4 `protocol = "tcp"` listener; D-4
-        # needs an L7 HTTPS listener with H2 + H3 enabled.
+            -days 1 -nodes -subj "/CN=localhost" \
+            -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+          head -c 32 /dev/urandom > retry.bin
+      - name: Write conformance config (lb-config schema)
         run: |
-          cat > conformance.toml <<'TOML'
+          cat > conformance.toml <<TOML
+          [runtime]
+          drain_timeout_ms = 5000
+          readiness_settle_ms = 100
+
+          # H1+H2 over TLS (ALPN h2 then http/1.1) -> h2spec target (TCP).
           [[listeners]]
-          address  = "0.0.0.0:8443"
-          protocol = "https"          # H1 + H2 over TLS, ALPN-negotiated
-          tls_cert = "cert.pem"
-          tls_key  = "key.pem"
-
+          address  = "127.0.0.1:8443"
+          protocol = "h1s"
+          [listeners.tls]
+          cert_path = "$PWD/cert.pem"
+          key_path  = "$PWD/key.pem"
           [[listeners.backends]]
-          address = "127.0.0.1:3000"
-          weight  = 1
+          address  = "127.0.0.1:3000"
+          protocol = "h1"
+          weight   = 1
 
-          [[listeners.h3]]            # HTTP/3 / QUIC listener
-          address  = "0.0.0.0:8443"
-          tls_cert = "cert.pem"
-          tls_key  = "key.pem"
+          # HTTP/3 over QUIC, H3-terminate (quiche::h3) -> h3spec target (UDP).
+          [[listeners]]
+          address  = "127.0.0.1:8444"
+          protocol = "quic"
+          [listeners.quic]
+          cert_path         = "$PWD/cert.pem"
+          key_path          = "$PWD/key.pem"
+          retry_secret_path = "$PWD/retry.bin"
+          [[listeners.backends]]
+          address  = "127.0.0.1:3000"
+          protocol = "h1"
+          weight   = 1
+
+          [observability]
+          metrics_bind = "127.0.0.1:9090"
           TOML
-      - name: Boot gateway
+          cat conformance.toml
+      - name: Boot gateway + wait for BOTH listeners
         run: |
-          ./target/debug/expressgateway conformance.toml &
+          ./target/debug/expressgateway conformance.toml >/tmp/gw.log 2>&1 &
           echo $! > gw.pid
-          for i in $(seq 1 30); do
-            curl -sk https://localhost:8443/ >/dev/null 2>&1 && break || sleep 1
+          up=0
+          for i in $(seq 1 40); do
+            if ss -ltn | grep -q ':8443' && ss -lun | grep -q ':8444'; then up=1; break; fi
+            sleep 1
           done
-      - name: h2spec (HTTP/2 conformance)
+          if [ "$up" -ne 1 ]; then
+            echo "::error::gateway listeners did not come up"; cat /tmp/gw.log; exit 1
+          fi
+          echo "both listeners up; gateway log:"; tail -5 /tmp/gw.log
+      - name: h2spec --strict (HTTP/2 conformance, TCP :8443)
         run: |
-          curl -fsSL https://github.com/summerwind/h2spec/releases/latest/download/h2spec_linux_amd64.tar.gz | tar -xz
-          # --strict fails the job on any non-conformant case. If specific
-          # cases are knowingly waived, list them in
-          # docs/conformance/h2spec-waivers.md and use --skip instead.
-          ./h2spec -t -k -h localhost -p 8443 --strict
-      - name: h3spec (HTTP/3 conformance)
+          curl -fsSL "https://github.com/summerwind/h2spec/releases/download/${H2SPEC_VER}/h2spec_linux_amd64.tar.gz" | tar -xz
+          # -k: skip cert validation (protocol conformance, not PKI). --strict:
+          # fail on ANY non-conformant case. The gateway passes 147/147.
+          ./h2spec -t -k -h 127.0.0.1 -p 8443 --strict
+      - name: h3spec (HTTP/3 conformance, UDP :8444) via named-waiver gate
         run: |
-          # h3spec is distributed as a prebuilt binary; pin a known tag.
-          curl -fsSL -o h3spec https://github.com/kazu-yamamoto/h3spec/releases/latest/download/h3spec-linux-x86_64
+          curl -fsSL -o h3spec "https://github.com/kazu-yamamoto/h3spec/releases/download/${H3SPEC_VER}/h3spec-linux-x86_64"
           chmod +x h3spec
-          ./h3spec localhost 8443
-      - name: Stop gateway
+          # The wrapper runs h3spec -n and PASSES iff every failure is one of the
+          # 12 individually-named, documented quiche-0.29 limitations
+          # (CF-QUICHE-UPGRADE). A NEW/un-waived failure turns this RED.
+          bash scripts/ci/h3spec-check.sh ./h3spec 127.0.0.1 8444
+      - name: Stop gateway + backend
         if: always()
-        run: kill "$(cat gw.pid)" || true
+        run: |
+          kill "$(cat gw.pid)" 2>/dev/null || true
+          kill "$(cat backend.pid)" 2>/dev/null || true
 
   # ---------------------------------------------------------------
   # D-3a — chaos ATTACK suite (the half that does not need a soak host)
@@ -190,15 +244,17 @@ jobs:
         with: { toolchain: "${{ env.RUST_MSRV }}" }
       - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev llvm
+      - name: Install cargo-nextest
+        # The chaos step runs `cargo nextest`; without this the job failed with
+        # `no such command: nextest` before any attack test executed.
+        run: curl -fsSL https://get.nexte.st/latest/linux | tar -xz -C ~/.cargo/bin
       - run: cargo build -p lb
       - name: Run chaos attack suite
-        # TODO: point this at the repo's own attack harness. The Round-8
-        # audit wired Smuggle/Slowloris/SlowPost detectors and the
-        # CONTINUATION/Rapid-Reset caps — there should be a test target
-        # exercising them. Prefer the in-repo harness over ad-hoc tools
-        # so the gate tests the product's own limits.
+        # The in-repo attack harness: Round-8 wired Smuggle/Slowloris/SlowPost
+        # detectors + the CONTINUATION/Rapid-Reset caps. --all-features keeps
+        # the lb-l7/lb-h2 test surface identical to the session gate.
         run: |
-          cargo nextest run --package lb-h2 --package lb-l7 \
+          cargo nextest run --all-features --package lb-h2 --package lb-l7 \
             -E 'test(/chaos|rapid_reset|continuation|hpack|slowloris/)'
         # If an external generator is preferred for some cases:
         #   h2load, or github.com/bahattincinic/rapid-reset-poc, etc.
@@ -228,36 +284,53 @@ jobs:
       # tree is NOT a substitute and must not be logged as D-5 pass.
 
   # ---------------------------------------------------------------
-  # D-2 — eBPF verifier matrix: XDP program loads on 5.15 / 6.1 / 6.6
-  # GitHub runners are kernel 6.x only, so each target kernel runs in
-  # a VM via the lima/qemu action. Alternative: self-hosted runners
-  # pinned to each kernel, or vmtest (github.com/danobi/vmtest).
+  # D-2 — XDP verifier-accept smoke (RUNNER-KERNEL ONLY).
+  #
+  # SCOPE (S34, honest-green rescope): this job loads the committed XDP
+  # ELF (crates/lb-l4-xdp/src/lb_xdp.bin) into the verifier of the runner's
+  # OWN kernel (GitHub hosted = Linux 6.x) and asserts ACCEPT. That is a
+  # TRUE, meaningful claim: "the shipped XDP object builds and the in-kernel
+  # verifier on a current kernel accepts it."
+  #
+  # It does NOT cover the full 5.15 / 6.1 / 6.6 verifier matrix. That matrix
+  # needs to boot VMs at each kernel (vmtest / QEMU-KVM), and GitHub hosted
+  # runners provide NO nested virtualization (/dev/kvm), so the previous
+  # `danobi/vmtest-action@main` job could never have run honestly there (and
+  # its `@main` ref no longer resolves). The multi-kernel matrix is escalated
+  # as F-ESC-1 (self-hosted / D-1-class hardware work — see
+  # audit/ci/s34-report.md and D1-soak-runbook.md). This smoke is the honest
+  # subset hosted CI CAN verify; it is NOT a substitute for F-ESC-1.
   # ---------------------------------------------------------------
-  D2-verifier-matrix:
+  D2-xdp-verifier-smoke:
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        kernel: ["5.15", "6.1", "6.6"]
     steps:
       - uses: actions/checkout@v4
-      - name: Build the XDP object
-        # TODO: confirm how the repo builds the BPF object. With aya this
-        # is typically `cargo xtask build-ebpf` or a build.rs step in
-        # crates/lb-l4-xdp. Produce the .o / embedded object here.
+      - uses: dtolnay/rust-toolchain@master
+        with: { toolchain: "${{ env.RUST_MSRV }}" }
+      - uses: Swatinem/rust-cache@v2
+      - name: System deps
+        run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev llvm
+      - name: Print runner kernel (for the record — smoke is THIS kernel only)
+        run: uname -r
+      - name: Build the real-load verifier test (validates the embedded ELF too)
+        # Build as the normal user so target artifacts aren't root-owned; the
+        # sudo step below reuses this binary.
+        run: cargo test -p lb-l4-xdp --test round8_verifier_baseline_70 --no-run
+      - name: Load the committed XDP ELF and assert verifier ACCEPT
+        # The committed ELF (built by scripts/build-xdp.sh) uses aya LEGACY map
+        # definitions, which libbpf v1.0+ tools (bpftool, ip) REFUSE to load
+        # ("legacy map definitions in 'maps' section are not supported"). aya is
+        # the only loader that can load it — and it is the gateway's OWN loader.
+        # round8_verifier_baseline_70 does a genuine BPF_PROG_LOAD via
+        # XdpLoader::load_from_bytes_pinned + kernel_load on the RUNNING kernel
+        # (no NIC/attach needed — the load is what runs the verifier) and
+        # asserts real kernel facts (prog_id, tag, verified_insns > 0). A
+        # successful run == the in-kernel verifier ACCEPTed the object on this
+        # runner's 6.x kernel. It needs CAP_BPF + bpffs, hence sudo + --ignored.
         run: |
-          sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev llvm
-          cargo build -p lb-l4-xdp
-      - name: Load under target kernel ${{ matrix.kernel }}
-        # vmtest boots a VM at the requested kernel and runs the command
-        # inside it. The command must exercise `bpftool prog load` (or the
-        # aya loader) against the built object and assert verifier accept.
-        uses: danobi/vmtest-action@main
-        with:
-          kernel: ${{ matrix.kernel }}
-          command: |
-            bpftool prog load ./target/bpf/xdp_prog.o /sys/fs/bpf/xdp_test
-            bpftool prog show pinned /sys/fs/bpf/xdp_test
-        # Capture verifier output to an artifact so a human can read it;
-        # verifier ACCEPT is necessary but not sufficient — it does not
-        # prove safety against malformed traffic (that is D-1 + fuzzing).
+          set -euo pipefail
+          sudo -E env "PATH=$PATH" cargo test -p lb-l4-xdp \
+            --test round8_verifier_baseline_70 -- --ignored --nocapture
+        # Verifier ACCEPT is necessary but NOT sufficient — it does not prove
+        # safety against malformed traffic (that is D-1 + fuzzing) and does not
+        # cover kernels other than this runner's (that is F-ESC-1).

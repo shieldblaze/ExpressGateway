@@ -1549,11 +1549,13 @@ async fn h3_one_request(
     // mis-count it as a failure). Pump the transport so the peer's MAX_STREAMS /
     // window advances, then retry; only a persistent block (or a real error) is
     // a failure.
-    let mut stream_id = None;
     let open_deadline = tokio::time::Instant::now() + Duration::from_secs(3);
-    while stream_id.is_none() {
+    // `loop { break id }` so the opened stream id flows out directly — the
+    // previous `Option` + post-loop `.expect()` was infallible-by-construction
+    // but trips the panic-freedom deny lint (S34).
+    let stream_id = loop {
         match h3.send_request(conn, &headers, bodyless) {
-            Ok(id) => stream_id = Some(id),
+            Ok(id) => break id,
             Err(quiche::h3::Error::StreamBlocked) | Err(quiche::h3::Error::Done) => {
                 if tokio::time::Instant::now() > open_deadline {
                     anyhow::bail!("send_request stayed StreamBlocked past the open budget");
@@ -1567,8 +1569,7 @@ async fn h3_one_request(
             }
             Err(e) => anyhow::bail!("send_request: {e:?}"),
         }
-    }
-    let stream_id = stream_id.expect("loop exits only with Some");
+    };
     flush(conn, socket, out).await?;
 
     // Send the request body (if any), re-trying on flow-control Done.

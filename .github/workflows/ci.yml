@@ -26,8 +26,12 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # --all-features is REQUIRED: the R8 memory integration tests in tests/
+      # read lb-l7's `#[cfg(feature = "test-gauges")]` gauges, forwarded by the
+      # root crate's `test-gauges` feature. Off by default; the canonical
+      # session gate has always built with --all-features (Cargo.toml:7-12).
       - name: cargo check
-        run: cargo check --workspace --all-targets
+        run: cargo check --workspace --all-targets --all-features
 
   clippy:
     name: Clippy
@@ -43,7 +47,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:
     name: Test
@@ -56,9 +60,26 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: cargo test
-        run: cargo test --workspace
-        timeout-minutes: 30
+      # Mirror the canonical session gate (--all-features = test-gauges) +
+      # --no-fail-fast. The heavy real-wire e2e binaries (grpc_h3_e2e, ws_*)
+      # already self-serialize via an in-file `static SUITE_SERIAL` tokio Mutex,
+      # and `cargo test` runs test binaries sequentially.
+      #
+      # CF-FCAP1-FLAKE / CF-SATURATION-1: fcap1_h2_over_cap_upload_yields_413
+      # must push a 66 MiB body past the 64 MiB cap to assert 413. On the 4-core
+      # hosted runner, sharing CPU with its ~14 sibling tests starves that upload
+      # (it stalls or the conn breaks before the cap — observed multiple modes),
+      # so it is isolated and run ALONE here (full CPU, uncontended → reliably
+      # reaches the cap). This is serialization, not weakening: same test, same
+      # `assert_eq!(status, 413)`. Everything ELSE runs parallel first.
+      - name: cargo test (suite minus the saturation-isolated fcap1)
+        run: cargo test --workspace --all-features --no-fail-fast -- --skip fcap1_h2_over_cap_upload_yields_413
+        timeout-minutes: 45
+      - name: cargo test (fcap1 over-cap, isolated / serial)
+        run: |
+          cargo test -p lb-integration-tests --test h2h1_md_streaming_verify \
+            --all-features -- --exact fcap1_h2_over_cap_upload_yields_413 --nocapture
+        timeout-minutes: 15
 
   fmt:
     name: Format
@@ -121,7 +142,8 @@ jobs:
       - uses: actions/checkout@v4
 
       # Newer cargo-audit needs a recent rustc to compile; the repo's
-      # rust-toolchain.toml pins 1.85 so we override with `+stable`.
+      # rust-toolchain.toml pins 1.88, and we use `+stable` here so cargo-audit
+      # always builds on the latest toolchain independent of the project MSRV.
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
 
@@ -133,23 +155,10 @@ jobs:
       - name: cargo audit -D warnings
         run: cargo audit -D warnings
 
-  deny:
-    name: Dependency Check (cargo-deny)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-deny
-        run: cargo +stable install cargo-deny --locked
-
-      # SEC-2-07: check licenses + advisories + bans + sources. The
-      # explicit subcommand list keeps a future cargo-deny "check"
-      # default from silently shrinking our gate.
-      - name: cargo deny check
-        run: cargo deny check licenses advisories bans sources
+  # S34 dedup: cargo-deny ran here AND as prod-readiness-gates'
+  # `gate-07-cargo-deny`. Removed this duplicate; gate-07 is the single source
+  # (it now runs the same explicit `check licenses advisories bans sources`
+  # subcommand list, so the gate scope is preserved, not shrunk).
 
   geiger:
     # SEC-2-07: cargo-geiger counts unsafe blocks. Informational —
@@ -206,18 +215,22 @@ jobs:
         run: cargo machete
 
   msrv:
-    name: MSRV (1.85)
+    # MSRV moved 1.85 -> 1.88 at S31 (quiche 0.29.1 + tokio-quiche 0.19
+    # hard-require Rust 1.88). The old 1.85 pin was BOTH wrong and a no-op:
+    # rust-toolchain.toml (channel = "1.88") overrode it, so the job silently
+    # ran 1.88. Pin 1.88 explicitly so the gate asserts the real MSRV.
+    name: MSRV (1.88)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
       - name: Install MSRV Rust toolchain
-        uses: dtolnay/rust-toolchain@1.85
+        uses: dtolnay/rust-toolchain@1.88
 
       - uses: Swatinem/rust-cache@v2
 
       - name: cargo check (MSRV)
-        run: cargo check --workspace --all-targets
+        run: cargo check --workspace --all-targets --all-features
 
   fuzz-smoke:
     name: Fuzz Smoke Test
@@ -263,23 +276,7 @@ jobs:
         run: cargo build --workspace --release
         timeout-minutes: 30
 
-  docker:
-    name: Docker Build
-    runs-on: ubuntu-latest
-    needs: [release-build]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Docker image (amd64)
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: docker/Dockerfile
-          platforms: linux/amd64
-          push: false
-          tags: expressgateway:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+  # S34 dedup: the Docker image was built here AND by prod-readiness-gates'
+  # `D5-image-scan` (which builds the same docker/Dockerfile and additionally
+  # runs the Trivy image scan). Removed this duplicate build; D5 is the single
+  # source that both builds and scans the image.
