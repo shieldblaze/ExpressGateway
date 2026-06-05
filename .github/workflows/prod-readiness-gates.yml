@@ -116,7 +116,7 @@ jobs:
         # test flakes; coverage-check.sh below is the actual verdict.
         run: |
           cargo llvm-cov nextest \
-            --workspace --all-features --no-fail-fast --ignore-run-fail \
+            --workspace --all-features --ignore-run-fail \
             --lcov --output-path coverage.lcov
       - name: Enforce per-module hot-path threshold (charter metric)
         run: bash scripts/ci/coverage-check.sh coverage.lcov
@@ -308,32 +308,29 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with: { toolchain: "${{ env.RUST_MSRV }}" }
       - uses: Swatinem/rust-cache@v2
-      - name: System deps (+ iproute2 for the verifier load)
-        run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev llvm iproute2
-      - name: Build lb-l4-xdp (validates the embedded ELF + EBPF-2-01 size guard)
-        run: cargo build -p lb-l4-xdp
+      - name: System deps
+        run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev llvm
       - name: Print runner kernel (for the record — smoke is THIS kernel only)
         run: uname -r
+      - name: Build the real-load verifier test (validates the embedded ELF too)
+        # Build as the normal user so target artifacts aren't root-owned; the
+        # sudo step below reuses this binary.
+        run: cargo test -p lb-l4-xdp --test round8_verifier_baseline_70 --no-run
       - name: Load the committed XDP ELF and assert verifier ACCEPT
-        # The committed ELF is the load-bearing artifact (built by
-        # scripts/build-xdp.sh; section "xdp", license "GPL\0", BTF present).
-        #
-        # We use iproute2's libbpf loader (`ip link ... xdpgeneric obj`) rather
-        # than bpftool: on hosted ubuntu-24.04 runners `bpftool` is a virtual
-        # package whose wrapper needs a kernel-matched linux-tools-$(uname -r)
-        # that the Azure apt mirror does not carry (uname -r is a 6.17 azure
-        # kernel). `ip` is always present and kernel-version-agnostic. Attaching
-        # the program in generic XDP mode on loopback runs the in-kernel
-        # verifier + CO-RE relocation against the running kernel's BTF; a
-        # successful attach == verifier ACCEPT.
+        # The committed ELF (built by scripts/build-xdp.sh) uses aya LEGACY map
+        # definitions, which libbpf v1.0+ tools (bpftool, ip) REFUSE to load
+        # ("legacy map definitions in 'maps' section are not supported"). aya is
+        # the only loader that can load it — and it is the gateway's OWN loader.
+        # round8_verifier_baseline_70 does a genuine BPF_PROG_LOAD via
+        # XdpLoader::load_from_bytes_pinned + kernel_load on the RUNNING kernel
+        # (no NIC/attach needed — the load is what runs the verifier) and
+        # asserts real kernel facts (prog_id, tag, verified_insns > 0). A
+        # successful run == the in-kernel verifier ACCEPTed the object on this
+        # runner's 6.x kernel. It needs CAP_BPF + bpffs, hence sudo + --ignored.
         run: |
           set -euo pipefail
-          ELF=crates/lb-l4-xdp/src/lb_xdp.bin
-          test -f "$ELF" || { echo "::error::committed XDP ELF $ELF missing"; exit 1; }
-          sudo ip link set dev lo xdpgeneric obj "$ELF" sec xdp
-          echo "verifier ACCEPT: XDP object loaded + attached (xdpgeneric on lo), kernel $(uname -r)"
-          ip -details link show dev lo | grep -i xdp || true
-          sudo ip link set dev lo xdpgeneric off
+          sudo -E env "PATH=$PATH" cargo test -p lb-l4-xdp \
+            --test round8_verifier_baseline_70 -- --ignored --nocapture
         # Verifier ACCEPT is necessary but NOT sufficient — it does not prove
         # safety against malformed traffic (that is D-1 + fuzzing) and does not
         # cover kernels other than this runner's (that is F-ESC-1).
