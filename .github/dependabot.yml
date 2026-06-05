@@ -23,3 +23,9 @@ updates:
       actions:
         patterns:
           - "*"
+        # dtolnay/rust-toolchain is versioned by RUST TOOLCHAIN (e.g. @1.88),
+        # not by action release. Dependabot's "*" group mistook the toolchain
+        # tag for an action version and proposed a bogus @1.100 bump (#214).
+        # Exclude it; the toolchain version is governed by rust-toolchain.toml.
+        exclude-patterns:
+          - "dtolnay/rust-toolchain"
