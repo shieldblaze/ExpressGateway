@@ -60,15 +60,26 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      # Mirror the canonical session gate exactly: --all-features (test-gauges)
-      # + --no-fail-fast so a single flaky-under-saturation case (CF-FCAP1-FLAKE
-      # / CF-SATURATION-1) cannot truncate the run before later assertions
-      # execute. The heavy real-wire e2e binaries (grpc_h3_e2e, ws_*) already
-      # self-serialize via an in-file `static SUITE_SERIAL` tokio Mutex, and
-      # `cargo test` runs test binaries sequentially, so no env knob is needed.
-      - name: cargo test
-        run: cargo test --workspace --all-features --no-fail-fast
+      # Mirror the canonical session gate (--all-features = test-gauges) +
+      # --no-fail-fast. The heavy real-wire e2e binaries (grpc_h3_e2e, ws_*)
+      # already self-serialize via an in-file `static SUITE_SERIAL` tokio Mutex,
+      # and `cargo test` runs test binaries sequentially.
+      #
+      # CF-FCAP1-FLAKE / CF-SATURATION-1: fcap1_h2_over_cap_upload_yields_413
+      # must push a 66 MiB body past the 64 MiB cap to assert 413. On the 4-core
+      # hosted runner, sharing CPU with its ~14 sibling tests starves that upload
+      # (it stalls or the conn breaks before the cap — observed multiple modes),
+      # so it is isolated and run ALONE here (full CPU, uncontended → reliably
+      # reaches the cap). This is serialization, not weakening: same test, same
+      # `assert_eq!(status, 413)`. Everything ELSE runs parallel first.
+      - name: cargo test (suite minus the saturation-isolated fcap1)
+        run: cargo test --workspace --all-features --no-fail-fast -- --skip fcap1_h2_over_cap_upload_yields_413
         timeout-minutes: 45
+      - name: cargo test (fcap1 over-cap, isolated / serial)
+        run: |
+          cargo test -p lb-integration-tests --test h2h1_md_streaming_verify \
+            --all-features -- --exact fcap1_h2_over_cap_upload_yields_413 --nocapture
+        timeout-minutes: 15
 
   fmt:
     name: Format
