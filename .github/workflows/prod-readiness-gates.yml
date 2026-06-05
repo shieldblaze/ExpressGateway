@@ -46,11 +46,11 @@ jobs:
           curl -fsSL "https://github.com/EmbarkStudios/cargo-deny/releases/download/${VER}/cargo-deny-${VER}-x86_64-unknown-linux-musl.tar.gz" \
             | tar -xz --strip-components=1 -C /usr/local/bin --wildcards '*/cargo-deny'
           cargo-deny --version
+      # Explicit subcommand list (S34): this is now the SINGLE cargo-deny gate
+      # (the duplicate ci.yml `deny` job was removed). The explicit list keeps a
+      # future cargo-deny "check" default from silently shrinking the gate.
       - name: cargo-deny check
-        run: cargo-deny check
-      # NOTE: deny.toml currently carries 6 stale ignore entries
-      # (advisory-not-detected) and 2 unmatched license allowances.
-      # Not gate-failing, but prune them — see audit note 2026-05-16.
+        run: cargo-deny check licenses advisories bans sources
 
   # ---------------------------------------------------------------
   # Build + clippy + fmt gate (fast feedback; not one of the seven
@@ -72,10 +72,20 @@ jobs:
       - run: cargo build --workspace
 
   # ---------------------------------------------------------------
-  # D-6 — hot-path coverage >= 80%
-  # The 80% threshold applies to the hot-path modules enumerated in
-  # audit/round-8/coverage-scope.md, NOT the whole workspace. Adjust
-  # the --package / --ignore-filename-regex flags to match that file.
+  # D-6 — hot-path coverage, PER-MODULE >= 80% (per audit/coverage-scope.md).
+  #
+  # The charter's metric is PER-MODULE line coverage on the named hot-path
+  # modules, NOT a whole-package aggregate. The old job applied
+  # --fail-under-lines 80 to a 7-package aggregate — a metric that never
+  # matched the charter (an average hides an under-covered hot module) and that
+  # also EXCLUDED the root integration suite, so hot paths like
+  # lb-quic::listener were under-counted (71% vs the real 87%). This job now:
+  #   (1) runs the FULL workspace test suite under instrumentation (so the
+  #       integration tests actually exercise the hot paths), and
+  #   (2) enforces >= 80% PER hot-path module via scripts/ci/coverage-check.sh,
+  #       with lb-l4-xdp/src/loader.rs carved out by name (XDP load needs root;
+  #       smoke-validated by D2-xdp-verifier-smoke). A new hot-path module under
+  #       80% turns this RED.
   # ---------------------------------------------------------------
   D6-coverage:
     runs-on: ubuntu-latest
@@ -87,25 +97,31 @@ jobs:
           toolchain: ${{ env.RUST_MSRV }}
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
+      - name: Free runner disk (instrumented --workspace build is ~28 GB)
+        # The full-workspace instrumented coverage target is large; reclaim the
+        # preinstalled toolchains the gateway build does not use so it fits.
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+            /usr/local/lib/android /opt/hostedtoolcache/CodeQL \
+            /usr/share/swift 2>/dev/null || true
+          df -h /
       - run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev llvm
       - name: Install cargo-llvm-cov + nextest
         run: |
           curl -fsSL https://github.com/taiki-e/cargo-llvm-cov/releases/latest/download/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C ~/.cargo/bin
           curl -fsSL https://get.nexte.st/latest/linux | tar -xz -C ~/.cargo/bin
-      - name: Coverage (hot-path scope)
-        # Hot-path request/packet-path crates. NOTE: lb-h3 was DELETED in S26
-        # (the hand-rolled H3 codec was replaced by quiche::h3); its hot-path
-        # coverage now lives in lb-quic (h3_bridge / conn_actor), already in
-        # this list. --all-features so the test-gauges R8 suites compile.
+      - name: Coverage (full workspace suite, --all-features)
+        # --ignore-run-fail: D-6 is the COVERAGE gate, not the pass/fail gate
+        # (that is the CI "Test" job). Measure what the suite covers even if a
+        # test flakes; coverage-check.sh below is the actual verdict.
         run: |
           cargo llvm-cov nextest \
-            --all-features \
-            --package lb-l7 --package lb-h1 --package lb-h2 \
-            --package lb-l4-xdp --package lb-balancer --package lb-io \
-            --package lb-quic \
-            --fail-under-lines 80 \
+            --workspace --all-features --no-fail-fast --ignore-run-fail \
             --lcov --output-path coverage.lcov
+      - name: Enforce per-module hot-path threshold (charter metric)
+        run: bash scripts/ci/coverage-check.sh coverage.lcov
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: coverage-lcov
           path: coverage.lcov
@@ -292,11 +308,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@master
         with: { toolchain: "${{ env.RUST_MSRV }}" }
       - uses: Swatinem/rust-cache@v2
-      - name: System deps (+ bpftool for the verifier load)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake clang libclang-dev llvm linux-tools-common bpftool || \
-            sudo apt-get install -y cmake clang libclang-dev llvm linux-tools-common linux-tools-generic
+      - name: System deps (+ iproute2 for the verifier load)
+        run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev llvm iproute2
       - name: Build lb-l4-xdp (validates the embedded ELF + EBPF-2-01 size guard)
         run: cargo build -p lb-l4-xdp
       - name: Print runner kernel (for the record — smoke is THIS kernel only)
@@ -304,16 +317,23 @@ jobs:
       - name: Load the committed XDP ELF and assert verifier ACCEPT
         # The committed ELF is the load-bearing artifact (built by
         # scripts/build-xdp.sh; section "xdp", license "GPL\0", BTF present).
-        # `bpftool prog load ... type xdp` runs the in-kernel verifier + CO-RE
-        # relocation against the running kernel's BTF; success == ACCEPT.
+        #
+        # We use iproute2's libbpf loader (`ip link ... xdpgeneric obj`) rather
+        # than bpftool: on hosted ubuntu-24.04 runners `bpftool` is a virtual
+        # package whose wrapper needs a kernel-matched linux-tools-$(uname -r)
+        # that the Azure apt mirror does not carry (uname -r is a 6.17 azure
+        # kernel). `ip` is always present and kernel-version-agnostic. Attaching
+        # the program in generic XDP mode on loopback runs the in-kernel
+        # verifier + CO-RE relocation against the running kernel's BTF; a
+        # successful attach == verifier ACCEPT.
         run: |
           set -euo pipefail
           ELF=crates/lb-l4-xdp/src/lb_xdp.bin
           test -f "$ELF" || { echo "::error::committed XDP ELF $ELF missing"; exit 1; }
-          sudo mkdir -p /sys/fs/bpf
-          sudo bpftool prog load "$ELF" /sys/fs/bpf/lb_xdp_smoke type xdp
-          sudo bpftool prog show pinned /sys/fs/bpf/lb_xdp_smoke
-          sudo rm -f /sys/fs/bpf/lb_xdp_smoke
+          sudo ip link set dev lo xdpgeneric obj "$ELF" sec xdp
+          echo "verifier ACCEPT: XDP object loaded + attached (xdpgeneric on lo), kernel $(uname -r)"
+          ip -details link show dev lo | grep -i xdp || true
+          sudo ip link set dev lo xdpgeneric off
         # Verifier ACCEPT is necessary but NOT sufficient — it does not prove
         # safety against malformed traffic (that is D-1 + fuzzing) and does not
         # cover kernels other than this runner's (that is F-ESC-1).
