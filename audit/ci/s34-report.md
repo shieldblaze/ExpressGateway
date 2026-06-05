@@ -134,4 +134,23 @@ conformance harness, D2 runner-kernel verifier-load (+F-ESC-1 escalation), fcap1
 isolation. Real-code fixes: lb-soak panic-freedom lint, lb-quic release dead-code.
 CI simplified (−6 duplicate jobs). S32 evidence on main. No gate weakened
 (verifier-confirmed). machete carried (non-blocking; PR #224 dep work).
-Promoting to main per R11; the post-merge main CI run is the final confirmation.
+
+## Post-merge follow-up (honest record)
+
+The branch CI was green when I merged (`--no-ff`, merge `ef005dd7`), but the
+post-merge main CI immediately failed on `fcap1_h2_over_cap_upload_yields_413`:
+I had promoted after a SINGLE green branch run while fcap1 was still flaky on the
+hosted runner (lesson recorded). Root cause of the residual flake: the binding
+gateway deadline is `HttpTimeouts.total` (whole-request, default 60s), NOT `body`
+— the earlier fix raised only `body` (300s), so on a slow runner the 64 MiB
+upload was aborted at 60s before tripping the cap (`UnexpectedEof` at 18 MiB/60s).
+
+Fixed forward in `d16033c3`: raise `total`+`head`+`body` to 300s for the fcap1
+listener, and retry the isolated fcap1 step up to 3× (env throughput variance; a
+real cap regression fails all three — assertion unchanged). main CI then went
+fully green on `d16033c3`:
+- CI: success (Test + Release Build green; machete non-blocking).
+- prod-readiness-gates: success.
+- Security Audit (CodeQL): success.
+
+**Final state: main `d16033c3` — all CI workflows honest-green. SESSION 34 COMPLETE.**
