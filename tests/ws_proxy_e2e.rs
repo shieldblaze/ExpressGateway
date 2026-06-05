@@ -24,6 +24,7 @@ use lb_l7::h1_proxy::{H1Proxy, HttpTimeouts, RoundRobinAddrs};
 use lb_l7::ws_proxy::{WsConfig, WsProxy};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::Utf8Bytes;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 
@@ -136,7 +137,7 @@ async fn spawn_close_backend() -> (SocketAddr, tokio::task::JoinHandle<()>) {
                 let _ = ws.next().await;
                 let frame = CloseFrame {
                     code: CloseCode::Error,
-                    reason: std::borrow::Cow::Borrowed("backend boom"),
+                    reason: Utf8Bytes::from_static("backend boom"),
                 };
                 let _ = ws.send(Message::Close(Some(frame))).await;
                 let _ = ws.close(None).await;
@@ -242,7 +243,7 @@ async fn ws_close_code_forwarded() {
     // sent a Pong via tungstenite's auto-handler on its way out — drain
     // until the Close lands).
     let close_frame = {
-        let mut observed: Option<CloseFrame<'_>> = None;
+        let mut observed: Option<CloseFrame> = None;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
         while tokio::time::Instant::now() < deadline {
             let Ok(Some(Ok(msg))) =
@@ -251,14 +252,14 @@ async fn ws_close_code_forwarded() {
                 continue;
             };
             if let Message::Close(Some(f)) = msg {
-                observed = Some(f.into_owned());
+                observed = Some(f);
                 break;
             }
         }
         observed.expect("never observed Close frame from gateway")
     };
     assert_eq!(close_frame.code, CloseCode::Error);
-    assert_eq!(close_frame.reason, "backend boom");
+    assert_eq!(close_frame.reason.as_str(), "backend boom");
 }
 
 // ── Test 3: Idle timeout → Close 1001 ──────────────────────────────────
@@ -282,7 +283,7 @@ async fn ws_idle_timeout_emits_1001() {
     // send us a Close(1001).
     let deadline = Duration::from_secs(3);
     let close_frame = {
-        let mut observed: Option<CloseFrame<'_>> = None;
+        let mut observed: Option<CloseFrame> = None;
         let start = tokio::time::Instant::now();
         while start.elapsed() < deadline {
             let Ok(Some(Ok(msg))) =
@@ -291,7 +292,7 @@ async fn ws_idle_timeout_emits_1001() {
                 continue;
             };
             if let Message::Close(Some(f)) = msg {
-                observed = Some(f.into_owned());
+                observed = Some(f);
                 break;
             }
         }
@@ -320,7 +321,10 @@ async fn ws_binary_message_roundtrip() {
     // a short-circuit.
     let payload: Vec<u8> = (0..4096).map(|i| (i & 0xff) as u8).collect();
     let mut client = connect_ws_client(gw, "/bin").await;
-    client.send(Message::Binary(payload.clone())).await.unwrap();
+    client
+        .send(Message::Binary(payload.clone().into()))
+        .await
+        .unwrap();
     let msg = tokio::time::timeout(Duration::from_secs(3), client.next())
         .await
         .unwrap()
@@ -358,7 +362,10 @@ async fn ws_ping_pong_keepalive() {
     let mut pongs = 0usize;
     let start = tokio::time::Instant::now();
     for i in 0..5 {
-        client.send(Message::Ping(vec![i as u8])).await.unwrap();
+        client
+            .send(Message::Ping(vec![i as u8].into()))
+            .await
+            .unwrap();
         if let Ok(Some(Ok(msg))) =
             tokio::time::timeout(Duration::from_millis(300), client.next()).await
         {
@@ -438,13 +445,13 @@ async fn ws_ping_flood_closes_with_1008() {
         // gateway closes the client half, further sends are expected
         // to fail. The acceptance check is the Close frame, not the
         // exact count of accepted Pings.
-        let _ = client.send(Message::Ping(vec![i])).await;
+        let _ = client.send(Message::Ping(vec![i].into())).await;
     }
 
     let deadline = Duration::from_secs(2);
     let start = tokio::time::Instant::now();
     let close_frame = {
-        let mut observed: Option<CloseFrame<'_>> = None;
+        let mut observed: Option<CloseFrame> = None;
         while start.elapsed() < deadline {
             let Ok(Some(Ok(msg))) =
                 tokio::time::timeout(Duration::from_millis(200), client.next()).await
@@ -452,7 +459,7 @@ async fn ws_ping_flood_closes_with_1008() {
                 continue;
             };
             if let Message::Close(Some(f)) = msg {
-                observed = Some(f.into_owned());
+                observed = Some(f);
                 break;
             }
         }
@@ -504,7 +511,7 @@ async fn ws_read_frame_timeout_closes_with_1008() {
     let deadline = Duration::from_secs(2);
     let start = tokio::time::Instant::now();
     let close_frame = {
-        let mut observed: Option<CloseFrame<'_>> = None;
+        let mut observed: Option<CloseFrame> = None;
         while start.elapsed() < deadline {
             let Ok(Some(Ok(msg))) =
                 tokio::time::timeout(Duration::from_millis(200), client.next()).await
@@ -512,7 +519,7 @@ async fn ws_read_frame_timeout_closes_with_1008() {
                 continue;
             };
             if let Message::Close(Some(f)) = msg {
-                observed = Some(f.into_owned());
+                observed = Some(f);
                 break;
             }
         }

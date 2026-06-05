@@ -55,7 +55,7 @@ fn write_self_signed(
 ) {
     let generated = rcgen::generate_simple_self_signed(vec![cn.to_string()]).unwrap();
     let cert_pem = generated.cert.pem();
-    let key_pem = generated.key_pair.serialize_pem();
+    let key_pem = generated.signing_key.serialize_pem();
     let cert_der = generated.cert.der().to_vec();
     let cert_path = dir.join(format!("{cn}.crt"));
     let key_path = dir.join(format!("{cn}.key"));

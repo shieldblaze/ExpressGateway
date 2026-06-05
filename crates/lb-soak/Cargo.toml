@@ -42,7 +42,7 @@ quiche = { workspace = true }
 # ring + rcgen are declared directly (not workspace-inherited) to match the
 # lb-quic convention — they are not in [workspace.dependencies].
 ring = "0.17"
-rcgen = { version = "0.13", features = ["pem"] }
+rcgen = { version = "0.14", features = ["pem"] }
 # TLS client for the h1s/h2 (ALPN) front scenarios.
 tokio-rustls = { workspace = true }
 rustls = { workspace = true }

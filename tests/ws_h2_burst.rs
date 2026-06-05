@@ -49,7 +49,7 @@ fn make_cert_for(san: &str) -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'sta
     let g = rcgen::generate_simple_self_signed(vec![san.to_string()]).unwrap();
     (
         vec![CertificateDer::from(g.cert.der().to_vec())],
-        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(g.key_pair.serialize_der())),
+        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(g.signing_key.serialize_der())),
     )
 }
 fn build_client_cfg(ta: CertificateDer<'static>) -> Arc<ClientConfig> {
@@ -269,10 +269,12 @@ async fn one_cycle(gw: SocketAddr, ta: CertificateDer<'static>) {
         .expect("text echo timeout")
         .expect("stream ended")
         .expect("text echo err");
-    assert!(matches!(echo, Message::Text(ref s) if s == "ping"));
+    assert!(matches!(echo, Message::Text(ref s) if s.as_str() == "ping"));
 
     let payload: Vec<u8> = (0..1024).map(|i| (i & 0xff) as u8).collect();
-    ws.send(Message::Binary(payload.clone())).await.unwrap();
+    ws.send(Message::Binary(payload.clone().into()))
+        .await
+        .unwrap();
     let echo = tokio::time::timeout(STEP_TIMEOUT, ws.next())
         .await
         .expect("bin echo timeout")

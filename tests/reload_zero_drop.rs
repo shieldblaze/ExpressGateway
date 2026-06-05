@@ -265,7 +265,7 @@ weight = 1
         let cert_path = dir.join("quicdrain.crt");
         let key_path = dir.join("quicdrain.key");
         std::fs::write(&cert_path, generated.cert.pem()).expect("write cert");
-        write_key_0600(&key_path, &generated.key_pair.serialize_pem());
+        write_key_0600(&key_path, &generated.signing_key.serialize_pem());
         // lb_security::load_or_generate_retry_secret will mint a
         // fresh 32-byte secret when this path is missing — we leave
         // the file absent so the gateway exercises that path.
@@ -489,7 +489,7 @@ weight = 1
         let cert_path = dir.join("h2drain.crt");
         let key_path = dir.join("h2drain.key");
         std::fs::write(&cert_path, generated.cert.pem()).expect("write cert");
-        write_key_0600(&key_path, &generated.key_pair.serialize_pem());
+        write_key_0600(&key_path, &generated.signing_key.serialize_pem());
         let toml = format!(
             r#"
 [runtime]

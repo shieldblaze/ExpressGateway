@@ -31,7 +31,7 @@ fn fresh_rotator() -> Arc<Mutex<TicketRotator>> {
 fn self_signed() -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'static>) {
     let generated = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
     let cert_der: Vec<u8> = generated.cert.der().to_vec();
-    let key_der: Vec<u8> = generated.key_pair.serialize_der();
+    let key_der: Vec<u8> = generated.signing_key.serialize_der();
     let chain = vec![CertificateDer::from(cert_der)];
     let key = PrivateKeyDer::Pkcs8(rustls_pki_types::PrivatePkcs8KeyDer::from(key_der));
     (chain, key)

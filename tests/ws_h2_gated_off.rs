@@ -42,7 +42,7 @@ fn make_cert_for(san: &str) -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'sta
     let g = rcgen::generate_simple_self_signed(vec![san.to_string()]).unwrap();
     (
         vec![CertificateDer::from(g.cert.der().to_vec())],
-        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(g.key_pair.serialize_der())),
+        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(g.signing_key.serialize_der())),
     )
 }
 

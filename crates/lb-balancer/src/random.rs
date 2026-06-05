@@ -1,6 +1,6 @@
 //! Uniform random load balancer.
 
-use rand::Rng;
+use rand::{Rng, RngExt};
 
 use crate::{Backend, BalancerError, LoadBalancer};
 
@@ -22,7 +22,7 @@ impl<R: Rng + Send + Sync> LoadBalancer for Random<R> {
         if backends.is_empty() {
             return Err(BalancerError::NoBackends);
         }
-        let idx = self.rng.gen_range(0..backends.len());
+        let idx = self.rng.random_range(0..backends.len());
         Ok(idx)
     }
 }
@@ -30,7 +30,7 @@ impl<R: Rng + Send + Sync> LoadBalancer for Random<R> {
 /// Create a random balancer using the thread-local RNG.
 #[must_use]
 pub fn with_thread_rng() -> Random<rand::rngs::ThreadRng> {
-    Random::new(rand::thread_rng())
+    Random::new(rand::rng())
 }
 
 #[cfg(test)]

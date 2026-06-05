@@ -1,6 +1,6 @@
 //! Weighted random load balancer: probability proportional to weight.
 
-use rand::Rng;
+use rand::{Rng, RngExt};
 
 use crate::{Backend, BalancerError, LoadBalancer};
 
@@ -29,7 +29,7 @@ impl<R: Rng + Send + Sync> LoadBalancer for WeightedRandom<R> {
             return Err(BalancerError::AllZeroWeight);
         }
 
-        let mut dart = self.rng.gen_range(0..total_weight);
+        let mut dart = self.rng.random_range(0..total_weight);
         for (i, backend) in backends.iter().enumerate() {
             let w = u64::from(backend.weight);
             if dart < w {
@@ -47,7 +47,7 @@ impl<R: Rng + Send + Sync> LoadBalancer for WeightedRandom<R> {
 /// Create a weighted random balancer using the thread-local RNG.
 #[must_use]
 pub fn with_thread_rng() -> WeightedRandom<rand::rngs::ThreadRng> {
-    WeightedRandom::new(rand::thread_rng())
+    WeightedRandom::new(rand::rng())
 }
 
 #[cfg(test)]

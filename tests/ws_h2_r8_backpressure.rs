@@ -92,7 +92,7 @@ fn make_cert_for(san: &str) -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'sta
     let g = rcgen::generate_simple_self_signed(vec![san.to_string()]).unwrap();
     (
         vec![CertificateDer::from(g.cert.der().to_vec())],
-        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(g.key_pair.serialize_der())),
+        PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(g.signing_key.serialize_der())),
     )
 }
 fn build_client_cfg(ta: CertificateDer<'static>) -> Arc<ClientConfig> {
@@ -331,7 +331,9 @@ async fn open_ws_windowed(
 /// O(1) at all times.
 async fn round_trip_n(ws: &mut WebSocketStream<H2StreamAdapter>, n: u64) {
     for i in 0..n {
-        ws.send(Message::Text(format!("m{i}"))).await.unwrap();
+        ws.send(Message::Text(format!("m{i}").into()))
+            .await
+            .unwrap();
         let echo = tokio::time::timeout(Duration::from_secs(10), ws.next())
             .await
             .expect("echo timed out")

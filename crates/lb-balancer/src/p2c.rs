@@ -1,6 +1,6 @@
 //! Power-of-two-choices (P2C) load balancer.
 
-use rand::Rng;
+use rand::{Rng, RngExt};
 
 use crate::{Backend, BalancerError, LoadBalancer};
 
@@ -31,8 +31,8 @@ impl<R: Rng + Send + Sync> LoadBalancer for PowerOfTwoChoices<R> {
             return Ok(0);
         }
 
-        let a = self.rng.gen_range(0..len);
-        let mut b = self.rng.gen_range(0..len.saturating_sub(1));
+        let a = self.rng.random_range(0..len);
+        let mut b = self.rng.random_range(0..len.saturating_sub(1));
         if b >= a {
             b += 1;
         }
@@ -59,7 +59,7 @@ impl<R: Rng + Send + Sync> LoadBalancer for PowerOfTwoChoices<R> {
 /// Create a P2C balancer using the thread-local RNG.
 #[must_use]
 pub fn with_thread_rng() -> PowerOfTwoChoices<rand::rngs::ThreadRng> {
-    PowerOfTwoChoices::new(rand::thread_rng())
+    PowerOfTwoChoices::new(rand::rng())
 }
 
 #[cfg(test)]

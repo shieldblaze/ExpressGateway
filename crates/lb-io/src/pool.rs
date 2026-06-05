@@ -775,7 +775,7 @@ mod tests {
     /// Hand-rolled proptest to avoid pulling in a new workspace dep.
     #[tokio::test]
     async fn size_invariant_holds_under_random_ops() {
-        use rand::Rng;
+        use rand::RngExt;
         use rand::SeedableRng;
 
         let (_l1, addr1, _s1) = echo_listener();
@@ -796,10 +796,10 @@ mod tests {
 
         let mut held: Vec<PooledTcp> = Vec::new();
         for _ in 0..400 {
-            let op: u8 = rng.gen_range(0..3);
+            let op: u8 = rng.random_range(0..3);
             match op {
                 0 | 1 => {
-                    let i = rng.gen_range(0..peers.len());
+                    let i = rng.random_range(0..peers.len());
                     if let Some(peer) = peers.get(i) {
                         if let Ok(c) = pool.acquire(*peer) {
                             held.push(c);
@@ -808,7 +808,7 @@ mod tests {
                 }
                 _ => {
                     if !held.is_empty() {
-                        let idx = rng.gen_range(0..held.len());
+                        let idx = rng.random_range(0..held.len());
                         let _ = held.swap_remove(idx);
                     }
                 }
