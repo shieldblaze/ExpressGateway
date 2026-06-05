@@ -144,23 +144,10 @@ jobs:
       - name: cargo audit -D warnings
         run: cargo audit -D warnings
 
-  deny:
-    name: Dependency Check (cargo-deny)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-deny
-        run: cargo +stable install cargo-deny --locked
-
-      # SEC-2-07: check licenses + advisories + bans + sources. The
-      # explicit subcommand list keeps a future cargo-deny "check"
-      # default from silently shrinking our gate.
-      - name: cargo deny check
-        run: cargo deny check licenses advisories bans sources
+  # S34 dedup: cargo-deny ran here AND as prod-readiness-gates'
+  # `gate-07-cargo-deny`. Removed this duplicate; gate-07 is the single source
+  # (it now runs the same explicit `check licenses advisories bans sources`
+  # subcommand list, so the gate scope is preserved, not shrunk).
 
   geiger:
     # SEC-2-07: cargo-geiger counts unsafe blocks. Informational —
@@ -278,23 +265,7 @@ jobs:
         run: cargo build --workspace --release
         timeout-minutes: 30
 
-  docker:
-    name: Docker Build
-    runs-on: ubuntu-latest
-    needs: [release-build]
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Build Docker image (amd64)
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: docker/Dockerfile
-          platforms: linux/amd64
-          push: false
-          tags: expressgateway:ci
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+  # S34 dedup: the Docker image was built here AND by prod-readiness-gates'
+  # `D5-image-scan` (which builds the same docker/Dockerfile and additionally
+  # runs the Trivy image scan). Removed this duplicate build; D5 is the single
+  # source that both builds and scans the image.
