@@ -279,7 +279,14 @@ impl FlowEntry {
 /// Verifier code-reads on every change. Owner ruling §9.5 primary
 /// item 2: "FlowEntry MUST hold no key material — passthrough never
 /// decrypts."
-#[cfg(any(test, debug_assertions))]
+// Compiled + dead-code-allowed in ALL profiles (S34): release builds compile
+// out the `#[cfg(test)]` caller, so when this audit was `#[cfg(debug_assertions)]`
+// the `backend` field was read nowhere in release -> `field is never read` under
+// `-D warnings` broke `cargo build --release` (surfaced once the Release Build CI
+// job stopped being skipped). Making the audit unconditional keeps the
+// no-key-material + field-enumeration invariant enforced in release too and makes
+// every FlowEntry field count as read in every profile. `#[allow(dead_code)]`
+// covers the audit being uncalled outside `#[cfg(test)]`.
 #[allow(dead_code)]
 fn _flow_entry_field_audit(e: &FlowEntry) {
     let FlowEntry {
