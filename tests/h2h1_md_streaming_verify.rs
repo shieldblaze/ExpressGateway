@@ -1782,30 +1782,30 @@ async fn fcap1_h2_over_cap_upload_yields_413() {
     // gateway stream the body upstream at full speed so the forwarded total
     // crosses MAX_REQUEST_BODY_BYTES (64 MiB) and the cap fires.
     let (backend, body_bytes) = spawn_body_counting_backend().await;
-    // CF-SATURATION-1 — give THIS gateway listener a 120 s body timeout
+    // CF-SATURATION-1 — give THIS gateway listener a 300 s body timeout
     // (vs the 30 s HttpTimeouts::default). S11 hardened the BACKEND read
     // timeout (3 s→30 s, line ~740) but left the gateway's OWN wall-clock
     // body timeout (h2_proxy.rs:1837 — `tokio::time::timeout(self.timeouts
     // .body, send_fut)`, wrapping the WHOLE send_request future, NOT an
-    // idle/no-progress timeout) at the 30 s default. Under the full
-    // `--workspace --all-features` gate at 8-core saturation the H2 client
-    // pushed only ~2 MiB of the 66 MiB before that 30 s fired →
-    // ProxyErr::Timeout (h2_proxy.rs:1867-1871) → 504, beating the cap-trip
-    // → 413 (run#2 evidence: status=504 written=2162688 ≪ 64 MiB cap, so
-    // the cap was genuinely never reached — 504 was correct for a stalled
-    // upload; this is a TEST-HARNESS fragility, not a product defect). Runs
-    // #1/#3 (unsaturated) completed the push <30 s and passed, so 120 s is
-    // ~4× the observed normal-completion budget — enough starvation margin
-    // yet BOUNDED so a genuinely-dead gateway still terminates the test (the
-    // client response-wait below is raised to 130 s, just above this, so the
-    // gateway's bounded arm — not the client wait — fires on a true wedge).
-    // The cap-trip → 413 assertion is UNCHANGED. (Mirror of the S11
-    // reload_zero_drop / backend-read hardening, closing the gateway-side
-    // gap S11 left.)
+    // idle/no-progress timeout) at the 30 s default. The H2 client must push
+    // 66 MiB past the 64 MiB cap; under saturation that wall-clock total grows
+    // with however starved the runner is. S34 evidence: on the 4-core GitHub
+    // hosted runner under the full `--workspace --all-features` gate the
+    // client moved ~44 MiB of 66 MiB in 130 s (~0.34 MiB/s, still PROGRESSING
+    // — the body-progress watchdog never fired) and the client wait timed out
+    // BEFORE the cap was reached → status None, never 413. The upload was not
+    // wedged, just slow; it simply needed more wall-clock. 300 s at that
+    // observed worst-case rate clears ~100 MiB — comfortably past the 64 MiB
+    // cap — yet stays BOUNDED so a genuinely-dead gateway still terminates the
+    // test (the client response-wait below is raised to 310 s, just above
+    // this, so the gateway's bounded arm — not the client wait — fires on a
+    // true wedge). The cap-trip → 413 assertion is UNCHANGED; this only buys
+    // the slowest runner enough time to actually reach the cap. (8-core boxes
+    // finish the push in well under 30 s, so this margin is inert there.)
     let (gw, anchor) = spawn_listener_for_with_timeouts(
         backend,
         HttpTimeouts {
-            body: Duration::from_secs(120),
+            body: Duration::from_secs(300),
             ..HttpTimeouts::default()
         },
     )
@@ -1853,11 +1853,11 @@ async fn fcap1_h2_over_cap_upload_yields_413() {
         off
     });
 
-    // 130 s: just above the gateway's hardened 120 s body timeout (see the
+    // 310 s: just above the gateway's hardened 300 s body timeout (see the
     // CF-SATURATION-1 comment above) so the gateway's own BOUNDED timeout
     // arm — not this client wait — is what fires on a genuine wedge, and a
     // truly-dead gateway still terminates the test.
-    let status = match tokio::time::timeout(Duration::from_secs(130), resp_fut).await {
+    let status = match tokio::time::timeout(Duration::from_secs(310), resp_fut).await {
         Ok(Ok(resp)) => Some(resp.status().as_u16()),
         Ok(Err(e)) => {
             eprintln!("FCAP1_H2 response errored: {e:?}");
