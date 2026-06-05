@@ -284,7 +284,66 @@ h2spec crown jewel + WS R8/R13 intact; CF-S27-2 unchanged (still gated).
   WS regression → **drop tokio-tungstenite** (pin 0.24), keep the rest.
 
 ## PHASE 4 — full re-validation + promote
-_<pending Phase 3>_
+
+### Binding ×3 gate (verifier `verifier4`, independent of dep-eng) — **GREEN** (tip 2ea6c181)
+fmt 0 · clippy 0 · test ×3: run2 **1512/0/18**, run3 **1512/0/18**, run1 1511/1/18. The single
+run-1 failure = `fcap1_h2_over_cap_upload_yields_413` — the **known F-CAP-1 over-cap flake family**
+(over-cap upload to a draining backend stalls on H2 flow-control / races TLS teardown under
+contention → `status=None`/`peer closed without close_notify`; passes 2/3; **lead isolation re-run
+4/4 PASS, all `Some(413)`** ~8s uncontended). Sibling of CF-FCAP1-FLAKE / CF-S19-TLS-TEARDOWN-413,
+both pre-existing/isolation-proven. No test weakened (R2). Not a dep regression (passed Phase-1 ×3 +
+Phase-2 ×3 + here 2/3 + isolation 4/4 on identical deps; deterministic regression would fail all).
+
+Surfaces confirmed present-and-passing in the gate (verifier, run-1 log):
+- **h2spec** generic + **strict** (`h2spec_server_conformance_strict_passes ok`) — crown jewel intact.
+- **WS matrix**: every `ws_*` 0-failed (ws_proxy_e2e 7/0, ws_h2_conformance 4/0, ws_h2_upgrade_defer
+  3/0, ws_h2_burst/e2e/r8 1/0, ws_r8_backpressure_plateau 1/0, ws_autobahn 1/0).
+- **gRPC-H3**: `grpc_h3_e2e` **16/0** (4 call types + trailers + health/deadline).
+- **F-MD-4**: `h2h3_md_streaming_verify` **13/0** (truncation/RST guards).
+- **Held surface**: quiche 0.29.1, tokio-quiche 0.19.0, foundations 4.5.0, tokio 1.51.1, aya 0.13.1 — unchanged.
+
+### Coverage — by-construction (rename-only session, no new prod logic)
+Every adaptation site sits on a green-tested path (verifier table): socket2 `set_tcp_nodelay` ←
+lb-io sockopts 56/0; rand `random_range`/`rng()` ← lb-balancer 22/0; toml `Table` ←
+lb-controlplane validate tests 15/0; rcgen `signing_key` ← lb-security 84/0 + lb-quic 94/0;
+tokio-tungstenite `WebSocketConfig`/`Utf8Bytes`/`CloseFrame` ← lb-l7 ws_proxy 93/0 + WS e2e/R8.
+No new uncovered production logic → coverage non-regression. (Full llvm-cov skipped — by-construction
+sufficient + avoids ENOSPC on this box.)
+
+### Re-soak (12 scenarios, 3 batches ×900s/76 samples) — **PASS** (10 BOUNDED + 2 explained DRIFT)
+`audit/soak/s33-soak-data/batch{A,B,C}/`. All mission surfaces BOUNDED:
+| scenario | verdict | scenario | verdict |
+|---|---|---|---|
+| sc1_h1h1 | BOUNDED | sc6_413teardown | BOUNDED |
+| sc1b_h1h2 | BOUNDED | sc7_h3terminate (H3) | BOUNDED |
+| sc2_h2h2 | BOUNDED | sc8_ws_h1 (WS-H1) | BOUNDED |
+| sc4_modeb (Mode B) | BOUNDED | sc8b_ws_h2 (WS-H2) | BOUNDED |
+| sc5_modea (Mode A) | BOUNDED | sc8c_ws_h3 (WS-H3) | BOUNDED |
+| **sc9_grpc_h3** | **DRIFT — known** | **sc3_slowloris** | **DRIFT — pre-existing FP** |
+fds/threads/panic BOUNDED everywhere; all scenarios err=0 (sc3 4.77M req, etc.).
+
+**sc9_grpc_h3 DRIFT = the KNOWN carried baseline** (quiche `collected` leak, S32): rss 7856→42160
+(+46.5%), monotone 90%, fds BOUNDED 12. Matches the documented sc9 staircase; quiche HELD → expected,
+NOT a new finding.
+
+**sc3_slowloris DRIFT = pre-existing analyzer false-positive (boot-ramp-to-plateau), NOT a S33
+regression** — proven three ways:
+1. **Pre-existing:** sc3 ALSO DRIFTed at 900s in **S21** (rss 17372→25016, +44%, same boot-ramp
+   shape) — the short-run DRIFT predates the bumps.
+2. **No memory increase:** S33 plateau rss ~28 MB (median 27672, **max 28196**) == the **S20 clean
+   5400s BOUNDED baseline** (median 28090, max 32128) — absolute slowloris RSS is unchanged by the
+   bumps.
+3. **Not a leak:** rss is a ramp-to-**plateau** (last=27292 ≤ max=28196, monotone only **74%** =
+   sawtooth), fds BOUNDED at 210 (the held slowloris conns — no fd/conn leak), panic 0. The +21.6%
+   is the boot sample (first=7260) inflating the first-third median on a short run — the documented
+   `soak-analyzer-sawtooth-and-boot-outlier` FP (S20's 5400s run trims the ramp → BOUNDED).
+**Confirmatory sc3 @ 1800s run → BOUNDED** ✅ (121 samples): rss +6.9% within-band (first-third
+22636 already at plateau, max 25520), vmhwm/fds(210)/threads/accept_inflight all BOUNDED, panic 0,
+**22.1M req err=0**. The boot ramp trims out at 1800s → DRIFT→BOUNDED flip confirms the 900s DRIFT
+was the boot-ramp FP, **not a leak**. (`audit/soak/s33-soak-data/sc3-confirm-1800/`.)
+
+**RE-SOAK PASS:** every scenario BOUNDED except the known **sc9** carried baseline (quiche, HELD).
+The datapath bumps (rustls/socket2/hyper/h2/tokio-tungstenite) introduced **no leak** under load.
 
 **Re-soak plan (lead pre-scope).** `scripts/soak/run-soak.sh <dur> <out> [sample] [scale]
 [scenarios…]` (needs `eg-soak` + gateway release binaries built first). 12 scenarios:
@@ -308,4 +367,29 @@ gRPC-H3 4-call-types+trailers (grpc_h3_e2e 16); F-MD-4 (h2h3_md_streaming_verify
 ≥80%. PROMOTE per R11 if all green (sc9 DRIFT expected).
 
 ## VERDICT
-_<pending>_
+**14 of 15 in-scope crates upgraded; 1 dropped (prometheus 0.14). quiche/tokio-quiche HELD.**
+
+Upgraded: http 1.4.1, serde_json 1.0.150, libc 0.2.186, rustls 0.23.40, rustls-pki-types 1.14.1,
+dashmap 6.2.1, object 0.37.3 (P1) · socket2 0.6.3, toml 1.1.2, rand 0.10.1, rcgen 0.14.8 (P2) ·
+hyper 1.10.1, h2 0.4.14, tokio-tungstenite 0.29.0 (P3).
+Dropped (carried CF): **prometheus 0.14** — unification drags the HELD foundations 4.5.0→5.7.1 +
+tokio 1.51.1→1.52.3 + tokio-quiche telemetry stack (R3 held-surface blocker).
+
+All adaptations behavior-preserving mechanical renames (lead-reviewed diffs, no smuggled logic):
+socket2 `set_tcp_nodelay`, toml `Table`, rand `random_range`/`rng()`/`RngExt`, rcgen `signing_key`,
+tokio-tungstenite payload/CloseFrame/WebSocketConfig rewrap (R8 relay logic untouched).
+
+Gates: ×3 1512/0/18 (modulo known isolation-proven F-CAP-1 over-cap flake; no test weakened) ·
+fmt/clippy clean · h2spec strict 146/1/0 crown jewel intact · WS matrix H1/H2/H3 green + R8/R13
+(WS burst 50/50) · grpc_h3_e2e 16/0 · F-MD-4 13/0 · held surface unchanged · **re-soak PASS**
+(10/12 BOUNDED; sc9 DRIFT = known carried baseline; sc3 DRIFT @900s = boot-ramp FP, → BOUNDED
+@1800s). CF-S27-2 still gated (hyper 1.10.1 unchanged — closed-window `poll_capacity`
+Pending still swallowed). Box constraints handled: 15GiB/0-swap → `CARGO_BUILD_JOBS=4`; 67G disk →
+CF-DISK-1 reclaim between gates.
+
+### Promote (drafted; pending re-soak BOUNDED-except-sc9)
+`git checkout main && git merge --no-ff feature/bulk-deps-s33` with the honest message listing all 14
+bumps + 4 API adaptations + prometheus drop + the sc9 carried-baseline note. _<commit pending>_
+
+→ **SESSION 33 COMPLETE-partial-batch** (clean promote of 14 verified crates; prometheus 0.14
+carried) — pending the re-soak verdict.
