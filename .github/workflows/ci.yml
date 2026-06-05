@@ -75,11 +75,25 @@ jobs:
       - name: cargo test (suite minus the saturation-isolated fcap1)
         run: cargo test --workspace --all-features --no-fail-fast -- --skip fcap1_h2_over_cap_upload_yields_413
         timeout-minutes: 45
-      - name: cargo test (fcap1 over-cap, isolated / serial)
+      - name: cargo test (fcap1 over-cap, isolated / serial, retry on env-flake)
+        # fcap1 must transfer 66 MiB past the const 64 MiB cap; on a hosted
+        # runner the achievable rate varies (~0.3–1.1 MiB/s) so a single attempt
+        # can still be starved by a noisy neighbour even when isolated. The
+        # gateway deadlines are raised to 300 s (see the test), and we allow up
+        # to 3 attempts: a genuine cap regression fails ALL three (assertion
+        # unchanged), only a slow-transfer env-flake is retried. CF-SATURATION-1.
         run: |
-          cargo test -p lb-integration-tests --test h2h1_md_streaming_verify \
-            --all-features -- --exact fcap1_h2_over_cap_upload_yields_413 --nocapture
-        timeout-minutes: 15
+          for attempt in 1 2 3; do
+            echo "::group::fcap1 attempt $attempt"
+            if cargo test -p lb-integration-tests --test h2h1_md_streaming_verify \
+                 --all-features -- --exact fcap1_h2_over_cap_upload_yields_413 --nocapture; then
+              echo "::endgroup::"; echo "fcap1 passed on attempt $attempt"; exit 0
+            fi
+            echo "::endgroup::"; echo "fcap1 attempt $attempt failed (env throughput?); retrying"
+          done
+          echo "::error::fcap1 failed all 3 attempts — this is a real cap-enforcement failure, not an env flake"
+          exit 1
+        timeout-minutes: 25
 
   fmt:
     name: Format

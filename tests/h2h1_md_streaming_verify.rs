@@ -1804,8 +1804,20 @@ async fn fcap1_h2_over_cap_upload_yields_413() {
     // finish the push in well under 30 s, so this margin is inert there.)
     let (gw, anchor) = spawn_listener_for_with_timeouts(
         backend,
+        // CF-SATURATION-1: ALL three request deadlines are raised, not just
+        // `body`. The binding one on a slow runner is `total` (whole-request,
+        // default 60 s): a 66 MiB upload that crosses the 64 MiB cap takes
+        // ~213 s at the slowest observed hosted-runner rate (~0.3 MiB/s), so the
+        // default 60 s `total` (and 60 s `head`) would abort the connection
+        // before the cap trips (S34: observed `UnexpectedEof` at 18 MiB/60 s).
+        // 300 s clears the observed floor with margin; the client wait below is
+        // 310 s so the gateway's bounded arm still fires first on a true wedge.
+        // The cap-trip -> 413 assertion is UNCHANGED; fast boxes finish in
+        // <30 s so this margin is inert there.
         HttpTimeouts {
             body: Duration::from_secs(300),
+            total: Duration::from_secs(300),
+            head: Duration::from_secs(300),
             ..HttpTimeouts::default()
         },
     )
