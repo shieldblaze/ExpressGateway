@@ -1,0 +1,61 @@
+--- /home/ubuntu/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/quiche-0.29.1/src/stream/mod.rs	2006-07-24 01:21:28.000000000 +0000
++++ /home/ubuntu/Code/quiche-0.29.1-s32/src/stream/mod.rs	2026-06-03 19:42:15.816578509 +0000
+@@ -52,6 +52,13 @@
+ /// The maximum size of the receiver stream flow control window.
+ pub const MAX_STREAM_WINDOW: u64 = 16 * 1024 * 1024;
+ 
++/// S32 (CF-GRPC-H3-CHURN-RSS): upper bound on the number of recently-collected
++/// stream IDs retained in `StreamMap::collected` (the recreate-guard). Bounds a
++/// previously-unbounded insert-only set; 64 Ki recent IDs is far beyond any
++/// realistic in-flight reordering window for a late/duplicate packet, so the
++/// guard's behaviour is preserved while per-connection memory stays O(1).
++const MAX_COLLECTED_TRACKED: usize = 65_536;
++
+ /// A simple no-op hasher for Stream IDs.
+ ///
+ /// The QUIC protocol and quiche library guarantees stream ID uniqueness, so
+@@ -125,8 +132,20 @@
+     /// Instead of keeping the full stream state forever, we collect completed
+     /// streams to save memory, but we still need to keep track of previously
+     /// created streams, to prevent peers from re-creating them.
++    ///
++    /// S32 (CF-GRPC-H3-CHURN-RSS): this set was previously INSERT-ONLY and
++    /// unbounded — on a long-lived connection opening millions of short streams
++    /// (e.g. gRPC-over-HTTP/3, one stream per unary RPC) it grew without bound
++    /// (~1 `u64`/stream) and was the sole driver of an RSS staircase. It is now
++    /// bounded to the most-recently-collected `MAX_COLLECTED_TRACKED` IDs (see
++    /// `collected_order`).
+     collected: StreamIdHashSet,
+ 
++    /// S32 (CF-GRPC-H3-CHURN-RSS): insertion order of `collected`, used to evict
++    /// the oldest tracked ID once the set exceeds `MAX_COLLECTED_TRACKED` —
++    /// bounds the previously-unbounded set.
++    collected_order: std::collections::VecDeque<u64>,
++
+     /// Peer's maximum bidirectional stream count limit.
+     peer_max_streams_bidi: u64,
+ 
+@@ -614,7 +633,22 @@
+ 
+         self.remove_flushable(&s.priority_key);
+ 
+-        self.collected.insert(stream_id);
++        // S32 (CF-GRPC-H3-CHURN-RSS): bound the previously-unbounded `collected`
++        // set. Track insertion order and, once the set exceeds
++        // `MAX_COLLECTED_TRACKED`, evict the oldest ID. A late/duplicate packet
++        // referencing an already-collected stream can only arrive within a
++        // small recency window of that stream's completion, so retaining only
++        // the most-recent IDs preserves the recreate-guard while bounding
++        // memory (was: `collected` grew ~1 `u64`/stream forever on long-lived
++        // high-stream-count connections, the gRPC-over-H3 RSS staircase).
++        if self.collected.insert(stream_id) {
++            self.collected_order.push_back(stream_id);
++            while self.collected_order.len() > MAX_COLLECTED_TRACKED {
++                if let Some(old) = self.collected_order.pop_front() {
++                    self.collected.remove(&old);
++                }
++            }
++        }
+     }
+ 
+     /// Creates an iterator over streams that have outstanding data to read.

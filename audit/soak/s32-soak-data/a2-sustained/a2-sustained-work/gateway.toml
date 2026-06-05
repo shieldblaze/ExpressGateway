@@ -1,0 +1,20 @@
+[runtime]
+drain_timeout_ms = 5000
+readiness_settle_ms = 100
+
+[[listeners]]
+address = "127.0.0.1:37455"
+protocol = "quic"
+
+[listeners.quic]
+cert_path = "a2-sustained/a2-sustained-work/cert.pem"
+key_path = "a2-sustained/a2-sustained-work/key.pem"
+retry_secret_path = "a2-sustained/a2-sustained-work/retry.bin"
+
+[[listeners.backends]]
+address = "127.0.0.1:45333"
+protocol = "h2"
+weight = 1
+
+[observability]
+metrics_bind = "127.0.0.1:32863"
