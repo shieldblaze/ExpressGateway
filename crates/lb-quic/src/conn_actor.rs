@@ -346,12 +346,23 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
     // S36-A: H3 connection-recycling state. `cap == 0` disables the whole
     // mechanism (every check below short-circuits ⇒ byte-identical to the
     // pre-S36 H3 front, R3). When non-zero: `requests_served` counts each
-    // NEW request stream (in `poll_h3`); at the cap we send ONE H3 GOAWAY
-    // for `goaway_last_id` (the highest admitted request stream), reject
-    // newer streams, then drain-and-close so the connection recycles and
+    // NEW request stream (in `poll_h3`); at the cap we mark `goaway_pending`
+    // (STOP admitting new requests immediately) and send ONE H3 GOAWAY for
+    // `goaway_last_id` (the highest admitted request stream), retrying on a
+    // `StreamBlocked` control-stream window until it lands (then
+    // `goaway_sent`); then drain-and-close so the connection recycles and
     // quiche's per-connection `collected` set is freed (S32 leak).
+    //
+    // `goaway_pending` vs `goaway_sent` (lead's pre-soak correctness input):
+    // the cap can trip while the control-stream send window is momentarily
+    // full (`send_goaway` → `StreamBlocked`). `goaway_pending` flips the
+    // instant the cap is reached so we reject NEW request streams right away
+    // (no admit during the retry window); `goaway_sent` flips only once the
+    // GOAWAY frame is actually queued, gating the drain-then-close (we never
+    // recycle before the soft advisory is on the wire).
     let cap = params.max_requests_per_h3_connection;
     let mut requests_served: u64 = 0;
+    let mut goaway_pending = false;
     let mut goaway_sent = false;
     let mut goaway_last_id: u64 = 0;
 
@@ -462,8 +473,24 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
                     // S36-A: connection-recycling cap + state + metrics.
                     cap,
                     &mut requests_served,
+                    &mut goaway_pending,
                     &mut goaway_sent,
                     &mut goaway_last_id,
+                    params.h3_recycle_metrics.as_ref(),
+                );
+                // S36-A: retry a cap GOAWAY whose first send hit a full
+                // control-stream window. The triggering client may send
+                // nothing more, so this per-tick retry (not just poll_h3's
+                // on-new-HEADERS attempt) is what guarantees the GOAWAY
+                // eventually lands before the drain-then-close fires. No-op
+                // unless `goaway_pending && !goaway_sent` (and inert when
+                // cap == 0, which never sets goaway_pending — R3).
+                try_send_pending_goaway(
+                    &mut params.conn,
+                    h3c,
+                    &mut goaway_pending,
+                    &mut goaway_sent,
+                    goaway_last_id,
                     params.h3_recycle_metrics.as_ref(),
                 );
             }
@@ -1020,6 +1047,68 @@ fn reset_h3_stream(conn: &mut quiche::Connection, sid: u64, code: u64) {
     }
 }
 
+/// S36-A — attempt to emit the cap-triggered H3 GOAWAY (RFC 9114 §5.2).
+///
+/// Called once when the cap trips (in `poll_h3`) and again each tick from
+/// the `run_actor` loop while `*goaway_pending && !*goaway_sent` — because
+/// the triggering client may send nothing more, so the retry on a
+/// momentarily-full control-stream window CANNOT live only in `poll_h3`.
+///
+/// `goaway_last_id` is the highest admitted request stream id (a
+/// client-initiated bidi stream ⇒ a multiple of 4, satisfying
+/// `send_goaway`'s server-id precondition). We call this only while
+/// `!*goaway_sent`, so `send_goaway`'s "id must not increase across calls"
+/// rule cannot bite (it is emitted exactly once).
+///
+/// Outcomes (per the lead's pre-soak correctness input):
+///   * `Ok(())` — frame queued ⇒ set `goaway_sent`, bump the recycle metric.
+///   * `Err(StreamBlocked)` / `Err(Done)` — control-stream window full ⇒
+///     leave `goaway_sent` false; the caller retries next tick. (Admission
+///     is already stopped via `goaway_pending`, set by the caller.)
+///   * `Err(_)` (e.g. `IdError`, which the invariants above preclude) —
+///     log at debug and flip `goaway_sent` so we do not spin on a doomed
+///     send; the subsequent `graceful_h3_shutdown` CONNECTION_CLOSE is the
+///     hard recycle signal the client always sees regardless.
+fn try_send_pending_goaway(
+    conn: &mut quiche::Connection,
+    h3: &mut quiche::h3::Connection,
+    goaway_pending: &mut bool,
+    goaway_sent: &mut bool,
+    goaway_last_id: u64,
+    h3_recycle_metrics: Option<&lb_observability::QuicH3RecycleMetrics>,
+) {
+    if *goaway_sent || !*goaway_pending {
+        return;
+    }
+    match h3.send_goaway(conn, goaway_last_id) {
+        Ok(()) => {
+            *goaway_sent = true;
+            if let Some(m) = h3_recycle_metrics {
+                m.goaway_sent_total.inc();
+            }
+            tracing::debug!(
+                goaway_last_id,
+                "S36-A: H3 connection reached request cap; sent GOAWAY, draining to recycle"
+            );
+        }
+        Err(quiche::h3::Error::StreamBlocked) | Err(quiche::h3::Error::Done) => {
+            // Control-stream window momentarily full — retry next tick. New
+            // requests are already being rejected (goaway_pending is set).
+        }
+        Err(e) => {
+            tracing::debug!(
+                error = %e,
+                goaway_last_id,
+                "S36-A: send_goaway failed; proceeding to drain/close (CONNECTION_CLOSE is the hard recycle signal)"
+            );
+            *goaway_sent = true;
+            if let Some(m) = h3_recycle_metrics {
+                m.goaway_sent_total.inc();
+            }
+        }
+    }
+}
+
 pub(crate) async fn drain_conn_send(
     socket: &UdpSocket,
     conn: &mut quiche::Connection,
@@ -1166,9 +1255,11 @@ fn poll_h3(
     // S36-A: connection-recycling cap + actor-local state + metrics. `cap
     // == 0` ⇒ every recycling check below short-circuits (byte-identical
     // pre-S36 H3 front, R3). When non-zero: count each NEW request stream,
-    // send ONE GOAWAY at the cap, then reject newer streams.
+    // mark `goaway_pending` at the cap, send ONE GOAWAY (retry on
+    // `StreamBlocked`), then reject newer streams.
     cap: u32,
     requests_served: &mut u64,
+    goaway_pending: &mut bool,
     goaway_sent: &mut bool,
     goaway_last_id: &mut u64,
     h3_recycle_metrics: Option<&lb_observability::QuicH3RecycleMetrics>,
@@ -1233,11 +1324,17 @@ fn poll_h3(
                 // byte-identical to the pre-S36 H3 front (R3).
                 if cap != 0 {
                     // 1) Already recycling: reject any request stream opened
-                    //    AFTER the GOAWAY's last-processed id. RFC 9114 §5.2:
-                    //    such a stream MAY be retried by the client on a new
-                    //    connection — exactly the recycle semantics. Reset it
+                    //    AFTER the GOAWAY's last-processed id. The gate is
+                    //    `goaway_pending` (NOT `goaway_sent`): the moment the
+                    //    cap trips we STOP admitting new work, even while the
+                    //    GOAWAY frame is still waiting on a momentarily-full
+                    //    control-stream window — so no request is admitted
+                    //    past the boundary during the send retry. RFC 9114
+                    //    §5.2: a stream above the GOAWAY's last-processed id
+                    //    MAY be retried by the client on a new connection —
+                    //    exactly the recycle semantics. Reset it
                     //    (H3_REQUEST_REJECTED) and do NOT count/route it.
-                    if *goaway_sent && sid > *goaway_last_id {
+                    if *goaway_pending && sid > *goaway_last_id {
                         tracing::debug!(
                             stream_id = sid,
                             goaway_last_id = *goaway_last_id,
@@ -1257,47 +1354,27 @@ fn poll_h3(
                     // so it is the new highest-processed id for the GOAWAY we
                     // may send below. Client request streams are bidi
                     // client-initiated ⇒ ids are multiples of 4, satisfying
-                    // `send_goaway`'s server-id constraint.
+                    // `send_goaway`'s server-id constraint. Set ONLY here, on
+                    // an admitted request bidi stream — never from a uni /
+                    // control stream — so the `send_goaway` multiple-of-4
+                    // precondition holds by construction.
                     *goaway_last_id = sid;
-                    // 3) At the cap, send ONE H3 GOAWAY (RFC 9114 §5.2) for
-                    //    the highest-processed id, then flip into draining.
-                    //    `send_goaway` can return `StreamBlocked`/`Done` if the
-                    //    control-stream window is momentarily full — leave
-                    //    `goaway_sent` false so the next tick retries; only a
-                    //    successful send (or an unexpected hard error, which we
-                    //    do not want to spin on) flips the latch + records.
-                    if *requests_served >= u64::from(cap) && !*goaway_sent {
-                        match h3.send_goaway(conn, *goaway_last_id) {
-                            Ok(()) => {
-                                *goaway_sent = true;
-                                if let Some(m) = h3_recycle_metrics {
-                                    m.goaway_sent_total.inc();
-                                }
-                                tracing::debug!(
-                                    requests_served = *requests_served,
-                                    cap,
-                                    goaway_last_id = *goaway_last_id,
-                                    "S36-A: H3 connection reached request cap; sent GOAWAY, draining to recycle"
-                                );
-                            }
-                            Err(quiche::h3::Error::StreamBlocked)
-                            | Err(quiche::h3::Error::Done) => {
-                                // Control stream momentarily full — retry on a
-                                // later tick (the cap stays tripped).
-                            }
-                            Err(e) => {
-                                // Unexpected (e.g. IdError) — should not happen
-                                // given the multiple-of-4 + once-only invariants
-                                // above. Flip the latch anyway so we do not spin
-                                // re-trying a doomed send; the drain-close path
-                                // still recycles the connection.
-                                tracing::warn!(error = %e, goaway_last_id = *goaway_last_id, "S36-A: send_goaway failed; proceeding to drain/close");
-                                *goaway_sent = true;
-                                if let Some(m) = h3_recycle_metrics {
-                                    m.goaway_sent_total.inc();
-                                }
-                            }
-                        }
+                    // 3) At the cap, flip `goaway_pending` (stop admitting,
+                    //    immediately) and try to emit the GOAWAY now. If the
+                    //    control-stream window is full the helper leaves
+                    //    `goaway_sent` false and the outer loop retries each
+                    //    tick (the client may send nothing more, so the retry
+                    //    cannot live only here in poll_h3).
+                    if *requests_served >= u64::from(cap) {
+                        *goaway_pending = true;
+                        try_send_pending_goaway(
+                            conn,
+                            h3,
+                            goaway_pending,
+                            goaway_sent,
+                            *goaway_last_id,
+                            h3_recycle_metrics,
+                        );
                     }
                 }
 
