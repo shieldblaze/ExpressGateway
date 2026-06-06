@@ -112,6 +112,29 @@ pub struct QuicListenerParams {
     /// `None` (every non-WS listener) keeps the H3 front byte-identical
     /// (R3). Mirrors how the `config_factory` closure is threaded.
     pub ws_relay_launcher: Option<crate::ws_tunnel::WsRelayLauncher>,
+    /// S36-A: per-connection H3 request cap. When non-zero, the H3 actor
+    /// sends an H3 GOAWAY once `max_requests_per_h3_connection` request
+    /// streams have been seen on a single connection, drains the in-flight
+    /// requests, then gracefully closes — so the connection recycles and
+    /// quiche's per-connection `StreamMap::collected` set is freed (the
+    /// S32 CF-GRPC-H3-CHURN-RSS leak / DoS vector). `0` (set via
+    /// [`Self::new`]) disables the cap — byte-identical to the pre-S36 H3
+    /// front (no GOAWAY, no recycle, R3). The binary sets it from
+    /// `[runtime].max_requests_per_h3_connection` via
+    /// [`Self::with_h3_request_cap`]. Threaded to
+    /// [`crate::router::RouterParams::max_requests_per_h3_connection`] →
+    /// each actor. Ignored on Mode B (`run_raw_proxy_actor` returns before
+    /// any H3 state is built).
+    pub max_requests_per_h3_connection: u32,
+    /// S36-A: the `h3_*` recycle metric handles, threaded verbatim into
+    /// [`crate::router::RouterParams::h3_recycle_metrics`] → each actor.
+    /// `Some` once a non-Mode-B QUIC listener is spawned with a metrics
+    /// registry; the actor bumps `goaway_sent_total` at the cap and
+    /// `connections_recycled_total` after the drain-close. `None` (the
+    /// smoke / transport-only path with no registry) ⇒ the actor still
+    /// recycles, it just does not record (R3-neutral). Cheap to clone (an
+    /// `Arc`-backed `prometheus` bundle).
+    pub h3_recycle_metrics: Option<lb_observability::QuicH3RecycleMetrics>,
 }
 
 impl std::fmt::Debug for QuicListenerParams {
@@ -133,6 +156,11 @@ impl std::fmt::Debug for QuicListenerParams {
             .field("quic_modeb_metrics_set", &self.quic_modeb_metrics.is_some())
             .field("ws_enabled", &self.ws_enabled)
             .field("ws_relay_launcher_set", &self.ws_relay_launcher.is_some())
+            .field(
+                "max_requests_per_h3_connection",
+                &self.max_requests_per_h3_connection,
+            )
+            .field("h3_recycle_metrics_set", &self.h3_recycle_metrics.is_some())
             .finish()
     }
 }
@@ -172,7 +200,31 @@ impl QuicListenerParams {
             // SESSION 28 / WS-over-H3 Stage C: no relay launcher by default
             // — injected via `with_ws_relay_launcher` on a WS listener.
             ws_relay_launcher: None,
+            // S36-A: H3 request cap DISABLED by default — the binary opts
+            // in via `with_h3_request_cap` from
+            // `[runtime].max_requests_per_h3_connection`. `0` keeps the H3
+            // front byte-identical (no GOAWAY, no recycle, R3) for every
+            // smoke / transport-only caller.
+            max_requests_per_h3_connection: 0,
+            h3_recycle_metrics: None,
         }
+    }
+
+    /// S36-A: set the per-connection H3 request cap (+ the recycle metric
+    /// handles). The binary calls this from
+    /// `[runtime].max_requests_per_h3_connection`; `cap == 0` disables the
+    /// cap (the field stays at its `new()` default, byte-identical to the
+    /// pre-S36 H3 front, R3). `metrics` is the registered `h3_*` recycle
+    /// family, threaded into [`crate::router::RouterParams`] → each actor.
+    #[must_use]
+    pub fn with_h3_request_cap(
+        mut self,
+        cap: u32,
+        metrics: Option<lb_observability::QuicH3RecycleMetrics>,
+    ) -> Self {
+        self.max_requests_per_h3_connection = cap;
+        self.h3_recycle_metrics = metrics;
+        self
     }
 
     /// Attach a backend list + TCP pool for H3→H1 forwarding
@@ -378,6 +430,10 @@ impl QuicListener {
             // (cloned so the `QuicListenerParams` — which is `Clone` — can
             // outlive `spawn`). `None` ⇒ byte-identical H3 front (R3).
             ws_relay_launcher: params.ws_relay_launcher.clone(),
+            // S36-A: the per-connection H3 request cap + recycle metrics,
+            // threaded verbatim into each actor. `0` ⇒ no cap (R3).
+            max_requests_per_h3_connection: params.max_requests_per_h3_connection,
+            h3_recycle_metrics: params.h3_recycle_metrics.clone(),
         };
         let router_handle = router::spawn(router_params);
         let handle = tokio::spawn(async move {

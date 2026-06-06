@@ -529,6 +529,8 @@ async fn s16_b2_one_bidi_stream_round_trips_byte_identical() {
         // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
         ws_enabled: false,
         ws_relay_launcher: None,
+        max_requests_per_h3_connection: 0,
+        h3_recycle_metrics: None,
     };
 
     // 9) Run the actor; wait for the echoed payload, then cancel.
@@ -711,6 +713,8 @@ async fn run_concurrent_relay(n_streams: u64, payload_len: usize, full_send: boo
         // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
         ws_enabled: false,
         ws_relay_launcher: None,
+        max_requests_per_h3_connection: 0,
+        h3_recycle_metrics: None,
     };
     let actor = tokio::spawn(run_raw_proxy_actor_for_test(params));
 

@@ -109,6 +109,19 @@ pub struct RouterParams {
     /// `None` (every non-WS listener) keeps the H3 termination path
     /// byte-identical (R3). Cheap to clone (an `Arc`-backed closure).
     pub ws_relay_launcher: Option<crate::ws_tunnel::WsRelayLauncher>,
+    /// S36-A: per-connection H3 request cap, threaded verbatim from
+    /// [`crate::listener::QuicListenerParams::max_requests_per_h3_connection`]
+    /// into each spawned actor's
+    /// [`crate::conn_actor::ActorParams::max_requests_per_h3_connection`].
+    /// `0` (every pre-S36 caller / the smoke path) keeps the H3 front
+    /// byte-identical (no GOAWAY, no recycle, R3).
+    pub max_requests_per_h3_connection: u32,
+    /// S36-A: the `h3_*` recycle metric handles, threaded verbatim into
+    /// each spawned actor's
+    /// [`crate::conn_actor::ActorParams::h3_recycle_metrics`]. `None` on
+    /// the registry-less smoke path. Cheap to clone (an `Arc`-backed
+    /// `prometheus` bundle).
+    pub h3_recycle_metrics: Option<lb_observability::QuicH3RecycleMetrics>,
     /// Maximum number of concurrent QUIC connections served by this
     /// router. When the per-CID dispatch table is at this cap, new
     /// Initial packets are dropped (legitimate clients retry; a
@@ -417,6 +430,11 @@ fn spawn_new_connection(
         // launcher so the actor can run the frame relay on a validated
         // extended CONNECT. `None` ⇒ no tunnel ever built (R3).
         ws_relay_launcher: params.ws_relay_launcher.clone(),
+        // S36-A: thread the per-connection H3 request cap + recycle
+        // metrics so the actor sends GOAWAY + recycles at the cap. `0` ⇒
+        // no cap (R3); Mode B early-dispatches before reading either.
+        max_requests_per_h3_connection: params.max_requests_per_h3_connection,
+        h3_recycle_metrics: params.h3_recycle_metrics.clone(),
     };
     // CODE-2-08: wrap the two DashMap entries in a CidEntryGuard so
     // cleanup runs unconditionally — clean exit, async-cancel
@@ -528,6 +546,8 @@ mod tests {
             quic_modeb_metrics: None,
             ws_enabled: false,
             ws_relay_launcher: None,
+            max_requests_per_h3_connection: 0,
+            h3_recycle_metrics: None,
             // TEST-001: reduced cap so the dashmap only needs 4 entries
             // to be saturated. cap_entries = 2 * 2 = 4.
             max_connections: 2,
@@ -747,6 +767,8 @@ mod tests {
             quic_modeb_metrics: None,
             ws_enabled: false,
             ws_relay_launcher: None,
+            max_requests_per_h3_connection: 0,
+            h3_recycle_metrics: None,
             max_connections: MAX_CONNECTIONS,
             cancel: cancel.clone(),
         };

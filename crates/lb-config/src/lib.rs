@@ -286,6 +286,37 @@ pub struct RuntimeConfig {
     /// mode is a type error, not a runtime surprise.
     #[serde(default = "default_max_keepalive_requests")]
     pub max_keepalive_requests: u32,
+    /// S36-A: hard cap on the number of request streams served on a
+    /// single HTTP/3 connection before the gateway sends an H3 GOAWAY
+    /// (RFC 9114 §5.2), drains the in-flight streams, then gracefully
+    /// closes the QUIC connection so the client reconnects on a fresh
+    /// one.
+    ///
+    /// This is the H3 sibling of [`max_keepalive_requests`] but a
+    /// **separate, H3-tuned knob** on purpose: "N requests per
+    /// connection" means something different per protocol, and
+    /// recycling an H3 connection is expensive (full QUIC+TLS
+    /// handshake, congestion-control ramp, lost 0-RTT). One knob = one
+    /// meaning. The cap bounds quiche's per-connection
+    /// `StreamMap::collected` set (S32 root cause of
+    /// CF-GRPC-H3-CHURN-RSS) — a client holding one connection open and
+    /// streaming requests forever would otherwise grow that set
+    /// insert-only, an RSS-staircase leak *and* a single-connection DoS
+    /// vector on an internet-facing listener.
+    ///
+    /// `0` disables the cap (no GOAWAY, no recycle — byte-identical to
+    /// the pre-S36 behaviour), which **re-opens the leak / DoS vector**
+    /// and is therefore only appropriate on trusted / internal
+    /// listeners. Default `1000` (`default_max_requests_per_h3_connection`):
+    /// tokio-quiche ships an `Option<u64>` = `None`/uncapped, so there
+    /// is no numeric reference default; the owner anchor is "order
+    /// 1000, meaningfully > the H1/H2 100" because each H3 recycle pays
+    /// the full handshake cost. Any configured value above `u32::MAX`
+    /// is clamped at parse time by the serde `u64` → `u32` conversion
+    /// in the wiring crate; `validate_runtime` accepts the full
+    /// `0..=u32::MAX` range so the only failure mode is a type error.
+    #[serde(default = "default_max_requests_per_h3_connection")]
+    pub max_requests_per_h3_connection: u32,
     /// ROUND8-L4-03: per-CPU new-flow-rate cap for the XDP SYN-flood
     /// mitigation (Katran `balancer_kern.c` `is_under_flood()`,
     /// `MAX_CONN_RATE`). When the data plane sees more than this many
@@ -322,6 +353,17 @@ const fn default_xdp_new_flow_cap_per_sec_per_cpu() -> u32 {
 /// connection. `0` would disable; we ship the safe industry floor.
 const fn default_max_keepalive_requests() -> u32 {
     100
+}
+
+/// S36-A: default H3 per-connection request cap. tokio-quiche ships an
+/// uncapped `Option<u64>` = `None`, so there is no numeric reference
+/// default to mirror; the owner anchor is "order 1000, meaningfully >
+/// the H1/H2 100" — an H3 recycle pays a full QUIC+TLS handshake, so
+/// the cap is set higher than the H1/H2 keep-alive cap. `0` would
+/// disable (re-opening the leak/DoS vector); we ship the safe
+/// non-zero default.
+const fn default_max_requests_per_h3_connection() -> u32 {
+    1000
 }
 
 impl RuntimeConfig {
@@ -2650,6 +2692,7 @@ xdp_interface = "eth0"
                 watchdog: None,
                 header_underscore_policy: HeaderUnderscorePolicy::Reject,
                 max_keepalive_requests: 100,
+                max_requests_per_h3_connection: 1000,
                 xdp_new_flow_cap_per_sec_per_cpu: 125_000,
             }),
             observability: None,
@@ -2693,6 +2736,7 @@ xdp_interface = "eth0"
                 watchdog: None,
                 header_underscore_policy: HeaderUnderscorePolicy::Reject,
                 max_keepalive_requests: 100,
+                max_requests_per_h3_connection: 1000,
                 xdp_new_flow_cap_per_sec_per_cpu: 125_000,
             }),
             observability: None,
@@ -2942,6 +2986,7 @@ address = "127.0.0.1:3000"
             watchdog: None,
             header_underscore_policy: HeaderUnderscorePolicy::Reject,
             max_keepalive_requests: 100,
+            max_requests_per_h3_connection: 1000,
             xdp_new_flow_cap_per_sec_per_cpu: 125_000,
         }
     }

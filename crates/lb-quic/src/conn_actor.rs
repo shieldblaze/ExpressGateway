@@ -125,6 +125,17 @@ const GRACEFUL_SHUTDOWN_BUDGET: Duration = Duration::from_millis(500);
 /// RFC 9220 §3 maps a WebSocket abnormal close over H3 to this code.
 const H3_REQUEST_CANCELLED: u64 = 0x010c;
 
+/// S36-A — RFC 9114 §8.1 `H3_REQUEST_REJECTED` (`0x010b`): "the request or
+/// its response (including pushed response) is rejected by the server
+/// without processing." Emitted (as a STREAM reset via [`reset_h3_stream`])
+/// on a request stream that arrives AFTER the connection sent its
+/// cap-triggered GOAWAY — RFC 9114 §5.2 mandates a client whose request was
+/// rejected this way (stream ID greater than the GOAWAY's) MAY retry it on a
+/// fresh connection. This is exactly the recycle semantics: the gateway
+/// stops accepting new work on the recycling connection and the client
+/// reopens one.
+const H3_REQUEST_REJECTED: u64 = 0x010b;
+
 /// SESSION 28 / WS-over-H3 Stage C — per-stream WebSocket tunnel state.
 ///
 /// Held in the actor's `ws_tunnels` map for a sid that carried a validated
@@ -252,6 +263,26 @@ pub struct ActorParams {
     /// is byte-identical (R3). Threaded from
     /// [`crate::router::RouterParams::ws_relay_launcher`].
     pub ws_relay_launcher: Option<crate::ws_tunnel::WsRelayLauncher>,
+    /// S36-A: per-connection H3 request cap. When non-zero, [`run_actor`]
+    /// counts each NEW request stream and, once the count reaches the cap,
+    /// sends an H3 GOAWAY (RFC 9114 §5.2), rejects further new streams,
+    /// drains the in-flight requests/tunnels, then gracefully closes — so
+    /// the connection recycles and quiche's per-connection
+    /// `StreamMap::collected` set is freed (the S32 CF-GRPC-H3-CHURN-RSS
+    /// leak). `0` (every pre-S36 caller / the smoke path) disables the cap:
+    /// no GOAWAY, no recycle — the H3 path is byte-identical to today (R3).
+    /// Threaded from
+    /// [`crate::router::RouterParams::max_requests_per_h3_connection`].
+    /// Ignored on Mode B ([`run_raw_proxy_actor`](crate::raw_proxy::run_raw_proxy_actor)
+    /// returns before any H3 state is built).
+    pub max_requests_per_h3_connection: u32,
+    /// S36-A: the `h3_*` recycle metric handles. The actor bumps
+    /// `goaway_sent_total` when it sends the cap GOAWAY and
+    /// `connections_recycled_total` after the drain-then-close completes.
+    /// `None` on the registry-less smoke path (the actor still recycles, it
+    /// just does not record — R3-neutral). Threaded from
+    /// [`crate::router::RouterParams::h3_recycle_metrics`].
+    pub h3_recycle_metrics: Option<lb_observability::QuicH3RecycleMetrics>,
 }
 
 /// Drive one `quiche::Connection` to completion, terminating H3 and
@@ -311,6 +342,18 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
     // `pump_ws_tunnels`. Empty (always, on a non-WS listener) ⇒ the H3
     // front is byte-identical (R3).
     let mut ws_tunnels: HashMap<u64, WsTunnelState> = HashMap::new();
+
+    // S36-A: H3 connection-recycling state. `cap == 0` disables the whole
+    // mechanism (every check below short-circuits ⇒ byte-identical to the
+    // pre-S36 H3 front, R3). When non-zero: `requests_served` counts each
+    // NEW request stream (in `poll_h3`); at the cap we send ONE H3 GOAWAY
+    // for `goaway_last_id` (the highest admitted request stream), reject
+    // newer streams, then drain-and-close so the connection recycles and
+    // quiche's per-connection `collected` set is freed (S32 leak).
+    let cap = params.max_requests_per_h3_connection;
+    let mut requests_served: u64 = 0;
+    let mut goaway_sent = false;
+    let mut goaway_last_id: u64 = 0;
 
     loop {
         // Before waiting: push any outbound bytes from quiche + any
@@ -416,6 +459,12 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
                     params.ws_enabled,
                     &mut ws_tunnels,
                     params.ws_relay_launcher.as_ref(),
+                    // S36-A: connection-recycling cap + state + metrics.
+                    cap,
+                    &mut requests_served,
+                    &mut goaway_sent,
+                    &mut goaway_last_id,
+                    params.h3_recycle_metrics.as_ref(),
                 );
             }
         }
@@ -442,6 +491,35 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
         // Reap finished response producers (liveness only; the actor
         // already observed their events / channel close).
         resp_tasks.retain(|h| !h.is_finished());
+
+        // S36-A: DRAIN-THEN-RECYCLE. Once the cap GOAWAY is out, the actor
+        // stops accepting new request streams (rejected in `poll_h3`); the
+        // in-flight requests (incl. long-lived gRPC streaming calls) and any
+        // WS-H3 tunnels (≤ goaway_last_id) drain naturally through the maps
+        // above. When every per-stream map is empty the connection has no
+        // outstanding work — gracefully close it so the client reconnects on
+        // a fresh connection and quiche frees this connection's `collected`
+        // set (the S32 leak). In-flight work is NEVER force-closed: we only
+        // close on a fully-idle connection (R3 per-request correctness).
+        // `goaway_sent` is only ever set when `cap != 0`, so this whole arm
+        // is dead for the disabled path (byte-identical pre-S36, R3).
+        if goaway_sent
+            && body_tx_by_stream.is_empty()
+            && resp_rx_by_stream.is_empty()
+            && stream_response.is_empty()
+            && ws_tunnels.is_empty()
+        {
+            graceful_h3_shutdown(&mut params.conn, &params.socket, &mut out_buf).await;
+            if let Some(m) = params.h3_recycle_metrics.as_ref() {
+                m.connections_recycled_total.inc();
+            }
+            tracing::debug!(
+                requests_served,
+                goaway_last_id,
+                "S36-A: H3 connection recycled after cap GOAWAY drained all in-flight streams"
+            );
+            break;
+        }
     }
     // SESSION 28 / WS-over-H3 Stage C: the connection is closing — abort any
     // live relay tasks so a dead connection never leaves a tunnel relay (and
@@ -1085,6 +1163,15 @@ fn poll_h3(
     // injected relay launcher. Both inert when no WS tunnel exists (R3).
     ws_tunnels: &mut HashMap<u64, WsTunnelState>,
     ws_relay_launcher: Option<&WsRelayLauncher>,
+    // S36-A: connection-recycling cap + actor-local state + metrics. `cap
+    // == 0` ⇒ every recycling check below short-circuits (byte-identical
+    // pre-S36 H3 front, R3). When non-zero: count each NEW request stream,
+    // send ONE GOAWAY at the cap, then reject newer streams.
+    cap: u32,
+    requests_served: &mut u64,
+    goaway_sent: &mut bool,
+    goaway_last_id: &mut u64,
+    h3_recycle_metrics: Option<&lb_observability::QuicH3RecycleMetrics>,
 ) {
     // PASS 1 — re-arm / backpressure drain (see fn doc): every body-phase
     // stream gets a capacity-gated `recv_body` drain this tick, regardless
@@ -1135,6 +1222,83 @@ fn poll_h3(
                     }
                     pending_trailers.insert(sid, headers);
                     continue;
+                }
+
+                // S36-A CONNECTION RECYCLING — runs ONCE per NEW request
+                // stream (we are past the trailer/body re-entry guard above,
+                // so each request stream lands here exactly once: admit,
+                // 400/malformed-reject, AND the WS extended-CONNECT all flow
+                // through). `cap == 0` short-circuits the whole block (every
+                // branch is gated on `cap != 0`), so the disabled path is
+                // byte-identical to the pre-S36 H3 front (R3).
+                if cap != 0 {
+                    // 1) Already recycling: reject any request stream opened
+                    //    AFTER the GOAWAY's last-processed id. RFC 9114 §5.2:
+                    //    such a stream MAY be retried by the client on a new
+                    //    connection — exactly the recycle semantics. Reset it
+                    //    (H3_REQUEST_REJECTED) and do NOT count/route it.
+                    if *goaway_sent && sid > *goaway_last_id {
+                        tracing::debug!(
+                            stream_id = sid,
+                            goaway_last_id = *goaway_last_id,
+                            "S36-A: rejecting new H3 request after cap GOAWAY (H3_REQUEST_REJECTED, RFC 9114 §5.2)"
+                        );
+                        reset_h3_stream(conn, sid, H3_REQUEST_REJECTED);
+                        continue;
+                    }
+                    // 2) Count this new request stream. Counting here (before
+                    //    pseudo-header validation / admission) bounds quiche's
+                    //    per-connection `collected` set against a
+                    //    malformed-request-spam variant too: every new stream
+                    //    quiche surfaces lands in `collected`, so the cap must
+                    //    count rejects as well as admits (S32).
+                    *requests_served = requests_served.saturating_add(1);
+                    // This stream WILL be processed (it predates any GOAWAY),
+                    // so it is the new highest-processed id for the GOAWAY we
+                    // may send below. Client request streams are bidi
+                    // client-initiated ⇒ ids are multiples of 4, satisfying
+                    // `send_goaway`'s server-id constraint.
+                    *goaway_last_id = sid;
+                    // 3) At the cap, send ONE H3 GOAWAY (RFC 9114 §5.2) for
+                    //    the highest-processed id, then flip into draining.
+                    //    `send_goaway` can return `StreamBlocked`/`Done` if the
+                    //    control-stream window is momentarily full — leave
+                    //    `goaway_sent` false so the next tick retries; only a
+                    //    successful send (or an unexpected hard error, which we
+                    //    do not want to spin on) flips the latch + records.
+                    if *requests_served >= u64::from(cap) && !*goaway_sent {
+                        match h3.send_goaway(conn, *goaway_last_id) {
+                            Ok(()) => {
+                                *goaway_sent = true;
+                                if let Some(m) = h3_recycle_metrics {
+                                    m.goaway_sent_total.inc();
+                                }
+                                tracing::debug!(
+                                    requests_served = *requests_served,
+                                    cap,
+                                    goaway_last_id = *goaway_last_id,
+                                    "S36-A: H3 connection reached request cap; sent GOAWAY, draining to recycle"
+                                );
+                            }
+                            Err(quiche::h3::Error::StreamBlocked)
+                            | Err(quiche::h3::Error::Done) => {
+                                // Control stream momentarily full — retry on a
+                                // later tick (the cap stays tripped).
+                            }
+                            Err(e) => {
+                                // Unexpected (e.g. IdError) — should not happen
+                                // given the multiple-of-4 + once-only invariants
+                                // above. Flip the latch anyway so we do not spin
+                                // re-trying a doomed send; the drain-close path
+                                // still recycles the connection.
+                                tracing::warn!(error = %e, goaway_last_id = *goaway_last_id, "S36-A: send_goaway failed; proceeding to drain/close");
+                                *goaway_sent = true;
+                                if let Some(m) = h3_recycle_metrics {
+                                    m.goaway_sent_total.inc();
+                                }
+                            }
+                        }
+                    }
                 }
 
                 // Initial request HEADERS. (#12–15) pseudo-header
