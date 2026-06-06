@@ -21,9 +21,29 @@ stays honest-green throughout.
 | Swap cushion added | ✅ 8 GiB swapfile (`/swapfile`); box is 15 GiB RAM / was 0 swap |
 | `clippy --all-targets --all-features -D warnings` | ✅ rc=0 (clean) |
 | `fmt --all --check` | ✅ rc=0 |
-| `cargo test --workspace --all-features --no-fail-fast` ×3 | ⏳ running |
+| `cargo test --workspace --all-features --no-fail-fast` ×3 | ✅ **1512 / 0 / 18** identical ×3 (247 binaries); `audit/ops/s36-baseline/test-run{1,2,3}.log` |
 | main CI gate set green (GitHub) | ✅ prod-readiness-gates / CI / scheduled-scans / Dependabot all `success` |
-| sc9 staircase reproduced (pre-fix reference) | ⏳ pending (after ×3) |
+| sc9 staircase reproduced (pre-fix reference) | ✅ **DRIFT** — see below |
+
+### sc9 pre-fix reference (negative control for workstream A) — COMPLETED RUN (R15)
+`audit/soak/s36-soak-data/sc9-prefix-reference/` — `sc9_grpc_h3` isolated, 1800 s, **151 samples**.
+
+| metric | verdict | first → last | peak | growth | monotone | note |
+|---|---|---|---|---|---|---|
+| `rss_kb`   | **DRIFT** | 8 320 → 81 924 KB | 81 924 KB (≈80 MB) | +36.3% (last-third vs first-third median) | 99.3% | slope 290 KB/sample |
+| `vmhwm_kb` | **DRIFT** | 8 320 → 86 020 KB | 86 020 KB (≈84 MB) | +38.5% | 99.3% | slope 314 KB/sample |
+| `fds`      | BOUNDED | 11 → 12 | 13 | +0.0% | — | **no fd leak** |
+| `threads`  | BOUNDED | 10 → 9 | 10 | +0.0% | — | — |
+| `panic_total` | BOUNDED (0) | 0 → 0 | 0 | — | — | zero panics across run |
+
+Load over the run: `grpc_h3_sustained` ok=2 966 903 / err=1; `grpc_h3_churn` ok=1 981 432 / err=0
+(**≈4.95 M gRPC-over-H3 RPCs, err≈0**). RSS climbed monotonically as a staircase
+(8→23→31→39→53→80 MB observed in heartbeats) **while per-request correctness held** — the
+isolated `collected`-HashSet leak (S32 root cause). **Workstream A must flip `rss_kb`/`vmhwm_kb`
+to BOUNDED with this same load.**
+
+**Phase 0 verdict: COMPLETE — base is honest-green (×3 1512/0/18, clippy/fmt clean, main CI
+green) and the sc9 pre-fix DRIFT staircase is captured as the negative control.**
 
 CI gate set (must stay green — S34/S35):
 `ci.yml` {fmt, clippy, test, msrv, release-build} +
