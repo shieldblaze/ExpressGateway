@@ -61,8 +61,67 @@ D4 h2spec/h3spec, D3a chaos, D5 docker build+smoke+trivy, D2 XDP verifier} +
 
 ---
 
-## Phase 1 — (A) connection recycling
-_pending_
+## Phase 1 — (A) connection recycling — VERIFIED (coverage pending), on `4480fb83`
+
+**Design (owner-decided, single-sourced in the shared H3 actor — covers gRPC-H3 / WS-H3 / plain-H3):**
+a **separate, H3-tuned config knob** `max_requests_per_h3_connection` (lb-config `RuntimeConfig`,
+u32, **default 1000**, `0`=disabled→documented as re-opening the leak/DoS vector, internal-only).
+The H3 actor counts each new request stream; at the cap it sends an H3 **GOAWAY** (RFC 9114 §5.2),
+rejects newer streams (`H3_REQUEST_REJECTED` 0x010b), drains in-flight requests/tunnels, then
+`graceful_h3_shutdown` → the connection recycles and quiche's per-connection `StreamMap::collected`
+set is freed (S32 root cause). A two-flag latch (`goaway_pending` flips at the cap → stop admitting
+immediately; `goaway_sent` flips only when the frame lands → gates the drain-close) + a per-tick
+`try_send_pending_goaway` retry handles `send_goaway` `StreamBlocked` even if the client goes silent.
+Owner chose a separate knob (not reusing the H1/H2 `max_keepalive_requests` 100) because an H3
+recycle pays a full QUIC+TLS handshake; tokio-quiche ships `None`/uncapped, so 1000 is the anchor.
+
+Commits: `ea4d87bd` (impl) + `c00bfa19` (tests) + `4480fb83` (GOAWAY `goaway_pending` hardening).
+Files: lb-config knob (+122), lb-observability `quic_h3_recycle_metrics.rs` (+96,
+`h3_goaway_sent_total`/`h3_connections_recycled_total`), conn_actor (+enforcement), listener/router/main
+threading. New tests: `h3_connection_recycle_e2e.rs` (4) + 4 config + 2 metric.
+
+**The leak fix (R13 — the negative control flipped):** `sc9_grpc_h3` isolated, **1800 s / 151
+samples, COMPLETED** (R15), at default cap 1000 → **`overall=BOUNDED`**
+(`audit/soak/s36-soak-data/sc9-postfix/`).
+
+| metric | pre-fix (Phase 0) | post-fix (`4480fb83`) |
+|---|---|---|
+| `rss_kb` | **DRIFT** 8 320→81 924 KB, +36.3%, slope **+290**, 99.3% monotone | **BOUNDED** ~22 MB flat, −0.2%, slope **−0.35** |
+| `vmhwm_kb` | DRIFT, peak **86 020 KB (~84 MB)** | BOUNDED, peak **23 432 KB (~23 MB)** |
+| `fds`/`threads`/`panic` | bounded / bounded / 0 | bounded / bounded / **0** |
+
+**Recycle-count proof + err cross-check (airtight):** ~5.0 M RPCs; sustained ok=2 997 771
+**err=2994 ≈ 2998 = sustained_ok ÷ cap(1000)** → err IS the recycle artifact (the non-GOAWAY-aware
+sustained client bails+reconnects once per recycle), NOT a regression; churn err=0, no storm. Mid-run
+`/metrics`: `h3_goaway_sent_total == h3_connections_recycled_total` (every GOAWAY → clean recycle).
+
+**R3 per-request correctness (independent):** recycle e2e **4/4** (branch provably TAKEN — F-CAP-1
+trap avoided; in-flight-at-boundary drains **not** RST; `cap=0` byte-identical; fresh conn serves after
+recycle through the real `QuicListener`). Fast smoke **~96/0** (gRPC-H3 16/0, plain-H3 cells incl. the
+R8 backpressure/bounded gauges, authority, ws_tunnel seam, quic_listener e2e). **R8 preserved.**
+
+**Gate (lead-run; author=recycle-eng ⇒ author≠verifier):**
+`cargo test --workspace --all-features --no-fail-fast` **×3 = 1522 / 0 / 18 ALL-PASS** (identical, 248
+binaries; +10 vs Phase-0 1512 = the new recycle/config/metric tests, additive). `clippy --all-targets
+--all-features -D warnings` **clean**; `fmt --check` **clean**.
+
+**Coverage — charter D-6 gate PASS** (full-workspace `cargo llvm-cov nextest --workspace --all-features`,
+`audit/ops/s36-aimpl-cov/`): "31 hot-path modules passed, 0 below". The two charter hot-path modules
+this change touches are both ≥80%: **conn_actor.rs 84.79%** (803/947), **listener.rs 86.41%** (248/287).
+New-code modules: **lb-config/lib.rs 91.92%** (the knob), **quic_h3_recycle_metrics.rs 92.59%** (the
+metric). (A scoped lb-quic-only run first read conn_actor at 65% — a scoping artifact: conn_actor's
+WS-tunnel/Mode-B paths are only exercised by workspace-level integration tests; the new recycle happy
++ drain paths are fully covered, only ~20 defensive error arms — StreamBlocked retry / IdError /
+post-GOAWAY reject the well-behaved client never triggers — are uncovered, an acceptable module-level
+fraction. R4: documented, not asterisked.)
+
+**Phase 1 verdict: VERIFIED — leak FIXED (sc9 BOUNDED at cap 1000), per-request correctness intact,
+gate green (×3 + clippy/fmt + D-6). Staged on `feature/ops-layer-s36 @ 4480fb83`; promotes at Phase 5
+per the mission (Phase 1 ends commit/push, not a standalone main merge).**
+
+> Process note (honest record): the verifier subagent completed the sc9 BOUNDED soak (13:05 UTC) but
+> stalled without reporting — caught ~5.75 h later (idle-billing waste, no compute burned, result intact).
+> Lead took over the remaining gate with harness-tracked jobs + a stall watchdog (now standing practice).
 
 ## Phase 2 — (B) config management
 _pending_
