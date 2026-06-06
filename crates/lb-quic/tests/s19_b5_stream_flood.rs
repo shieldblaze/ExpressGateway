@@ -601,6 +601,8 @@ async fn s19_b5_stream_flood_bounded_table_completes_all() {
         // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
         ws_enabled: false,
         ws_relay_launcher: None,
+        max_requests_per_h3_connection: 0,
+        h3_recycle_metrics: None,
     };
 
     // 8) Run the actor; wait for every stream to complete, then cancel.

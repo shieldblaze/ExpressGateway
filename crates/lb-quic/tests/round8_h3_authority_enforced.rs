@@ -331,6 +331,8 @@ async fn run_case(authority: &str) -> (Option<u16>, u32) {
         // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
         ws_enabled: false,
         ws_relay_launcher: None,
+        max_requests_per_h3_connection: 0,
+        h3_recycle_metrics: None,
     };
     let actor = tokio::spawn(run_actor(params));
 

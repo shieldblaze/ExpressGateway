@@ -48,6 +48,7 @@ pub mod log;
 pub mod passthrough_metrics;
 pub mod probes;
 pub mod prometheus_exposition;
+pub mod quic_h3_recycle_metrics;
 pub mod quic_modeb_metrics;
 pub mod tracing_propagation;
 pub mod xdp_metrics;
@@ -59,6 +60,7 @@ pub use label_budget::{
 pub use log::{LogFormat, TracingConfig, TracingError, init_tracing};
 pub use passthrough_metrics::PassthroughMetrics;
 pub use probes::{ProbeRegistry, ProbeState};
+pub use quic_h3_recycle_metrics::QuicH3RecycleMetrics;
 pub use quic_modeb_metrics::QuicModeBMetrics;
 pub use xdp_metrics::{ConntrackFamily, SamplerBaseline, XdpMetrics, stat_slot_labels};
 

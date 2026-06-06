@@ -1,0 +1,103 @@
+{
+  "columns": [
+    {
+      "column": "rss_kb",
+      "first": 8320.0,
+      "first_third_median": 39816.0,
+      "kind": "trend",
+      "last": 81924.0,
+      "last_third_median": 54268.0,
+      "max": 81924.0,
+      "min": 8320.0,
+      "monotone_frac": 0.9925925925925926,
+      "n": 151,
+      "note": "rss_kb: drift — last-third median 54268 vs first-third 39816 (+36.3%), monotone 99% , slope 290.2054/sample",
+      "rel_growth": 0.3629696604380149,
+      "slope_per_sample": 290.20541004723054,
+      "verdict": "DRIFT"
+    },
+    {
+      "column": "vmhwm_kb",
+      "first": 8320.0,
+      "first_third_median": 40296.0,
+      "kind": "trend",
+      "last": 86020.0,
+      "last_third_median": 55828.0,
+      "max": 86020.0,
+      "min": 8320.0,
+      "monotone_frac": 0.9925925925925926,
+      "n": 151,
+      "note": "vmhwm_kb: drift — last-third median 55828 vs first-third 40296 (+38.5%), monotone 99% , slope 313.5405/sample",
+      "rel_growth": 0.38544768711534644,
+      "slope_per_sample": 313.54049902199324,
+      "verdict": "DRIFT"
+    },
+    {
+      "column": "fds",
+      "first": 11.0,
+      "first_third_median": 12.0,
+      "kind": "trend",
+      "last": 12.0,
+      "last_third_median": 12.0,
+      "max": 13.0,
+      "min": 11.0,
+      "monotone_frac": 0.9851851851851852,
+      "n": 151,
+      "note": "fds: bounded — last-third median 12 vs first-third 12 (+0.0%, within band 10% or non-monotone 99%)",
+      "rel_growth": 0.0,
+      "slope_per_sample": 0.00011449835408616001,
+      "verdict": "BOUNDED"
+    },
+    {
+      "column": "threads",
+      "first": 10.0,
+      "first_third_median": 9.0,
+      "kind": "trend",
+      "last": 9.0,
+      "last_third_median": 9.0,
+      "max": 10.0,
+      "min": 9.0,
+      "monotone_frac": 1.0,
+      "n": 151,
+      "note": "threads: bounded — last-third median 9 vs first-third 9 (+0.0%, within band 10% or non-monotone 100%)",
+      "rel_growth": 0.0,
+      "slope_per_sample": 0.0,
+      "verdict": "BOUNDED"
+    },
+    {
+      "column": "panic_total",
+      "first": 0.0,
+      "first_third_median": 0.0,
+      "kind": "counter_must_be_zero",
+      "last": 0.0,
+      "last_third_median": 0.0,
+      "max": 0.0,
+      "min": 0.0,
+      "monotone_frac": 1.0,
+      "n": 151,
+      "note": "panic_total: stayed zero across the run",
+      "rel_growth": 0.0,
+      "slope_per_sample": 0.0,
+      "verdict": "BOUNDED"
+    }
+  ],
+  "duration_secs": 1800,
+  "label": "sc9_grpc_h3",
+  "load": [
+    {
+      "err": 1,
+      "name": "grpc_h3_sustained",
+      "ok": 2966903
+    },
+    {
+      "err": 0,
+      "name": "grpc_h3_churn",
+      "ok": 1981432
+    }
+  ],
+  "overall": "DRIFT",
+  "sample_secs": 12,
+  "samples": 151,
+  "scale": 1,
+  "scenario": "sc9_grpc_h3"
+}

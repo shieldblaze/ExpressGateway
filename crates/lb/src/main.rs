@@ -482,6 +482,12 @@ fn quic_listener_params_from_config(
     // when `cfg.raw_proxy` is configured; `None` ⇒ H3-terminate (R3).
     raw_backend: Option<RawBackend>,
     quic_modeb_metrics: Option<lb_observability::QuicModeBMetrics>,
+    // S36-A: the gateway-level `[runtime].max_requests_per_h3_connection`
+    // cap (`0` disables → byte-identical pre-S36 H3 front, R3) + the
+    // registered `h3_*` recycle metric handles. Only consulted on the
+    // H3-terminate path; Mode B early-dispatches before any H3 state.
+    max_requests_per_h3_connection: u32,
+    h3_recycle_metrics: Option<lb_observability::QuicH3RecycleMetrics>,
 ) -> QuicListenerParams {
     let mut params = QuicListenerParams::new(
         bind_addr,
@@ -491,6 +497,11 @@ fn quic_listener_params_from_config(
     );
     params.max_idle_timeout = Duration::from_millis(cfg.max_idle_timeout_ms);
     params.max_recv_udp_payload_size = cfg.max_recv_udp_payload_size;
+    // S36-A: opt this listener into H3 connection recycling. `with_h3_request_cap`
+    // is a no-op for `cap == 0` (the field stays at its `new()` default —
+    // byte-identical to the pre-S36 H3 front, R3). On Mode B the cap is
+    // threaded but unread (`run_raw_proxy_actor` returns before any H3 state).
+    params = params.with_h3_request_cap(max_requests_per_h3_connection, h3_recycle_metrics);
     // SESSION 19 / Mode B (B6): flip to Mode B ONLY when a raw backend was
     // built. `with_raw_backend` sets `raw_quic_backend`, the DATAGRAM cap,
     // and the metrics, and is the ONLY thing that enables datagrams on the
@@ -1194,6 +1205,11 @@ async fn spawn_quic(
     pool: &TcpPool,
     resolver: &DnsResolver,
     metrics: &Arc<MetricsRegistry>,
+    // S36-A: the gateway-level `[runtime].max_requests_per_h3_connection`
+    // cap, threaded in from the caller (read once near the other runtime
+    // knobs). `0` disables H3 connection recycling (byte-identical pre-S36
+    // H3 front, R3).
+    max_requests_per_h3_connection: u32,
     shutdown_token: CancellationToken,
 ) -> anyhow::Result<QuicListener> {
     let Some(quic_cfg) = listener_cfg.quic.as_ref() else {
@@ -1223,8 +1239,28 @@ async fn spawn_quic(
     };
     let mode_b = raw_backend.is_some();
 
-    let mut params =
-        quic_listener_params_from_config(bind_addr, quic_cfg, raw_backend, modeb_metrics);
+    // S36-A: register the `h3_*` recycle metric family for an H3-terminate
+    // listener with the cap enabled, so the GOAWAY-sent / connections-recycled
+    // rows appear in `/metrics` from spawn (the soak + the recycle e2e assert
+    // them). Never on Mode B (no H3 state) and never when the cap is disabled
+    // (`0` ⇒ byte-identical pre-S36 H3 front, no new metric rows, R3).
+    let h3_recycle_metrics = if !mode_b && max_requests_per_h3_connection != 0 {
+        Some(
+            lb_observability::QuicH3RecycleMetrics::register(metrics)
+                .context("registering h3_* recycle metrics")?,
+        )
+    } else {
+        None
+    };
+
+    let mut params = quic_listener_params_from_config(
+        bind_addr,
+        quic_cfg,
+        raw_backend,
+        modeb_metrics,
+        max_requests_per_h3_connection,
+        h3_recycle_metrics,
+    );
 
     // SESSION 27 / WS-over-H3 (RFC 9220) Stage A: opt this listener into
     // WebSocket extended CONNECT ONLY when a `[listeners.websocket]` block
@@ -2188,6 +2224,15 @@ async fn async_main() -> anyhow::Result<()> {
         .runtime
         .as_ref()
         .map_or(100, |r| r.max_keepalive_requests);
+    // S36-A: per-connection H3 request cap (cap → GOAWAY → drain → recycle).
+    // `0` disables. Falls back to the lb-config default (1000) when no
+    // `[runtime]` block is present, so a QUIC listener under a minimal config
+    // still gets the safe recycling default rather than the unbounded
+    // (pre-S36) behaviour.
+    let max_requests_per_h3_connection = config
+        .runtime
+        .as_ref()
+        .map_or(1000, |r| r.max_requests_per_h3_connection);
     // SEC-2-04 Wave 2c-2: per-listener / per-IP admission gate.
     // The same `Arc<HooksBundle>` is shared across every listener
     // (`ConnGate`'s `listener_cap` counts all connections under
@@ -2290,6 +2335,7 @@ async fn async_main() -> anyhow::Result<()> {
                     &pool,
                     &resolver,
                     &metrics,
+                    max_requests_per_h3_connection,
                     shutdown.token().child_token(),
                 )
                 .await?,
@@ -3509,7 +3555,7 @@ mod tests {
         let cfg = quic_cfg_with_raw_proxy(Some(rp.clone()));
         // The same backend-build the binary does at spawn.
         let backend = build_raw_quic_backend(&rp).expect("build raw backend");
-        let params = quic_listener_params_from_config(bind, &cfg, Some(backend), None);
+        let params = quic_listener_params_from_config(bind, &cfg, Some(backend), None, 0, None);
         assert!(
             params.raw_quic_backend.is_some(),
             "a raw_proxy block must produce a Mode-B listener (raw_quic_backend = Some)"
@@ -3528,7 +3574,7 @@ mod tests {
         // params carry `raw_quic_backend = None` — the H3-termination path,
         // which makes `build_server_config`'s `enable_datagrams = false`
         // (transport params byte-identical to today).
-        let params = quic_listener_params_from_config(bind, &cfg, None, None);
+        let params = quic_listener_params_from_config(bind, &cfg, None, None, 0, None);
         assert!(
             params.raw_quic_backend.is_none(),
             "R3: a config without raw_proxy must stay on the H3-terminate path (raw_quic_backend = None)"
@@ -3578,7 +3624,8 @@ mod tests {
             tls_verify_hostname: None,
             tls_verify_peer: true,
         });
-        let params = quic_listener_params_from_config(bind, cfg.quic.as_ref().unwrap(), None, None);
+        let params =
+            quic_listener_params_from_config(bind, cfg.quic.as_ref().unwrap(), None, None, 0, None);
         let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
         let resolver = DnsResolver::new(ResolverConfig::default());
         let metrics = Arc::new(MetricsRegistry::new());
@@ -3612,7 +3659,8 @@ mod tests {
             tls_verify_hostname: Some("h3.backend.test".to_string()),
             tls_verify_peer: false,
         });
-        let params = quic_listener_params_from_config(bind, cfg.quic.as_ref().unwrap(), None, None);
+        let params =
+            quic_listener_params_from_config(bind, cfg.quic.as_ref().unwrap(), None, None, 0, None);
         let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
         let resolver = DnsResolver::new(ResolverConfig::default());
         let metrics = Arc::new(MetricsRegistry::new());
@@ -3658,7 +3706,8 @@ mod tests {
             tls_verify_hostname: None,
             tls_verify_peer: true,
         });
-        let params = quic_listener_params_from_config(bind, cfg.quic.as_ref().unwrap(), None, None);
+        let params =
+            quic_listener_params_from_config(bind, cfg.quic.as_ref().unwrap(), None, None, 0, None);
         let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
         let resolver = DnsResolver::new(ResolverConfig::default());
         let metrics = Arc::new(MetricsRegistry::new());
@@ -3970,7 +4019,7 @@ mod tests {
         let token = CancellationToken::new();
         let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
         let resolver = DnsResolver::new(ResolverConfig::default());
-        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, token.clone())
+        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, 0, token.clone())
             .await
             .expect("spawn_quic Mode-B must start");
         let lb_addr = listener.local_addr();
@@ -4258,7 +4307,7 @@ mod tests {
         let token = CancellationToken::new();
         let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
         let resolver = DnsResolver::new(ResolverConfig::default());
-        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, token.clone())
+        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, 0, token.clone())
             .await
             .expect("spawn_quic H3-terminate must start");
         let lb_addr = listener.local_addr();
@@ -4804,7 +4853,7 @@ mod tests {
         let token = CancellationToken::new();
         let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
         let resolver = DnsResolver::new(ResolverConfig::default());
-        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, token.clone())
+        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, 0, token.clone())
             .await
             .expect("spawn_quic WS-over-H3 must start");
         let lb_addr = listener.local_addr();
@@ -4903,7 +4952,7 @@ mod tests {
         let token = CancellationToken::new();
         let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
         let resolver = DnsResolver::new(ResolverConfig::default());
-        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, token.clone())
+        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, 0, token.clone())
             .await
             .expect("spawn_quic WS-over-H3 must start");
         let lb_addr = listener.local_addr();
@@ -4957,7 +5006,7 @@ mod tests {
         let token = CancellationToken::new();
         let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
         let resolver = DnsResolver::new(ResolverConfig::default());
-        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, token.clone())
+        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, 0, token.clone())
             .await
             .expect("spawn_quic WS-over-H3 must start");
         let lb_addr = listener.local_addr();
@@ -5105,7 +5154,7 @@ mod tests {
         };
         let pool = TcpPool::new(PoolConfig::default(), tiny_opts, Runtime::new());
         let resolver = DnsResolver::new(ResolverConfig::default());
-        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, token.clone())
+        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, 0, token.clone())
             .await
             .expect("spawn_quic WS-over-H3 must start");
         let lb_addr = listener.local_addr();
@@ -5347,7 +5396,7 @@ mod tests {
         let token = CancellationToken::new();
         let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
         let resolver = DnsResolver::new(ResolverConfig::default());
-        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, token.clone())
+        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, 0, token.clone())
             .await
             .expect("spawn_quic WS-over-H3 must start");
         let lb_addr = listener.local_addr();
@@ -5380,7 +5429,7 @@ mod tests {
         let token = CancellationToken::new();
         let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
         let resolver = DnsResolver::new(ResolverConfig::default());
-        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, token.clone())
+        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, 0, token.clone())
             .await
             .expect("spawn_quic WS-over-H3 must start");
         let lb_addr = listener.local_addr();
@@ -5417,7 +5466,7 @@ mod tests {
         let token = CancellationToken::new();
         let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
         let resolver = DnsResolver::new(ResolverConfig::default());
-        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, token.clone())
+        let listener = spawn_quic(&listener_cfg, &pool, &resolver, &metrics, 0, token.clone())
             .await
             .expect("spawn_quic WS-over-H3 must start");
         let lb_addr = listener.local_addr();
