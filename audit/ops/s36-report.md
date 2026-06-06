@@ -123,19 +123,35 @@ per the mission (Phase 1 ends commit/push, not a standalone main merge).**
 > stalled without reporting — caught ~5.75 h later (idle-billing waste, no compute burned, result intact).
 > Lead took over the remaining gate with harness-tracked jobs + a stall watchdog (now standing practice).
 
-## Phase 2 — (B) config management
-_pending_
+## Phase 2 — (B) config management — CARRIED to S37
+## Phase 3 — (C) hot reload — CARRIED to S37
+## Phase 4 — (D) latest-deps upgrade — CARRIED to S37
+## Phase 5 — full re-validation + promote — N/A (A promoted standalone; see verdict)
 
-## Phase 3 — (C) hot reload
-_pending_
-
-## Phase 4 — (D) latest-deps upgrade
-_pending_
-
-## Phase 5 — full re-validation + promote
-_pending_
+Owner decision (2026-06-06): promote the fully-verified workstream A standalone now and carry
+B/C/D to a fresh focused S37 session. Rationale: A is self-contained and load-bearing (belongs on
+main, not stranded on a branch); B/C/D are substantial, and hot reload especially is
+correctness-critical operational code (live-connection preservation, validate-before-apply,
+rollback) that must not be authored in the exhausted back-half of a 10 h+ session that already
+absorbed a ~6 h teammate-stall (the exact conditions a subtle reload race gets introduced —
+violates the solid-before-prod bar). See `audit/ops/s37-handoff.md`.
 
 ---
 
 ## Verdict
-_in progress_
+
+**SESSION 36 — PARTIAL→COMPLETE for workstream A: connection-recycling leak FIXED and PROMOTED;
+B/C/D carried to S37.**
+
+Workstream A (H3 connection recycling) is fully verified and promoted to `main` (`--no-ff`):
+- **CF-GRPC-H3-CHURN-RSS CLOSED as our-code-fixed.** The S32 "quiche `collected` leak" was our
+  lifecycle gap (no per-connection request cap / no GOAWAY), not a quiche bug — the cap→GOAWAY→
+  drain→recycle fix flips sc9 from DRIFT (8→80 MB staircase) to **BOUNDED (~22 MB flat)** at the
+  default cap 1000. Also closes the internet-facing single-connection DoS vector.
+- Per-request correctness intact (gRPC-H3/WS-H3/plain-H3): recycle e2e 4/4, smoke ~96/0, R8 held,
+  cap=0 byte-identical. Gate green: ×3 1522/0/18, clippy/fmt clean, coverage D-6 PASS.
+- New operator knob `max_requests_per_h3_connection` (default 1000, 0=disabled→internal-only).
+
+Carried to S37 (well-scoped, fresh session): B config management, C hot reload, D latest-deps
+(the held cluster + PR #224/#226), then full re-soak + the carry-forwards (CF-S27-2/hyper#4050,
+F-ESC-1, CF-S35-T5-FLAKE, security audit, docs).
