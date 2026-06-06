@@ -3239,4 +3239,81 @@ strict_source_binding = true
         assert_eq!(pt.min_client_dcid_len, 8);
         assert!(validate_config(&cfg).is_ok());
     }
+
+    // ── S36-A: max_requests_per_h3_connection knob ──────────────────
+
+    #[test]
+    fn h3_request_cap_defaults_to_1000_when_absent() {
+        // A [runtime] block that omits the knob must serde-default to 1000
+        // (the safe recycling default).
+        let input = r#"
+[[listeners]]
+address = "0.0.0.0:80"
+protocol = "tcp"
+
+[[listeners.backends]]
+address = "127.0.0.1:3000"
+
+[runtime]
+drain_timeout_ms = 10000
+"#;
+        let cfg = parse_config(input).expect("parse ok");
+        let rt = cfg.runtime.as_ref().expect("runtime present");
+        assert_eq!(
+            rt.max_requests_per_h3_connection, 1000,
+            "the H3 request cap must serde-default to 1000 when absent"
+        );
+        assert!(validate_config(&cfg).is_ok());
+    }
+
+    #[test]
+    fn h3_request_cap_explicit_value_parses() {
+        let input = r#"
+[[listeners]]
+address = "0.0.0.0:80"
+protocol = "tcp"
+
+[[listeners.backends]]
+address = "127.0.0.1:3000"
+
+[runtime]
+drain_timeout_ms = 10000
+max_requests_per_h3_connection = 250
+"#;
+        let cfg = parse_config(input).expect("parse ok");
+        let rt = cfg.runtime.as_ref().expect("runtime present");
+        assert_eq!(rt.max_requests_per_h3_connection, 250);
+        assert!(validate_config(&cfg).is_ok());
+    }
+
+    #[test]
+    fn h3_request_cap_zero_is_valid_disabled() {
+        // `0` disables the cap (re-opens the leak/DoS vector) — accepted by
+        // validation just like max_keepalive_requests' 0 (full 0..=u32::MAX
+        // range; only a type error can fail).
+        let rt = RuntimeConfig {
+            max_requests_per_h3_connection: 0,
+            ..base_runtime()
+        };
+        assert!(
+            validate_runtime(&rt).is_ok(),
+            "max_requests_per_h3_connection=0 (disabled) must validate"
+        );
+    }
+
+    #[test]
+    fn h3_request_cap_full_u32_range_is_valid() {
+        // The entire u32 range is accepted (the wiring crate clamps any
+        // larger configured value at the serde u64→u32 boundary).
+        for v in [1u32, 100, 1000, 1_000_000, u32::MAX] {
+            let rt = RuntimeConfig {
+                max_requests_per_h3_connection: v,
+                ..base_runtime()
+            };
+            assert!(
+                validate_runtime(&rt).is_ok(),
+                "max_requests_per_h3_connection={v} must validate"
+            );
+        }
+    }
 }
