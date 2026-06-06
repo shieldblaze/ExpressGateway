@@ -9,7 +9,6 @@ publish = false
 [dependencies]
 thiserror = { workspace = true }
 rand = { workspace = true }
-parking_lot = { workspace = true }
 # CODE-2-14: lb-core::BackendState is the single source of truth for
 # the active_connections / active_requests counters. lb-balancer holds
 # an Arc<BackendState> per Backend so the scheduler and the metrics

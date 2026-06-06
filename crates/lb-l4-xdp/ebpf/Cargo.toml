@@ -15,7 +15,6 @@ path = "src/main.rs"
 
 [dependencies]
 aya-ebpf = "0.1"
-aya-log-ebpf = "0.1"
 
 [profile.dev]
 # Optimisations required even for debug: the verifier rejects debug

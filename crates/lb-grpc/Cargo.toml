@@ -9,4 +9,3 @@ publish = false
 [dependencies]
 thiserror = { workspace = true }
 bytes = { workspace = true }
-http = { workspace = true }

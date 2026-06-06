@@ -8,7 +8,6 @@ publish = false
 
 [dependencies]
 thiserror = { workspace = true }
-bytes = { workspace = true }
 serde = { workspace = true }
 # CODE-2-03 Shutdown token: CancellationToken + TaskTracker. Adding the
 # dep into lb-core is the workspace-wide single source so every spawn
