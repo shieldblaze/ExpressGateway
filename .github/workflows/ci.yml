@@ -14,18 +14,18 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# S35 consolidation: shared checkout+toolchain+cache setup is single-sourced via
+# ./.github/actions/rust-setup (R12). The informational scans that used to live
+# here (cargo-geiger "Unsafe Inventory", cargo-machete "Unused Deps") moved OFF
+# the PR critical path to .github/workflows/scheduled-scans.yml — they STILL RUN
+# (weekly), just not blocking every PR. See audit/ci/s35-gate-map.md.
 jobs:
   check:
     name: Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
+      - uses: ./.github/actions/rust-setup
       # --all-features is REQUIRED: the R8 memory integration tests in tests/
       # read lb-l7's `#[cfg(feature = "test-gauges")]` gauges, forwarded by the
       # root crate's `test-gauges` feature. Off by default; the canonical
@@ -38,14 +38,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/rust-setup
         with:
           components: clippy
-
-      - uses: Swatinem/rust-cache@v2
-
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
@@ -54,11 +49,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/rust-setup
 
       # Mirror the canonical session gate (--all-features = test-gauges) +
       # --no-fail-fast. The heavy real-wire e2e binaries (grpc_h3_e2e, ws_*)
@@ -100,12 +91,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+      - uses: ./.github/actions/rust-setup
         with:
           components: rustfmt
-
+          cache: 'false'
       - name: cargo fmt
         run: cargo fmt --all -- --check
 
@@ -123,7 +112,6 @@ jobs:
           # / `git ls-tree` against historical SHAs cited in
           # Verified-Fixed claims. Need full history.
           fetch-depth: 0
-
       - name: Run doc-lint (tier-1 stale patterns + tier-2 audit-of-audit)
         run: bash scripts/ci/doc-lint.sh
 
@@ -132,7 +120,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Verify panic-freedom deny lints are present
         run: |
           MISSING=""
@@ -154,18 +141,18 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       # Newer cargo-audit needs a recent rustc to compile; the repo's
       # rust-toolchain.toml pins 1.88, and we use `+stable` here so cargo-audit
       # always builds on the latest toolchain independent of the project MSRV.
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
+      - uses: ./.github/actions/rust-setup
       - name: Install cargo-audit
         run: cargo +stable install cargo-audit --locked
-
       # SEC-2-07: fail on ANY RUSTSEC advisory. Explicit ignores must
       # be added to .cargo/audit.toml with a justification + link.
+      # This is the per-PR/push audit; a weekly schedule of the SAME strict
+      # audit runs in scheduled-scans.yml (folds the old codeql.yml job, which
+      # ran a WEAKER `cargo audit` without -D warnings — strengthened, not
+      # weakened). See audit/ci/s35-gate-map.md.
       - name: cargo audit -D warnings
         run: cargo audit -D warnings
 
@@ -173,76 +160,26 @@ jobs:
   # `gate-07-cargo-deny`. Removed this duplicate; gate-07 is the single source
   # (it now runs the same explicit `check licenses advisories bans sources`
   # subcommand list, so the gate scope is preserved, not shrunk).
-
-  geiger:
-    # SEC-2-07: cargo-geiger counts unsafe blocks. Informational —
-    # every unsafe site is justified in audit/unsafe-justifications.md
-    # per Round-7 spec, so we capture the JSON inventory and archive
-    # it as an artifact rather than failing the build on unsafe.
-    name: Unsafe Inventory (cargo-geiger)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Install cargo-geiger
-        run: cargo +stable install cargo-geiger --locked
-
-      - name: cargo geiger
-        # `--output-format Json` lets a downstream gate parse the
-        # totals; `--all-features` covers the optional surfaces; we
-        # tee the human-readable form to the job log too.
-        run: |
-          cargo geiger --all-features --output-format Json > geiger.json
-          cargo geiger --all-features || true
-
-      - name: Upload geiger inventory
-        uses: actions/upload-artifact@v4
-        with:
-          name: cargo-geiger-inventory
-          path: geiger.json
-          retention-days: 30
-
-  machete:
-    # SEC-2-07: cargo-machete flags unused dependencies. Soft check —
-    # known feature-gated re-exports occasionally false-positive, so
-    # this job is informational unless an operator wires it into the
-    # required set in branch protection.
-    name: Unused Deps (cargo-machete)
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cargo-machete
-        run: cargo +stable install cargo-machete --locked
-
-      - name: cargo machete
-        run: cargo machete
+  #
+  # S35: the cargo-geiger "Unsafe Inventory" and cargo-machete "Unused Deps"
+  # jobs moved to scheduled-scans.yml (weekly) — they were already
+  # `continue-on-error` informational and are now off the PR critical path
+  # (the S34-deferred plan; named in s35-gate-map.md). machete is GREEN as of
+  # S35 (17 genuinely-unused deps removed).
 
   msrv:
     # MSRV moved 1.85 -> 1.88 at S31 (quiche 0.29.1 + tokio-quiche 0.19
-    # hard-require Rust 1.88). The old 1.85 pin was BOTH wrong and a no-op:
-    # rust-toolchain.toml (channel = "1.88") overrode it, so the job silently
-    # ran 1.88. Pin 1.88 explicitly so the gate asserts the real MSRV.
+    # hard-require Rust 1.88). `cargo check --all-targets --all-features` on the
+    # MSRV toolchain is the canonical "compiles on the pinned MSRV" gate; the
+    # full-codegen build runs in `release-build` (stable). This subsumes the old
+    # prod-readiness `build-and-lint` MSRV build (folded at S35).
     name: MSRV (1.88)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install MSRV Rust toolchain
-        uses: dtolnay/rust-toolchain@1.88
-
-      - uses: Swatinem/rust-cache@v2
-
+      - uses: ./.github/actions/rust-setup
+        with:
+          toolchain: '1.88'
       - name: cargo check (MSRV)
         run: cargo check --workspace --all-targets --all-features
 
@@ -251,15 +188,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust nightly (for cargo-fuzz)
-        uses: dtolnay/rust-toolchain@nightly
-
-      - uses: Swatinem/rust-cache@v2
-
+      - uses: ./.github/actions/rust-setup
+        with:
+          toolchain: nightly
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
-
       - name: Smoke test all fuzz targets (10 seconds each)
         run: |
           cd fuzz
@@ -280,17 +213,12 @@ jobs:
     needs: [check, clippy, test, fmt, panic-freedom, doc-lint]
     steps:
       - uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-
+      - uses: ./.github/actions/rust-setup
       - name: cargo build --release
         run: cargo build --workspace --release
         timeout-minutes: 30
 
   # S34 dedup: the Docker image was built here AND by prod-readiness-gates'
-  # `D5-image-scan` (which builds the same docker/Dockerfile and additionally
-  # runs the Trivy image scan). Removed this duplicate build; D5 is the single
-  # source that both builds and scans the image.
+  # `D5-image-scan`. Removed this duplicate; D5 is the single source that builds
+  # the image, and as of S35 also RUNS it and smoke-tests a real request
+  # through the live container (scripts/ci/docker-smoke.sh) before Trivy-scanning.
