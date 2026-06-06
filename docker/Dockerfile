@@ -16,6 +16,12 @@ RUN apt-get update \
         clang \
         libclang-dev \
     && rm -rf /var/lib/apt/lists/*
+# Bound peak build parallelism. Default 4 keeps the BoringSSL + workspace
+# release compile within ~15 GiB RAM (the project OOMs at higher job counts
+# on small/0-swap hosts); GitHub hosted runners are 4-core so this is also
+# full utilisation there. CI may override with `--build-arg CARGO_BUILD_JOBS=N`.
+ARG CARGO_BUILD_JOBS=4
+ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS}
 RUN cargo install cargo-chef --locked
 WORKDIR /app
 COPY --from=planner /app/recipe.json recipe.json
@@ -69,5 +75,12 @@ EXPOSE 9090
 # HEALTHCHECK that opens 127.0.0.1:9090/livez — see
 # `audit/round-8/fixes/ops-batch-low.md` §2.2.
 
+# The binary takes the config path as a single POSITIONAL argument
+# (`std::env::args().nth(1)` in crates/lb/src/main.rs:1910) — there is NO
+# `--config` flag and no clap parser. Passing `--config` would make the
+# binary try to read a file literally named `--config` and fail to boot
+# with "cannot read config file: --config". CMD is therefore the bare
+# config path, appended to the ENTRYPOINT as argv[1]. Exec-form only —
+# distroless:nonroot has no shell, so shell-form would not resolve.
 ENTRYPOINT ["/usr/local/bin/expressgateway"]
-CMD ["--config", "/etc/expressgateway/config.toml"]
+CMD ["/etc/expressgateway/config.toml"]
