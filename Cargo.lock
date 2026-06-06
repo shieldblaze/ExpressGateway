@@ -1508,9 +1508,6 @@ dependencies = [
  "rand 0.10.1",
  "rcgen",
  "ring",
- "rustls",
- "rustls-pemfile",
- "rustls-pki-types",
  "socket2",
  "tokio",
  "tokio-rustls",
@@ -1526,7 +1523,6 @@ version = "0.1.0"
 dependencies = [
  "lb-core",
  "loom",
- "parking_lot",
  "rand 0.10.1",
  "thiserror 2.0.18",
  "tokio",
@@ -1545,8 +1541,6 @@ dependencies = [
 name = "lb-controlplane"
 version = "0.1.0"
 dependencies = [
- "serde",
- "serde_json",
  "thiserror 2.0.18",
  "toml",
 ]
@@ -1555,7 +1549,6 @@ dependencies = [
 name = "lb-core"
 version = "0.1.0"
 dependencies = [
- "bytes",
  "parking_lot",
  "serde",
  "serde_json",
@@ -1576,7 +1569,6 @@ name = "lb-grpc"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "http 1.4.1",
  "thiserror 2.0.18",
 ]
 
@@ -1595,7 +1587,6 @@ name = "lb-h2"
 version = "0.1.0"
 dependencies = [
  "bytes",
- "http 1.4.1",
  "proptest",
  "thiserror 2.0.18",
 ]
@@ -1614,7 +1605,6 @@ name = "lb-health"
 version = "0.1.0"
 dependencies = [
  "thiserror 2.0.18",
- "tokio",
 ]
 
 [[package]]
@@ -1663,7 +1653,6 @@ dependencies = [
 name = "lb-io"
 version = "0.1.0"
 dependencies = [
- "bytes",
  "dashmap 6.2.1",
  "http-body-util",
  "hyper",
@@ -1689,7 +1678,6 @@ dependencies = [
  "libc",
  "object 0.37.3",
  "parking_lot",
- "rand 0.10.1",
  "thiserror 2.0.18",
  "tracing",
 ]
@@ -1776,7 +1764,6 @@ name = "lb-security"
 version = "0.1.0"
 dependencies = [
  "arc-swap",
- "bytes",
  "dashmap 6.2.1",
  "http 1.4.1",
  "parking_lot",
@@ -1789,7 +1776,6 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "tokio-rustls",
- "tracing",
 ]
 
 [[package]]
@@ -1809,13 +1795,11 @@ dependencies = [
  "ring",
  "rustls",
  "rustls-pki-types",
- "serde",
  "serde_json",
  "tokio",
  "tokio-rustls",
  "tokio-tungstenite",
  "tokio-util",
- "tracing",
 ]
 
 [[package]]

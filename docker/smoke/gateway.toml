@@ -1,0 +1,40 @@
+# ExpressGateway Docker smoke config — TLS-free, single plaintext
+# HTTP/1.1 listener proxying to one backend. Mounted at
+# /etc/expressgateway/config.toml by scripts/ci/docker-smoke.sh. This is
+# a throwaway test config; it is NOT baked into the image (the image
+# ships config/default.toml). Schema is the lb-config shape proven by the
+# D4-conformance job in .github/workflows/prod-readiness-gates.yml.
+#
+# The binary takes this file as a positional arg (argv[1]); see the
+# Dockerfile CMD and crates/lb/src/main.rs:1910.
+
+[runtime]
+# Short drain so the container stops fast on teardown.
+drain_timeout_ms = 5000
+readiness_settle_ms = 100
+
+# Plaintext HTTP/1.1 listener (protocol "h1" => hyper-terminated L7 proxy;
+# the TLS variant would be "h1s"). MUST bind 0.0.0.0 so a published
+# container port is reachable from the host — 127.0.0.1 inside a container
+# is not. lb-config validates "h1" forbids [listeners.tls]/[listeners.quic].
+[[listeners]]
+address  = "0.0.0.0:8080"
+protocol = "h1"
+
+# Single upstream. The hostname `backend` resolves on the user-defined
+# docker network the smoke creates (container-to-container DNS); port 8080
+# is hashicorp/http-echo's default listen port. protocol "h1" => plain
+# HTTP/1.1 to the backend (parse_upstream_proto maps tcp|h1 => H1).
+[[listeners.backends]]
+address  = "backend:8080"
+protocol = "h1"
+weight   = 1
+
+# Admin/metrics HTTP listener (/livez, /readyz, /metrics). Kept on
+# loopback: lb-security AdminAuthGate::validate_bind refuses a non-loopback
+# admin bind unless BOTH [admin].allow_non_loopback=true AND an
+# api_token_hash are set (admin_auth.rs:234-242). Loopback needs neither,
+# so the gateway boots cleanly. The smoke proves liveness through the
+# data-plane listener instead (a real request to the backend).
+[observability]
+metrics_bind = "127.0.0.1:9090"

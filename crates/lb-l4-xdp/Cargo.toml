@@ -9,7 +9,6 @@ build = "build.rs"
 
 [dependencies]
 thiserror = { workspace = true }
-rand = { workspace = true }
 parking_lot = { workspace = true }
 # EBPF-2-04: the attach-fallback ladder logs each rejected mode at WARN
 # and the chosen mode at INFO so operators see the negotiation without

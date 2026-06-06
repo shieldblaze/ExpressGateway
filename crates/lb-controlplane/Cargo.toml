@@ -8,6 +8,4 @@ publish = false
 
 [dependencies]
 thiserror = { workspace = true }
-serde = { workspace = true }
 toml = { workspace = true }
-serde_json = { workspace = true }

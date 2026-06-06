@@ -2,17 +2,24 @@
 #
 # Covers the Round-8 deferred gates that need a real CI environment:
 #   gate-07  cargo-deny           (also verified locally 2026-05-16: PASS)
-#   D-6      cargo-llvm-cov       hot-path coverage >= 80%
+#   D-6      cargo-llvm-cov       hot-path coverage >= 80% PER MODULE
 #   D-4      h2spec / h3spec      HTTP/2 + HTTP/3 conformance
 #   D-3a     chaos ATTACK suite   Rapid Reset / CONTINUATION / HPACK / slowloris
-#   D-5      trivy image scan     real docker build + image scan
-#   D-2      bpftool verifier     XDP load on kernels 5.15 / 6.1 / 6.6
+#   D-5      docker build+SMOKE+trivy   real image build, RUN+SERVE proof, scan
+#   D-2      bpftool verifier     XDP load on the runner kernel
 #
 # NOT covered here (need real hardware — see D1-soak-runbook.md):
 #   D-1      native-mode XDP attach on a production ENA NIC
 #   D-3b     4-hour soak / leak detection
 #
-# Drop this file in .github/workflows/. Tune the marked TODOs to the repo.
+# S35 consolidation: the old `build-and-lint` job (fmt + clippy + build on the
+# MSRV toolchain) was FOLDED OUT — its fmt/clippy are covered (identically /
+# more strictly) by ci.yml's `fmt` + `clippy` (stable), and "compiles on the
+# 1.88 MSRV" is the `msrv` job (cargo check, all-targets, all-features) plus the
+# full-codegen `release-build`. The shared toolchain/cache/system-deps setup is
+# single-sourced via ./.github/actions/rust-setup (R12). The per-job `needs:
+# build-and-lint` edges were removed (each heavy gate self-builds). See
+# audit/ci/s35-gate-map.md for the before->after accounting (0 gates dropped).
 
 name: prod-readiness-gates
 
@@ -32,9 +39,10 @@ jobs:
 
   # ---------------------------------------------------------------
   # gate-07 — cargo-deny (advisories / licenses / bans / sources)
-  # cargo-deny >=0.19 requires rustc >=1.88, so it runs on a separate
-  # toolchain from the workspace build. cargo-deny is a standalone
-  # lockfile analyzer; toolchain mismatch with the project is fine.
+  # cargo-deny is a standalone prebuilt binary (no toolchain needed). It is the
+  # SINGLE cargo-deny gate (the duplicate ci.yml `deny` job was removed at S34).
+  # The explicit subcommand list keeps a future cargo-deny "check" default from
+  # silently shrinking the gate.
   # ---------------------------------------------------------------
   gate-07-cargo-deny:
     runs-on: ubuntu-latest
@@ -46,57 +54,29 @@ jobs:
           curl -fsSL "https://github.com/EmbarkStudios/cargo-deny/releases/download/${VER}/cargo-deny-${VER}-x86_64-unknown-linux-musl.tar.gz" \
             | tar -xz --strip-components=1 -C /usr/local/bin --wildcards '*/cargo-deny'
           cargo-deny --version
-      # Explicit subcommand list (S34): this is now the SINGLE cargo-deny gate
-      # (the duplicate ci.yml `deny` job was removed). The explicit list keeps a
-      # future cargo-deny "check" default from silently shrinking the gate.
       - name: cargo-deny check
         run: cargo-deny check licenses advisories bans sources
-
-  # ---------------------------------------------------------------
-  # Build + clippy + fmt gate (fast feedback; not one of the seven
-  # but the foundation the others depend on).
-  # ---------------------------------------------------------------
-  build-and-lint:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ env.RUST_MSRV }}
-          components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
-      - name: System deps (BoringSSL/boring-sys + bindgen)
-        run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev llvm
-      - run: cargo fmt --all --check
-      - run: cargo clippy --all-targets --all-features -- -D warnings
-      - run: cargo build --workspace
 
   # ---------------------------------------------------------------
   # D-6 — hot-path coverage, PER-MODULE >= 80% (per audit/coverage-scope.md).
   #
   # The charter's metric is PER-MODULE line coverage on the named hot-path
-  # modules, NOT a whole-package aggregate. The old job applied
-  # --fail-under-lines 80 to a 7-package aggregate — a metric that never
-  # matched the charter (an average hides an under-covered hot module) and that
-  # also EXCLUDED the root integration suite, so hot paths like
-  # lb-quic::listener were under-counted (71% vs the real 87%). This job now:
-  #   (1) runs the FULL workspace test suite under instrumentation (so the
-  #       integration tests actually exercise the hot paths), and
-  #   (2) enforces >= 80% PER hot-path module via scripts/ci/coverage-check.sh,
-  #       with lb-l4-xdp/src/loader.rs carved out by name (XDP load needs root;
-  #       smoke-validated by D2-xdp-verifier-smoke). A new hot-path module under
-  #       80% turns this RED.
+  # modules, NOT a whole-package aggregate. This job (1) runs the FULL workspace
+  # test suite under instrumentation (so the integration tests actually exercise
+  # the hot paths) and (2) enforces >= 80% PER hot-path module via
+  # scripts/ci/coverage-check.sh, with lb-l4-xdp/src/loader.rs carved out by
+  # name (XDP load needs root; smoke-validated by D2-xdp-verifier-smoke). A new
+  # hot-path module under 80% turns this RED.
   # ---------------------------------------------------------------
   D6-coverage:
     runs-on: ubuntu-latest
-    needs: build-and-lint
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
+      - uses: ./.github/actions/rust-setup
         with:
           toolchain: ${{ env.RUST_MSRV }}
           components: llvm-tools-preview
-      - uses: Swatinem/rust-cache@v2
+          system-deps: 'true'
       - name: Free runner disk (instrumented --workspace build is ~28 GB)
         # The full-workspace instrumented coverage target is large; reclaim the
         # preinstalled toolchains the gateway build does not use so it fits.
@@ -105,7 +85,6 @@ jobs:
             /usr/local/lib/android /opt/hostedtoolcache/CodeQL \
             /usr/share/swift 2>/dev/null || true
           df -h /
-      - run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev llvm
       - name: Install cargo-llvm-cov + nextest
         run: |
           curl -fsSL https://github.com/taiki-e/cargo-llvm-cov/releases/latest/download/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C ~/.cargo/bin
@@ -132,22 +111,20 @@ jobs:
   # Boots the REAL gateway with two listeners in front of a stub backend:
   #   * an `h1s` listener (TLS, ALPN h2/http1.1) on TCP :8443  -> h2spec
   #   * a  `quic` listener (H3-terminate, quiche::h3) on UDP :8444 -> h3spec
-  # Config keys verified against the lb-config schema (the soak harness's
-  # config_gen + the S26 h3spec config). Tool versions are PINNED so the
-  # h3spec waiver list (CF-QUICHE-UPGRADE) stays exact.
+  # Tool versions are PINNED so the h3spec waiver list (CF-QUICHE-UPGRADE) stays
+  # exact.
   # ---------------------------------------------------------------
   D4-conformance:
     runs-on: ubuntu-latest
-    needs: build-and-lint
     env:
       H2SPEC_VER: "v2.6.0"
       H3SPEC_VER: "v0.1.13"
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-        with: { toolchain: "${{ env.RUST_MSRV }}" }
-      - uses: Swatinem/rust-cache@v2
-      - run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev llvm iproute2
+      - uses: ./.github/actions/rust-setup
+        with:
+          toolchain: ${{ env.RUST_MSRV }}
+          system-deps: 'true'
       - run: cargo build -p lb
       - name: Stub backend + test cert/key + QUIC retry secret
         run: |
@@ -237,16 +214,13 @@ jobs:
   # ---------------------------------------------------------------
   D3a-chaos-attacks:
     runs-on: ubuntu-latest
-    needs: build-and-lint
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-        with: { toolchain: "${{ env.RUST_MSRV }}" }
-      - uses: Swatinem/rust-cache@v2
-      - run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev llvm
+      - uses: ./.github/actions/rust-setup
+        with:
+          toolchain: ${{ env.RUST_MSRV }}
+          system-deps: 'true'
       - name: Install cargo-nextest
-        # The chaos step runs `cargo nextest`; without this the job failed with
-        # `no such command: nextest` before any attack test executed.
         run: curl -fsSL https://get.nexte.st/latest/linux | tar -xz -C ~/.cargo/bin
       - run: cargo build -p lb
       - name: Run chaos attack suite
@@ -256,21 +230,35 @@ jobs:
         run: |
           cargo nextest run --all-features --package lb-h2 --package lb-l7 \
             -E 'test(/chaos|rapid_reset|continuation|hpack|slowloris/)'
-        # If an external generator is preferred for some cases:
-        #   h2load, or github.com/bahattincinic/rapid-reset-poc, etc.
-        # Each attack must assert the gateway stayed up and shed within
-        # the documented limit — not merely "didn't crash".
 
   # ---------------------------------------------------------------
-  # D-5 — container image scan (real docker build + trivy image)
+  # D-5 — container image: real docker build + RUN+SERVE smoke + trivy scan.
+  #
+  # S35: D5 now builds the image ONCE and (a) proves it actually BOOTS and
+  # SERVES L7 traffic via scripts/ci/docker-smoke.sh — a real HTTP/1.1 request
+  # through the live container must return the backend's 200 + body — and only
+  # then (b) Trivy-scans the same image. `docker build` exit-0 alone was never
+  # proof the container works (the pre-S35 image had a wrong CMD that could not
+  # boot — caught here now). A `trivy fs` on the source tree is NOT a substitute
+  # for the real image scan and must not be logged as D-5 pass.
   # ---------------------------------------------------------------
   D5-image-scan:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Build image
-        # TODO: point -f at the real Dockerfile (docker/ holds it).
-        run: docker build -f docker/Dockerfile -t expressgateway:ci .
+        run: |
+          docker build -f docker/Dockerfile \
+            --build-arg GIT_SHA="${GITHUB_SHA::8}" \
+            --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --build-arg VERSION="ci-${GITHUB_SHA::8}" \
+            -t expressgateway:ci .
+      - name: Smoke — RUN the container and serve a real request through it
+        # Boots expressgateway:ci with a plaintext H1 smoke config + a backend
+        # container on a user-defined network, then curls a real request THROUGH
+        # the running gateway and asserts 200 + the backend body. Proves
+        # serve-not-just-build. Fails the job on any boot/serve failure.
+        run: IMAGE=expressgateway:ci bash scripts/ci/docker-smoke.sh
       - name: Trivy image scan
         uses: aquasecurity/trivy-action@master
         with:
@@ -279,37 +267,26 @@ jobs:
           exit-code: "1"                 # fail the job on findings
           severity: HIGH,CRITICAL
           ignore-unfixed: true
-      # This is the REAL D-5: it scans the built image's OS layer +
-      # base image, not just Cargo.lock. A `trivy fs` on the source
-      # tree is NOT a substitute and must not be logged as D-5 pass.
 
   # ---------------------------------------------------------------
   # D-2 — XDP verifier-accept smoke (RUNNER-KERNEL ONLY).
   #
-  # SCOPE (S34, honest-green rescope): this job loads the committed XDP
-  # ELF (crates/lb-l4-xdp/src/lb_xdp.bin) into the verifier of the runner's
-  # OWN kernel (GitHub hosted = Linux 6.x) and asserts ACCEPT. That is a
-  # TRUE, meaningful claim: "the shipped XDP object builds and the in-kernel
-  # verifier on a current kernel accepts it."
-  #
-  # It does NOT cover the full 5.15 / 6.1 / 6.6 verifier matrix. That matrix
-  # needs to boot VMs at each kernel (vmtest / QEMU-KVM), and GitHub hosted
-  # runners provide NO nested virtualization (/dev/kvm), so the previous
-  # `danobi/vmtest-action@main` job could never have run honestly there (and
-  # its `@main` ref no longer resolves). The multi-kernel matrix is escalated
-  # as F-ESC-1 (self-hosted / D-1-class hardware work — see
-  # audit/ci/s34-report.md and D1-soak-runbook.md). This smoke is the honest
-  # subset hosted CI CAN verify; it is NOT a substitute for F-ESC-1.
+  # SCOPE (S34, honest-green rescope): this job loads the committed XDP ELF
+  # (crates/lb-l4-xdp/src/lb_xdp.bin) into the verifier of the runner's OWN
+  # kernel (GitHub hosted = Linux 6.x) and asserts ACCEPT. That is a TRUE,
+  # meaningful claim: "the shipped XDP object builds and the in-kernel verifier
+  # on a current kernel accepts it." It does NOT cover the full 5.15/6.1/6.6
+  # matrix (that needs nested virt the hosted runners lack — escalated as
+  # F-ESC-1, self-hosted; see audit/ci/s34-report.md + D1-soak-runbook.md).
   # ---------------------------------------------------------------
   D2-xdp-verifier-smoke:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-        with: { toolchain: "${{ env.RUST_MSRV }}" }
-      - uses: Swatinem/rust-cache@v2
-      - name: System deps
-        run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev llvm
+      - uses: ./.github/actions/rust-setup
+        with:
+          toolchain: ${{ env.RUST_MSRV }}
+          system-deps: 'true'
       - name: Print runner kernel (for the record — smoke is THIS kernel only)
         run: uname -r
       - name: Build the real-load verifier test (validates the embedded ELF too)
@@ -318,19 +295,13 @@ jobs:
         run: cargo test -p lb-l4-xdp --test round8_verifier_baseline_70 --no-run
       - name: Load the committed XDP ELF and assert verifier ACCEPT
         # The committed ELF (built by scripts/build-xdp.sh) uses aya LEGACY map
-        # definitions, which libbpf v1.0+ tools (bpftool, ip) REFUSE to load
-        # ("legacy map definitions in 'maps' section are not supported"). aya is
-        # the only loader that can load it — and it is the gateway's OWN loader.
-        # round8_verifier_baseline_70 does a genuine BPF_PROG_LOAD via
+        # definitions, which libbpf v1.0+ tools (bpftool, ip) REFUSE to load.
+        # aya is the only loader that can load it — and it is the gateway's OWN
+        # loader. round8_verifier_baseline_70 does a genuine BPF_PROG_LOAD via
         # XdpLoader::load_from_bytes_pinned + kernel_load on the RUNNING kernel
-        # (no NIC/attach needed — the load is what runs the verifier) and
-        # asserts real kernel facts (prog_id, tag, verified_insns > 0). A
-        # successful run == the in-kernel verifier ACCEPTed the object on this
-        # runner's 6.x kernel. It needs CAP_BPF + bpffs, hence sudo + --ignored.
+        # (no NIC/attach needed) and asserts real kernel facts (prog_id, tag,
+        # verified_insns > 0). It needs CAP_BPF + bpffs, hence sudo + --ignored.
         run: |
           set -euo pipefail
           sudo -E env "PATH=$PATH" cargo test -p lb-l4-xdp \
             --test round8_verifier_baseline_70 -- --ignored --nocapture
-        # Verifier ACCEPT is necessary but NOT sufficient — it does not prove
-        # safety against malformed traffic (that is D-1 + fuzzing) and does not
-        # cover kernels other than this runner's (that is F-ESC-1).

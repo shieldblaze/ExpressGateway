@@ -34,9 +34,7 @@ hyper = { workspace = true }
 hyper-util = { workspace = true }
 http-body-util = { workspace = true }
 anyhow = { workspace = true }
-serde = { workspace = true }
 serde_json = { workspace = true }
-tracing = { workspace = true }
 # QUIC client + backend for the Mode A / Mode B scenarios.
 quiche = { workspace = true }
 # ring + rcgen are declared directly (not workspace-inherited) to match the

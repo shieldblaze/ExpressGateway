@@ -9,7 +9,6 @@ publish = false
 [dependencies]
 thiserror = { workspace = true }
 bytes = { workspace = true }
-http = { workspace = true }
 
 [dev-dependencies]
 # CODE-2-11: property-based decode_frame / HPACK round-trip

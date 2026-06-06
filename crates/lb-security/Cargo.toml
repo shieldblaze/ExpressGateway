@@ -8,7 +8,6 @@ publish = false
 
 [dependencies]
 thiserror = { workspace = true }
-bytes = { workspace = true }
 http = { workspace = true }
 rustls = { workspace = true }
 rustls-pki-types = { workspace = true }
@@ -34,9 +33,6 @@ tokio-rustls = { workspace = true }
 # and reads `bundle.load()` per accept; the SIGUSR1 reload path stores a
 # new bundle without blocking accepts. Already transitive via prometheus.
 arc-swap = "1"
-# REL-2-03 (Wave 2c-2): tracing inside the cert-rotation reload path so
-# the log line lands in the same JSON stream as the rest of lb's events.
-tracing = { workspace = true }
 # HMAC-SHA256 for stateless-retry tokens (Pillar 3b.3a). ring is already
 # in the tree transitively via rustls; pulling it in directly keeps the
 # retry module independent of rustls's feature set.

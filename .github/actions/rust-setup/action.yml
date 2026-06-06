@@ -1,0 +1,47 @@
+name: 'Rust setup'
+description: >-
+  Single-sources the repeated CI setup: install a Rust toolchain (+ optional
+  components), restore the shared cargo build cache, and optionally install the
+  BoringSSL/boring-sys + bindgen system deps. Referenced by ci.yml,
+  prod-readiness-gates.yml and scheduled-scans.yml so the toolchain/cache/deps
+  setup is defined ONCE (S35 consolidation, R12). The caller MUST run
+  actions/checkout BEFORE `uses: ./.github/actions/rust-setup` (a local
+  composite action is only available after the repo is checked out).
+inputs:
+  toolchain:
+    description: 'Rust toolchain channel (stable | nightly | 1.88 | ...).'
+    required: false
+    default: 'stable'
+  components:
+    description: 'Comma-separated rustup components (e.g. "clippy, rustfmt").'
+    required: false
+    default: ''
+  cache:
+    description: 'Restore Swatinem/rust-cache (true/false).'
+    required: false
+    default: 'true'
+  system-deps:
+    description: >-
+      Install cmake/clang/libclang-dev/llvm (BoringSSL + bindgen) + iproute2
+      (the conformance job needs `ss`). true/false.
+    required: false
+    default: 'false'
+runs:
+  using: 'composite'
+  steps:
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ inputs.toolchain }}
+        components: ${{ inputs.components }}
+
+    - name: Restore cargo build cache
+      if: ${{ inputs.cache == 'true' }}
+      uses: Swatinem/rust-cache@v2
+
+    - name: System deps (BoringSSL/boring-sys + bindgen + iproute2)
+      if: ${{ inputs.system-deps == 'true' }}
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake clang libclang-dev llvm iproute2
