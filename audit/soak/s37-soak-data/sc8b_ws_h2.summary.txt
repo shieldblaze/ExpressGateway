@@ -1,0 +1,9 @@
+=== SOAK sc8b_ws_h2 — BOUNDED (900s, 76 samples) ===
+      rss_kb [BOUNDED] rss_kb: bounded — last-third median 42440 vs first-third 42380 (+0.1%, within band 10% or non-monotone 51%) — first=20224 last=41516 min=20224 max=46484
+    vmhwm_kb [BOUNDED] vmhwm_kb: bounded — last-third median 45648 vs first-third 43236 (+5.6%, within band 10% or non-monotone 96%) — first=20224 last=45648 min=20224 max=46484
+         fds [BOUNDED] fds: bounded — last-third median 43 vs first-third 43 (+0.0%, within band 10% or non-monotone 75%) — first=12 last=41 min=12 max=43
+     threads [BOUNDED] threads: bounded — last-third median 9 vs first-third 9 (+0.0%, within band 10% or non-monotone 100%) — first=10 last=9 min=9 max=10
+  panic_total [BOUNDED] panic_total: stayed zero across the run — first=0 last=0 min=0 max=0
+  load:
+    ws_sustained: ok=191477 err=0
+    ws_churn: ok=319560 err=0
