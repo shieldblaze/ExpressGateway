@@ -414,7 +414,6 @@ async fn reload_config(
     resolver: &DnsResolver,
     hooks: &Arc<HooksBundle>,
     watchdog: Option<&Watchdog>,
-    max_keepalive_requests: u32,
     metrics: Option<&ReloadMetrics>,
 ) {
     let Some(mgr) = config_manager else {
@@ -479,75 +478,97 @@ async fn reload_config(
         }
     }
 
-    // Step 4: apply the swappable subset. Increment 1 wires the backend
-    // set: for each changed-backend L7 listener, rebuild the proxy from
-    // the new config and `.store()` it under in-flight connections.
+    // Step 4: apply the swappable subset by rebuilding L7 proxies. A
+    // per-listener `ListenerL7` change rebuilds that one listener; a
+    // process-wide `RuntimeMaxKeepaliveRequests` change rebuilds EVERY L7
+    // listener (the cap is baked into each proxy). Compute the UNION of
+    // affected listeners so each is rebuilt exactly once — the rebuild
+    // reads the whole new listener config + the new keepalive, so one
+    // rebuild applies every co-changed swappable field.
+    let new_keepalive = new_config
+        .runtime
+        .as_ref()
+        .map_or(100, |r| r.max_keepalive_requests);
+    let registry: Vec<ListenerReloadEntry> = listener_reload_registry.lock().clone();
+    let keepalive_changed = plan
+        .swappable
+        .iter()
+        .any(|c| matches!(c, lb_config::SwappableChange::RuntimeMaxKeepaliveRequests));
+
+    // Per-listener L7 changes (by address).
+    let mut to_rebuild: Vec<String> = plan
+        .swappable
+        .iter()
+        .filter_map(lb_config::SwappableChange::address)
+        .map(str::to_owned)
+        .collect();
+    // A process-wide keepalive change pulls in every registered L7
+    // listener not already in the set.
+    if keepalive_changed {
+        for e in &registry {
+            if !to_rebuild.iter().any(|a| a == &e.listener) {
+                to_rebuild.push(e.listener.clone());
+            }
+        }
+    }
+
     let mut applied_count = 0_usize;
-    for change in &plan.swappable {
-        match change {
-            lb_config::SwappableChange::ListenerL7 { address, .. } => {
-                let Some(new_l) = new_config.listeners.iter().find(|l| &l.address == address)
-                else {
-                    // Unreachable: the diff produced this from the new
-                    // config. Defensive — skip rather than panic.
-                    continue;
-                };
-                let entry = listener_reload_registry
-                    .lock()
-                    .iter()
-                    .find(|e| &e.listener == address)
-                    .cloned();
-                let Some(entry) = entry else {
-                    // No swap handle (e.g. a non-L7 listener the diff
-                    // classified swappable in a future increment). Surface
-                    // it honestly rather than dropping it silently.
-                    tracing::warn!(
-                        listener = %address,
-                        "SIGHUP: L7 change detected but no swap handle — not applied (requires restart)"
-                    );
-                    if let Some(m) = metrics {
-                        m.restart_required_fields_total
-                            .with_label_values(&["listener.l7.no_handle"])
-                            .inc();
-                    }
-                    continue;
-                };
-                match rebuild_l7_proxies(
-                    new_l,
-                    &entry.proxies,
-                    pool,
-                    resolver,
-                    hooks,
-                    watchdog,
-                    max_keepalive_requests,
-                )
-                .await
-                {
-                    Ok(()) => {
-                        applied_count += 1;
-                        if let Some(m) = metrics {
-                            m.applied_swappable_total
-                                .with_label_values(&[change.field()])
-                                .inc();
-                        }
-                        tracing::info!(listener = %address, "SIGHUP: {}", change.describe());
-                    }
-                    Err(e) => {
-                        // A rebuild failure (e.g. backend DNS now fails)
-                        // leaves the OLD proxy live — no blip. Count as a
-                        // failed reload and keep serving.
-                        tracing::warn!(
-                            listener = %address,
-                            error = %e,
-                            "SIGHUP: L7 swap rebuild failed — keeping previous proxy live"
-                        );
-                        if let Some(m) = metrics {
-                            m.failed_total.inc();
-                        }
-                    }
+    for address in &to_rebuild {
+        let Some(new_l) = new_config.listeners.iter().find(|l| &l.address == address) else {
+            continue; // listener no longer present (removed) — handled elsewhere
+        };
+        let Some(entry) = registry.iter().find(|e| &e.listener == address) else {
+            // A swappable change for a listener with no L7 swap handle
+            // (e.g. a plain-TCP/TLS listener). Surface honestly.
+            tracing::warn!(
+                listener = %address,
+                "SIGHUP: swappable change detected but no L7 swap handle — not applied (requires restart)"
+            );
+            if let Some(m) = metrics {
+                m.restart_required_fields_total
+                    .with_label_values(&["listener.l7.no_handle"])
+                    .inc();
+            }
+            continue;
+        };
+        match rebuild_l7_proxies(
+            new_l,
+            &entry.proxies,
+            pool,
+            resolver,
+            hooks,
+            watchdog,
+            new_keepalive,
+        )
+        .await
+        {
+            Ok(()) => {
+                applied_count += 1;
+                tracing::info!(listener = %address, "SIGHUP: L7 proxy rebuilt + swapped (new config applied)");
+            }
+            Err(e) => {
+                // A rebuild failure (e.g. backend DNS now fails) leaves the
+                // OLD proxy live — no blip. Count + keep serving.
+                tracing::warn!(
+                    listener = %address,
+                    error = %e,
+                    "SIGHUP: L7 swap rebuild failed — keeping previous proxy live"
+                );
+                if let Some(m) = metrics {
+                    m.failed_total.inc();
                 }
             }
         }
+    }
+    // Per-swappable-change metric + log (decoupled from the per-listener
+    // rebuild so the summary names each changed field class once).
+    for change in &plan.swappable {
+        if let Some(m) = metrics {
+            m.applied_swappable_total
+                .with_label_values(&[change.field()])
+                .inc();
+        }
+        tracing::info!(field = change.field(), "SIGHUP: {}", change.describe());
     }
 
     // Commit the applied config so the NEXT reload diffs against it.
@@ -2950,8 +2971,21 @@ async fn async_main() -> anyhow::Result<()> {
     // / SIGINT and falls through to the drain sequence. Cert reload
     // (SIGUSR1) and config reload (SIGHUP) are kept as separate triggers
     // so the proven cert path stays untouched.
+    // SIGNAL-LOSS FIX (S37-C, R6): install the lifecycle-signal streams
+    // ONCE here and reuse them across every loop iteration. A SIGTERM/
+    // SIGINT landing while we service a non-terminal SIGHUP/SIGUSR1 is
+    // then never lost (it latches on the persistent stream). On non-unix,
+    // only Ctrl-C is wired (Windows operators drain via Ctrl-C).
+    #[cfg(unix)]
+    let mut lifecycle_signals = LifecycleSignals::install()?;
     let signal_kind = loop {
-        let s = wait_for_lifecycle_signal().await;
+        #[cfg(unix)]
+        let s = lifecycle_signals.recv().await;
+        #[cfg(not(unix))]
+        let s = {
+            let _ = signal::ctrl_c().await;
+            LifecycleSignal::SigInt
+        };
         tracing::info!(signal = %s, "lifecycle signal received");
         match s {
             LifecycleSignal::SigUsr1 => {
@@ -2986,7 +3020,6 @@ async fn async_main() -> anyhow::Result<()> {
                     &resolver,
                     &hooks,
                     Some(&watchdog),
-                    max_keepalive_requests,
                     reload_metrics.as_ref(),
                 )
                 .await;
@@ -3224,7 +3257,7 @@ async fn async_main() -> anyhow::Result<()> {
 }
 
 /// CODE-2-03 Wave 2c: terminal-or-reload signal returned by
-/// [`wait_for_lifecycle_signal`].
+/// [`LifecycleSignals::recv`].
 #[derive(Copy, Clone, Debug)]
 enum LifecycleSignal {
     /// SIGTERM (k8s lameduck, systemd stop).
@@ -3248,63 +3281,97 @@ impl std::fmt::Display for LifecycleSignal {
     }
 }
 
-/// Wait for SIGTERM, SIGINT, SIGUSR1, or SIGHUP. On non-unix targets only
-/// Ctrl-C is wired (Windows operators trigger drain via Ctrl-C too).
-async fn wait_for_lifecycle_signal() -> LifecycleSignal {
-    #[cfg(unix)]
-    {
+/// The four lifecycle-signal streams, installed ONCE and reused across
+/// every iteration of the signal loop.
+///
+/// SIGNAL-LOSS FIX (S37-C, R6): the previous `wait_for_lifecycle_signal`
+/// re-installed the `unix_signal` streams on EVERY call. A terminal signal
+/// (SIGTERM/SIGINT) landing in the window between the old streams being
+/// dropped and the new ones being created — which the loop re-entered
+/// after every non-terminal signal (SIGHUP/SIGUSR1) — was silently lost,
+/// so the gateway would miss a shutdown request issued right after a
+/// reload. Installing the streams once (here) and only awaiting `.recv()`
+/// in the loop closes that window: a tokio `Signal` registered with the
+/// driver coalesces and latches deliveries, so a signal arriving while we
+/// are servicing a previous one is still observed on the next `.recv()`.
+#[cfg(unix)]
+struct LifecycleSignals {
+    sigterm: tokio::signal::unix::Signal,
+    sigint: tokio::signal::unix::Signal,
+    sigusr1: Option<tokio::signal::unix::Signal>,
+    sighup: Option<tokio::signal::unix::Signal>,
+}
+
+#[cfg(unix)]
+impl LifecycleSignals {
+    /// Install the streams once. SIGTERM/SIGINT are mandatory (their
+    /// install failure is fatal to graceful lifecycle and surfaces as an
+    /// error); SIGUSR1/SIGHUP are optional reload knobs that degrade to
+    /// "unavailable" on install failure without taking the process down.
+    fn install() -> anyhow::Result<Self> {
         use tokio::signal::unix::{SignalKind, signal as unix_signal};
-        let mut sigterm = match unix_signal(SignalKind::terminate()) {
-            Ok(s) => s,
+        let sigterm = unix_signal(SignalKind::terminate()).context("install SIGTERM handler")?;
+        let sigint = unix_signal(SignalKind::interrupt()).context("install SIGINT handler")?;
+        let sigusr1 = match unix_signal(SignalKind::user_defined1()) {
+            Ok(s) => Some(s),
             Err(e) => {
-                tracing::warn!(error = %e, "SIGTERM handler install failed");
-                return LifecycleSignal::SigInt;
+                tracing::warn!(error = %e, "SIGUSR1 handler install failed — cert reload disabled");
+                None
             }
         };
-        let mut sigint = match unix_signal(SignalKind::interrupt()) {
-            Ok(s) => s,
+        let sighup = match unix_signal(SignalKind::hangup()) {
+            Ok(s) => Some(s),
             Err(e) => {
-                tracing::warn!(error = %e, "SIGINT handler install failed");
-                return LifecycleSignal::SigTerm;
+                tracing::warn!(error = %e, "SIGHUP handler install failed — config reload disabled");
+                None
             }
         };
-        let mut sigusr1 = match unix_signal(SignalKind::user_defined1()) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!(error = %e, "SIGUSR1 handler install failed");
-                // Fall through to a select on the two terminal signals.
-                tokio::select! {
-                    _ = sigterm.recv() => return LifecycleSignal::SigTerm,
-                    _ = sigint.recv() => return LifecycleSignal::SigInt,
+        Ok(Self {
+            sigterm,
+            sigint,
+            sigusr1,
+            sighup,
+        })
+    }
+
+    /// Await the next lifecycle signal on the persistent streams. A
+    /// missing optional reload stream (install failed) is represented by a
+    /// `pending()` future that never fires, so its arm stays pending
+    /// forever and the terminal signals remain always live — no extra
+    /// crate dependency needed.
+    async fn recv(&mut self) -> LifecycleSignal {
+        // Borrow the disjoint fields up front so the four `select!` arms
+        // don't each try to borrow `self` (which would conflict). A
+        // missing optional reload stream becomes an eternal `pending`
+        // future, so its arm never fires — no extra crate dependency.
+        let LifecycleSignals {
+            sigterm,
+            sigint,
+            sigusr1,
+            sighup,
+        } = self;
+        let usr1 = async {
+            match sigusr1.as_mut() {
+                Some(s) => {
+                    s.recv().await;
                 }
+                None => std::future::pending::<()>().await,
             }
         };
-        // S37-C: SIGHUP config hot-reload trigger. A failed install
-        // degrades gracefully (the config-reload knob is unavailable, but
-        // the terminal + cert-reload signals keep working) rather than
-        // taking the process down — mirrors the SIGUSR1 fallback above.
-        let mut sighup = match unix_signal(SignalKind::hangup()) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!(error = %e, "SIGHUP handler install failed");
-                tokio::select! {
-                    _ = sigterm.recv() => return LifecycleSignal::SigTerm,
-                    _ = sigint.recv() => return LifecycleSignal::SigInt,
-                    _ = sigusr1.recv() => return LifecycleSignal::SigUsr1,
+        let hup = async {
+            match sighup.as_mut() {
+                Some(s) => {
+                    s.recv().await;
                 }
+                None => std::future::pending::<()>().await,
             }
         };
         tokio::select! {
             _ = sigterm.recv() => LifecycleSignal::SigTerm,
             _ = sigint.recv() => LifecycleSignal::SigInt,
-            _ = sigusr1.recv() => LifecycleSignal::SigUsr1,
-            _ = sighup.recv() => LifecycleSignal::SigHup,
+            () = usr1 => LifecycleSignal::SigUsr1,
+            () = hup => LifecycleSignal::SigHup,
         }
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = signal::ctrl_c().await;
-        LifecycleSignal::SigInt
     }
 }
 

@@ -122,18 +122,35 @@ mod hup {
         None
     }
 
-    /// Deliver SIGHUP (signal 1) — the config-reload trigger. Mirrors
-    /// `mod drain`'s `sigterm`.
-    fn sighup(child: &Child) {
+    /// Deliver an arbitrary signal to the child via raw `kill(2)`.
+    fn raw_signal(child: &Child, sig: i32) {
         unsafe extern "C" {
             fn kill(pid: i32, sig: i32) -> i32;
         }
-        const SIGHUP: i32 = 1;
-        let rc = unsafe { kill(child.id() as i32, SIGHUP) };
+        let rc = unsafe { kill(child.id() as i32, sig) };
         assert!(
             rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(3),
-            "kill(SIGHUP) returned {rc}"
+            "kill(sig={sig}) returned {rc}"
         );
+    }
+
+    /// Deliver SIGHUP (signal 1) — the config-reload trigger.
+    fn sighup(child: &Child) {
+        raw_signal(child, 1);
+    }
+
+    /// Wait (bounded) for the child to exit; returns true if it exited
+    /// within `budget`. Mutates the child to reap it.
+    fn wait_exit(child: &mut Child, budget: Duration) -> bool {
+        let deadline = Instant::now() + budget;
+        while Instant::now() < deadline {
+            match child.try_wait() {
+                Ok(Some(_)) => return true,
+                Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+                Err(_) => return false,
+            }
+        }
+        false
     }
 
     struct ChildGuard(Option<Child>);
@@ -780,72 +797,100 @@ weight = 1
             BOOT_CAP,
             "baseline keep-alive cap must be the boot value {BOOT_CAP}"
         );
-        let applied_before =
-            scrape_metric(&metrics, "config_reload_applied_swappable_total").unwrap_or(0.0);
-        let rr_before =
-            scrape_metric(&metrics, "config_reload_restart_required_fields_total").unwrap_or(0.0);
 
-        // SIGHUP: swap backends A->B (SWAPPABLE) + change keepalive cap
-        // 2->6 (RESTART-REQUIRED, process-wide).
-        write_config_keepalive(&dir, listener.port(), metrics.port(), addr_b, NEW_CAP);
+        // SIGHUP changing, on the SAME listener address (so it stays
+        // serving): two SWAPPABLE fields — backends A->B AND
+        // max_keepalive_requests 2->6 — PLUS one RESTART-REQUIRED change:
+        // a SECOND listener added at a fresh bind port.
+        let added_port = ephemeral_port();
+        let added_addr: SocketAddr = format!("127.0.0.1:{added_port}").parse().unwrap();
+        let toml = format!(
+            r#"
+[runtime]
+drain_timeout_ms = 3000
+readiness_settle_ms = 100
+max_keepalive_requests = {NEW_CAP}
+
+[observability]
+metrics_bind = "127.0.0.1:{}"
+
+[[listeners]]
+address = "127.0.0.1:{}"
+protocol = "h1"
+[[listeners.backends]]
+address = "{addr_b}"
+weight = 1
+
+[[listeners]]
+address = "127.0.0.1:{added_port}"
+protocol = "h1"
+[[listeners.backends]]
+address = "{addr_a}"
+weight = 1
+"#,
+            metrics.port(),
+            listener.port(),
+        );
+        std::fs::write(dir.join("gateway.toml"), toml).expect("write reload config");
         sighup(child.0.as_ref().unwrap());
 
-        // SWAPPABLE applied: a NEW conn observes backend B.
+        // SWAPPABLE #1 applied + observable: a NEW conn observes backend B.
         assert!(
             await_reload_effect(&listener, "B", Duration::from_secs(5)),
             "swappable backend change must observably take effect (new conn -> B)"
         );
-
-        // RESTART-REQUIRED NOT applied: a NEW conn's keep-alive cap is
-        // STILL the boot value (2), not the new value (6).
+        // SWAPPABLE #2 applied + observable: a NEW conn's keep-alive cap is
+        // now the NEW value (6), not the boot value (2).
         assert_eq!(
             requests_until_keepalive_close(&listener, 20),
-            BOOT_CAP,
-            "restart-required max_keepalive_requests must NOT take effect — \
-             a new conn must still close at the boot cap {BOOT_CAP}, not the new {NEW_CAP}"
+            NEW_CAP,
+            "swappable max_keepalive_requests must observably take effect — \
+             a new conn must now close at the new cap {NEW_CAP}, not the boot {BOOT_CAP}"
+        );
+        // RESTART-REQUIRED reported + NOT observable: the added listener's
+        // port was NOT silently bound.
+        assert!(
+            TcpStream::connect_timeout(&added_addr, Duration::from_millis(300)).is_err(),
+            "the added listener's bind port must NOT be bound (restart-required, not applied)"
         );
 
-        // The SUMMARY (metrics) must match: swappable applied bumped +
-        // the keepalive restart-required field bumped.
-        let applied_after = poll_metric_gt(
+        // SUMMARY matches in BOTH directions: applied-swappable bumped for
+        // BOTH listener.l7 (backends) AND max_keepalive_requests; the
+        // restart-required listener.added bumped.
+        let applied_l7 = scrape_metric_labeled(
             &metrics,
             "config_reload_applied_swappable_total",
-            applied_before,
-        );
-        assert!(
-            applied_after > applied_before,
-            "config_reload_applied_swappable_total must bump (backend swap applied)"
-        );
-        let rr_keepalive = scrape_metric_labeled(
+            "listener.l7",
+        )
+        .unwrap_or(0.0);
+        let applied_keepalive = scrape_metric_labeled(
             &metrics,
-            "config_reload_restart_required_fields_total",
+            "config_reload_applied_swappable_total",
             "max_keepalive_requests",
         )
         .unwrap_or(0.0);
+        let rr_added = scrape_metric_labeled(
+            &metrics,
+            "config_reload_restart_required_fields_total",
+            "listener.added",
+        )
+        .unwrap_or(0.0);
         assert!(
-            rr_keepalive >= 1.0,
-            "config_reload_restart_required_fields_total{{field=max_keepalive_requests}} must bump \
-             (keepalive change reported restart-required); rr_before={rr_before}"
+            applied_l7 >= 1.0,
+            "applied_swappable_total{{field=listener.l7}} must bump (backends applied)"
+        );
+        assert!(
+            applied_keepalive >= 1.0,
+            "applied_swappable_total{{field=max_keepalive_requests}} must bump (cap applied)"
+        );
+        assert!(
+            rr_added >= 1.0,
+            "restart_required_fields_total{{field=listener.added}} must bump (added listener not applied)"
         );
 
         drop(child);
         drop((backend_a, backend_b));
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    /// Poll a metric until it exceeds `floor` (bounded), returning the
-    /// last observed value.
-    fn poll_metric_gt(addr: &SocketAddr, name: &str, floor: f64) -> f64 {
-        let deadline = Instant::now() + Duration::from_secs(3);
-        let mut last = floor;
-        while Instant::now() < deadline {
-            last = scrape_metric(addr, name).unwrap_or(floor);
-            if last > floor {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        last
     }
 
     /// Scrape a labelled metric sample: the value of the line for
@@ -870,6 +915,47 @@ weight = 1
             }
         }
         None
+    }
+
+    /// SIGNAL-LOSS REGRESSION (S37-C, R6): a terminal signal landing right
+    /// after a non-terminal one must NOT be lost. The pre-fix
+    /// `wait_for_lifecycle_signal` re-installed the signal streams every
+    /// loop iteration, so a SIGTERM arriving in the re-install window after
+    /// a SIGHUP/SIGUSR1 was silently dropped and the gateway never drained.
+    /// With the streams installed once and reused, the terminal signal
+    /// latches and the gateway exits. Tests both the SIGHUP→SIGTERM and
+    /// SIGUSR1→SIGTERM orderings.
+    #[test]
+    #[cfg_attr(not(unix), ignore)]
+    fn signal_loss_terminal_after_nonterminal_still_drains() {
+        if find_binary().is_err() {
+            eprintln!("SKIP: binary absent");
+            return;
+        }
+        for nonterminal in [1_i32 /* SIGHUP */, 10 /* SIGUSR1 */] {
+            let (backend_a, addr_a) = spawn_tagged_backend("A");
+            let (mut child, listener, _cfg, dir) = boot("sigloss", addr_a);
+            let child_inner = child.0.take().expect("child present");
+            assert_eq!(get_backend_id(&listener).as_deref(), Some("A"));
+
+            // Fire the non-terminal signal, then immediately the terminal
+            // SIGTERM (15) — the window the pre-fix code lost it in.
+            raw_signal(&child_inner, nonterminal);
+            raw_signal(&child_inner, 15);
+
+            // The gateway must exit (drain) within a generous budget.
+            let mut owned = child_inner;
+            let drained = wait_exit(&mut owned, Duration::from_secs(15));
+            let _ = owned.kill();
+            let _ = owned.wait();
+            assert!(
+                drained,
+                "after a non-terminal signal ({nonterminal}) + SIGTERM, the gateway must drain \
+                 and exit — a lost terminal signal would hang here"
+            );
+            drop(backend_a);
+            std::fs::remove_dir_all(&dir).ok();
+        }
     }
 
     /// (c) honesty — the WARN + metric path. Scrapes the gateway stderr

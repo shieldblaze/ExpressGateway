@@ -1,6 +1,6 @@
-# S37-C negative-control + lifecycle unit tests — 2026-06-07T14:12:15Z
+# S37-C negative-control + lifecycle unit tests — 2026-06-07T14:25:47Z
    Compiling lb v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/s37-reload/crates/lb)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 7.78s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.91s
      Running unittests src/main.rs (/home/ubuntu/Code/eg-target/debug/deps/expressgateway-bafa8e6033d12506)
 
 running 2 tests

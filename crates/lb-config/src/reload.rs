@@ -46,6 +46,11 @@ pub enum SwappableChange {
         /// The specific changed L7 fields (for the operator log).
         fields: Vec<&'static str>,
     },
+    /// The process-wide `[runtime].max_keepalive_requests` cap changed.
+    /// Applied live by rebuilding EVERY L7 listener's proxy with the new
+    /// value (the cap is baked into each `H1Proxy`/`H2Proxy`). Carried as
+    /// a single process-wide change, not per-listener.
+    RuntimeMaxKeepaliveRequests,
 }
 
 impl SwappableChange {
@@ -59,6 +64,10 @@ impl SwappableChange {
                     fields.join(", ")
                 )
             }
+            Self::RuntimeMaxKeepaliveRequests => {
+                "runtime.max_keepalive_requests changed — applied live (all L7 listeners)"
+                    .to_owned()
+            }
         }
     }
 
@@ -67,14 +76,16 @@ impl SwappableChange {
     pub const fn field(&self) -> &'static str {
         match self {
             Self::ListenerL7 { .. } => "listener.l7",
+            Self::RuntimeMaxKeepaliveRequests => "max_keepalive_requests",
         }
     }
 
-    /// Bind address this change targets.
+    /// Bind address this change targets, if it is a per-listener change.
     #[must_use]
-    pub fn address(&self) -> &str {
+    pub fn address(&self) -> Option<&str> {
         match self {
-            Self::ListenerL7 { address, .. } => address,
+            Self::ListenerL7 { address, .. } => Some(address),
+            Self::RuntimeMaxKeepaliveRequests => None,
         }
     }
 }
@@ -349,12 +360,24 @@ fn diff_runtime(
     new: Option<&crate::RuntimeConfig>,
     plan: &mut ReloadPlan,
 ) {
+    // SWAPPABLE: `max_keepalive_requests` is applied live by rebuilding
+    // every L7 proxy with the new cap. Compare the EFFECTIVE values
+    // (default 100 when the block / field is absent) so it is detected
+    // even when the `[runtime]` block itself appears/disappears.
+    let eff_keepalive =
+        |c: Option<&crate::RuntimeConfig>| c.map_or(100, |r| r.max_keepalive_requests);
+    if eff_keepalive(old) != eff_keepalive(new) {
+        plan.swappable
+            .push(SwappableChange::RuntimeMaxKeepaliveRequests);
+    }
+
     match (old, new) {
         (None, None) => {}
         (Some(o), Some(n)) if o == n => {}
         (None, Some(_)) | (Some(_), None) => {
-            // The whole block appeared or disappeared — every field it
-            // carries is affected; report it once as a runtime change.
+            // The whole block appeared or disappeared — every NON-swappable
+            // field it carries is affected; report it once as a runtime
+            // change. (`max_keepalive_requests` is handled swappably above.)
             plan.restart_required
                 .push(RestartRequiredChange::RuntimeField { field: "runtime" });
         }
@@ -387,7 +410,8 @@ fn diff_runtime(
             rt_field!(per_ip_connection_cap, "per_ip_connection_cap");
             rt_field!(watchdog, "watchdog");
             rt_field!(header_underscore_policy, "header_underscore_policy");
-            rt_field!(max_keepalive_requests, "max_keepalive_requests");
+            // NOTE: `max_keepalive_requests` is SWAPPABLE — handled above
+            // (rebuilds every L7 proxy with the new cap), NOT here.
             rt_field!(
                 max_requests_per_h3_connection,
                 "max_requests_per_h3_connection"
@@ -600,6 +624,7 @@ mod tests {
     fn l7_fields(change: &SwappableChange) -> Vec<&'static str> {
         match change {
             SwappableChange::ListenerL7 { fields, .. } => fields.clone(),
+            SwappableChange::RuntimeMaxKeepaliveRequests => Vec::new(),
         }
     }
 
@@ -619,6 +644,35 @@ mod tests {
         let fields = l7_fields(&plan.swappable[0]);
         assert!(fields.contains(&"backends"));
         assert!(fields.contains(&"http"));
+    }
+
+    #[test]
+    fn max_keepalive_requests_change_is_swappable() {
+        // The cap is rebuilt into every L7 proxy on reload, so a change is
+        // SWAPPABLE (RuntimeMaxKeepaliveRequests), not restart-required.
+        // Build via parse_config so [runtime] gets its serde defaults
+        // (RuntimeConfig has no Default derive).
+        let base = "[[listeners]]\naddress = \"0.0.0.0:8080\"\nprotocol = \"h1\"\n\
+                    [[listeners.backends]]\naddress = \"10.0.0.1:80\"\nweight = 1\n";
+        let a =
+            crate::parse_config(&format!("{base}[runtime]\nmax_keepalive_requests = 2\n")).unwrap();
+        let b =
+            crate::parse_config(&format!("{base}[runtime]\nmax_keepalive_requests = 6\n")).unwrap();
+        let plan = a.diff(&b);
+        assert!(
+            plan.swappable
+                .iter()
+                .any(|c| c.field() == "max_keepalive_requests"),
+            "max_keepalive_requests change must be swappable: {:?}",
+            plan.swappable
+        );
+        assert!(
+            !plan
+                .restart_required
+                .iter()
+                .any(|c| c.field() == "max_keepalive_requests"),
+            "max_keepalive_requests must NOT be reported restart-required"
+        );
     }
 
     #[test]
