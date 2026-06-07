@@ -1,0 +1,14 @@
+# S37-C negative-control + lifecycle unit tests — 2026-06-07T14:00:14Z
+   Compiling lb-quic v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/s37-reload/crates/lb-quic)
+   Compiling lb v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/s37-reload/crates/lb)
+   Compiling lb-l7 v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/s37-reload/crates/lb-l7)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 21.41s
+     Running unittests src/main.rs (/home/ubuntu/Code/eg-target/debug/deps/expressgateway-bafa8e6033d12506)
+
+running 2 tests
+test tests::arcswap_captured_snapshot_survives_store ... ok
+test tests::lifecycle_signal_display_matches_canonical_names ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 32 filtered out; finished in 0.00s
+
+UNIT_EXIT=0
