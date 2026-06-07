@@ -54,7 +54,19 @@ Two deep maps produced (config/boot/reload surface; deps/harness surface). Key f
 4. R3 byte-identical: equivalent-to-today configs boot + existing TOML-boot e2e/soak pass unchanged; new real-binary boot tests (each listener type) + invalid-config negative tests (clear messages).
 5. Refresh `CONFIG.md`; `config/examples/` per listener type. Gate scoped ×3 + clippy + fmt; `lb-config` cov ≥ charter.
 
-## Phase 2 — (C) hot reload `[reload-eng]` — correctness-critical _(staged behind B)_
+## Phase 2 — (C) hot reload `[reload-eng]` — ✅ VERIFIED + INTEGRATED (merge `ad87e65e`)
+
+**C v1 = SIGHUP validate-first / atomic-swap L7 hot reload** (final commit `6e43b09c`). SIGHUP → full `lb_config::validate_config` → `LbConfig::diff`/`ReloadPlan` → atomic `Arc<ArcSwap>` per-listener proxy swap (mirrors the proven SIGUSR1+ArcSwap cert pattern). Snapshot-at-accept: each connection captures one owned `Arc<H1Proxy/H2Proxy>` at accept → in-flight isolation by construction.
+- **Swappable (applied live, summary-honest):** backends/weights, http timeouts, `max_keepalive_requests`, `h2_security`, websocket H1/H2 knobs, `alt_svc`, `grpc`. TLS cert/key via the existing SIGUSR1 path.
+- **Restart-required (honest WARN+metric, never silent):** `per_ip_connection_cap` + `strict_te` (shared HooksBundle, not proxy state — carried as the deeper-swap follow-up), QUIC/H3 backends (CF-S37-C-H3-BACKEND-RELOAD), listener add/remove/bind/protocol, XDP, TLS cert PATH/ALPN.
+
+**Independent verification — C is PROMOTABLE (live-connection preservation PROVEN under traffic):**
+- Crown-jewel proofs (verifier, real running gateway, completed runs): reload-under-traffic suite **9/9**; **gRPC mid-RPC survives** (frame after SIGHUP still served by the original backend, grpc-status 0), **live WS tunnel survives**, mid-stream chunked response survives (10 chunks, 0 leak); **invalid-reload-no-blip** (+ `config_reload_failed_total` bump); **restart-required-honesty** (no silent rebind + WARN); **no-cross-talk**; **reload-takes-effect**; **`reload-summary-matches-observed-behavior` bidirectional, every field class** (incl. co-changed backend+timeout — the inverse-dishonesty bug is gone). Verifier **could not defeat isolation or honesty**. Evidence: `audit/ops/s37-verify-C/`.
+- **F-S37-C-1** (pre-existing MED signal-loss: TERM-after-HUP/USR1 dropped) **FIXED** — `LifecycleSignals` installed once before the loop; re-verified HUP→TERM **0/6 stuck** (was 3/6), USR1→TERM 0/6. Regression test `signal_loss_terminal_after_nonterminal_still_drains`.
+- **F-S37-C-2** (LOW, doc-only): stale `rebuild_l7_proxies` comment — **fixed at integration** (this branch).
+- **Binding ×3 (R3-after-seam / no-regression):** run2 clean **1562/0/18**; run1/run3 failures were the known throughput flakes (`fcap1_h2`, its `h2h3` sibling, `t5` = CF-FCAP1-FLAKE / fcap1-family / CF-S35-T5-FLAKE), each **isolation-confirmed PASS 3/3** serialized off-load (R2 — not regressions). clippy/fmt clean. Coverage: `lb-config/src/lib.rs` 90.42%, `reload.rs` 83.78% (≥80 charter). Evidence: `audit/ops/s37-verifyC-lead/`.
+
+### Phase 2 — (C) plan (as executed)
 SIGHUP trigger · validate-first via full `lb_config::validate_config` · `Arc<ArcSwap<EffectiveConfig>>` mirroring the SIGUSR1 cert pattern · snapshot-at-accept (in-flight preserved, new conns get new config, no cross-talk) · honesty rule (restart-required change → clear per-field warning/reject, never silent).
 
 **R13 load-bearing proofs (real running gateway under traffic) — SIX:**

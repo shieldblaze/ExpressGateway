@@ -595,17 +595,18 @@ async fn reload_config(
 /// connections that captured it at accept) until those connections drop.
 ///
 /// HONESTY INVARIANT (the diff's swappable set MUST match this exactly):
-/// this rebuild APPLIES, from the NEW listener config `new_l`, every
-/// per-listener L7 field — `backends`, `http` (timeouts), `h2_security`,
-/// `websocket` (H1/H2 knobs), `alt_svc`, `grpc`. These are precisely the
-/// fields [`lb_config::LbConfig::diff`] classifies as
-/// [`lb_config::SwappableChange::ListenerL7`]. It PRESERVES (does NOT
-/// apply) the process-wide values passed by the caller — `hooks` (carries
-/// `[security].strict_te` + per-IP gate) and `max_keepalive_requests`
-/// (`[runtime]`) keep their BOOT values, which is why the diff reports a
-/// change to either as restart-required (truthful: a rebuild here does not
-/// pick up a new process-wide value). Changing the swappable L7 set here
-/// without also reclassifying it in `diff` (or vice versa) breaks the
+/// this rebuild APPLIES, from the NEW config, every swappable field — from
+/// `new_l`: `backends`, `http` (timeouts), `h2_security`, `websocket`
+/// (H1/H2 knobs), `alt_svc`, `grpc`; and from `[runtime]`:
+/// `max_keepalive_requests` (passed in as the `max_keepalive_requests`
+/// arg). These are precisely the fields [`lb_config::LbConfig::diff`]
+/// classifies as swappable ([`lb_config::SwappableChange::ListenerL7`] +
+/// `RuntimeMaxKeepaliveRequests`). It PRESERVES (does NOT apply) only the
+/// process-wide `hooks` bundle (carries `[security].strict_te` + the per-IP
+/// connection gate), which is why the diff reports a change to `strict_te`
+/// or `per_ip_connection_cap` as restart-required (truthful: this rebuild
+/// does not rebuild the shared `HooksBundle`). Changing the swappable set
+/// here without also reclassifying it in `diff` (or vice versa) breaks the
 /// honesty invariant the verifier adversarially tests.
 async fn rebuild_l7_proxies(
     new_l: &lb_config::ListenerConfig,
