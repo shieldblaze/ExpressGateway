@@ -252,6 +252,69 @@ weight = 1
         write_config(dir, listener_port, backend)
     }
 
+    /// Config variant that also binds a loopback admin/metrics listener so
+    /// a test can scrape `/metrics` and assert the reload counters.
+    fn write_config_with_metrics(
+        dir: &Path,
+        listener_port: u16,
+        metrics_port: u16,
+        backend: SocketAddr,
+    ) -> PathBuf {
+        let toml = format!(
+            r#"
+[runtime]
+drain_timeout_ms = 3000
+readiness_settle_ms = 100
+
+[observability]
+metrics_bind = "127.0.0.1:{metrics_port}"
+
+[[listeners]]
+address = "127.0.0.1:{listener_port}"
+protocol = "h1"
+
+[[listeners.backends]]
+address = "{backend}"
+weight = 1
+"#
+        );
+        let path = dir.join("gateway.toml");
+        std::fs::write(&path, toml).expect("write config");
+        path
+    }
+
+    /// Scrape `GET /metrics` from the admin listener and return the value
+    /// of `metric_name` (the first matching sample line's trailing number),
+    /// or `None` if absent.
+    fn scrape_metric(metrics_addr: &SocketAddr, metric_name: &str) -> Option<f64> {
+        let mut s = TcpStream::connect_timeout(metrics_addr, Duration::from_secs(2)).ok()?;
+        s.set_read_timeout(Some(Duration::from_secs(3))).ok();
+        s.write_all(b"GET /metrics HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+            .ok()?;
+        s.flush().ok();
+        let mut body = Vec::new();
+        let _ = s.read_to_end(&mut body);
+        let text = String::from_utf8_lossy(&body);
+        for line in text.lines() {
+            if line.starts_with('#') {
+                continue;
+            }
+            // Match "name" or "name{labels}" then a trailing value.
+            let matches_name = line.split_once('{').map_or_else(
+                || line.split_whitespace().next() == Some(metric_name),
+                |(n, _)| n == metric_name,
+            );
+            if matches_name {
+                if let Some(v) = line.split_whitespace().last() {
+                    if let Ok(n) = v.parse::<f64>() {
+                        return Some(n);
+                    }
+                }
+            }
+        }
+        None
+    }
+
     // ── wire client ─────────────────────────────────────────────────────
 
     /// Send one GET on a FRESH connection; return the `X-Backend-Id` of
@@ -439,23 +502,58 @@ weight = 1
     }
 
     /// (b) invalid-reload-no-blip: an invalid config on SIGHUP changes
-    /// nothing; the old config stays fully live and traffic keeps flowing.
+    /// nothing; the old config stays fully live and traffic keeps flowing
+    /// AND the config_reload_failed_total metric bumps (observability).
     #[test]
     #[cfg_attr(not(unix), ignore)]
     fn proof_b_invalid_reload_no_blip() {
-        if find_binary().is_err() {
+        let Ok(bin) = find_binary() else {
             eprintln!("SKIP: binary absent");
             return;
-        }
+        };
         let (backend_a, addr_a) = spawn_tagged_backend("A");
-        let (child, listener, _cfg, dir) = boot("b", addr_a);
+        // Boot with a metrics listener so we can assert the failure counter.
+        let mut child_opt = None;
+        let mut listener_opt = None;
+        let mut metrics_opt = None;
+        let mut dir_opt = None;
+        for _ in 0..5 {
+            let lp = ephemeral_port();
+            let mp = ephemeral_port();
+            if lp == mp {
+                continue;
+            }
+            let laddr: SocketAddr = format!("127.0.0.1:{lp}").parse().unwrap();
+            let maddr: SocketAddr = format!("127.0.0.1:{mp}").parse().unwrap();
+            let dir = unique_temp_dir("b");
+            let cfg = write_config_with_metrics(&dir, lp, mp, addr_a);
+            if let Some(child) = try_spawn_gateway(&bin, &cfg, laddr) {
+                child_opt = Some(child);
+                listener_opt = Some(laddr);
+                metrics_opt = Some(maddr);
+                dir_opt = Some(dir);
+                break;
+            }
+            std::fs::remove_dir_all(&dir).ok();
+        }
+        let child = ChildGuard(Some(child_opt.expect("gateway bound")));
+        let listener = listener_opt.unwrap();
+        let metrics = metrics_opt.unwrap();
+        let dir = dir_opt.unwrap();
+
         assert_eq!(get_backend_id(&listener).as_deref(), Some("A"));
+        let failed_before = scrape_metric(&metrics, "config_reload_failed_total").unwrap_or(0.0);
 
         // Write a config that PARSES as TOML but FAILS lb_config
-        // validation (a listener with no backends + no passthrough is
-        // rejected by validate_config). The reload must reject it and
-        // keep the live config.
-        let bad = "[[listeners]]\naddress = \"127.0.0.1:1\"\nprotocol = \"h1\"\n";
+        // validation: an `h1` listener carrying a `[listeners.tls]` block
+        // is rejected by `validate_config` ("has [listeners.tls] but
+        // protocol is h1"). This is a genuine validation FAILURE (not a
+        // valid-but-restart-required reload), so validate-first must
+        // reject it, keep the live config, and bump the failure counter.
+        let bad = "[[listeners]]\naddress = \"127.0.0.1:18080\"\nprotocol = \"h1\"\n\
+                   [listeners.tls]\ncert_path = \"/nonexistent.crt\"\n\
+                   key_path = \"/nonexistent.key\"\n\
+                   [[listeners.backends]]\naddress = \"127.0.0.1:9\"\nweight = 1\n";
         std::fs::write(dir.join("gateway.toml"), bad).expect("write bad config");
         sighup(child.0.as_ref().unwrap());
 
@@ -469,6 +567,23 @@ weight = 1
                 "request {i} after an INVALID SIGHUP must still hit the live backend A (no blip)"
             );
         }
+
+        // The failure counter must have bumped (validate-first rejected
+        // the bad config) — the observable form of "nothing applied".
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut failed_after = failed_before;
+        while Instant::now() < deadline {
+            failed_after = scrape_metric(&metrics, "config_reload_failed_total").unwrap_or(0.0);
+            if failed_after > failed_before {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(
+            failed_after > failed_before,
+            "config_reload_failed_total must bump on an invalid SIGHUP \
+             (before={failed_before}, after={failed_after})"
+        );
 
         drop(child);
         drop(backend_a);
@@ -617,5 +732,640 @@ weight = 1
             "a restart-required SIGHUP must log a per-field 'requires restart, not applied' WARN \
              (honesty contract — never a silent no-op)"
         );
+    }
+}
+
+// ── async survival proofs: long-lived gRPC bidi + WS tunnel across SIGHUP ──
+//
+// The owner's R13 requires that an in-flight gRPC mid-RPC AND a live WS
+// tunnel COMPLETE correctly across a backend-swap SIGHUP. Both run over the
+// listeners whose proxies the increment holds in Arc<ArcSwap<_>>; the
+// captured-snapshot design covers them by construction (the whole proxy Arc
+// is load_full()-snapshotted once at accept, so a long-lived stream keeps
+// its captured proxy/backend for the connection's life regardless of a
+// concurrent .store()). These tests PROVE that on the wire.
+#[cfg(unix)]
+mod hup_async {
+    use std::net::SocketAddr;
+    use std::path::PathBuf;
+    use std::process::{Child, Command, Stdio};
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{Duration, Instant};
+
+    use futures_util::{SinkExt, StreamExt};
+    use tokio::net::TcpListener;
+    use tokio_tungstenite::tungstenite::Message;
+
+    // Reuse the sync module's binary/port/dir/signal helpers via super.
+    fn find_binary() -> Option<PathBuf> {
+        let target_dir = std::env::var("CARGO_TARGET_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                let m = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".into());
+                PathBuf::from(m).join("target")
+            });
+        for p in ["release", "debug"] {
+            let c = target_dir.join(p).join("expressgateway");
+            if c.is_file() {
+                return Some(c);
+            }
+        }
+        None
+    }
+
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    fn temp_dir(tag: &str) -> PathBuf {
+        let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let d = std::env::temp_dir().join(format!(
+            "eg-hupa-{tag}-{}-{nanos}-{seq}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&d).expect("mkdir");
+        d
+    }
+
+    fn ephemeral_port() -> u16 {
+        let l = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+        let p = l.local_addr().unwrap().port();
+        drop(l);
+        p
+    }
+
+    fn sighup(child: &Child) {
+        unsafe extern "C" {
+            fn kill(pid: i32, sig: i32) -> i32;
+        }
+        let _ = unsafe { kill(child.id() as i32, 1) };
+    }
+
+    struct ChildGuard(Child);
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    async fn tcp_ready(addr: SocketAddr, budget: Duration) -> bool {
+        let deadline = Instant::now() + budget;
+        while Instant::now() < deadline {
+            if tokio::net::TcpStream::connect(addr).await.is_ok() {
+                return true;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        false
+    }
+
+    // ── WS-over-H1 tunnel survival ──────────────────────────────────────
+
+    /// A WS echo backend that prefixes every echoed Text with `id|` so the
+    /// client can tell WHICH backend the tunnel is wired to.
+    async fn spawn_ws_echo_backend(id: &'static str) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+        let l = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = l.local_addr().unwrap();
+        let h = tokio::spawn(async move {
+            loop {
+                let Ok((sock, _)) = l.accept().await else {
+                    return;
+                };
+                tokio::spawn(async move {
+                    let ws = match tokio_tungstenite::accept_async(sock).await {
+                        Ok(w) => w,
+                        Err(_) => return,
+                    };
+                    let (mut tx, mut rx) = ws.split();
+                    while let Some(Ok(msg)) = rx.next().await {
+                        if let Message::Text(t) = msg {
+                            let tagged = Message::Text(format!("{id}|{t}").into());
+                            if tx.send(tagged).await.is_err() {
+                                break;
+                            }
+                        } else if matches!(msg, Message::Close(_)) {
+                            break;
+                        }
+                    }
+                    let _ = tx.close().await;
+                });
+            }
+        });
+        (addr, h)
+    }
+
+    fn write_ws_config(dir: &std::path::Path, listener_port: u16, backend: SocketAddr) -> PathBuf {
+        let toml = format!(
+            r#"
+[runtime]
+drain_timeout_ms = 3000
+readiness_settle_ms = 100
+
+[[listeners]]
+address = "127.0.0.1:{listener_port}"
+protocol = "h1"
+
+[listeners.websocket]
+enabled = true
+
+[[listeners.backends]]
+address = "{backend}"
+weight = 1
+"#
+        );
+        let p = dir.join("gateway.toml");
+        std::fs::write(&p, toml).unwrap();
+        p
+    }
+
+    /// R13 (live WS tunnel survives reload): open a WS echo tunnel through
+    /// the gateway to backend A, SIGHUP-swap the backend set to B, then
+    /// keep using the SAME tunnel — it must still echo via backend A (the
+    /// captured snapshot), and a NEW tunnel must reach backend B.
+    #[tokio::test]
+    async fn proof_ws_tunnel_survives_reload() {
+        let Some(bin) = find_binary() else {
+            eprintln!("SKIP: binary absent");
+            return;
+        };
+        let (addr_a, _ja) = spawn_ws_echo_backend("A").await;
+        let (addr_b, _jb) = spawn_ws_echo_backend("B").await;
+
+        // Boot on a retried fresh port.
+        let mut guard = None;
+        let mut lport = 0u16;
+        let mut dir = PathBuf::new();
+        for _ in 0..5 {
+            let p = ephemeral_port();
+            let laddr: SocketAddr = format!("127.0.0.1:{p}").parse().unwrap();
+            let d = temp_dir("ws");
+            write_ws_config(&d, p, addr_a);
+            let child = Command::new(&bin)
+                .arg(d.join("gateway.toml"))
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .env("RUST_LOG", "warn")
+                .spawn()
+                .expect("spawn");
+            if tcp_ready(laddr, Duration::from_secs(10)).await {
+                guard = Some(ChildGuard(child));
+                lport = p;
+                dir = d;
+                break;
+            }
+            let mut c = child;
+            let _ = c.kill();
+            let _ = c.wait();
+            std::fs::remove_dir_all(&d).ok();
+        }
+        let guard = guard.expect("gateway bound");
+        let listener: SocketAddr = format!("127.0.0.1:{lport}").parse().unwrap();
+
+        // Open a live tunnel to A.
+        let (mut live, _) = tokio_tungstenite::connect_async(format!("ws://{listener}/"))
+            .await
+            .expect("ws connect");
+        live.send(Message::Text("one".into())).await.unwrap();
+        let echo1 = next_text(&mut live).await;
+        assert_eq!(
+            echo1, "A|one",
+            "live tunnel must echo via backend A pre-reload"
+        );
+
+        // SIGHUP: swap backend set to B.
+        write_ws_config(&dir, lport, addr_b);
+        sighup(&guard.0);
+
+        // New tunnels must reach B (reload took effect) — poll.
+        let mut new_ok = false;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if let Ok((mut nt, _)) =
+                tokio_tungstenite::connect_async(format!("ws://{listener}/")).await
+            {
+                nt.send(Message::Text("probe".into())).await.ok();
+                if next_text(&mut nt).await == "B|probe" {
+                    new_ok = true;
+                    let _ = nt.close(None).await;
+                    break;
+                }
+                let _ = nt.close(None).await;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(new_ok, "after SIGHUP a NEW WS tunnel must reach backend B");
+
+        // The LIVE tunnel (captured snapshot) must STILL echo via A.
+        live.send(Message::Text("two".into())).await.unwrap();
+        let echo2 = next_text(&mut live).await;
+        assert_eq!(
+            echo2, "A|two",
+            "the pre-reload WS tunnel must keep echoing via backend A (survives the reload)"
+        );
+        let _ = live.close(None).await;
+
+        drop(guard);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    async fn next_text<S>(ws: &mut S) -> String
+    where
+        S: futures_util::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>>
+            + Unpin,
+    {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            match tokio::time::timeout(Duration::from_secs(5), ws.next()).await {
+                Ok(Some(Ok(Message::Text(t)))) => return t.to_string(),
+                Ok(Some(Ok(_))) => {}
+                _ => return String::new(),
+            }
+            if Instant::now() > deadline {
+                return String::new();
+            }
+        }
+    }
+
+    // ── gRPC bidi mid-RPC survival over h1s (TLS + ALPN h2) ─────────────
+
+    use http_body_util::{BodyExt, StreamBody};
+    use hyper::body::{Bytes, Frame, Incoming};
+    use hyper::{Request, Response};
+    use hyper_util::rt::{TokioExecutor, TokioIo};
+
+    type ClientBody = http_body_util::combinators::BoxBody<Bytes, std::convert::Infallible>;
+
+    /// Encode one gRPC length-prefixed frame (1 compressed flag + 4 BE len
+    /// + payload).
+    fn grpc_frame(payload: &[u8]) -> Vec<u8> {
+        let mut v = Vec::with_capacity(5 + payload.len());
+        v.push(0u8);
+        v.extend_from_slice(&(payload.len() as u32).to_be_bytes());
+        v.extend_from_slice(payload);
+        v
+    }
+
+    /// An h2 (cleartext) gRPC echo backend: for each inbound gRPC frame it
+    /// echoes back the SAME frame with the payload prefixed by `id|`, then
+    /// closes with `grpc-status: 0`. Also sets `x-backend-id: <id>` on the
+    /// response headers so the client can identify the serving backend.
+    /// Bidi: it reads the request body stream frame-by-frame and writes
+    /// each echo as it arrives.
+    async fn spawn_grpc_echo_backend(
+        id: &'static str,
+    ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+        let l = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = l.local_addr().unwrap();
+        let h = tokio::spawn(async move {
+            loop {
+                let Ok((sock, _)) = l.accept().await else {
+                    return;
+                };
+                tokio::spawn(async move {
+                    let builder = hyper::server::conn::http2::Builder::new(TokioExecutor::new());
+                    let svc =
+                        hyper::service::service_fn(move |req: Request<Incoming>| async move {
+                            // TRUE BIDI: respond with 200 HEADERS immediately,
+                            // then stream one tagged echo DATA frame per inbound
+                            // request DATA frame AS IT ARRIVES (not after the
+                            // whole body), and send grpc-status:0 trailers when
+                            // the request body ends. This lets the client send
+                            // its second frame AFTER the reload on the SAME open
+                            // stream and observe the echo from THIS backend —
+                            // the mid-RPC-survives property.
+                            let (btx, brx) = tokio::sync::mpsc::channel::<
+                                Result<Frame<Bytes>, std::convert::Infallible>,
+                            >(16);
+                            tokio::spawn(async move {
+                                let mut body = req.into_body();
+                                let mut acc: Vec<u8> = Vec::new();
+                                while let Some(Ok(frame)) = body.frame().await {
+                                    if let Ok(data) = frame.into_data() {
+                                        acc.extend_from_slice(&data);
+                                        // Drain whole gRPC frames from `acc`.
+                                        let mut i = 0usize;
+                                        while i + 5 <= acc.len() {
+                                            let len = u32::from_be_bytes([
+                                                acc[i + 1],
+                                                acc[i + 2],
+                                                acc[i + 3],
+                                                acc[i + 4],
+                                            ])
+                                                as usize;
+                                            if i + 5 + len > acc.len() {
+                                                break; // partial — wait for more
+                                            }
+                                            let payload = &acc[i + 5..i + 5 + len];
+                                            let mut tagged = format!("{id}|").into_bytes();
+                                            tagged.extend_from_slice(payload);
+                                            let _ = btx
+                                                .send(Ok(Frame::data(Bytes::from(grpc_frame(
+                                                    &tagged,
+                                                )))))
+                                                .await;
+                                            i += 5 + len;
+                                        }
+                                        acc.drain(..i);
+                                    }
+                                }
+                                let mut trailers = hyper::HeaderMap::new();
+                                trailers.insert(
+                                    "grpc-status",
+                                    hyper::header::HeaderValue::from_static("0"),
+                                );
+                                let _ = btx.send(Ok(Frame::trailers(trailers))).await;
+                            });
+                            let stream = futures_util::stream::unfold(brx, |mut rx| async move {
+                                rx.recv().await.map(|f| (f, rx))
+                            });
+                            let body = BodyExt::boxed(StreamBody::new(stream));
+                            Ok::<_, std::convert::Infallible>(
+                                Response::builder()
+                                    .status(200)
+                                    .header("content-type", "application/grpc+proto")
+                                    .header("x-backend-id", id)
+                                    .body(body)
+                                    .unwrap(),
+                            )
+                        });
+                    let _ = builder.serve_connection(TokioIo::new(sock), svc).await;
+                });
+            }
+        });
+        (addr, h)
+    }
+
+    fn write_h1s_grpc_config(
+        dir: &std::path::Path,
+        listener_port: u16,
+        backend: SocketAddr,
+        cert: &std::path::Path,
+        key: &std::path::Path,
+    ) -> PathBuf {
+        let toml = format!(
+            r#"
+[runtime]
+drain_timeout_ms = 3000
+readiness_settle_ms = 100
+
+[[listeners]]
+address = "127.0.0.1:{listener_port}"
+protocol = "h1s"
+
+[listeners.tls]
+cert_path = "{cert}"
+key_path = "{key}"
+
+[[listeners.backends]]
+address = "{backend}"
+protocol = "h2"
+weight = 1
+"#,
+            cert = cert.display(),
+            key = key.display(),
+        );
+        let p = dir.join("gateway.toml");
+        std::fs::write(&p, toml).unwrap();
+        p
+    }
+
+    /// A rustls ClientConfig that accepts ANY server cert (self-signed
+    /// test cert) and advertises ALPN h2.
+    fn insecure_h2_client_config() -> std::sync::Arc<tokio_rustls::rustls::ClientConfig> {
+        use tokio_rustls::rustls;
+        #[derive(Debug)]
+        struct NoVerify;
+        impl rustls::client::danger::ServerCertVerifier for NoVerify {
+            fn verify_server_cert(
+                &self,
+                _e: &rustls::pki_types::CertificateDer<'_>,
+                _i: &[rustls::pki_types::CertificateDer<'_>],
+                _s: &rustls::pki_types::ServerName<'_>,
+                _o: &[u8],
+                _n: rustls::pki_types::UnixTime,
+            ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+                Ok(rustls::client::danger::ServerCertVerified::assertion())
+            }
+            fn verify_tls12_signature(
+                &self,
+                _m: &[u8],
+                _c: &rustls::pki_types::CertificateDer<'_>,
+                _d: &rustls::DigitallySignedStruct,
+            ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error>
+            {
+                Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+            }
+            fn verify_tls13_signature(
+                &self,
+                _m: &[u8],
+                _c: &rustls::pki_types::CertificateDer<'_>,
+                _d: &rustls::DigitallySignedStruct,
+            ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error>
+            {
+                Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+            }
+            fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+                use rustls::SignatureScheme::*;
+                vec![
+                    RSA_PKCS1_SHA256,
+                    RSA_PKCS1_SHA384,
+                    RSA_PKCS1_SHA512,
+                    ECDSA_NISTP256_SHA256,
+                    ECDSA_NISTP384_SHA384,
+                    RSA_PSS_SHA256,
+                    RSA_PSS_SHA384,
+                    RSA_PSS_SHA512,
+                    ED25519,
+                ]
+            }
+        }
+        let mut cfg = rustls::ClientConfig::builder()
+            .dangerous()
+            .with_custom_certificate_verifier(std::sync::Arc::new(NoVerify))
+            .with_no_client_auth();
+        cfg.alpn_protocols = vec![b"h2".to_vec()];
+        std::sync::Arc::new(cfg)
+    }
+
+    /// Open a gRPC client-streaming request to the gateway over TLS+h2
+    /// whose request body is fed from `body_rx` (so the client can send a
+    /// frame BEFORE and a frame AFTER the SIGHUP on the SAME open h2
+    /// stream). Returns a JoinHandle for the response: the gateway's H2
+    /// path buffers a small request body before dialing the upstream, so
+    /// `send_request` only resolves once the body ends — the caller drives
+    /// the body channel (and drops it) BEFORE awaiting this handle. The
+    /// backend the request reaches is the one CAPTURED in the h2_proxy
+    /// snapshot at accept time (backend A), regardless of when the gateway
+    /// dials it — that captured-snapshot routing across the reload is the
+    /// property under test.
+    async fn grpc_open(
+        listener: SocketAddr,
+        body_rx: tokio::sync::mpsc::Receiver<Bytes>,
+    ) -> tokio::task::JoinHandle<Response<Incoming>> {
+        use tokio_rustls::TlsConnector;
+        let tcp = tokio::net::TcpStream::connect(listener).await.unwrap();
+        let connector = TlsConnector::from(insecure_h2_client_config());
+        let server_name =
+            tokio_rustls::rustls::pki_types::ServerName::try_from("127.0.0.1").unwrap();
+        let tls = connector.connect(server_name, tcp).await.unwrap();
+        let (mut sender, conn) = hyper::client::conn::http2::handshake::<_, _, ClientBody>(
+            TokioExecutor::new(),
+            TokioIo::new(tls),
+        )
+        .await
+        .unwrap();
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
+        // Adapt the mpsc receiver into a Stream of body frames without a
+        // `tokio-stream` dev-dep: unfold over the receiver, yielding one
+        // `Frame::data` per channel message until the sender is dropped.
+        let stream = futures_util::stream::unfold(body_rx, |mut rx| async move {
+            rx.recv()
+                .await
+                .map(|b| (Ok::<_, std::convert::Infallible>(Frame::data(b)), rx))
+        });
+        let body = BodyExt::boxed(StreamBody::new(stream));
+        let req = Request::builder()
+            .method("POST")
+            .uri("/echo.Service/Bidi")
+            .header("content-type", "application/grpc+proto")
+            .header("te", "trailers")
+            .body(body)
+            .unwrap();
+        // Spawn the request so the caller can keep feeding the body channel
+        // concurrently; the handle resolves to the response once headers
+        // arrive (after the gateway buffers + forwards + backend replies).
+        tokio::spawn(async move { sender.send_request(req).await.unwrap() })
+    }
+
+    /// R13 (in-flight gRPC RPC survives reload): open a gRPC streaming
+    /// request over the h1s (TLS/h2) listener to backend A, send one
+    /// frame, SIGHUP-swap the backend set to B, send a SECOND frame on the
+    /// SAME open request stream, then close the request. The whole RPC
+    /// must complete via backend A (the captured snapshot) — both frames
+    /// echoed with the `A|` tag, x-backend-id=A, grpc-status: 0 — proving
+    /// the mid-RPC stream was NOT reset or misrouted by the reload.
+    #[tokio::test]
+    async fn proof_grpc_rpc_survives_reload() {
+        let Some(bin) = find_binary() else {
+            eprintln!("SKIP: binary absent");
+            return;
+        };
+        let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+        let (addr_a, _ja) = spawn_grpc_echo_backend("A").await;
+        let (addr_b, _jb) = spawn_grpc_echo_backend("B").await;
+
+        // Self-signed cert for the h1s listener.
+        let dir0 = temp_dir("grpc");
+        let generated =
+            rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string(), "localhost".into()])
+                .unwrap();
+        let cert_p = dir0.join("g.crt");
+        let key_p = dir0.join("g.key");
+        std::fs::write(&cert_p, generated.cert.pem()).unwrap();
+        std::fs::write(&key_p, generated.signing_key.serialize_pem()).unwrap();
+
+        // Boot the h1s gateway on a retried fresh port.
+        let mut guard = None;
+        let mut lport = 0u16;
+        let mut dir = PathBuf::new();
+        for _ in 0..5 {
+            let p = ephemeral_port();
+            let laddr: SocketAddr = format!("127.0.0.1:{p}").parse().unwrap();
+            let d = temp_dir("grpc");
+            write_h1s_grpc_config(&d, p, addr_a, &cert_p, &key_p);
+            let child = Command::new(&bin)
+                .arg(d.join("gateway.toml"))
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .env("RUST_LOG", "warn")
+                .spawn()
+                .expect("spawn");
+            if tcp_ready(laddr, Duration::from_secs(10)).await {
+                guard = Some(ChildGuard(child));
+                lport = p;
+                dir = d;
+                break;
+            }
+            let mut c = child;
+            let _ = c.kill();
+            let _ = c.wait();
+            std::fs::remove_dir_all(&d).ok();
+        }
+        let guard = guard.expect("h1s gateway bound");
+        let listener: SocketAddr = format!("127.0.0.1:{lport}").parse().unwrap();
+
+        // Open the gRPC client-streaming RPC; the h2 request stream stays
+        // OPEN across the SIGHUP — frame 1 is sent now, frame 2 AFTER the
+        // reload, on the SAME stream. The gateway's h2_proxy snapshot is
+        // captured at accept (backend A); the whole RPC must therefore land
+        // on A regardless of the reload.
+        let (tx, rx) = tokio::sync::mpsc::channel::<Bytes>(8);
+        tx.send(Bytes::from(grpc_frame(b"one"))).await.unwrap();
+        let resp_handle = grpc_open(listener, rx).await;
+
+        // SIGHUP: swap the backend set to B while the RPC stream is OPEN.
+        write_h1s_grpc_config(&dir, lport, addr_b, &cert_p, &key_p);
+        sighup(&guard.0);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        // Send frame 2 on the SAME open stream AFTER the reload, then end
+        // the request body so the gateway forwards the (buffered) request.
+        tx.send(Bytes::from(grpc_frame(b"two"))).await.unwrap();
+        drop(tx);
+
+        // The response must come from backend A (captured snapshot) with
+        // both frames echoed and grpc-status: 0.
+        let resp = tokio::time::timeout(Duration::from_secs(10), resp_handle)
+            .await
+            .expect("response did not arrive in time")
+            .expect("request task panicked");
+        assert_eq!(resp.status(), 200);
+        assert_eq!(
+            resp.headers()
+                .get("x-backend-id")
+                .map(|v| v.to_str().unwrap()),
+            Some("A"),
+            "the RPC (stream open across the SIGHUP) must be served by backend A"
+        );
+        let collected = resp.into_body().collect().await.unwrap();
+        let trailers = collected.trailers().cloned();
+        let echoed = parse_grpc_payloads(&collected.to_bytes());
+        assert!(
+            echoed.iter().any(|p| p == "A|one"),
+            "frame 1 must be echoed by backend A: {echoed:?}"
+        );
+        assert!(
+            echoed.iter().any(|p| p == "A|two"),
+            "frame 2 (sent AFTER the SIGHUP, same open stream) must STILL be echoed by \
+             backend A — the mid-RPC stream survived the reload: {echoed:?}"
+        );
+        assert_eq!(
+            trailers
+                .as_ref()
+                .and_then(|t| t.get("grpc-status"))
+                .map(|v| v.to_str().unwrap()),
+            Some("0"),
+            "the RPC must complete with grpc-status 0 across the reload"
+        );
+
+        drop(guard);
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&dir0).ok();
+    }
+
+    fn parse_grpc_payloads(buf: &[u8]) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut i = 0usize;
+        while i + 5 <= buf.len() {
+            let len = u32::from_be_bytes([buf[i + 1], buf[i + 2], buf[i + 3], buf[i + 4]]) as usize;
+            let start = i + 5;
+            let end = (start + len).min(buf.len());
+            out.push(String::from_utf8_lossy(&buf[start..end]).to_string());
+            i = end;
+        }
+        out
     }
 }

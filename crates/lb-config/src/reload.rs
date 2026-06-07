@@ -28,11 +28,23 @@ use crate::LbConfig;
 /// precise.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SwappableChange {
-    /// A listener's backend set (addresses/weights/protocols) changed.
-    /// Identified by bind address.
-    ListenerBackends {
+    /// One or more of a listener's per-listener L7 fields changed and ALL
+    /// of them are applied live by rebuilding the listener's `H1Proxy` /
+    /// `H2Proxy` from the new config (the rebuild reads the WHOLE new
+    /// listener config, so this set must EXACTLY match what the rebuild
+    /// applies — the honesty invariant). `fields` lists the specific
+    /// changed L7 fields for the operator log. Identified by bind address.
+    ///
+    /// In scope: `backends` (addresses/weights/protocols), `http`
+    /// (header/body/total/head timeouts), `h2_security`, `websocket`
+    /// (the H1/H2 knobs; the H3 `h3_extended_connect` sub-field only
+    /// affects the QUIC datapath and is irrelevant on an L7 listener),
+    /// `alt_svc`, `grpc`.
+    ListenerL7 {
         /// Bind address of the affected listener.
         address: String,
+        /// The specific changed L7 fields (for the operator log).
+        fields: Vec<&'static str>,
     },
 }
 
@@ -41,8 +53,11 @@ impl SwappableChange {
     #[must_use]
     pub fn describe(&self) -> String {
         match self {
-            Self::ListenerBackends { address } => {
-                format!("listener {address}: backend set changed")
+            Self::ListenerL7 { address, fields } => {
+                format!(
+                    "listener {address}: L7 config changed ({}) — applied live",
+                    fields.join(", ")
+                )
             }
         }
     }
@@ -51,7 +66,15 @@ impl SwappableChange {
     #[must_use]
     pub const fn field(&self) -> &'static str {
         match self {
-            Self::ListenerBackends { .. } => "listener.backends",
+            Self::ListenerL7 { .. } => "listener.l7",
+        }
+    }
+
+    /// Bind address this change targets.
+    #[must_use]
+    pub fn address(&self) -> &str {
+        match self {
+            Self::ListenerL7 { address, .. } => address,
         }
     }
 }
@@ -262,24 +285,45 @@ fn diff_listener(old: &crate::ListenerConfig, new: &crate::ListenerConfig, plan:
         return;
     }
 
-    // SWAPPABLE: backend set (addresses/weights/protocols).
-    if old.backends != new.backends {
-        plan.swappable.push(SwappableChange::ListenerBackends {
+    // SWAPPABLE: the per-listener L7 fields the proxy rebuild applies
+    // from the new config. These MUST exactly match what
+    // `rebuild_l7_proxies` consumes from the new `ListenerConfig` (the
+    // honesty invariant — the diff's "applied" set == the actually-
+    // applied behaviour). The rebuild calls `build_h1_proxy` /
+    // `build_h2_proxy` with `new.{backends, http, h2_security, websocket,
+    // alt_svc, grpc}`, so a change to ANY of these is applied live.
+    let mut l7_fields: Vec<&'static str> = Vec::new();
+    macro_rules! swappable_l7 {
+        ($field:ident, $tag:literal) => {
+            if old.$field != new.$field {
+                l7_fields.push($tag);
+            }
+        };
+    }
+    swappable_l7!(backends, "backends");
+    swappable_l7!(http, "http");
+    swappable_l7!(h2_security, "h2_security");
+    swappable_l7!(websocket, "websocket");
+    swappable_l7!(alt_svc, "alt_svc");
+    swappable_l7!(grpc, "grpc");
+    if !l7_fields.is_empty() {
+        plan.swappable.push(SwappableChange::ListenerL7 {
             address: addr.clone(),
+            fields: l7_fields,
         });
     }
 
-    // The remaining per-listener fields are surfaced honestly. Increment
-    // 1 wires only the backend-set swap end-to-end; every other changed
-    // field is reported (restart-required) so it is never a silent
-    // no-op. Later increments RECLASSIFY the swappable subset (http
-    // timeouts, h2_security, websocket H1/H2 knobs) to `swappable` as
-    // each is wired into the ArcSwap snapshot.
-    //
-    // Establishment-input / structural fields that stay restart-required
-    // PERMANENTLY: tls (cert/key path + ALPN), quic (transport params +
-    // retry secret), drain budgets, websocket h3_extended_connect.
-    macro_rules! field_changed {
+    // RESTART-REQUIRED per-listener fields — establishment inputs or
+    // values the proxy rebuild does NOT touch, so reporting them
+    // restart-required is TRUTHFUL:
+    //   * `tls`  — cert/key PATH + ALPN: the TLS bundle is owned by the
+    //     listener mode + the SIGUSR1 cert-reload path, not rebuilt here.
+    //   * `quic` — transport params + retry secret: QUIC datapath, baked
+    //     into the config_factory at spawn (not an L7 proxy field).
+    //   * `drain_timeout_ms` / `drain_jitter_ms` — read at SHUTDOWN from
+    //     the boot config, never from the proxy, so a rebuild does not
+    //     apply them.
+    macro_rules! restart_field {
         ($field:ident, $tag:literal) => {
             if old.$field != new.$field {
                 plan.restart_required
@@ -290,15 +334,10 @@ fn diff_listener(old: &crate::ListenerConfig, new: &crate::ListenerConfig, plan:
             }
         };
     }
-    field_changed!(tls, "tls");
-    field_changed!(quic, "quic");
-    field_changed!(alt_svc, "alt_svc");
-    field_changed!(http, "http");
-    field_changed!(h2_security, "h2_security");
-    field_changed!(websocket, "websocket");
-    field_changed!(grpc, "grpc");
-    field_changed!(drain_timeout_ms, "drain_timeout_ms");
-    field_changed!(drain_jitter_ms, "drain_jitter_ms");
+    restart_field!(tls, "tls");
+    restart_field!(quic, "quic");
+    restart_field!(drain_timeout_ms, "drain_timeout_ms");
+    restart_field!(drain_jitter_ms, "drain_jitter_ms");
 }
 
 /// Diff the `[runtime]` block. XDP attach fields are establishment
@@ -359,6 +398,7 @@ fn diff_runtime(
 
 #[cfg(test)]
 mod tests {
+    use super::SwappableChange;
     use crate::{BackendConfig, LbConfig, ListenerConfig};
 
     fn backend(addr: &str, weight: u32) -> BackendConfig {
@@ -420,7 +460,7 @@ mod tests {
         let plan = a.diff(&b);
         assert_eq!(plan.swappable.len(), 1);
         assert!(plan.restart_required.is_empty());
-        assert_eq!(plan.swappable[0].field(), "listener.backends");
+        assert_eq!(plan.swappable[0].field(), "listener.l7");
         assert!(plan.has_swappable());
     }
 
@@ -524,5 +564,86 @@ mod tests {
         let plan = a.diff(&b);
         assert_eq!(plan.swappable.len(), 1);
         assert_eq!(plan.restart_required.len(), 1);
+    }
+
+    fn http(header_ms: u64) -> crate::HttpTimeoutsConfig {
+        crate::HttpTimeoutsConfig {
+            header_timeout_ms: header_ms,
+            body_timeout_ms: 30_000,
+            total_timeout_ms: 60_000,
+            head_timeout_ms: 30_000,
+        }
+    }
+
+    #[test]
+    fn http_timeout_change_is_swappable_l7() {
+        // The rebuild applies new.http, so an http-timeout change MUST be
+        // classified swappable (the honesty invariant — the diff's
+        // "applied" set must match what the rebuild actually applies).
+        let mut a_l = listener("0.0.0.0:8080", vec![backend("10.0.0.1:80", 1)]);
+        a_l.http = Some(http(5_000));
+        let mut b_l = listener("0.0.0.0:8080", vec![backend("10.0.0.1:80", 1)]);
+        b_l.http = Some(http(9_000));
+        let plan = cfg(vec![a_l]).diff(&cfg(vec![b_l]));
+        assert_eq!(plan.swappable.len(), 1, "http change must be swappable");
+        assert!(plan.restart_required.is_empty());
+        let fields = l7_fields(&plan.swappable[0]);
+        assert!(fields.contains(&"http"), "fields must name http: {fields:?}");
+        assert!(!fields.contains(&"backends"), "backends did not change");
+    }
+
+    /// Extract the changed-field list from a `ListenerL7` swappable change
+    /// (test helper — avoids `panic!` which the crate's lint set denies).
+    fn l7_fields(change: &SwappableChange) -> Vec<&'static str> {
+        match change {
+            SwappableChange::ListenerL7 { fields, .. } => fields.clone(),
+        }
+    }
+
+    #[test]
+    fn combined_backend_and_http_change_is_one_swappable_with_both_fields() {
+        // HONESTY: a reload changing backends AND an http timeout together
+        // must report BOTH as swappable (the rebuild applies both) — never
+        // "backend swapped, timeout silently applied while claimed
+        // restart-required". One ListenerL7 entry listing both fields.
+        let mut a_l = listener("0.0.0.0:8080", vec![backend("10.0.0.1:80", 1)]);
+        a_l.http = Some(http(5_000));
+        let mut b_l = listener("0.0.0.0:8080", vec![backend("10.0.0.2:80", 1)]);
+        b_l.http = Some(http(9_000));
+        let plan = cfg(vec![a_l]).diff(&cfg(vec![b_l]));
+        assert_eq!(plan.swappable.len(), 1);
+        assert!(plan.restart_required.is_empty());
+        let fields = l7_fields(&plan.swappable[0]);
+        assert!(fields.contains(&"backends"));
+        assert!(fields.contains(&"http"));
+    }
+
+    #[test]
+    fn tls_and_drain_changes_are_restart_required_not_swappable() {
+        // tls (cert/key path + ALPN) and drain budgets are NOT applied by
+        // the proxy rebuild, so reporting them restart-required is
+        // truthful — they must NOT leak into the swappable bucket.
+        let mut a_l = listener("0.0.0.0:8443", vec![backend("10.0.0.1:80", 1)]);
+        a_l.protocol = "h1s".to_owned();
+        a_l.tls = Some(crate::TlsConfig {
+            cert_path: "/a.crt".to_owned(),
+            key_path: "/a.key".to_owned(),
+            ticket_rotation_interval_seconds: 86_400,
+            ticket_rotation_overlap_seconds: 3_600,
+        });
+        a_l.drain_timeout_ms = Some(5_000);
+        let mut b_l = a_l.clone();
+        b_l.tls = Some(crate::TlsConfig {
+            cert_path: "/b.crt".to_owned(),
+            key_path: "/b.key".to_owned(),
+            ticket_rotation_interval_seconds: 86_400,
+            ticket_rotation_overlap_seconds: 3_600,
+        });
+        b_l.drain_timeout_ms = Some(9_000);
+        let plan = cfg(vec![a_l]).diff(&cfg(vec![b_l]));
+        assert!(plan.swappable.is_empty(), "tls/drain must not be swappable");
+        let fields: Vec<_> = plan.restart_required.iter().map(|c| c.field()).collect();
+        assert!(fields.contains(&"tls"));
+        assert!(fields.contains(&"drain_timeout_ms"));
     }
 }

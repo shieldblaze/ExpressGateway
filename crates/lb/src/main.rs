@@ -485,7 +485,7 @@ async fn reload_config(
     let mut applied_count = 0_usize;
     for change in &plan.swappable {
         match change {
-            lb_config::SwappableChange::ListenerBackends { address } => {
+            lb_config::SwappableChange::ListenerL7 { address, .. } => {
                 let Some(new_l) = new_config.listeners.iter().find(|l| &l.address == address)
                 else {
                     // Unreachable: the diff produced this from the new
@@ -503,11 +503,11 @@ async fn reload_config(
                     // it honestly rather than dropping it silently.
                     tracing::warn!(
                         listener = %address,
-                        "SIGHUP: backend change detected but no L7 swap handle — not applied (requires restart)"
+                        "SIGHUP: L7 change detected but no swap handle — not applied (requires restart)"
                     );
                     if let Some(m) = metrics {
                         m.restart_required_fields_total
-                            .with_label_values(&["listener.backends.no_handle"])
+                            .with_label_values(&["listener.l7.no_handle"])
                             .inc();
                     }
                     continue;
@@ -539,7 +539,7 @@ async fn reload_config(
                         tracing::warn!(
                             listener = %address,
                             error = %e,
-                            "SIGHUP: backend swap rebuild failed — keeping previous proxy live"
+                            "SIGHUP: L7 swap rebuild failed — keeping previous proxy live"
                         );
                         if let Some(m) = metrics {
                             m.failed_total.inc();
@@ -572,6 +572,20 @@ async fn reload_config(
 /// the swapped-in proxy is byte-identical to a fresh boot with the new
 /// config. The OLD proxy stays live (refcount-pinned by in-flight
 /// connections that captured it at accept) until those connections drop.
+///
+/// HONESTY INVARIANT (the diff's swappable set MUST match this exactly):
+/// this rebuild APPLIES, from the NEW listener config `new_l`, every
+/// per-listener L7 field — `backends`, `http` (timeouts), `h2_security`,
+/// `websocket` (H1/H2 knobs), `alt_svc`, `grpc`. These are precisely the
+/// fields [`lb_config::LbConfig::diff`] classifies as
+/// [`lb_config::SwappableChange::ListenerL7`]. It PRESERVES (does NOT
+/// apply) the process-wide values passed by the caller — `hooks` (carries
+/// `[security].strict_te` + per-IP gate) and `max_keepalive_requests`
+/// (`[runtime]`) keep their BOOT values, which is why the diff reports a
+/// change to either as restart-required (truthful: a rebuild here does not
+/// pick up a new process-wide value). Changing the swappable L7 set here
+/// without also reclassifying it in `diff` (or vice versa) breaks the
+/// honesty invariant the verifier adversarially tests.
 async fn rebuild_l7_proxies(
     new_l: &lb_config::ListenerConfig,
     handles: &ReloadableProxies,
