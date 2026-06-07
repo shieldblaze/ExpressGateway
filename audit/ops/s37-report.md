@@ -36,14 +36,38 @@ Two deep maps produced (config/boot/reload surface; deps/harness surface). Key f
 
 ---
 
-## Phase 1 — (B) config management
-_(pending plan approval)_
+**Plan APPROVED** (owner, Phase 0). Team `s37-ops`: lead + config-eng (B) + reload-eng (C) + dep-eng (D) + verifier. Sub-branches off `feature/ops-bcd-s37`, integrated B→C→D; verifier independent (author≠verifier); promote `--no-ff` per R11.
 
-## Phase 2 — (C) hot reload
-_(pending plan approval)_
+## Phase 1 — (B) config management `[config-eng]` _(in progress)_
+1. `#[serde(deny_unknown_fields)]` on `LbConfig` + every nested struct (single-sourced) — close the silent-typo gap. Negative tests per error class.
+2. Reject `http`/`h2`/`h3` listener protocols (accepted today, never served) with a clear message → served set `tcp`/`tls`/`h1`/`h1s`/`quic`.
+3. Range checks for `max_keepalive_requests`, `max_requests_per_h3_connection` (0=disable), + other unchecked numeric knobs.
+4. R3 byte-identical: equivalent-to-today configs boot + existing TOML-boot e2e/soak pass unchanged; new real-binary boot tests (each listener type) + invalid-config negative tests (clear messages).
+5. Refresh `CONFIG.md`; `config/examples/` per listener type. Gate scoped ×3 + clippy + fmt; `lb-config` cov ≥ charter.
 
-## Phase 3 — (D) latest-deps upgrade
-_(pending plan approval)_
+## Phase 2 — (C) hot reload `[reload-eng]` — correctness-critical _(staged behind B)_
+SIGHUP trigger · validate-first via full `lb_config::validate_config` · `Arc<ArcSwap<EffectiveConfig>>` mirroring the SIGUSR1 cert pattern · snapshot-at-accept (in-flight preserved, new conns get new config, no cross-talk) · honesty rule (restart-required change → clear per-field warning/reject, never silent).
 
-## Phase 4 — full re-validation + promote
-_(pending)_
+**R13 load-bearing proofs (real running gateway under traffic) — SIX:**
+1. live-connection-survives-reload (gRPC mid-RPC + live WS complete across reload) + **negative control** (naive swap would reset them).
+2. invalid-reload-no-blip (bad config → keeps serving old, zero interruption).
+3. restart-required-honesty (bind-addr change → clear detected response; bind did NOT silently change; uninterrupted).
+4. no cross-talk (old-config vs new-config conns not mis-routed).
+5. **(owner addition) reload-TAKES-EFFECT** — after SIGHUP changing a swappable field (backend weight/timeout), NEW connections observe the new value (guards against a no-op reload passing 1–4).
+6. **(owner addition) R3-after-seam (structural, verifier-independent)** — after the baked-read→snapshot-read conversion, the existing e2e/soak suite passes UNCHANGED. The risk is the *non-reload* data path subtly changing, not the reload logic. Load-bearing.
+
+If live-connection-preservation can't be PROVEN under traffic → C NOT promoted (R11), carried. Check-in to owner with the proof + negative control before integration.
+
+## Phase 3 — (D) latest-deps upgrade `[dep-eng]` _(concurrent; integrated last)_
+Staged: patch group → prometheus 0.13→0.14 (held un-hold) + object→0.39 (folds #224) → quiche/tokio-quiche→latest [h3spec vs 12-waiver] → hyper/h2→latest [h2spec 147/147; **hyper#4050: un-gate WS-H2 ONLY IF the fix is in the adopted release — re-prove the backpressure plateau as the un-gate gate; else WS-H2 stays gated**] → tokio-tungstenite→latest [WS matrix]. Supersede #224/#226. R8 re-proven. MSRV bump only if latest quiche requires (+ refresh stale "1.85" prose). Un-verifiable crate → drop/pin-back, carry.
+
+**D research COMPLETE** (`audit/ops/s37-deps-plan.md`, committed `5470a4f5`) — far smaller than feared:
+- **Already at latest (no bump available, relock/no-op):** quiche 0.29.1, tokio-quiche 0.19.0, hyper 1.10.1, hyper-util, h2 0.4.14, tokio-tungstenite 0.29, rustls 0.23.40, tokio-rustls, http, serde/json, toml, bytes, etc. ⇒ **the H2/H3/WS protocol-lib surface is UNCHANGED by D** (h2spec/h3spec re-run is a no-regression formality, not a version shift).
+- **Real bumps (all mechanical, zero source change predicted):** tokio 1.51.1→**1.52.3**, socket2 0.6.3→**0.6.4**, prometheus 0.13.4→**0.14.0** (AsRef widening, `process` feature retained, default-features-off keeps protobuf out), object 0.37.3→**0.39.1** (read-only ELF path untouched), aya 0.13.1→0.13.2, aya-obj 0.2.1→0.2.2, idna_adapter 1.1.0→1.2.2.
+- **Best-effort / hold:** foundations 4.5→5.7 (transitive; **likely capped at ^4 by tokio-quiche 0.19** → leave 4.5.0 as held-by-upstream, a finding not a failure; if it moves + drops serde_yaml, prune RUSTSEC-2024-0320 waiver); reqwest 0.12→0.13 (**dev-only major**; hold at 0.12.28 if aws-lc/ring crypto-provider default fights us).
+- **hyper#4050 VERDICT (primary-sourced):** **NOT fixed in any release** — fetched `v1.10.1/src/proto/h2/upgrade.rs`, the buggy `Poll::Pending => break 'capacity` fall-through is still present; PR #4050 is open/unmerged. ⇒ **WS-H2 stays gated, `#[ignore]` stays, CF-S27-2 stays open (upstream), no fork.** Owner's un-gate rule not met.
+- MSRV stays 1.88 (highest requirement among bumps is object-all-features 1.87). Stale "1.85" prose in `deny.toml`/`.cargo/audit.toml` to refresh (Stage 6).
+- Execution staged behind B integration (dep-eng on stand-by) to avoid dual-lockfile thrash on the shared target.
+
+## Phase 4 — full re-validation + promote `[verifier + lead]`
+×3 · h2spec 147/147 · h3spec 12-waiver · WS matrix · gRPC-H3 · R8+R13 · full re-soak ALL BOUNDED (sc9 ~22MB) · docker-smoke from config · all CI gates · per-module cov. Promote `--no-ff` per R11.
