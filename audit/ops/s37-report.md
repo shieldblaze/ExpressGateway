@@ -38,7 +38,16 @@ Two deep maps produced (config/boot/reload surface; deps/harness surface). Key f
 
 **Plan APPROVED** (owner, Phase 0). Team `s37-ops`: lead + config-eng (B) + reload-eng (C) + dep-eng (D) + verifier. Sub-branches off `feature/ops-bcd-s37`, integrated B→C→D; verifier independent (author≠verifier); promote `--no-ff` per R11.
 
-## Phase 1 — (B) config management `[config-eng]` _(in progress)_
+## Phase 1 — (B) config management `[config-eng]` — ✅ VERIFIED + INTEGRATED (merge `47744ffa`)
+
+**Built (config-eng, `a3da4db2`):** `#[serde(deny_unknown_fields)]` on all 20 Deserialize structs (2 enums inapplicable; **zero `serde(flatten)`** so it applies uniformly); reject `http`/`h2`/`h3` as listener protocols (served set tcp/tls/h1/h1s/quic; clear message routing H2→h1s/ALPN, H3→quic); range-check `max_keepalive_requests` + `max_requests_per_h3_connection` (0=disable, else 1..=10_000_000); `tests/config_boot_matrix.rs` (real-binary boots + negative boots); CONFIG.md rewrite; `config/examples/*.toml` ×9.
+
+**Verified (independent, author≠verifier):**
+- verifier real-wire (`origin/s37-verify @ 44fbd7fd`): all 9 example configs boot+bind; h1 path serves 200 end-to-end; every invalid class rejects loud (exit 1, actionable msgs — e.g. unknown key names the expected field; unserved-protocol explains the served set); adversarial stray-key-in-every-nested-block all reject; range boundaries exact (==10M ok, 10M+1 rejects); default.toml + docker/smoke boot under deny_unknown_fields. **Zero findings.**
+- binding ×3 (lead takeover after verifier's run1 stalled on an unbounded monitor-wait, R9; lead independent of B's author): run1 1539/**1**/18, run2 **1540/0/18**, run3 **1540/0/18** — sole failure was `fcap1` in run1, passed clean runs 2&3 → confirmed CF-FCAP1-FLAKE (R2), not a defect. clippy + fmt clean. **lb-config/src/lib.rs coverage 90.42%** (≥80 charter). Evidence: `audit/ops/s37-verifyB-lead/`.
+- R3 byte-identical: equivalent-to-today configs unchanged; existing TOML-boot e2e/soak green under deny_unknown_fields; only a test using `protocol="http"`→`tcp` + the u32-range cap test rewritten to the 10M bound (no validation weakened).
+
+### Phase 1 — (B) plan (as executed)
 1. `#[serde(deny_unknown_fields)]` on `LbConfig` + every nested struct (single-sourced) — close the silent-typo gap. Negative tests per error class.
 2. Reject `http`/`h2`/`h3` listener protocols (accepted today, never served) with a clear message → served set `tcp`/`tls`/`h1`/`h1s`/`quic`.
 3. Range checks for `max_keepalive_requests`, `max_requests_per_h3_connection` (0=disable), + other unchecked numeric knobs.
