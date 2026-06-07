@@ -18,6 +18,13 @@ tokio-util = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 parking_lot = { workspace = true }
+# S37-C: hot-reload config swap. The proven cert-reload path holds the
+# TLS bundle in an `Arc<ArcSwap<_>>` inside lb-security; the SIGHUP config
+# reload mirrors that shape for the per-listener L7 proxy snapshot.
+# arc-swap was declared workspace-wide but removed (CODE-2-12) when it had
+# zero consumers; the CODE-2-12 note explicitly anticipated re-adding it
+# at the crate level "if a real hot-swap site lands later" — this is it.
+arc-swap = "1"
 # S35: rustls / rustls-pki-types / rustls-pemfile removed as direct deps —
 # the binary builds its ServerConfig via lb_security (which re-declares them
 # with the same workspace pin); main.rs only touches tokio_rustls::TlsAcceptor.

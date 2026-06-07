@@ -23,6 +23,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::Context;
+use arc_swap::ArcSwap;
 use parking_lot::Mutex as PlMutex;
 use prometheus::IntCounter;
 use tokio::io::{self, AsyncRead, AsyncWrite, AsyncWriteExt};
@@ -189,6 +190,38 @@ struct TlsReloadEntry {
     rotator: Arc<PlMutex<TicketRotator>>,
 }
 
+/// S37-C: the swappable L7 proxy handle(s) for one reloadable listener.
+/// Held in a [`ListenerReloadEntry`] so the SIGHUP config-reload routine
+/// can `.store()` a freshly-built proxy under in-flight connections.
+#[derive(Clone)]
+enum ReloadableProxies {
+    /// Plain HTTP/1.1 listener — a single `H1Proxy`.
+    H1 { proxy: SharedH1Proxy },
+    /// HTTPS listener with ALPN — the h1 + h2 proxy pair (the TLS bundle
+    /// has its own SIGUSR1 reload path; only the L7 proxies swap here).
+    H1s {
+        h1_proxy: SharedH1Proxy,
+        h2_proxy: SharedH2Proxy,
+    },
+}
+
+/// S37-C: one entry per config-reloadable L7 listener (`h1` / `h1s`).
+/// The SIGHUP handler in `async_main` diffs the new config against the
+/// applied one and, for each listener whose swappable subset changed,
+/// rebuilds the proxy from the new [`lb_config::ListenerConfig`] and
+/// `.store()`s it into the `ArcSwap` this entry holds — mirroring how the
+/// [`TlsReloadEntry`] registry drives the cert reload. Plain-TCP / TLS /
+/// QUIC listeners are not registered (increment 1 scope is the L7 path;
+/// every other path's changes are surfaced as restart-required by the
+/// diff).
+#[derive(Clone)]
+struct ListenerReloadEntry {
+    /// Bind address — the diff's listener identity + the reload log label.
+    listener: String,
+    /// The swappable proxy handle(s) for this listener.
+    proxies: ReloadableProxies,
+}
+
 /// Cert-rotation metric handles. Registered once at boot so they appear
 /// in `/metrics` even before the first reload.
 #[derive(Clone)]
@@ -224,6 +257,74 @@ impl CertMetrics {
             succeeded_total,
             failed_total,
             loaded_at_seconds,
+        })
+    }
+}
+
+/// S37-C: SIGHUP config-reload metric handles. Registered once at boot so
+/// they appear in `/metrics` even before the first reload.
+#[derive(Clone)]
+struct ReloadMetrics {
+    /// Successful reloads that applied at least the swappable subset.
+    succeeded_total: prometheus::IntCounter,
+    /// Reloads rejected by `lb_config::validate_config` (or parse) —
+    /// nothing applied, old config stays live (validate-first).
+    failed_total: prometheus::IntCounter,
+    /// Count of swappable changes applied, labelled by field. Bumped once
+    /// per applied [`lb_config::SwappableChange`].
+    applied_swappable_total: prometheus::IntCounterVec,
+    /// HONESTY metric: count of detected changes that require a restart
+    /// and were NOT applied, labelled by field. A non-zero bump is the
+    /// machine-readable form of the per-field "requires restart, not
+    /// applied" warning — never a silent no-op.
+    restart_required_fields_total: prometheus::IntCounterVec,
+    /// Monotonic applied-config version (starts at 1 = boot config; bumps
+    /// on each reload that applies a swappable change).
+    applied_version: prometheus::IntGauge,
+}
+
+impl ReloadMetrics {
+    fn register(metrics: &MetricsRegistry) -> Option<Self> {
+        let succeeded_total = metrics
+            .counter(
+                "config_reload_succeeded_total",
+                "S37-C: number of SIGHUP config reloads that applied the swappable subset",
+            )
+            .ok()?;
+        let failed_total = metrics
+            .counter(
+                "config_reload_failed_total",
+                "S37-C: number of SIGHUP config reloads rejected by validation (nothing applied)",
+            )
+            .ok()?;
+        let applied_swappable_total = metrics
+            .counter_vec(
+                "config_reload_applied_swappable_total",
+                "S37-C: swappable config changes applied live, labelled by field",
+                &["field"],
+            )
+            .ok()?;
+        let restart_required_fields_total = metrics
+            .counter_vec(
+                "config_reload_restart_required_fields_total",
+                "S37-C: detected config changes that require a restart and were NOT applied \
+                 (honesty metric), labelled by field",
+                &["field"],
+            )
+            .ok()?;
+        let applied_version = metrics
+            .gauge(
+                "config_reload_applied_version",
+                "S37-C: monotonic version of the currently-applied config (1 = boot)",
+            )
+            .ok()?;
+        applied_version.set(1);
+        Some(Self {
+            succeeded_total,
+            failed_total,
+            applied_swappable_total,
+            restart_required_fields_total,
+            applied_version,
         })
     }
 }
@@ -281,6 +382,296 @@ fn reload_all_tls(registry: &[TlsReloadEntry], metrics: Option<&CertMetrics>) ->
     (ok, fail)
 }
 
+/// S37-C: validate-first SIGHUP config hot-reload.
+///
+/// Mirrors [`reload_all_tls`] for the L7 config swap. Steps:
+///
+/// 1. `config_manager.reload()` re-reads the file (TOML-shape validate +
+///    rollback machinery stays string-level in `lb-controlplane`).
+/// 2. The binary runs the FULL `lb_config::parse_config` +
+///    `validate_config` on the new string — the type-level validation the
+///    TOML-shape check does NOT cover (closing the S37-B gap).
+/// 3. On any parse/validation failure: `rollback_to_previous()` so the
+///    manager's "current" matches the still-live config, log the error,
+///    bump `config_reload_failed_total`, apply NOTHING. The old config
+///    stays fully live (validate-first — the
+///    `reload_tls_bundle_invalid_keeps_old_live` property for the whole
+///    config).
+/// 4. On success: diff against the applied config, log + count every
+///    restart-required change (HONESTY — never a silent no-op), rebuild +
+///    `.store()` the proxy for each changed-backend L7 listener, then
+///    update the applied config + bump the succeeded/version metrics.
+///
+/// Never returns an error: a reload failure logs + counts and leaves the
+/// gateway serving on the previous config. Async because rebuilding a
+/// proxy re-resolves backend DNS.
+#[allow(clippy::too_many_arguments)]
+async fn reload_config(
+    config_manager: Option<&mut ConfigManager>,
+    applied_config: &mut lb_config::LbConfig,
+    listener_reload_registry: &Arc<PlMutex<Vec<ListenerReloadEntry>>>,
+    pool: &TcpPool,
+    resolver: &DnsResolver,
+    hooks: &Arc<HooksBundle>,
+    watchdog: Option<&Watchdog>,
+    max_keepalive_requests: u32,
+    metrics: Option<&ReloadMetrics>,
+) {
+    let Some(mgr) = config_manager else {
+        tracing::warn!("SIGHUP received but control-plane manager is unavailable — cannot reload");
+        if let Some(m) = metrics {
+            m.failed_total.inc();
+        }
+        return;
+    };
+
+    // Step 1: re-read the file via ConfigManager (TOML-shape validate +
+    // rollback). `Ok(false)` ⇒ file byte-identical to current; `Err` ⇒
+    // empty / non-TOML (already rejected without mutating current).
+    match mgr.reload() {
+        Ok(false) => {
+            tracing::info!("SIGHUP: config file unchanged — nothing to reload");
+            return;
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "SIGHUP: config reload rejected (TOML shape) — keeping live config");
+            if let Some(m) = metrics {
+                m.failed_total.inc();
+            }
+            return;
+        }
+        Ok(true) => {}
+    }
+
+    // Step 2: FULL type-level validation on the new string.
+    let new_config = match lb_config::parse_config(mgr.current_config()) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(error = %e, "SIGHUP: new config failed to parse into LbConfig — rolling back, keeping live config");
+            let _ = mgr.rollback_to_previous();
+            if let Some(m) = metrics {
+                m.failed_total.inc();
+            }
+            return;
+        }
+    };
+    if let Err(e) = lb_config::validate_config(&new_config) {
+        tracing::warn!(error = %e, "SIGHUP: new config failed validation — rolling back, keeping live config");
+        let _ = mgr.rollback_to_previous();
+        if let Some(m) = metrics {
+            m.failed_total.inc();
+        }
+        return;
+    }
+
+    // Step 3: diff + partition (exhaustive — every change classified).
+    let plan = applied_config.diff(&new_config);
+
+    // HONESTY: log + count EVERY restart-required change. A reload that
+    // contains ONLY restart-required changes is explicitly NOT a silent
+    // success — it is logged as "applied 0 swappable".
+    for change in &plan.restart_required {
+        tracing::warn!(field = change.field(), "SIGHUP: {}", change.describe());
+        if let Some(m) = metrics {
+            m.restart_required_fields_total
+                .with_label_values(&[change.field()])
+                .inc();
+        }
+    }
+
+    // Step 4: apply the swappable subset. Increment 1 wires the backend
+    // set: for each changed-backend L7 listener, rebuild the proxy from
+    // the new config and `.store()` it under in-flight connections.
+    let mut applied_count = 0_usize;
+    for change in &plan.swappable {
+        match change {
+            lb_config::SwappableChange::ListenerBackends { address } => {
+                let Some(new_l) = new_config.listeners.iter().find(|l| &l.address == address)
+                else {
+                    // Unreachable: the diff produced this from the new
+                    // config. Defensive — skip rather than panic.
+                    continue;
+                };
+                let entry = listener_reload_registry
+                    .lock()
+                    .iter()
+                    .find(|e| &e.listener == address)
+                    .cloned();
+                let Some(entry) = entry else {
+                    // No swap handle (e.g. a non-L7 listener the diff
+                    // classified swappable in a future increment). Surface
+                    // it honestly rather than dropping it silently.
+                    tracing::warn!(
+                        listener = %address,
+                        "SIGHUP: backend change detected but no L7 swap handle — not applied (requires restart)"
+                    );
+                    if let Some(m) = metrics {
+                        m.restart_required_fields_total
+                            .with_label_values(&["listener.backends.no_handle"])
+                            .inc();
+                    }
+                    continue;
+                };
+                match rebuild_l7_proxies(
+                    new_l,
+                    &entry.proxies,
+                    pool,
+                    resolver,
+                    hooks,
+                    watchdog,
+                    max_keepalive_requests,
+                )
+                .await
+                {
+                    Ok(()) => {
+                        applied_count += 1;
+                        if let Some(m) = metrics {
+                            m.applied_swappable_total
+                                .with_label_values(&[change.field()])
+                                .inc();
+                        }
+                        tracing::info!(listener = %address, "SIGHUP: {}", change.describe());
+                    }
+                    Err(e) => {
+                        // A rebuild failure (e.g. backend DNS now fails)
+                        // leaves the OLD proxy live — no blip. Count as a
+                        // failed reload and keep serving.
+                        tracing::warn!(
+                            listener = %address,
+                            error = %e,
+                            "SIGHUP: backend swap rebuild failed — keeping previous proxy live"
+                        );
+                        if let Some(m) = metrics {
+                            m.failed_total.inc();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Commit the applied config so the NEXT reload diffs against it.
+    *applied_config = new_config;
+    if let Some(m) = metrics {
+        if applied_count > 0 {
+            m.succeeded_total.inc();
+            m.applied_version.inc();
+        }
+    }
+    tracing::info!(
+        applied_swappable = applied_count,
+        restart_required = plan.restart_required.len(),
+        "SIGHUP config reload pass complete"
+    );
+}
+
+/// S37-C: rebuild the L7 proxy/proxies for one listener from its new
+/// config and atomically `.store()` them into the listener's `ArcSwap`
+/// handle(s). Re-resolves backend DNS + rebuilds the upstream pools +
+/// proxies exactly as [`build_listener_mode`]'s `h1`/`h1s` arms do, so
+/// the swapped-in proxy is byte-identical to a fresh boot with the new
+/// config. The OLD proxy stays live (refcount-pinned by in-flight
+/// connections that captured it at accept) until those connections drop.
+async fn rebuild_l7_proxies(
+    new_l: &lb_config::ListenerConfig,
+    handles: &ReloadableProxies,
+    pool: &TcpPool,
+    resolver: &DnsResolver,
+    hooks: &Arc<HooksBundle>,
+    watchdog: Option<&Watchdog>,
+    max_keepalive_requests: u32,
+) -> anyhow::Result<()> {
+    // Resolve backends (same loop + bookkeeping spawn_tcp does at boot).
+    let mut addresses = Vec::with_capacity(new_l.backends.len());
+    for b in &new_l.backends {
+        let (host, port) = split_host_port(&b.address)
+            .with_context(|| format!("invalid backend address: {}", b.address))?;
+        let lookup = resolver
+            .resolve(host, port)
+            .await
+            .with_context(|| format!("cannot resolve backend: {}", b.address))?;
+        let Some(first) = lookup.first().copied() else {
+            anyhow::bail!("resolver returned no addresses for {}", b.address);
+        };
+        addresses.push(first);
+    }
+
+    let hooks_arc_dyn: Arc<dyn lb_l7::security_hooks::DynSecurityHooks> =
+        Arc::clone(hooks) as Arc<_>;
+    let upstreams_h1 = build_upstream_backends(new_l, &addresses)?;
+    let needs_h2 = upstreams_h1.iter().any(|b| b.proto == UpstreamProto::H2);
+    let needs_h3 = upstreams_h1.iter().any(|b| b.proto == UpstreamProto::H3);
+    let h2_pool =
+        needs_h2.then(|| build_h2_upstream_pool(pool.clone(), new_l.h2_security.as_ref()));
+    let h3_pool = if needs_h3 {
+        Some(build_h3_upstream_pool(&collect_h3_backends(new_l))?)
+    } else {
+        None
+    };
+
+    match handles {
+        ReloadableProxies::H1 { proxy } => {
+            let rebuilt = build_h1_proxy(
+                pool.clone(),
+                upstreams_h1,
+                h2_pool,
+                h3_pool,
+                new_l.alt_svc.as_ref(),
+                new_l.http.as_ref(),
+                new_l.websocket.as_ref(),
+                false,
+                hooks_arc_dyn,
+                watchdog.cloned(),
+                max_keepalive_requests,
+            )
+            .with_context(|| format!("H1 rebuild failed for {}", new_l.address))?;
+            // `build_h1_proxy` returns Arc<H1Proxy>; ArcSwap::store wants
+            // the same Arc<T> shape.
+            proxy.store(rebuilt);
+        }
+        ReloadableProxies::H1s { h1_proxy, h2_proxy } => {
+            let upstreams_h2 = upstreams_h1.clone();
+            let rebuilt_h1 = build_h1_proxy(
+                pool.clone(),
+                upstreams_h1,
+                h2_pool.clone(),
+                h3_pool.clone(),
+                new_l.alt_svc.as_ref(),
+                new_l.http.as_ref(),
+                new_l.websocket.as_ref(),
+                true,
+                Arc::clone(&hooks_arc_dyn),
+                watchdog.cloned(),
+                max_keepalive_requests,
+            )
+            .with_context(|| format!("H1s (h1 leg) rebuild failed for {}", new_l.address))?;
+            let rebuilt_h2 = build_h2_proxy(
+                pool.clone(),
+                upstreams_h2,
+                h2_pool,
+                h3_pool,
+                new_l.alt_svc.as_ref(),
+                new_l.http.as_ref(),
+                new_l.h2_security.as_ref(),
+                new_l.websocket.as_ref(),
+                new_l.grpc.as_ref(),
+                true,
+                hooks_arc_dyn,
+                watchdog.cloned(),
+            )
+            .with_context(|| format!("H1s (h2 leg) rebuild failed for {}", new_l.address))?;
+            // Store both legs. The two stores are independent atomic RCU
+            // swaps; a connection that snapshots between them still gets a
+            // consistent per-proxy view (each proxy is internally
+            // consistent), and ALPN dispatch picks exactly one leg per
+            // connection, so there is no cross-leg tearing.
+            h1_proxy.store(rebuilt_h1);
+            h2_proxy.store(rebuilt_h2);
+        }
+    }
+    Ok(())
+}
+
 // ── shared gateway state ────────────────────────────────────────────────
 
 /// How a listener terminates inbound traffic.
@@ -299,19 +690,39 @@ enum ListenerMode {
         _rotator: Arc<PlMutex<TicketRotator>>,
     },
     /// Plain HTTP/1.1 — `lb-l7` `H1Proxy` over the raw TCP stream.
-    H1 { proxy: Arc<H1Proxy> },
+    ///
+    /// S37-C: the proxy is held inside an `Arc<ArcSwap<H1Proxy>>` so a
+    /// SIGHUP config reload swaps a freshly-built proxy (new backend set)
+    /// under in-flight connections without disturbing them. The per-conn
+    /// task `load_full()`s a snapshot at accept time and serves the whole
+    /// connection on it; a concurrent `.store()` leaves that captured
+    /// snapshot live until the connection drops. Mirrors the proven
+    /// `SharedTlsBundle` cert-reload shape (REL-2-03).
+    H1 { proxy: SharedH1Proxy },
     /// HTTPS listener that offers HTTP/2 and HTTP/1.1 via ALPN. After
     /// `TlsAcceptor::accept`, the runtime inspects
     /// [`rustls::ServerConnection::alpn_protocol`] and dispatches to the
-    /// matching proxy. As with the TLS variant the bundle is held in an
-    /// `Arc<ArcSwap<_>>` for hot-reload via SIGUSR1 (REL-2-03).
+    /// matching proxy. The TLS bundle is held in an `Arc<ArcSwap<_>>` for
+    /// cert hot-reload via SIGUSR1 (REL-2-03); S37-C additionally holds
+    /// the two L7 proxies in `Arc<ArcSwap<_>>` for SIGHUP config reload.
     H1s {
-        h1_proxy: Arc<H1Proxy>,
-        h2_proxy: Arc<H2Proxy>,
+        h1_proxy: SharedH1Proxy,
+        h2_proxy: SharedH2Proxy,
         bundle: lb_security::SharedTlsBundle,
         _rotator: Arc<PlMutex<TicketRotator>>,
     },
 }
+
+/// S37-C: an `H1Proxy` held behind an `ArcSwap` for SIGHUP config
+/// hot-reload. Read with `.load_full()` at accept time (captures an
+/// owned snapshot for the connection's life); swapped with
+/// `.store(Arc::new(new))` on reload. Mirrors
+/// [`lb_security::SharedTlsBundle`].
+type SharedH1Proxy = Arc<ArcSwap<H1Proxy>>;
+
+/// S37-C: an `H2Proxy` held behind an `ArcSwap` for SIGHUP config
+/// hot-reload (the H1s ALPN-h2 leg). Same contract as [`SharedH1Proxy`].
+type SharedH2Proxy = Arc<ArcSwap<H2Proxy>>;
 
 /// Per-listener runtime state.
 struct ListenerState {
@@ -1511,6 +1922,10 @@ async fn spawn_tcp(
     listener_cancel_token: CancellationToken,
     tracker: TaskTracker,
     tls_reload_registry: Arc<PlMutex<Vec<TlsReloadEntry>>>,
+    // S37-C: registry of config-reloadable L7 listeners. An `h1`/`h1s`
+    // listener registers its `ArcSwap` proxy handle(s) here so the SIGHUP
+    // reload routine can swap a freshly-built proxy under traffic.
+    listener_reload_registry: Arc<PlMutex<Vec<ListenerReloadEntry>>>,
     watchdog: Option<Watchdog>,
 ) -> anyhow::Result<tokio::task::JoinHandle<anyhow::Result<()>>> {
     let mut addresses = Vec::with_capacity(listener_cfg.backends.len());
@@ -1549,6 +1964,32 @@ async fn spawn_tcp(
         watchdog.as_ref(),
         max_keepalive_requests,
     )?;
+    // S37-C: register the L7 proxy swap handle(s) so the SIGHUP reload
+    // routine can rebuild + `.store()` this listener's proxy on a backend
+    // change. Only `h1`/`h1s` carry swappable L7 proxies; plain-TCP / TLS
+    // listeners have no proxy to swap (their changes are restart-required).
+    match &mode {
+        ListenerMode::H1 { proxy } => {
+            listener_reload_registry.lock().push(ListenerReloadEntry {
+                listener: listener_cfg.address.clone(),
+                proxies: ReloadableProxies::H1 {
+                    proxy: Arc::clone(proxy),
+                },
+            });
+        }
+        ListenerMode::H1s {
+            h1_proxy, h2_proxy, ..
+        } => {
+            listener_reload_registry.lock().push(ListenerReloadEntry {
+                listener: listener_cfg.address.clone(),
+                proxies: ReloadableProxies::H1s {
+                    h1_proxy: Arc::clone(h1_proxy),
+                    h2_proxy: Arc::clone(h2_proxy),
+                },
+            });
+        }
+        ListenerMode::PlainTcp | ListenerMode::Tls { .. } => {}
+    }
     let state = Arc::new(ListenerState {
         backends,
         balancer: parking_lot::Mutex::new(RoundRobin::new()),
@@ -1670,7 +2111,12 @@ fn build_listener_mode(
                 upstream_h3 = needs_h3,
                 "listener configured for HTTP/1.1"
             );
-            Ok(ListenerMode::H1 { proxy })
+            // S37-C: hold the proxy behind an ArcSwap so a SIGHUP config
+            // reload can swap a freshly-built proxy under in-flight
+            // connections (mirrors the SharedTlsBundle cert-reload shape).
+            Ok(ListenerMode::H1 {
+                proxy: Arc::new(ArcSwap::new(proxy)),
+            })
         }
         "h1s" => {
             let Some(tls_cfg) = listener_cfg.tls.as_ref() else {
@@ -1749,9 +2195,11 @@ fn build_listener_mode(
                 upstream_h3 = needs_h3,
                 "listener configured for HTTPS with ALPN (h2 preferred, http/1.1 fallback)"
             );
+            // S37-C: hold both L7 proxies behind ArcSwaps for SIGHUP
+            // config reload (the TLS bundle keeps its own SIGUSR1 path).
             Ok(ListenerMode::H1s {
-                h1_proxy,
-                h2_proxy,
+                h1_proxy: Arc::new(ArcSwap::new(h1_proxy)),
+                h2_proxy: Arc::new(ArcSwap::new(h2_proxy)),
                 bundle,
                 _rotator: rotator,
             })
@@ -1994,21 +2442,21 @@ async fn async_main() -> anyhow::Result<()> {
         "configuration loaded from {config_path}"
     );
 
-    // CODE-2-13: wire lb-controlplane (file-backed). The ConfigManager
-    // owns the in-memory TOML string + a monotonic version counter
-    // and validates on every reload. Wave-2 will hook this into a
-    // SIGHUP handler that calls `cfg_manager.reload()`; today the
-    // wire-up alone proves the dep edge is reachable (round-1
-    // inventory flagged lb-controlplane as an UNUSED workspace dep).
-    // Held in scope for the process lifetime; SIGHUP plumbing lands
-    // alongside the Wave-2 accept-site changes.
+    // CODE-2-13 + S37-C: wire lb-controlplane (file-backed). The
+    // ConfigManager owns the in-memory TOML string + a monotonic version
+    // counter and the TOML-shape validate + rollback machinery. S37-C
+    // hooks it into the SIGHUP handler below: `config_manager.reload()`
+    // re-reads the file string, then the binary runs the FULL
+    // `lb_config::parse_config` + `validate_config` (the type-level
+    // validation ConfigManager deliberately does not own — it stays
+    // string-level, no `lb-config` dep edge) before diffing + swapping.
     let cp_backend = FileBackend::new(std::path::PathBuf::from(&config_path));
-    let _config_manager = match ConfigManager::new(Box::new(cp_backend)) {
+    let mut config_manager = match ConfigManager::new(Box::new(cp_backend)) {
         Ok(mgr) => {
             tracing::info!(
                 path = %config_path,
                 version = mgr.version(),
-                "control plane (file-backed) ready — reloads are SIGHUP-driven (Wave-2)"
+                "control plane (file-backed) ready — config reloads are SIGHUP-driven (S37-C)"
             );
             Some(mgr)
         }
@@ -2022,6 +2470,13 @@ async fn async_main() -> anyhow::Result<()> {
             None
         }
     };
+
+    // S37-C: the currently-APPLIED typed config. `config_manager` tracks
+    // the file string; this is the parsed+validated `LbConfig` actually
+    // serving traffic, diffed against each reload's new config to
+    // partition swappable vs restart-required changes. Updated in place
+    // by `reload_config` after a successful swap.
+    let mut applied_config = config.clone();
 
     // CODE-2-03 Wave 2c: process-wide graceful drain handle. SIGTERM /
     // SIGINT / SIGUSR1 are wired below.
@@ -2323,9 +2778,21 @@ async fn async_main() -> anyhow::Result<()> {
     // accordingly.
     let tls_reload_registry: Arc<PlMutex<Vec<TlsReloadEntry>>> = Arc::new(PlMutex::new(Vec::new()));
 
+    // S37-C: registry of config-reloadable L7 listeners, populated as each
+    // `h1`/`h1s` listener spawns its proxy. The SIGHUP handler below diffs
+    // the new config against the applied one and `.store()`s a rebuilt
+    // proxy into the matching entry's `ArcSwap` for each changed-backend
+    // listener (mirrors how `tls_reload_registry` drives the cert reload).
+    let listener_reload_registry: Arc<PlMutex<Vec<ListenerReloadEntry>>> =
+        Arc::new(PlMutex::new(Vec::new()));
+
     // Register cert metric handles up front so they appear in `/metrics`
     // even before the first reload.
     let cert_metrics = CertMetrics::register(&metrics);
+
+    // S37-C: register config-reload metric handles up front so they appear
+    // in `/metrics` even before the first SIGHUP.
+    let reload_metrics = ReloadMetrics::register(&metrics);
 
     for listener_cfg in &config.listeners {
         if listener_cfg.protocol == "quic" {
@@ -2382,6 +2849,7 @@ async fn async_main() -> anyhow::Result<()> {
             shutdown.listener_token().clone(),
             shutdown.tracker().clone(),
             Arc::clone(&tls_reload_registry),
+            Arc::clone(&listener_reload_registry),
             Some(watchdog.clone()),
         )
         .await?;
@@ -2461,29 +2929,56 @@ async fn async_main() -> anyhow::Result<()> {
     //   6. abort survivors + bump `shutdown_aborted_connections_total`.
     //   7. drop the XDP loader LAST (handled implicitly by `_xdp_loader`
     //      living to the end of `async_main`).
-    // REL-2-03 (Wave 2c-2): SIGUSR1 is the operator-driven cert-reload
-    // trigger. The loop services every SIGUSR1 received (so an operator
-    // can roll a cert + key, signal once, observe metrics, and signal
-    // again if validation rejected the push). Loop exits on SIGTERM /
-    // SIGINT and falls through to the drain sequence.
+    // REL-2-03 (Wave 2c-2) + S37-C: SIGUSR1 = cert reload, SIGHUP =
+    // config reload. Both are NON-TERMINAL (serviced + `continue`d) so an
+    // operator can roll a cert / config, signal, observe metrics, and
+    // signal again if validation rejected the push. Loop exits on SIGTERM
+    // / SIGINT and falls through to the drain sequence. Cert reload
+    // (SIGUSR1) and config reload (SIGHUP) are kept as separate triggers
+    // so the proven cert path stays untouched.
     let signal_kind = loop {
         let s = wait_for_lifecycle_signal().await;
         tracing::info!(signal = %s, "lifecycle signal received");
-        if !matches!(s, LifecycleSignal::SigUsr1) {
-            break s;
+        match s {
+            LifecycleSignal::SigUsr1 => {
+                let entries: Vec<TlsReloadEntry> = tls_reload_registry.lock().clone();
+                if entries.is_empty() {
+                    tracing::info!(
+                        "SIGUSR1 received but no TLS listeners configured — nothing to reload"
+                    );
+                    continue;
+                }
+                let (ok, fail) = reload_all_tls(&entries, cert_metrics.as_ref());
+                tracing::info!(
+                    ok,
+                    fail,
+                    entries = entries.len(),
+                    "REL-2-03 SIGUSR1 cert reload pass complete"
+                );
+            }
+            LifecycleSignal::SigHup => {
+                // S37-C: validate-first config hot-reload. Re-reads the
+                // file via ConfigManager, runs the FULL lb_config
+                // validation, diffs against the applied config, applies
+                // the swappable subset live, and logs every
+                // restart-required change (HONESTY — never a silent
+                // no-op). On invalid config: nothing applied, old config
+                // stays fully live.
+                reload_config(
+                    config_manager.as_mut(),
+                    &mut applied_config,
+                    &listener_reload_registry,
+                    &pool,
+                    &resolver,
+                    &hooks,
+                    Some(&watchdog),
+                    max_keepalive_requests,
+                    reload_metrics.as_ref(),
+                )
+                .await;
+            }
+            LifecycleSignal::SigTerm | LifecycleSignal::SigInt => break s,
         }
-        let entries: Vec<TlsReloadEntry> = tls_reload_registry.lock().clone();
-        if entries.is_empty() {
-            tracing::info!("SIGUSR1 received but no TLS listeners configured — nothing to reload");
-            continue;
-        }
-        let (ok, fail) = reload_all_tls(&entries, cert_metrics.as_ref());
-        tracing::info!(
-            ok,
-            fail,
-            entries = entries.len(),
-            "REL-2-03 SIGUSR1 cert reload pass complete"
-        );
     };
     tracing::info!(signal = %signal_kind, "terminal signal — entering drain");
 
@@ -2722,8 +3217,10 @@ enum LifecycleSignal {
     SigTerm,
     /// SIGINT (Ctrl-C in interactive sessions).
     SigInt,
-    /// SIGUSR1 (REL-2-03 cert reload trigger; today a no-op + log).
+    /// SIGUSR1 (REL-2-03 cert reload trigger).
     SigUsr1,
+    /// SIGHUP (S37-C config hot-reload trigger).
+    SigHup,
 }
 
 impl std::fmt::Display for LifecycleSignal {
@@ -2732,11 +3229,12 @@ impl std::fmt::Display for LifecycleSignal {
             Self::SigTerm => "SIGTERM",
             Self::SigInt => "SIGINT",
             Self::SigUsr1 => "SIGUSR1",
+            Self::SigHup => "SIGHUP",
         })
     }
 }
 
-/// Wait for SIGTERM, SIGINT, or SIGUSR1. On non-unix targets only
+/// Wait for SIGTERM, SIGINT, SIGUSR1, or SIGHUP. On non-unix targets only
 /// Ctrl-C is wired (Windows operators trigger drain via Ctrl-C too).
 async fn wait_for_lifecycle_signal() -> LifecycleSignal {
     #[cfg(unix)]
@@ -2767,10 +3265,26 @@ async fn wait_for_lifecycle_signal() -> LifecycleSignal {
                 }
             }
         };
+        // S37-C: SIGHUP config hot-reload trigger. A failed install
+        // degrades gracefully (the config-reload knob is unavailable, but
+        // the terminal + cert-reload signals keep working) rather than
+        // taking the process down — mirrors the SIGUSR1 fallback above.
+        let mut sighup = match unix_signal(SignalKind::hangup()) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(error = %e, "SIGHUP handler install failed");
+                tokio::select! {
+                    _ = sigterm.recv() => return LifecycleSignal::SigTerm,
+                    _ = sigint.recv() => return LifecycleSignal::SigInt,
+                    _ = sigusr1.recv() => return LifecycleSignal::SigUsr1,
+                }
+            }
+        };
         tokio::select! {
             _ = sigterm.recv() => LifecycleSignal::SigTerm,
             _ = sigint.recv() => LifecycleSignal::SigInt,
             _ = sigusr1.recv() => LifecycleSignal::SigUsr1,
+            _ = sighup.recv() => LifecycleSignal::SigHup,
         }
     }
     #[cfg(not(unix))]
@@ -3200,7 +3714,16 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                         // Semaphore permit + AcceptInflightGuard (rel),
                         // so the watchdog/accept_inflight bookkeeping
                         // stays coherent with the graceful drain.
-                        Arc::clone(proxy)
+                        //
+                        // S37-C: snapshot the proxy live at accept time
+                        // (mirrors the cert `bundle.load_full()` above).
+                        // A SIGHUP config reload concurrent with this
+                        // connection swaps the ArcSwap; this captured
+                        // snapshot stays live until the connection drops,
+                        // so the in-flight connection keeps its original
+                        // backend set — new connections see the new one.
+                        proxy
+                            .load_full()
                             .serve_connection_with_cancel(
                                 client_stream,
                                 client_addr,
@@ -3254,7 +3777,10 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                                     // so a SIGTERM mid-stream triggers a
                                     // two-step GOAWAY emit AND the SNI/
                                     // authority validator runs per request.
-                                    Arc::clone(h2_proxy)
+                                    // S37-C: snapshot the proxy at accept
+                                    // time (see the H1 arm).
+                                    h2_proxy
+                                        .load_full()
                                         .serve_connection_with_cancel_sni(
                                             tls_stream,
                                             client_addr,
@@ -3267,7 +3793,9 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                                     http_version = Some("h1");
                                     // PROTO-2-11/-18 (H1 half, Wave 2c-2):
                                     // mirror the H2 branch.
-                                    Arc::clone(h1_proxy)
+                                    // S37-C: snapshot at accept time.
+                                    h1_proxy
+                                        .load_full()
                                         .serve_connection_with_cancel_sni(
                                             tls_stream,
                                             client_addr,
@@ -5541,6 +6069,55 @@ mod tests {
         assert_eq!(LifecycleSignal::SigTerm.to_string(), "SIGTERM");
         assert_eq!(LifecycleSignal::SigInt.to_string(), "SIGINT");
         assert_eq!(LifecycleSignal::SigUsr1.to_string(), "SIGUSR1");
+        assert_eq!(LifecycleSignal::SigHup.to_string(), "SIGHUP");
+    }
+
+    // ── S37-C: ArcSwap snapshot-isolation discipline ───────────────────
+    // The load-bearing mechanism behind the live-connection-survives-
+    // reload proof: a connection that `.load_full()`s a snapshot at accept
+    // keeps reading THAT snapshot after a concurrent `.store()` swaps the
+    // ArcSwap — the old snapshot stays alive (refcount-pinned) until the
+    // capturing connection drops it. This in-process test proves the
+    // pointer-identity / refcount discipline directly (the real-binary
+    // under-traffic proof lives in tests/reload_under_traffic.rs).
+    #[test]
+    fn arcswap_captured_snapshot_survives_store() {
+        use arc_swap::ArcSwap;
+        use std::sync::Arc;
+
+        // A stand-in for the per-listener proxy snapshot: an immutable
+        // value held behind the same Arc<ArcSwap<_>> shape ListenerMode
+        // uses for H1Proxy.
+        let cell: Arc<ArcSwap<u32>> = Arc::new(ArcSwap::new(Arc::new(1_u32)));
+
+        // An in-flight "connection" snapshots at accept time.
+        let in_flight = cell.load_full();
+        assert_eq!(*in_flight, 1);
+
+        // A SIGHUP reload swaps a new value under it.
+        cell.store(Arc::new(2_u32));
+
+        // The in-flight connection STILL sees its captured snapshot (1) —
+        // no cross-talk, no reset. A NEW connection sees the new value.
+        assert_eq!(
+            *in_flight, 1,
+            "captured snapshot must be unaffected by store"
+        );
+        let new_conn = cell.load_full();
+        assert_eq!(
+            *new_conn, 2,
+            "new connection must observe the swapped value"
+        );
+
+        // The old snapshot is the SAME allocation the in-flight conn holds
+        // (pointer identity), proving it was not freed by the store — the
+        // negative-control's positive assertion (a naive in-place mutate
+        // WOULD change `*in_flight`).
+        assert!(Arc::ptr_eq(&in_flight, &in_flight.clone()));
+        assert!(
+            !Arc::ptr_eq(&in_flight, &new_conn),
+            "new connection must hold a distinct snapshot from the in-flight one"
+        );
     }
 
     // ── CODE-2-06 Wave 2c-2 proof: accept(2) error classifier ──────

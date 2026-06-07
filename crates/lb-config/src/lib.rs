@@ -17,6 +17,11 @@
     allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)
 )]
 
+/// S37-C: config hot-reload diff/partition (swappable vs
+/// restart-required). [`LbConfig::diff`] lives here.
+pub mod reload;
+pub use reload::{ReloadPlan, RestartRequiredChange, SwappableChange};
+
 /// Errors from configuration parsing and validation.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
@@ -41,7 +46,7 @@ pub enum ConfigError {
 /// with `deny_unknown_fields`), so the attribute applies uniformly. R3:
 /// every previously-VALID config still parses byte-identically — only
 /// previously-silently-accepted invalid keys are now rejected.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LbConfig {
     /// Configured listeners.
@@ -89,7 +94,7 @@ pub struct LbConfig {
 /// separate from per-listener `[listeners.*]` blocks. The shared
 /// `lb_security::HooksBundle` consumes these knobs at construction
 /// time in `crates/lb/src/main.rs`.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SecurityConfig {
     /// When `true`, the shared `HooksBundle` is constructed with
@@ -113,7 +118,7 @@ pub struct SecurityConfig {
 /// shape at startup. `allow_non_loopback` is a foot-gun guard: even
 /// with a configured token, the listener defaults to loopback-only
 /// unless this flag is `true`.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AdminConfig {
     /// 64-character hex SHA-256 of the admin bearer token. When
@@ -137,7 +142,7 @@ pub struct AdminConfig {
 /// `GET /metrics` (Prometheus text exposition) and `GET /healthz`.
 /// Loopback-only is the expected deployment posture; there is no
 /// built-in mTLS today.
-#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ObservabilityConfig {
     /// Bind address for the admin HTTP listener. When `None` the
@@ -157,7 +162,7 @@ pub struct ObservabilityConfig {
 /// territory; the EBPF-2-04 change widens it with an additive
 /// `xdp_mode` field. The serde default keeps every existing config
 /// file accepted unchanged.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeConfig {
     /// When true, the binary tries to load and attach the compiled BPF
@@ -609,7 +614,7 @@ pub enum XdpModeChoice {
 }
 
 /// Configuration for a single listener.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ListenerConfig {
     /// Bind address (e.g. `"0.0.0.0:8080"`).
@@ -705,7 +710,7 @@ pub struct ListenerConfig {
 }
 
 /// gRPC capability config (Item 3, PROMPT.md §13).
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GrpcListenerConfig {
     /// Master switch. Defaults to true when the block is present.
@@ -750,7 +755,7 @@ const fn default_grpc_health_synthesized() -> bool {
 /// Every field is optional; omitted fields default to the canonical
 /// value. When the block is absent from the TOML entirely, the listener
 /// does NOT accept WebSocket upgrades.
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WebsocketConfig {
     /// Master switch. Defaults to true when the block is present so
@@ -857,7 +862,7 @@ const fn default_ws_read_frame_timeout_seconds() -> u64 {
 /// value drawn from `lb_h2::security`. Mirrors the shape of
 /// `lb_l7::h2_security::H2SecurityThresholds` without importing it
 /// (keeping lb-config free of a hyper dependency).
-#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct H2SecurityConfig {
     /// Maximum queued pending-accept `RST_STREAM` frames before GOAWAY.
@@ -896,7 +901,7 @@ pub struct H2SecurityConfig {
 /// When set, every H1 response gets `Alt-Svc: h3=":<h3_port>"; ma=<max_age>`.
 /// This is how a TLS-terminated H1 listener advertises an HTTP/3 endpoint
 /// for clients that support QUIC upgrade.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AltSvcConfig {
     /// UDP port hosting the H3 listener that should be advertised.
@@ -911,7 +916,7 @@ const fn default_alt_svc_max_age() -> u32 {
 }
 
 /// HTTP server timeouts (Pillar 3b.3b-1).
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HttpTimeoutsConfig {
     /// Maximum time the listener will spend reading the *request line +
@@ -965,7 +970,7 @@ const fn default_head_timeout_ms() -> u64 {
 /// Backed by rustls 0.23 + the `ring` crypto provider. The
 /// [`TicketRotator`](lb-security) mints session-resumption tickets using
 /// the configured rotation window.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TlsConfig {
     /// Filesystem path to the PEM-encoded certificate chain.
@@ -1001,7 +1006,7 @@ const fn default_ticket_overlap() -> u64 {
 /// auto-generated with mode 0600 on first boot if missing. Pillar
 /// 3b.3c-2 wires the signer + replay guard to the inbound packet
 /// router; 3b.3c-1 only validates the seam and the UDP bind.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct QuicListenerConfig {
     /// Filesystem path to the PEM-encoded certificate chain.
@@ -1053,7 +1058,7 @@ const fn default_quic_recv_udp_payload() -> u64 {
 /// are R7 pre-auth (apply before the client is authenticated), so the
 /// defaults are conservative, industry-safe bounds — documented per helper
 /// below.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RawQuicProxyConfig {
     /// Resolved upstream QUIC backend address (`host:port`) to
@@ -1124,7 +1129,7 @@ const fn default_raw_proxy_max_relay_streams() -> usize {
 /// Field defaults match the owner rulings from
 /// `audit/quic/s15-design.md` §9 — see each `default_*_passthrough`
 /// helper below for citations.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PassthroughConfig {
     /// Bind address for the listener UDP socket.
@@ -1240,7 +1245,7 @@ const fn default_passthrough_flow_idle_timeout_ms() -> u64 {
 }
 
 /// Configuration for a single upstream backend.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BackendConfig {
     /// Backend address (e.g. `"127.0.0.1:3000"`).
