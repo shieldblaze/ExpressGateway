@@ -588,7 +588,10 @@ mod tests {
         assert_eq!(plan.swappable.len(), 1, "http change must be swappable");
         assert!(plan.restart_required.is_empty());
         let fields = l7_fields(&plan.swappable[0]);
-        assert!(fields.contains(&"http"), "fields must name http: {fields:?}");
+        assert!(
+            fields.contains(&"http"),
+            "fields must name http: {fields:?}"
+        );
         assert!(!fields.contains(&"backends"), "backends did not change");
     }
 
