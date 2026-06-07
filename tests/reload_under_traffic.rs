@@ -373,6 +373,86 @@ weight = 1
         hay.windows(needle.len()).position(|w| w == needle)
     }
 
+    /// Drive a single keep-alive connection issuing requests until the
+    /// gateway sends `Connection: close` (the `max_keepalive_requests`
+    /// cap), and return how many requests were served before the close.
+    /// Bounded so a never-closing connection can't hang the test.
+    fn requests_until_keepalive_close(addr: &SocketAddr, max_probe: u32) -> u32 {
+        let Ok(mut s) = TcpStream::connect_timeout(addr, Duration::from_secs(2)) else {
+            return 0;
+        };
+        s.set_read_timeout(Some(Duration::from_secs(3))).ok();
+        for n in 1..=max_probe {
+            let head = "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: keep-alive\r\n\r\n";
+            if s.write_all(head.as_bytes()).is_err() {
+                return n - 1;
+            }
+            s.flush().ok();
+            let mut acc = Vec::new();
+            let mut buf = [0u8; 1024];
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let mut got_close = false;
+            loop {
+                match s.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(b) => {
+                        acc.extend_from_slice(&buf[..b]);
+                        if let Some(end) = find_subslice(&acc, b"\r\n\r\n") {
+                            if acc.len() >= end + 4 + 2 {
+                                break;
+                            }
+                        }
+                    }
+                    Err(_) => break,
+                }
+                if Instant::now() > deadline {
+                    break;
+                }
+            }
+            let text = String::from_utf8_lossy(&acc).to_lowercase();
+            if text.contains("connection: close") {
+                got_close = true;
+            }
+            if got_close {
+                return n; // the cap-th response carried Connection: close
+            }
+        }
+        max_probe + 1 // never closed within the probe budget
+    }
+
+    /// Config variant with a `[runtime].max_keepalive_requests` cap (a
+    /// process-wide, RESTART-REQUIRED field) + a metrics listener.
+    fn write_config_keepalive(
+        dir: &Path,
+        listener_port: u16,
+        metrics_port: u16,
+        backend: SocketAddr,
+        keepalive_cap: u32,
+    ) -> PathBuf {
+        let toml = format!(
+            r#"
+[runtime]
+drain_timeout_ms = 3000
+readiness_settle_ms = 100
+max_keepalive_requests = {keepalive_cap}
+
+[observability]
+metrics_bind = "127.0.0.1:{metrics_port}"
+
+[[listeners]]
+address = "127.0.0.1:{listener_port}"
+protocol = "h1"
+
+[[listeners.backends]]
+address = "{backend}"
+weight = 1
+"#
+        );
+        let path = dir.join("gateway.toml");
+        std::fs::write(&path, toml).expect("write config");
+        path
+    }
+
     /// Spawn the gateway on a retried fresh port with v1 config; return
     /// (child-guard, listener_addr, config_path, temp_dir).
     fn boot(tag: &str, backend: SocketAddr) -> (ChildGuard, SocketAddr, PathBuf, PathBuf) {
@@ -630,6 +710,166 @@ weight = 1
         drop(child);
         drop(backend_a);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// OWNER REQUIRED: reload-summary-matches-observed-behavior — the
+    /// honesty invariant in BOTH directions, on the wire. A single SIGHUP
+    /// changes one SWAPPABLE field (backends) AND one process-wide
+    /// RESTART-REQUIRED field (`[runtime].max_keepalive_requests`).
+    ///
+    /// SWAPPABLE side: the backend change is reported applied (metric
+    /// `config_reload_applied_swappable_total{field="listener.l7"}` bumped)
+    /// AND observably takes effect (a NEW conn routes to the new backend).
+    ///
+    /// RESTART-REQUIRED side: the keepalive change is reported not-applied
+    /// (metric `config_reload_restart_required_fields_total{field=
+    /// "max_keepalive_requests"}` bumped) AND observably does NOT take
+    /// effect (a NEW conn's keep-alive cap stays at the BOOT value).
+    ///
+    /// This guards BOTH the silent-no-op bug (restart-required claimed
+    /// applied) AND the inverse-dishonesty bug (a field silently taking
+    /// effect while reported not-applied). The per-field CLASSIFICATION for
+    /// every config field is exhaustively covered by the `lb-config`
+    /// `reload` diff unit tests; this proves the report tracks observed
+    /// behaviour on the wire for a representative field from EACH bucket.
+    #[test]
+    #[cfg_attr(not(unix), ignore)]
+    fn proof_reload_summary_matches_observed_behavior() {
+        let Ok(bin) = find_binary() else {
+            eprintln!("SKIP: binary absent");
+            return;
+        };
+        let (backend_a, addr_a) = spawn_tagged_backend("A");
+        let (backend_b, addr_b) = spawn_tagged_backend("B");
+        const BOOT_CAP: u32 = 2;
+        const NEW_CAP: u32 = 6;
+
+        // Boot: backend A, keep-alive cap = 2, metrics on.
+        let mut child_opt = None;
+        let mut listener_opt = None;
+        let mut metrics_opt = None;
+        let mut dir_opt = None;
+        for _ in 0..5 {
+            let lp = ephemeral_port();
+            let mp = ephemeral_port();
+            if lp == mp {
+                continue;
+            }
+            let laddr: SocketAddr = format!("127.0.0.1:{lp}").parse().unwrap();
+            let maddr: SocketAddr = format!("127.0.0.1:{mp}").parse().unwrap();
+            let dir = unique_temp_dir("sum");
+            write_config_keepalive(&dir, lp, mp, addr_a, BOOT_CAP);
+            if let Some(child) = try_spawn_gateway(&bin, &dir.join("gateway.toml"), laddr) {
+                child_opt = Some(child);
+                listener_opt = Some(laddr);
+                metrics_opt = Some(maddr);
+                dir_opt = Some(dir);
+                break;
+            }
+            std::fs::remove_dir_all(&dir).ok();
+        }
+        let child = ChildGuard(Some(child_opt.expect("gateway bound")));
+        let listener = listener_opt.unwrap();
+        let metrics = metrics_opt.unwrap();
+        let dir = dir_opt.unwrap();
+
+        // Baseline: backend A, keep-alive closes at the BOOT cap (2).
+        assert_eq!(get_backend_id(&listener).as_deref(), Some("A"));
+        assert_eq!(
+            requests_until_keepalive_close(&listener, 20),
+            BOOT_CAP,
+            "baseline keep-alive cap must be the boot value {BOOT_CAP}"
+        );
+        let applied_before =
+            scrape_metric(&metrics, "config_reload_applied_swappable_total").unwrap_or(0.0);
+        let rr_before =
+            scrape_metric(&metrics, "config_reload_restart_required_fields_total").unwrap_or(0.0);
+
+        // SIGHUP: swap backends A->B (SWAPPABLE) + change keepalive cap
+        // 2->6 (RESTART-REQUIRED, process-wide).
+        write_config_keepalive(&dir, listener.port(), metrics.port(), addr_b, NEW_CAP);
+        sighup(child.0.as_ref().unwrap());
+
+        // SWAPPABLE applied: a NEW conn observes backend B.
+        assert!(
+            await_reload_effect(&listener, "B", Duration::from_secs(5)),
+            "swappable backend change must observably take effect (new conn -> B)"
+        );
+
+        // RESTART-REQUIRED NOT applied: a NEW conn's keep-alive cap is
+        // STILL the boot value (2), not the new value (6).
+        assert_eq!(
+            requests_until_keepalive_close(&listener, 20),
+            BOOT_CAP,
+            "restart-required max_keepalive_requests must NOT take effect — \
+             a new conn must still close at the boot cap {BOOT_CAP}, not the new {NEW_CAP}"
+        );
+
+        // The SUMMARY (metrics) must match: swappable applied bumped +
+        // the keepalive restart-required field bumped.
+        let applied_after = poll_metric_gt(
+            &metrics,
+            "config_reload_applied_swappable_total",
+            applied_before,
+        );
+        assert!(
+            applied_after > applied_before,
+            "config_reload_applied_swappable_total must bump (backend swap applied)"
+        );
+        let rr_keepalive = scrape_metric_labeled(
+            &metrics,
+            "config_reload_restart_required_fields_total",
+            "max_keepalive_requests",
+        )
+        .unwrap_or(0.0);
+        assert!(
+            rr_keepalive >= 1.0,
+            "config_reload_restart_required_fields_total{{field=max_keepalive_requests}} must bump \
+             (keepalive change reported restart-required); rr_before={rr_before}"
+        );
+
+        drop(child);
+        drop((backend_a, backend_b));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Poll a metric until it exceeds `floor` (bounded), returning the
+    /// last observed value.
+    fn poll_metric_gt(addr: &SocketAddr, name: &str, floor: f64) -> f64 {
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut last = floor;
+        while Instant::now() < deadline {
+            last = scrape_metric(addr, name).unwrap_or(floor);
+            if last > floor {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        last
+    }
+
+    /// Scrape a labelled metric sample: the value of the line for
+    /// `name{...field="<field>"...}`.
+    fn scrape_metric_labeled(addr: &SocketAddr, name: &str, field: &str) -> Option<f64> {
+        let mut s = TcpStream::connect_timeout(addr, Duration::from_secs(2)).ok()?;
+        s.set_read_timeout(Some(Duration::from_secs(3))).ok();
+        s.write_all(b"GET /metrics HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+            .ok()?;
+        s.flush().ok();
+        let mut body = Vec::new();
+        let _ = s.read_to_end(&mut body);
+        let text = String::from_utf8_lossy(&body);
+        let needle = format!("field=\"{field}\"");
+        for line in text.lines() {
+            if line.starts_with(name) && line.contains(&needle) {
+                if let Some(v) = line.split_whitespace().last() {
+                    if let Ok(n) = v.parse::<f64>() {
+                        return Some(n);
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// (c) honesty — the WARN + metric path. Scrapes the gateway stderr

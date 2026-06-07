@@ -1,18 +1,17 @@
-# S37-C reload-under-traffic proofs — 2026-06-07T14:00:07Z
-   Compiling lb-config v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/s37-reload/crates/lb-config)
-   Compiling lb-integration-tests v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/s37-reload)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 3.54s
+# S37-C reload-under-traffic proofs — 2026-06-07T14:12:12Z
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.18s
      Running tests/reload_under_traffic.rs (/home/ubuntu/Code/eg-target/debug/deps/reload_under_traffic-c6a05603fe3eeb41)
 
-running 7 tests
+running 8 tests
 test hup::proof_b_invalid_reload_no_blip ... ok
 test hup::proof_c_restart_required_logs_honest_warning ... ok
 test hup::proof_c_restart_required_no_silent_rebind ... ok
 test hup::proof_d_no_cross_talk ... ok
 test hup::proof_e_takes_effect_and_a_live_conn_survives ... ok
+test hup::proof_reload_summary_matches_observed_behavior ... ok
 test hup_async::proof_grpc_rpc_survives_reload ... ok
 test hup_async::proof_ws_tunnel_survives_reload ... ok
 
-test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.89s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.16s
 
 WIRE_EXIT=0
