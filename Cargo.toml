@@ -70,8 +70,12 @@ edition = "2024"
 rust-version = "1.88"
 
 [workspace.dependencies]
-# Async runtime
-tokio = { version = "1", features = ["full"] }
+# Async runtime. HELD at 1.51.x (<1.52): S37-D measured tokio 1.52.x regressing the
+# H2->H3 relay throughput ~10x (its 1.52.0 LIFO slot-stealing revert reschedules the
+# relay) — tests/h2h3_md_streaming_verify.rs h2h3_fcap1 forwards only ~30 MiB / 60s on
+# 1.52.3 (cap-arm never reached) vs 64 MiB / ~5.7s on 1.51.1. Reproduced 3/3 on a quiet
+# box. Carry the 1.52 bump until upstream restores throughput (CF-S37-D-TOKIO-1.52-RELAY).
+tokio = { version = ">=1.51, <1.52", features = ["full"] }
 io-uring = "0.7"
 # Error handling
 thiserror = "2"
