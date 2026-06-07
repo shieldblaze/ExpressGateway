@@ -1,0 +1,15 @@
+[base 06:39:28] HEAD 21ee3c65 branch feature/ops-bcd-s37; disk 38G
+[base 06:39:28] fmt --all --check
+[base 06:39:30] fmt rc=0
+[base 06:39:30] build --workspace --all-features --no-run (full)
+[base 06:44:09] build done; disk 11G
+[base 06:44:09] x3 run 1
+[base 06:55:48] run 1 rc=0 passed=1522 failed=0 ignored=18; disk 12G
+[base 06:55:48] x3 run 2
+[base 07:07:22] run 2 rc=0 passed=1522 failed=0 ignored=18; disk 12G
+[base 07:07:22] x3 run 3
+[base 07:18:58] run 3 rc=0 passed=1522 failed=0 ignored=18; disk 12G
+[base 07:18:58] x3 DONE pass_runs=3/3
+[base 07:18:58] clippy --all-targets --all-features -D warnings
+[base 07:19:53] clippy rc=0 (    Finished `dev` profile [unoptimized + debuginfo] target(s) in 54.99s)
+[base 07:19:53] ALL DONE pass_runs=3/3 fmt=0 clippy=0
