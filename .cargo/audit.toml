@@ -18,20 +18,18 @@ ignore = [
     "RUSTSEC-2026-0002",
     # rand unsound with custom logger (v2)
     "RUSTSEC-2026-0097",
-    # time <0.3.47 RFC 2822 stack-exhaustion DoS; MSRV 1.85 blocks the fix.
-    # rcgen uses time only for internal cert-validity ranges, not RFC 2822
-    # parsing of untrusted input. Revisit when MSRV bumps to 1.88.
-    "RUSTSEC-2026-0009",
+    # (RUSTSEC-2026-0009 time<0.3.47 RFC 2822 DoS — DROPPED S37-D: time bumped to
+    #  0.3.47, the fix, now that MSRV is 1.88. No longer applicable.)
     # --- S34 re-sync with deny.toml. These two are ALREADY accepted in
     # deny.toml with full justifications; they were never mirrored here, so
     # cargo-audit failed while cargo-deny passed. Mirroring (not newly
     # relaxing): both are `unmaintained` advisories on transitive deps.
     # rustls-pemfile unmaintained (v2 advisory id; the v1 id 2025-0019 is above).
     "RUSTSEC-2025-0134",
-    # yaml-rust 0.4 unmaintained. Transitive via foundations 4.5 (held in the
-    # quiche cluster) -> serde_yaml 0.8 -> yaml-rust. foundations is
-    # Cloudflare-maintained and ships in tokio-quiche; its YAML surface parses
-    # only their telemetry config, never ExpressGateway-supplied input. Revisit
-    # when Cloudflare moves foundations off serde_yaml 0.8.
+    # yaml-rust 0.4 unmaintained. Transitive via foundations 4.5.0 (HELD-BY-UPSTREAM:
+    # quiche 0.29.1 -> qlog 0.18 -> foundations ^4) -> serde_yaml 0.8 -> yaml-rust.
+    # foundations is Cloudflare-maintained and ships in tokio-quiche; its YAML surface
+    # parses only their telemetry config, never ExpressGateway-supplied input. Revisit
+    # once quiche/qlog adopt foundations 5.x.
     "RUSTSEC-2024-0320",
 ]

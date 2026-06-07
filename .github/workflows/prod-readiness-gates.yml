@@ -47,7 +47,7 @@ jobs:
   gate-07-cargo-deny:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install cargo-deny (prebuilt binary, no toolchain needed)
         run: |
           VER=0.19.6
@@ -71,7 +71,7 @@ jobs:
   D6-coverage:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/rust-setup
         with:
           toolchain: ${{ env.RUST_MSRV }}
@@ -99,7 +99,7 @@ jobs:
             --lcov --output-path coverage.lcov
       - name: Enforce per-module hot-path threshold (charter metric)
         run: bash scripts/ci/coverage-check.sh coverage.lcov
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: coverage-lcov
@@ -120,7 +120,7 @@ jobs:
       H2SPEC_VER: "v2.6.0"
       H3SPEC_VER: "v0.1.13"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/rust-setup
         with:
           toolchain: ${{ env.RUST_MSRV }}
@@ -215,7 +215,7 @@ jobs:
   D3a-chaos-attacks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/rust-setup
         with:
           toolchain: ${{ env.RUST_MSRV }}
@@ -245,7 +245,7 @@ jobs:
   D5-image-scan:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Build image
         run: |
           docker build -f docker/Dockerfile \
@@ -282,7 +282,7 @@ jobs:
   D2-xdp-verifier-smoke:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/rust-setup
         with:
           toolchain: ${{ env.RUST_MSRV }}

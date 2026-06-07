@@ -39,4 +39,4 @@ libc = { workspace = true }
 #
 # Wave-1 (EBPF-2-01) used it only for the ELF-section regression
 # tests; Wave-2 (SEC-2-12) extends that into a startup-time check.
-object = { version = "0.37", default-features = false, features = ["read", "std"] }
+object = { version = "0.39", default-features = false, features = ["read", "std"] }

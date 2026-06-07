@@ -817,7 +817,7 @@ dependencies = [
  "once_cell",
  "opentelemetry-proto",
  "parking_lot",
- "prometheus",
+ "prometheus 0.13.4",
  "prometheus-client",
  "prometools",
  "rand 0.8.5",
@@ -1504,7 +1504,7 @@ dependencies = [
  "lb-quic",
  "lb-security",
  "parking_lot",
- "prometheus",
+ "prometheus 0.14.0",
  "quiche",
  "rand 0.10.1",
  "rcgen",
@@ -1677,7 +1677,7 @@ dependencies = [
  "aya",
  "aya-obj",
  "libc",
- "object 0.37.3",
+ "object 0.39.1",
  "parking_lot",
  "thiserror 2.0.18",
  "tracing",
@@ -1725,7 +1725,7 @@ dependencies = [
  "hyper-util",
  "lb-l4-xdp",
  "lb-security",
- "prometheus",
+ "prometheus 0.14.0",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
@@ -2074,6 +2074,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "object"
+version = "0.39.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2e5a6c098c7a3b6547378093f5cc30bc54fd361ce711e05293a5cc589562739b"
+dependencies = [
+ "memchr",
+]
+
+[[package]]
 name = "octets"
 version = "0.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2302,7 +2311,19 @@ dependencies = [
  "bitflags",
  "hex",
  "lazy_static",
- "procfs-core",
+ "procfs-core 0.16.0",
+ "rustix 0.38.44",
+]
+
+[[package]]
+name = "procfs"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc5b72d8145275d844d4b5f6d4e1eef00c8cd889edb6035c21675d1bb1f45c9f"
+dependencies = [
+ "bitflags",
+ "hex",
+ "procfs-core 0.17.0",
  "rustix 0.38.44",
 ]
 
@@ -2311,6 +2332,16 @@ name = "procfs-core"
 version = "0.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2d3554923a69f4ce04c4a754260c338f505ce22642d3830e049a399fc2059a29"
+dependencies = [
+ "bitflags",
+ "hex",
+]
+
+[[package]]
+name = "procfs-core"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "239df02d8349b06fc07398a3a1697b06418223b1c7725085e801e7c0fc6a12ec"
 dependencies = [
  "bitflags",
  "hex",
@@ -2328,8 +2359,24 @@ dependencies = [
  "libc",
  "memchr",
  "parking_lot",
- "procfs",
+ "procfs 0.16.0",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "prometheus"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ca5326d8d0b950a9acd87e6a3f94745394f62e4dae1b1ee22b2bc0c394af43a"
+dependencies = [
+ "cfg-if",
+ "fnv",
+ "lazy_static",
+ "libc",
+ "memchr",
+ "parking_lot",
+ "procfs 0.17.0",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -3171,9 +3218,9 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
 name = "socket2"
-version = "0.6.3"
+version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
+checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
 dependencies = [
  "libc",
  "windows-sys 0.61.2",
@@ -3409,9 +3456,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.51.1"
+version = "1.52.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f66bf9585cda4b724d3e78ab34b73fb2bbaba9011b9bfdf69dc836382ea13b8c"
+checksum = "8fc7f01b389ac15039e4dc9531aa973a135d7a4135281b12d7c1bc79fd57fffe"
 dependencies = [
  "bytes",
  "libc",

@@ -590,7 +590,7 @@ mod tests {
             .unwrap()
             .observe(0.2);
         let fams = reg.gather();
-        let names: Vec<String> = fams.iter().map(|f| f.get_name().to_owned()).collect();
+        let names: Vec<String> = fams.iter().map(|f| f.name().to_owned()).collect();
         assert!(names.contains(&"c1_total".to_string()));
         assert!(names.contains(&"g1".to_string()));
         assert!(names.contains(&"h1_seconds".to_string()));
