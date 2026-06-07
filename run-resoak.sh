@@ -11,7 +11,10 @@ RS=scripts/soak/run-soak.sh
 st(){ date -u +%H:%M:%S; }
 fg(){ df --output=avail -BG /dev/root|tail -1|tr -dc 0-9; }
 EGS=/home/ubuntu/Code/eg-target/debug/eg-soak
-echo "[resoak $(st)] eg-soak $( [ -x "$EGS" ] && echo present || echo MISSING ); disk $(fg)G; HEAD $(git rev-parse --short HEAD)" | tee "$OUT/resoak.console"
+echo "[resoak $(st)] HEAD $(git rev-parse --short HEAD); disk $(fg)G; building eg-soak bin (cargo test --no-run skips bins)" | tee "$OUT/resoak.console"
+cargo build -p lb-soak --bin eg-soak --all-features >> "$OUT/resoak.console" 2>&1
+[ -x "$EGS" ] || { echo "[resoak $(st)] eg-soak BUILD FAILED" | tee -a "$OUT/resoak.console"; echo "EGSOAK_BUILD_FAIL" > "$OUT/resoak.marker"; exit 1; }
+echo "[resoak $(st)] eg-soak present; disk $(fg)G" | tee -a "$OUT/resoak.console"
 run_batch(){ local dur="$1"; shift; echo "[resoak $(st)] BATCH dur=${dur}s: $* ; disk $(fg)G" | tee -a "$OUT/resoak.console"; bash "$RS" "$dur" "$OUT" 12 1 "$@" >> "$OUT/resoak.console" 2>&1; echo "[resoak $(st)] batch rc=$? done; disk $(fg)G" | tee -a "$OUT/resoak.console"; }
 run_batch 900  sc1_h1h1 sc1b_h1h2 sc2_h2h2 sc3_slowloris
 run_batch 900  sc4_modeb sc5_modea sc6_413teardown sc7_h3terminate

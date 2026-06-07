@@ -112,7 +112,7 @@ Staged: patch group → prometheus 0.13→0.14 (held un-hold) + object→0.39 (f
 - **Binding ×3 (lead): 3/3 CLEAN — 1562/0/18 all three runs, ZERO failures** (the tokio fix resolved h2h3_fcap1; no flakes). clippy `-D warnings` + fmt clean. Evidence `audit/ops/s37-p4f/`. (The pre-fix tokio-1.52 ×3 — 0/3 on the h2h3_fcap1 stall — is preserved in `audit/ops/s37-p4/` as the regression evidence.)
 - WS matrix + gRPC-H3 + R8 backpressure: pass within the ×3 (workspace --all-features). WS-H2 stays gated (verifier code-read: `#[ignore]` intact).
 - D-diff mechanical + WS-H2-gated: verifier-attested (`audit/ops/s37-verify-D/d-verify-summary.txt`).
-- h2spec/h3spec: verifier running live (tools on PATH) on the tokio-1.51.1 binary [pending].
+- **h2spec: 147/147 PASS** (0 failed, strict) + **h3spec: 49 examples / 12 failures = all 12 named CF-QUICHE-UPGRADE waivers, 37 non-waived all PASS, check-script exit 0** — verifier live on the tokio-1.51.1 binary with a real backend (`audit/ops/s37-verify-D/conformance-final.txt`). D doesn't regress protocol conformance (quiche/hyper/h2 unchanged).
 - Full re-soak (all scenarios incl. sc9 vs S36 ~22MB): lead running [pending].
 - Coverage (D6) + docker-smoke (D5): CI-binding on push (disk-constrained locally); B lb-config 90.42% / C reload.rs 83.78% from earlier scoped runs.
 
