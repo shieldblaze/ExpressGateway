@@ -1,0 +1,14 @@
+[iso 15:20:06] HEAD 31548a44; isolating known flakes serialized
+[iso 15:20:16] fcap1_h2_over_cap_upload_yields_413 iter1 rc=0 :: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[iso 15:20:26] fcap1_h2_over_cap_upload_yields_413 iter2 rc=0 :: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[iso 15:20:34] fcap1_h2_over_cap_upload_yields_413 iter3 rc=0 :: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[iso 15:20:34] === fcap1_h2_over_cap_upload_yields_413 isolated pass=3/3 ===
+[iso 15:20:41] h2h3_fcap1_over_cap_upload_never_complete iter1 rc=0 :: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[iso 15:20:49] h2h3_fcap1_over_cap_upload_never_complete iter2 rc=0 :: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[iso 15:20:55] h2h3_fcap1_over_cap_upload_never_complete iter3 rc=0 :: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[iso 15:20:55] === h2h3_fcap1_over_cap_upload_never_complete isolated pass=3/3 ===
+[iso 15:21:02] t5_single_large_data_frame_is_memory_bounded_through_stalled_upstream iter1 rc=0 :: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[iso 15:21:09] t5_single_large_data_frame_is_memory_bounded_through_stalled_upstream iter2 rc=0 :: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[iso 15:21:16] t5_single_large_data_frame_is_memory_bounded_through_stalled_upstream iter3 rc=0 :: test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+[iso 15:21:16] === t5_single_large_data_frame_is_memory_bounded_through_stalled_upstream isolated pass=3/3 ===
+[iso 15:21:16] ALL DONE
