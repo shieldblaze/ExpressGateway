@@ -30,7 +30,19 @@ pub enum ConfigError {
 }
 
 /// Top-level load balancer configuration.
+///
+/// S37-B: every config struct carries `#[serde(deny_unknown_fields)]`
+/// so a typo (e.g. a misspelled `[listenrs]` block, or
+/// `max_keepalv_requests = 5`) is rejected at parse time instead of
+/// silently dropped. Before S37 there was NO `deny_unknown_fields`
+/// anywhere combined with 88 `#[serde(default)]` keys, so unknown keys
+/// parsed clean and the operator never learned their override was
+/// ignored. None of these structs use `#[serde(flatten)]` (incompatible
+/// with `deny_unknown_fields`), so the attribute applies uniformly. R3:
+/// every previously-VALID config still parses byte-identically — only
+/// previously-silently-accepted invalid keys are now rejected.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LbConfig {
     /// Configured listeners.
     #[serde(default)]
@@ -78,6 +90,7 @@ pub struct LbConfig {
 /// `lb_security::HooksBundle` consumes these knobs at construction
 /// time in `crates/lb/src/main.rs`.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SecurityConfig {
     /// When `true`, the shared `HooksBundle` is constructed with
     /// `SmuggleMode::H1Strict` instead of the default `SmuggleMode::H1`.
@@ -101,6 +114,7 @@ pub struct SecurityConfig {
 /// with a configured token, the listener defaults to loopback-only
 /// unless this flag is `true`.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AdminConfig {
     /// 64-character hex SHA-256 of the admin bearer token. When
     /// `Some`, every request to the admin HTTP listener must carry
@@ -124,6 +138,7 @@ pub struct AdminConfig {
 /// Loopback-only is the expected deployment posture; there is no
 /// built-in mTLS today.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ObservabilityConfig {
     /// Bind address for the admin HTTP listener. When `None` the
     /// listener is not started. Recommended value for single-host
@@ -143,6 +158,7 @@ pub struct ObservabilityConfig {
 /// `xdp_mode` field. The serde default keeps every existing config
 /// file accepted unchanged.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RuntimeConfig {
     /// When true, the binary tries to load and attach the compiled BPF
     /// program on startup. Requires `CAP_BPF` + `CAP_NET_ADMIN` (or root)
@@ -279,11 +295,12 @@ pub struct RuntimeConfig {
     ///
     /// `0` disables the cap (transparent-pass mode — only the
     /// wall-clock / idle timeouts apply). Default `100`
-    /// (`default_max_keepalive_requests`). Any configured value
-    /// above `u32::MAX` is clamped at parse time by the serde `u64`
-    /// → `u32` conversion in the wiring crate; `validate_runtime`
-    /// accepts the full `0..=u32::MAX` range so the only failure
-    /// mode is a type error, not a runtime surprise.
+    /// (`default_max_keepalive_requests`). Any value above `u32::MAX`
+    /// is a TOML type error at parse time. **S37-B**: `validate_runtime`
+    /// now accepts `0` (disable) or `1..=10_000_000`; a fat-finger
+    /// value above 10M is rejected so an operator cannot accidentally
+    /// configure an effectively-unlimited cap while believing they set
+    /// a bound.
     #[serde(default = "default_max_keepalive_requests")]
     pub max_keepalive_requests: u32,
     /// S36-A: hard cap on the number of request streams served on a
@@ -311,10 +328,11 @@ pub struct RuntimeConfig {
     /// tokio-quiche ships an `Option<u64>` = `None`/uncapped, so there
     /// is no numeric reference default; the owner anchor is "order
     /// 1000, meaningfully > the H1/H2 100" because each H3 recycle pays
-    /// the full handshake cost. Any configured value above `u32::MAX`
-    /// is clamped at parse time by the serde `u64` → `u32` conversion
-    /// in the wiring crate; `validate_runtime` accepts the full
-    /// `0..=u32::MAX` range so the only failure mode is a type error.
+    /// the full handshake cost. Any value above `u32::MAX` is a TOML
+    /// type error at parse time. **S37-B**: `validate_runtime` now
+    /// accepts `0` (disable the recycle) or `1..=10_000_000`; a value
+    /// above 10M is rejected (same fat-finger guard as
+    /// [`Self::max_keepalive_requests`]).
     #[serde(default = "default_max_requests_per_h3_connection")]
     pub max_requests_per_h3_connection: u32,
     /// ROUND8-L4-03: per-CPU new-flow-rate cap for the XDP SYN-flood
@@ -435,6 +453,7 @@ pub enum HeaderUnderscorePolicy {
 /// knobs. Mirrors `lb_security::WatchdogConfig` plus the sweep-loop
 /// cadence and the per-request header deadline.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RuntimeWatchdogConfig {
     /// Per-request header-phase deadline, in milliseconds. Used as
     /// the `deadline` argument to `Watchdog::register` for inbound
@@ -492,6 +511,7 @@ const fn default_watchdog_sweep_interval_ms() -> u64 {
 /// gateway-wide *policy* knobs that apply to every TLS-bearing
 /// listener uniformly.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RuntimeTlsConfig {
     /// When `true`, every TLS listener (`protocol = "tls" | "h1s"`)
     /// negotiates **only** TLS 1.3 — rustls is configured with
@@ -590,6 +610,7 @@ pub enum XdpModeChoice {
 
 /// Configuration for a single listener.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ListenerConfig {
     /// Bind address (e.g. `"0.0.0.0:8080"`).
     pub address: String,
@@ -608,7 +629,16 @@ pub struct ListenerConfig {
     ///   [`[listeners.http]`](HttpTimeoutsConfig) blocks.
     /// * `"h1s"` — HTTP/1.1 over TLS. Requires
     ///   [`[listeners.tls]`](TlsConfig). Same optional blocks as `"h1"`.
-    /// * `"http"`, `"h2"`, `"h3"` — reserved for upcoming pillars.
+    ///   HTTP/2 is served on this listener via ALPN (`h2` preferred,
+    ///   `http/1.1` fallback) — there is no separate `"h2"` listener.
+    ///
+    /// S37-B: `"http"`, `"h2"`, and `"h3"` are **rejected** as listener
+    /// protocols (`validate_listener`). They are never served: the binary
+    /// dispatches a running implementation only for `tcp`/`tls`/`h1`/`h1s`
+    /// (TCP path) and `quic` (UDP path). HTTP/2 rides the `"h1s"` listener
+    /// via ALPN; HTTP/3 rides the `"quic"` listener. (These same tokens
+    /// *are* valid as [`BackendConfig::protocol`] values — that is the
+    /// upstream wire protocol, a different axis.)
     pub protocol: String,
     /// TLS settings. Required when `protocol == "tls"`; must be absent
     /// otherwise.
@@ -676,6 +706,7 @@ pub struct ListenerConfig {
 
 /// gRPC capability config (Item 3, PROMPT.md §13).
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct GrpcListenerConfig {
     /// Master switch. Defaults to true when the block is present.
     #[serde(default = "default_grpc_enabled")]
@@ -720,6 +751,7 @@ const fn default_grpc_health_synthesized() -> bool {
 /// value. When the block is absent from the TOML entirely, the listener
 /// does NOT accept WebSocket upgrades.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WebsocketConfig {
     /// Master switch. Defaults to true when the block is present so
     /// operators can enable the capability by declaring the empty table.
@@ -826,6 +858,7 @@ const fn default_ws_read_frame_timeout_seconds() -> u64 {
 /// `lb_l7::h2_security::H2SecurityThresholds` without importing it
 /// (keeping lb-config free of a hyper dependency).
 #[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct H2SecurityConfig {
     /// Maximum queued pending-accept `RST_STREAM` frames before GOAWAY.
     #[serde(default)]
@@ -864,6 +897,7 @@ pub struct H2SecurityConfig {
 /// This is how a TLS-terminated H1 listener advertises an HTTP/3 endpoint
 /// for clients that support QUIC upgrade.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AltSvcConfig {
     /// UDP port hosting the H3 listener that should be advertised.
     pub h3_port: u16,
@@ -878,6 +912,7 @@ const fn default_alt_svc_max_age() -> u32 {
 
 /// HTTP server timeouts (Pillar 3b.3b-1).
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HttpTimeoutsConfig {
     /// Maximum time the listener will spend reading the *request line +
     /// headers* before giving up. Defaults to 10 seconds.
@@ -931,6 +966,7 @@ const fn default_head_timeout_ms() -> u64 {
 /// [`TicketRotator`](lb-security) mints session-resumption tickets using
 /// the configured rotation window.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TlsConfig {
     /// Filesystem path to the PEM-encoded certificate chain.
     pub cert_path: String,
@@ -966,6 +1002,7 @@ const fn default_ticket_overlap() -> u64 {
 /// 3b.3c-2 wires the signer + replay guard to the inbound packet
 /// router; 3b.3c-1 only validates the seam and the UDP bind.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct QuicListenerConfig {
     /// Filesystem path to the PEM-encoded certificate chain.
     pub cert_path: String,
@@ -1017,6 +1054,7 @@ const fn default_quic_recv_udp_payload() -> u64 {
 /// defaults are conservative, industry-safe bounds — documented per helper
 /// below.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RawQuicProxyConfig {
     /// Resolved upstream QUIC backend address (`host:port`) to
     /// re-originate every terminated client connection to. Parsed to a
@@ -1087,6 +1125,7 @@ const fn default_raw_proxy_max_relay_streams() -> usize {
 /// `audit/quic/s15-design.md` §9 — see each `default_*_passthrough`
 /// helper below for citations.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PassthroughConfig {
     /// Bind address for the listener UDP socket.
     pub bind_addr: std::net::SocketAddr,
@@ -1202,6 +1241,7 @@ const fn default_passthrough_flow_idle_timeout_ms() -> u64 {
 
 /// Configuration for a single upstream backend.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BackendConfig {
     /// Backend address (e.g. `"127.0.0.1:3000"`).
     pub address: String,
@@ -1453,6 +1493,34 @@ fn validate_runtime(rt: &RuntimeConfig) -> Result<(), ConfigError> {
              (0 to disable, else 1000..=10000000)",
         )));
     }
+    // S37-B: ROUND8-L7-06 `max_keepalive_requests` previously accepted
+    // the full `0..=u32::MAX` range with no validation — a typo like
+    // `max_keepalive_requests = 4000000000` would silently configure an
+    // effectively-unlimited cap (the operator believing they had set a
+    // bound). `0` is the documented "disable the cap" sentinel and stays
+    // valid; otherwise we require `1..=10_000_000`. The 10M ceiling is
+    // far above any real keep-alive lifetime (nginx default 100, Pingora
+    // edge configs are low thousands) yet rejects an obviously-fat-finger
+    // value while preserving every realistic operator setting.
+    if rt.max_keepalive_requests != 0 && rt.max_keepalive_requests > 10_000_000 {
+        return Err(ConfigError::Validation(format!(
+            "runtime.max_keepalive_requests={} out of range \
+             (0 to disable the cap, else 1..=10000000)",
+            rt.max_keepalive_requests
+        )));
+    }
+    // S37-B: S36-A `max_requests_per_h3_connection` — same shape as
+    // `max_keepalive_requests`. `0` disables the H3 recycle (documented;
+    // re-opens the StreamMap::collected leak / single-connection DoS
+    // vector — only for trusted listeners) and stays valid; otherwise
+    // `1..=10_000_000`. Default 1000.
+    if rt.max_requests_per_h3_connection != 0 && rt.max_requests_per_h3_connection > 10_000_000 {
+        return Err(ConfigError::Validation(format!(
+            "runtime.max_requests_per_h3_connection={} out of range \
+             (0 to disable the recycle, else 1..=10000000)",
+            rt.max_requests_per_h3_connection
+        )));
+    }
     Ok(())
 }
 
@@ -1486,7 +1554,7 @@ fn validate_listener(i: usize, listener: &ListenerConfig) -> Result<(), ConfigEr
                 )));
             }
         }
-        "tcp" | "http" | "h2" | "h3" => {
+        "tcp" => {
             if listener.tls.is_some() {
                 return Err(ConfigError::Validation(format!(
                     "listener {i} has [listeners.tls] but protocol is {protocol:?}; \
@@ -1500,10 +1568,30 @@ fn validate_listener(i: usize, listener: &ListenerConfig) -> Result<(), ConfigEr
                 )));
             }
         }
+        // S37-B: `http`, `h2`, and `h3` pass the old protocol match but
+        // are NEVER served — the binary's listener spawn loop branches
+        // only `quic` → `spawn_quic` vs everything-else → `spawn_tcp`,
+        // and `build_listener_mode` (crates/lb/src/main.rs) dispatches a
+        // running implementation only for `tcp`/`tls`/`h1`/`h1s`. Before
+        // S37 these tokens validated clean and then hard-errored at boot
+        // with "no runtime implementation" — config-time rejection moves
+        // that failure to the place an operator can act on it. The served
+        // set is named explicitly: H2 is reached via the `h1s` listener's
+        // ALPN (`h2`,`http/1.1`) and H3 via the `quic` listener.
+        "http" | "h2" | "h3" => {
+            return Err(ConfigError::Validation(format!(
+                "listener {i} has protocol {protocol:?} which is not a served \
+                 listener protocol; served protocols are: tcp, tls, h1, h1s, quic. \
+                 HTTP/2 is served over the \"h1s\" listener via ALPN (h2 preferred, \
+                 http/1.1 fallback); HTTP/3 is served over the \"quic\" listener. \
+                 (\"http\"/\"h2\"/\"h3\" are valid BACKEND protocols but not listener \
+                 protocols.)"
+            )));
+        }
         other => {
             return Err(ConfigError::Validation(format!(
                 "listener {i} has unknown protocol {other:?} \
-                 (expected one of: tcp, tls, quic, h1, h1s, http, h2, h3)"
+                 (expected one of: tcp, tls, h1, h1s, quic)"
             )));
         }
     }
@@ -1979,10 +2067,14 @@ sni = "backend.test"
 
     #[test]
     fn validate_ok() {
+        // S37-B: a minimal `tcp` listener (a SERVED protocol) is valid.
+        // (This previously used `protocol = "http"`, which S37-B now
+        // rejects as an unserved listener protocol — see
+        // `validate_unserved_listener_protocol_rejected`.)
         let config = LbConfig {
             listeners: vec![ListenerConfig {
                 address: "0.0.0.0:80".into(),
-                protocol: "http".into(),
+                protocol: "tcp".into(),
                 tls: None,
                 quic: None,
                 alt_svc: None,
@@ -2127,6 +2219,193 @@ address = "127.0.0.1:3000"
             passthrough: None,
         };
         assert!(validate_config(&config).is_err());
+    }
+
+    // ── S37-B: unserved listener protocols (http/h2/h3) ─────────────────
+    //
+    // These pass the pre-S37 protocol match but are NEVER served by the
+    // binary — config-time rejection moves the failure to where the
+    // operator can act on it (was a boot-time "no runtime implementation"
+    // abort). The served set is tcp/tls/h1/h1s/quic.
+
+    #[test]
+    fn validate_unserved_listener_protocol_rejected() {
+        for proto in ["http", "h2", "h3"] {
+            let input = format!(
+                r#"
+[[listeners]]
+address = "0.0.0.0:8080"
+protocol = "{proto}"
+
+[[listeners.backends]]
+address = "127.0.0.1:3000"
+"#
+            );
+            // Parses fine (it's a valid String field) — validation rejects it.
+            let cfg = parse_config(&input).expect("parse ok (protocol is a String)");
+            let err = validate_config(&cfg).expect_err("unserved listener protocol must reject");
+            assert!(
+                matches!(&err, ConfigError::Validation(m)
+                    if m.contains("not a served") && m.contains(proto)),
+                "protocol {proto:?} must be rejected as unserved, got: {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_served_listener_protocols_named_in_unserved_error() {
+        // The error must name the served set so the operator knows the fix.
+        let input = r#"
+[[listeners]]
+address = "0.0.0.0:8080"
+protocol = "h2"
+
+[[listeners.backends]]
+address = "127.0.0.1:3000"
+"#;
+        let cfg = parse_config(input).expect("parse ok");
+        let err = validate_config(&cfg).unwrap_err();
+        let msg = match &err {
+            ConfigError::Validation(m) => m.clone(),
+            ConfigError::TomlParse(_) => String::new(),
+        };
+        assert!(
+            matches!(&err, ConfigError::Validation(_)),
+            "expected a Validation error, got: {err:?}"
+        );
+        for served in ["tcp", "tls", "h1", "h1s", "quic"] {
+            assert!(
+                msg.contains(served),
+                "served-protocol error must name {served:?}; got: {msg}"
+            );
+        }
+        // And it must point H2 at h1s/ALPN and H3 at quic.
+        assert!(
+            msg.contains("ALPN"),
+            "must explain H2 is served via ALPN: {msg}"
+        );
+    }
+
+    // ── S37-B: deny_unknown_fields (typo / unknown key rejection) ────────
+
+    #[test]
+    fn unknown_top_level_key_rejected() {
+        // A misspelled top-level table key (`[listenrs]` etc.) used to be
+        // silently dropped; deny_unknown_fields rejects it at parse time.
+        let input = r#"
+[[listeners]]
+address = "0.0.0.0:8080"
+protocol = "tcp"
+
+[[listeners.backends]]
+address = "127.0.0.1:3000"
+
+bogus_top_level_key = true
+"#;
+        let err = parse_config(input).expect_err("unknown top-level key must reject");
+        assert!(
+            matches!(&err, ConfigError::TomlParse(_)),
+            "unknown key is a parse-time (deny_unknown_fields) error, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_runtime_key_rejected() {
+        // The headline gap: `max_keepalv_requests = 5` (a typo of
+        // `max_keepalive_requests`) used to parse clean and be ignored.
+        let input = r#"
+[[listeners]]
+address = "0.0.0.0:8080"
+protocol = "tcp"
+
+[[listeners.backends]]
+address = "127.0.0.1:3000"
+
+[runtime]
+max_keepalv_requests = 5
+"#;
+        let err = parse_config(input).expect_err("typo'd runtime key must reject");
+        assert!(
+            matches!(&err, ConfigError::TomlParse(_)),
+            "expected a TomlParse error, got: {err:?}"
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("max_keepalv_requests") || msg.contains("unknown field"),
+            "error should name the unknown field, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn unknown_listener_key_rejected() {
+        let input = r#"
+[[listeners]]
+address = "0.0.0.0:8080"
+protocol = "tcp"
+prtocol = "tcp"
+
+[[listeners.backends]]
+address = "127.0.0.1:3000"
+"#;
+        let err = parse_config(input).expect_err("typo'd listener key must reject");
+        assert!(matches!(&err, ConfigError::TomlParse(_)), "got: {err:?}");
+    }
+
+    #[test]
+    fn unknown_nested_block_key_rejected() {
+        // Unknown key inside a nested [listeners.tls] block.
+        let input = r#"
+[[listeners]]
+address = "0.0.0.0:443"
+protocol = "tls"
+
+[listeners.tls]
+cert_path = "/c"
+key_path = "/k"
+ticket_rotaton_interval_seconds = 100
+
+[[listeners.backends]]
+address = "127.0.0.1:3000"
+"#;
+        let err = parse_config(input).expect_err("typo'd nested key must reject");
+        assert!(matches!(&err, ConfigError::TomlParse(_)), "got: {err:?}");
+    }
+
+    #[test]
+    fn valid_config_still_parses_under_deny_unknown_fields() {
+        // R3: a config that was valid before S37-B (every key maps to a
+        // real field) must still parse byte-identically. Mirrors the shape
+        // of `config/default.toml` plus a [runtime] block exercising the
+        // two range-checked knobs at their defaults.
+        let input = r#"
+[[listeners]]
+address = "0.0.0.0:8080"
+protocol = "tcp"
+
+[[listeners.backends]]
+address = "127.0.0.1:3000"
+weight = 1
+
+[[listeners.backends]]
+address = "127.0.0.1:3001"
+weight = 1
+
+[runtime]
+drain_timeout_ms = 30000
+readiness_settle_ms = 1000
+handshake_timeout_ms = 5000
+max_inflight_connections = 65536
+connect_timeout_ms = 5000
+per_ip_connection_cap = 1024
+max_keepalive_requests = 100
+max_requests_per_h3_connection = 1000
+header_underscore_policy = "reject"
+"#;
+        let cfg = parse_config(input).expect("valid config must parse");
+        validate_config(&cfg).expect("valid config must validate");
+        let rt = cfg.runtime.as_ref().expect("runtime present");
+        assert_eq!(rt.max_keepalive_requests, 100);
+        assert_eq!(rt.max_requests_per_h3_connection, 1000);
     }
 
     #[test]
@@ -3289,8 +3568,7 @@ max_requests_per_h3_connection = 250
     #[test]
     fn h3_request_cap_zero_is_valid_disabled() {
         // `0` disables the cap (re-opens the leak/DoS vector) — accepted by
-        // validation just like max_keepalive_requests' 0 (full 0..=u32::MAX
-        // range; only a type error can fail).
+        // validation just like max_keepalive_requests' 0 sentinel.
         let rt = RuntimeConfig {
             max_requests_per_h3_connection: 0,
             ..base_runtime()
@@ -3302,10 +3580,10 @@ max_requests_per_h3_connection = 250
     }
 
     #[test]
-    fn h3_request_cap_full_u32_range_is_valid() {
-        // The entire u32 range is accepted (the wiring crate clamps any
-        // larger configured value at the serde u64→u32 boundary).
-        for v in [1u32, 100, 1000, 1_000_000, u32::MAX] {
+    fn h3_request_cap_in_range_is_valid() {
+        // S37-B: `0` (disable) plus `1..=10_000_000` are accepted. Values
+        // above `u32::MAX` are a TOML type error, not reachable here.
+        for v in [1u32, 100, 1000, 1_000_000, 10_000_000] {
             let rt = RuntimeConfig {
                 max_requests_per_h3_connection: v,
                 ..base_runtime()
@@ -3315,5 +3593,110 @@ max_requests_per_h3_connection = 250
                 "max_requests_per_h3_connection={v} must validate"
             );
         }
+    }
+
+    #[test]
+    fn h3_request_cap_above_ceiling_rejected() {
+        // S37-B: a fat-finger value above 10M is rejected so an operator
+        // cannot configure an effectively-unlimited recycle while believing
+        // they set a bound.
+        let rt = RuntimeConfig {
+            max_requests_per_h3_connection: 10_000_001,
+            ..base_runtime()
+        };
+        let err = validate_runtime(&rt).unwrap_err();
+        assert!(
+            matches!(&err, ConfigError::Validation(m)
+                if m.contains("max_requests_per_h3_connection") && m.contains("out of range")),
+            "above-ceiling H3 cap must be rejected, got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn keepalive_requests_range_validated() {
+        // S37-B: `0` (disable) + `1..=10_000_000` accepted; above 10M
+        // rejected. (Pre-S37 this knob had NO validation at all.)
+        for v in [0u32, 1, 100, 10_000_000] {
+            let rt = RuntimeConfig {
+                max_keepalive_requests: v,
+                ..base_runtime()
+            };
+            assert!(
+                validate_runtime(&rt).is_ok(),
+                "max_keepalive_requests={v} must validate"
+            );
+        }
+        let rt = RuntimeConfig {
+            max_keepalive_requests: 10_000_001,
+            ..base_runtime()
+        };
+        let err = validate_runtime(&rt).unwrap_err();
+        assert!(
+            matches!(&err, ConfigError::Validation(m)
+                if m.contains("max_keepalive_requests") && m.contains("out of range")),
+            "above-ceiling keepalive cap must be rejected, got: {err:?}"
+        );
+    }
+
+    // ── S37-B: shipped config files parse + validate ────────────────────
+    //
+    // `config/default.toml` and every `config/examples/*.toml` MUST parse
+    // (under `deny_unknown_fields`) and validate. This is the R3 guard for
+    // the shipped operator-facing configs: a key that drifts out of the
+    // schema, or a new `deny_unknown_fields`/validation rule that breaks a
+    // documented example, fails here.
+
+    fn repo_config_dir() -> std::path::PathBuf {
+        // CARGO_MANIFEST_DIR = <repo>/crates/lb-config
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("config")
+    }
+
+    /// Parse + validate one shipped config file; the file path is woven
+    /// into every failure message. Failures are surfaced via `assert!` on
+    /// the `Result::is_ok()` (the crate-level `deny(clippy::panic)` forbids
+    /// `panic!`/`unreachable!` even in tests, and `expect(&format!(..))`
+    /// trips `clippy::expect_fun_call`).
+    fn assert_config_file_ok(path: &std::path::Path) {
+        let label = path.display().to_string();
+        let read = std::fs::read_to_string(path);
+        assert!(read.is_ok(), "read {label}: {read:?}");
+        let text = read.unwrap_or_default();
+        let parsed = parse_config(&text);
+        assert!(
+            parsed.is_ok(),
+            "{label} must parse under deny_unknown_fields: {parsed:?}"
+        );
+        let cfg = parsed.unwrap_or_default();
+        let validated = validate_config(&cfg);
+        assert!(validated.is_ok(), "{label} must validate: {validated:?}");
+    }
+
+    #[test]
+    fn shipped_default_config_parses_and_validates() {
+        assert_config_file_ok(&repo_config_dir().join("default.toml"));
+    }
+
+    #[test]
+    fn shipped_example_configs_parse_and_validate() {
+        let dir = repo_config_dir().join("examples");
+        let entries =
+            std::fs::read_dir(&dir).expect("config/examples must be a readable directory");
+        let mut seen = 0usize;
+        for entry in entries {
+            let path = entry.expect("dir entry").path();
+            if path.extension().and_then(|s| s.to_str()) != Some("toml") {
+                continue;
+            }
+            seen += 1;
+            assert_config_file_ok(&path);
+        }
+        // Guard against an empty/missing examples dir silently passing.
+        assert!(
+            seen >= 7,
+            "expected at least 7 example configs, found {seen}"
+        );
     }
 }

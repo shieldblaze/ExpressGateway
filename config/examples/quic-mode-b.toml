@@ -1,0 +1,28 @@
+# Example: QUIC listener in Mode B (raw-QUIC terminate-and-re-originate).
+#
+# Presence of `[listeners.quic.raw_proxy]` switches the QUIC listener from
+# HTTP/3-terminate to Mode B: the gateway terminates the client QUIC
+# connection and re-originates a fresh, dedicated upstream QUIC connection,
+# relaying raw streams + datagrams between the two (two distinct
+# quiche::Connections, never a CID bridge).
+#
+# Mode B and `[[listeners.backends]]` are mutually exclusive — a Mode B
+# listener routes to the single `backend_addr` below.
+#
+# Boot: `expressgateway config/examples/quic-mode-b.toml`
+
+[[listeners]]
+address = "0.0.0.0:8443"
+protocol = "quic"
+
+[listeners.quic]
+cert_path         = "/etc/expressgateway/tls/cert.pem"
+key_path          = "/etc/expressgateway/tls/key.pem"
+retry_secret_path = "/etc/expressgateway/quic/retry.secret"
+
+[listeners.quic.raw_proxy]
+backend_addr    = "10.0.0.10:4443"
+sni             = "backend.internal"
+backend_ca_path = "/etc/expressgateway/tls/backend-ca.pem"  # omit => system roots
+# dgram_queue_cap   = 1024   # default
+# max_relay_streams = 256    # default

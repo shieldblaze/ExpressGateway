@@ -1,0 +1,29 @@
+# Example: HTTPS (L7) listener — HTTP/1.1 + HTTP/2 over TLS.
+#
+# This is how HTTP/2 is served: ALPN advertises `h2` (preferred) then
+# `http/1.1`, so an H2 client negotiates HTTP/2 and an older client falls
+# back to HTTP/1.1 on the same port. There is no separate "h2" listener
+# protocol — `h1s` IS the H2 entry point.
+#
+# Replace the cert/key paths with your own PEM files (key must be 0600).
+#
+# Boot: `expressgateway config/examples/h1s.toml`
+
+[[listeners]]
+address = "0.0.0.0:8443"
+protocol = "h1s"
+
+[listeners.tls]
+cert_path = "/etc/expressgateway/tls/cert.pem"
+key_path  = "/etc/expressgateway/tls/key.pem"
+
+# Optional HTTP/2 security thresholds (live defaults apply when omitted).
+# [listeners.h2_security]
+# max_pending_accept_reset_streams = 100   # CVE-2023-44487 rapid-reset cap
+# max_concurrent_streams           = 256
+# max_header_list_size             = 65536
+
+[[listeners.backends]]
+address  = "127.0.0.1:3000"
+protocol = "h1"
+weight   = 1
