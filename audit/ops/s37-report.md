@@ -67,6 +67,11 @@ SIGHUP trigger · validate-first via full `lb_config::validate_config` · `Arc<A
 
 If live-connection-preservation can't be PROVEN under traffic → C NOT promoted (R11), carried. Check-in to owner with the proof + negative control before integration.
 
+**Phase-2 check-in (owner decision, 2026-06-07):** C increment 1 (commit `78c18dd6`) delivered the SIGHUP validate-first reload + atomic `Arc<ArcSwap>` seam + 5/5 H1 wire proofs + an in-process negative control. reload-eng honestly surfaced two gaps; owner ruled:
+- **Scope = L7 v1** (H1/H1s carrying H1/H2/gRPC/WS). **QUIC/H3 backend hot-reload stays RESTART-REQUIRED this session (honest WARN+metric), CARRIED** as its own scoped increment — it interacts with the S36 cap→GOAWAY→recycle lifecycle (swapping the H3 upstream pool mid-recycle is a distinct live-survival surface needing its own focused proof). → **CF-S37-C-H3-BACKEND-RELOAD** (carry).
+- **Non-waivable before C promotes:** (1) gRPC mid-RPC + live WS survival PROVEN on the wire (the hard stateful cases — H1-only insufficient). (2) Diff-honesty BOTH directions via making the full L7 swappable set genuinely applied + classified swappable; **new required proof `reload-summary-matches-observed-behavior` for EVERY field class** (a field reported "applied" observably takes effect; one reported "restart-required, not applied" observably does not — guarding the inverse-dishonesty bug). (3) `config_reload_failed_total` metric assertion in invalid-no-blip.
+- Mechanism (SIGHUP) confirmed. reload-eng executing the additions; verifier held until the final C commit, then the binding run.
+
 ## Phase 3 — (D) latest-deps upgrade `[dep-eng]` _(concurrent; integrated last)_
 Staged: patch group → prometheus 0.13→0.14 (held un-hold) + object→0.39 (folds #224) → quiche/tokio-quiche→latest [h3spec vs 12-waiver] → hyper/h2→latest [h2spec 147/147; **hyper#4050: un-gate WS-H2 ONLY IF the fix is in the adopted release — re-prove the backpressure plateau as the un-gate gate; else WS-H2 stays gated**] → tokio-tungstenite→latest [WS matrix]. Supersede #224/#226. R8 re-proven. MSRV bump only if latest quiche requires (+ refresh stale "1.85" prose). Un-verifiable crate → drop/pin-back, carry.
 
