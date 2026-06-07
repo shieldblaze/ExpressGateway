@@ -1694,4 +1694,201 @@ weight = 1
         }
         out
     }
+
+    // ── H2 backend-reload over h1s (TLS + ALPN h2 → H1 backend) ─────────
+    //
+    // The committed proof for the H2 reload path (the H2Proxy serve +
+    // H2->H1 forward path). An ALPN-h2 client hits an h1s listener that
+    // forwards to an H1 backend; a SIGHUP swaps the backend set; a NEW h2
+    // connection observes the new backend. Exercises the H2Proxy serve
+    // path deterministically (no throughput-fragile fcap timing), which
+    // also restores the lb-l7/h2_proxy.rs coverage the llvm-cov-
+    // instrumented fcap tests drop below charter under instrumentation.
+
+    /// A plain HTTP/1.1 backend (async hyper) that tags every 200 with
+    /// `x-backend-id: <id>`. The h1s listener's H2 leg forwards H2->H1 to
+    /// it, so this drives the H2Proxy serve+forward path.
+    async fn spawn_tagged_h1_backend(
+        id: &'static str,
+    ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+        let l = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let addr = l.local_addr().unwrap();
+        let h = tokio::spawn(async move {
+            loop {
+                let Ok((sock, _)) = l.accept().await else {
+                    return;
+                };
+                tokio::spawn(async move {
+                    let builder = hyper::server::conn::http1::Builder::new();
+                    let svc =
+                        hyper::service::service_fn(move |_req: Request<Incoming>| async move {
+                            let body = BodyExt::boxed(http_body_util::Full::new(
+                                Bytes::from_static(b"ok"),
+                            ));
+                            Ok::<_, std::convert::Infallible>(
+                                Response::builder()
+                                    .status(200)
+                                    .header("x-backend-id", id)
+                                    .body(body)
+                                    .unwrap(),
+                            )
+                        });
+                    let _ = builder.serve_connection(TokioIo::new(sock), svc).await;
+                });
+            }
+        });
+        (addr, h)
+    }
+
+    fn write_h1s_h1backend_config(
+        dir: &std::path::Path,
+        listener_port: u16,
+        backend: SocketAddr,
+        cert: &std::path::Path,
+        key: &std::path::Path,
+    ) -> PathBuf {
+        let toml = format!(
+            r#"
+[runtime]
+drain_timeout_ms = 3000
+readiness_settle_ms = 100
+
+[[listeners]]
+address = "127.0.0.1:{listener_port}"
+protocol = "h1s"
+
+[listeners.tls]
+cert_path = "{cert}"
+key_path = "{key}"
+
+[[listeners.backends]]
+address = "{backend}"
+weight = 1
+"#,
+            cert = cert.display(),
+            key = key.display(),
+        );
+        let p = dir.join("gateway.toml");
+        std::fs::write(&p, toml).unwrap();
+        p
+    }
+
+    /// Issue one GET over a fresh TLS+ALPN-h2 connection to the gateway;
+    /// return the `x-backend-id` response header (or None on failure).
+    async fn h2_get_backend_id(listener: SocketAddr) -> Option<String> {
+        use tokio_rustls::TlsConnector;
+        let tcp = tokio::net::TcpStream::connect(listener).await.ok()?;
+        let connector = TlsConnector::from(insecure_h2_client_config());
+        let server_name =
+            tokio_rustls::rustls::pki_types::ServerName::try_from("127.0.0.1").ok()?;
+        let tls = connector.connect(server_name, tcp).await.ok()?;
+        let (mut sender, conn) = hyper::client::conn::http2::handshake::<_, _, ClientBody>(
+            TokioExecutor::new(),
+            TokioIo::new(tls),
+        )
+        .await
+        .ok()?;
+        tokio::spawn(async move {
+            let _ = conn.await;
+        });
+        let req = Request::builder()
+            .method("GET")
+            .uri("/")
+            .body(BodyExt::boxed(http_body_util::Empty::<Bytes>::new()))
+            .ok()?;
+        let resp = tokio::time::timeout(Duration::from_secs(5), sender.send_request(req))
+            .await
+            .ok()?
+            .ok()?;
+        resp.headers()
+            .get("x-backend-id")
+            .and_then(|v| v.to_str().ok())
+            .map(str::to_owned)
+    }
+
+    /// R13 / D6: H2 backend hot-reload. An ALPN-h2 client hits an h1s
+    /// listener forwarding to H1 backend A; SIGHUP swaps the backend set to
+    /// B; a NEW h2 connection must observe backend B (reload took effect on
+    /// the H2 serve path), proving H2 backend reload works AND covering the
+    /// H2Proxy serve/forward lines deterministically.
+    #[tokio::test]
+    async fn proof_h2_backend_reload_takes_effect() {
+        let Some(bin) = find_binary() else {
+            eprintln!("SKIP: binary absent");
+            return;
+        };
+        let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+        let (addr_a, _ja) = spawn_tagged_h1_backend("A").await;
+        let (addr_b, _jb) = spawn_tagged_h1_backend("B").await;
+
+        let dir0 = temp_dir("h2cov");
+        let generated =
+            rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string(), "localhost".into()])
+                .unwrap();
+        let cert_p = dir0.join("g.crt");
+        let key_p = dir0.join("g.key");
+        std::fs::write(&cert_p, generated.cert.pem()).unwrap();
+        std::fs::write(&key_p, generated.signing_key.serialize_pem()).unwrap();
+
+        // Boot the h1s gateway on a retried fresh port.
+        let mut guard = None;
+        let mut lport = 0u16;
+        let mut dir = PathBuf::new();
+        for _ in 0..5 {
+            let p = ephemeral_port();
+            let laddr: SocketAddr = format!("127.0.0.1:{p}").parse().unwrap();
+            let d = temp_dir("h2cov");
+            write_h1s_h1backend_config(&d, p, addr_a, &cert_p, &key_p);
+            let child = Command::new(&bin)
+                .arg(d.join("gateway.toml"))
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .env("RUST_LOG", "warn")
+                .spawn()
+                .expect("spawn");
+            if tcp_ready(laddr, Duration::from_secs(10)).await {
+                guard = Some(ChildGuard(child));
+                lport = p;
+                dir = d;
+                break;
+            }
+            let mut c = child;
+            let _ = c.kill();
+            let _ = c.wait();
+            std::fs::remove_dir_all(&d).ok();
+        }
+        let guard = guard.expect("h1s gateway bound");
+        let listener: SocketAddr = format!("127.0.0.1:{lport}").parse().unwrap();
+
+        // Baseline: an H2 request reaches backend A.
+        assert_eq!(
+            h2_get_backend_id(listener).await.as_deref(),
+            Some("A"),
+            "baseline H2 request must reach backend A"
+        );
+
+        // SIGHUP: swap the backend set A -> B.
+        write_h1s_h1backend_config(&dir, lport, addr_b, &cert_p, &key_p);
+        sighup(&guard.0);
+
+        // A NEW h2 connection must observe backend B (reload took effect on
+        // the H2 serve path).
+        let mut took_effect = false;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < deadline {
+            if h2_get_backend_id(listener).await.as_deref() == Some("B") {
+                took_effect = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+        assert!(
+            took_effect,
+            "after SIGHUP a NEW H2 connection must reach backend B (H2 backend reload took effect)"
+        );
+
+        drop(guard);
+        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&dir0).ok();
+    }
 }
