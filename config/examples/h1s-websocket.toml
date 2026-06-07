@@ -1,0 +1,28 @@
+# Example: WebSocket over HTTPS (HTTP/1.1, RFC 6455) listener.
+#
+# The `[listeners.websocket]` block enables WebSocket upgrade handling on
+# the `h1s` listener. WS-over-HTTP/1.1 is on by default once the block is
+# present; WS-over-HTTP/2 (RFC 8441) is opt-in via `h2_extended_connect`
+# (OFF by default — see CF-S27-2). The backend speaks HTTP/1.1.
+#
+# Boot: `expressgateway config/examples/h1s-websocket.toml`
+
+[[listeners]]
+address = "0.0.0.0:8443"
+protocol = "h1s"
+
+[listeners.tls]
+cert_path = "/etc/expressgateway/tls/cert.pem"
+key_path  = "/etc/expressgateway/tls/key.pem"
+
+[listeners.websocket]
+enabled                    = true
+idle_timeout_seconds       = 60
+max_message_size_bytes     = 16777216   # 16 MiB
+read_frame_timeout_seconds = 30
+# h2_extended_connect = true            # opt in to WS-over-HTTP/2 (RFC 8441)
+
+[[listeners.backends]]
+address  = "127.0.0.1:3000"
+protocol = "h1"
+weight   = 1

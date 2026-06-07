@@ -1,0 +1,24 @@
+# Example: TLS-terminating (L4) listener.
+#
+# rustls terminates the client TLS, then forwards the decrypted byte
+# stream to the backend (raw TCP upstream). For HTTP-aware TLS use the
+# `h1s` example instead.
+#
+# Replace the cert/key paths with your own PEM files. The private key must
+# be 0600 (group/other-readable keys are rejected at boot).
+#
+# Boot: `expressgateway config/examples/tls.toml`
+
+[[listeners]]
+address = "0.0.0.0:8443"
+protocol = "tls"
+
+[listeners.tls]
+cert_path = "/etc/expressgateway/tls/cert.pem"
+key_path  = "/etc/expressgateway/tls/key.pem"
+# ticket_rotation_interval_seconds = 86400   # default 24h
+# ticket_rotation_overlap_seconds  = 86400   # default 24h
+
+[[listeners.backends]]
+address = "127.0.0.1:3000"
+weight = 1

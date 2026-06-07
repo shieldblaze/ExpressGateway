@@ -1,0 +1,26 @@
+# Example: QUIC listener in HTTP/3-terminate mode (the default QUIC mode).
+#
+# The gateway terminates the client QUIC connection and speaks HTTP/3 via
+# quiche::h3. This is how HTTP/3 is served — there is no separate "h3"
+# listener protocol.
+#
+# Replace cert/key paths with your own PEM files (key must be 0600). The
+# retry secret file is minted with mode 0600 on first boot if it does not
+# exist.
+#
+# Boot: `expressgateway config/examples/quic-h3.toml`
+
+[[listeners]]
+address = "0.0.0.0:8443"
+protocol = "quic"
+
+[listeners.quic]
+cert_path         = "/etc/expressgateway/tls/cert.pem"
+key_path          = "/etc/expressgateway/tls/key.pem"
+retry_secret_path = "/etc/expressgateway/quic/retry.secret"
+# max_idle_timeout_ms        = 30000   # default
+# max_recv_udp_payload_size  = 1350    # default; must be >= 1200
+
+# Advertise this H3 endpoint from an h1/h1s listener with:
+#   [listeners.alt_svc]
+#   h3_port = 8443
