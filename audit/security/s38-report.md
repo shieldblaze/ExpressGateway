@@ -188,8 +188,10 @@ Committed in `7f702188` (scoped to `crates/`). R13 layered verification per fix.
   read was bounded only by the 60s connection `total` (+ per-IP cap 1024), not the intended 10s
   `header`. A slowloris header-trickle held a connection/slot 6× longer than designed.
 - **Fix:** `.timer(TokioTimer::new()).header_read_timeout(self.timeouts.header)` on the builder
-  (mirrors H2's proven `timer + with_upgrades` wiring at h2_proxy.rs:828). Stale doc-comment
-  (F-RES-4) corrected in the same edit.
+  (reuses the same `TokioTimer` H2 already wires at h2_proxy.rs:828). The H1 WS upgrade path uses
+  `.with_upgrades()`, and the upgrade handshake runs in `serve_request` AFTER the header section is
+  read — so `header_read_timeout` is already satisfied before the upgrade and does not interfere
+  (confirmed by `round8_ws_upgrade_defer` 4/4). Stale doc-comment (F-RES-4) corrected in the same edit.
 - **Negative control (load-bearing, independently re-confirmed by lead):**
   `crates/lb-l7/tests/s38_h1_header_timeout.rs::h1_partial_head_closed_at_header_timeout_not_total`
   (boots H1 listener header=1s/total=10s, sends a partial head, asserts close <5s).
