@@ -49,14 +49,17 @@ members = [
     "crates/lb-soak",
 ]
 
-# MSRV-pin notes:
-# MSRV is 1.88 as of S31 (quiche 0.29.1 + tokio-quiche 0.19.0 hard-require Rust
-# 1.88; the bump is unavoidable to adopt quiche 0.29). Cargo.lock STILL pins
-# `foundations 4.5.0` and `idna_adapter 1.1.0` — NOT to hold MSRV (1.88 already
-# clears their newer requirements: darling 0.23 = 1.88, icu 2.2 = 1.86) but to
-# keep them ISOLATED from this quiche-only upgrade (they belong to Dependabot
-# #222's other tiers; bump them in their own session). Do not blindly
-# `cargo update`; verify the workspace still builds on 1.88 after any bump.
+# MSRV-pin / held-dep notes (refreshed S37-D):
+# MSRV is 1.88 (quiche 0.29.1 + tokio-quiche 0.19.0 hard-require it).
+# `foundations 4.5.0` is HELD-BY-UPSTREAM, not by choice: quiche 0.29.1 ->
+# qlog 0.18 -> foundations ^4, so it cannot move to 5.x without a quiche/qlog
+# bump (quiche 0.29.1 is already latest). foundations transitively pins
+# prometheus 0.13.4 + object 0.37.3 + serde_yaml/yaml-rust, dual-versioned
+# alongside our DIRECT prometheus 0.14 / object 0.39 (deny multiple-versions =
+# warn). `idna_adapter 1.1.0` is a leaf transitive (idna/url) left as resolved.
+# Re-evaluate both when quiche/qlog adopt foundations 5.x. (S37 also confirmed
+# aya 0.13.1 is latest — 0.13.2 was yanked — and held reqwest at 0.12: its 0.13
+# major renamed the rustls-tls feature + defaults to aws-lc, a dev-only churn.)
 
 [workspace.package]
 license = "GPL-3.0-only"
@@ -67,8 +70,12 @@ edition = "2024"
 rust-version = "1.88"
 
 [workspace.dependencies]
-# Async runtime
-tokio = { version = "1", features = ["full"] }
+# Async runtime. HELD at 1.51.x (<1.52): S37-D measured tokio 1.52.x regressing the
+# H2->H3 relay throughput ~10x (its 1.52.0 LIFO slot-stealing revert reschedules the
+# relay) — tests/h2h3_md_streaming_verify.rs h2h3_fcap1 forwards only ~30 MiB / 60s on
+# 1.52.3 (cap-arm never reached) vs 64 MiB / ~5.7s on 1.51.1. Reproduced 3/3 on a quiet
+# box. Carry the 1.52 bump until upstream restores throughput (CF-S37-D-TOKIO-1.52-RELAY).
+tokio = { version = ">=1.51, <1.52", features = ["full"] }
 io-uring = "0.7"
 # Error handling
 thiserror = "2"
@@ -136,7 +143,7 @@ libfuzzer-sys = "0.4"
 # listener. `default-features = false` drops the protobuf family so we
 # keep the text-format path only; `process` enables the
 # `process_collector` for OS-level RSS/CPU samples.
-prometheus = { version = "0.13", default-features = false, features = ["process"] }
+prometheus = { version = "0.14", default-features = false, features = ["process"] }
 # CODE-2-11: property-based testing for the H1 / H2 / H3 / QUIC parsers.
 # Dev-only; never enters release. The default-features include
 # `proptest-derive` machinery we do not need (regex-based generators)
@@ -181,6 +188,10 @@ tokio-rustls = { workspace = true }
 parking_lot = { workspace = true }
 # Pillar 3b.3b-2: reqwest for H2 integration tests. rustls-tls + http2
 # only; no default features to avoid pulling native-tls and OpenSSL.
+# reqwest HELD at 0.12 (latest 0.12.x, maintained): 0.13 renamed/removed the
+# `rustls-tls` feature and defaults its rustls provider to aws-lc-rs (vs our
+# ring standard) — a dev-only major not worth the crypto-provider churn (S37 D;
+# carry CF-S37-D-REQWEST-0.13). dev-dependency: never enters the release binary.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "http2"] }
 # Item 1: raw h2 crate used as a malicious-client harness in
 # tests/h2_security_live.rs. Pinned to the same minor hyper pulls.

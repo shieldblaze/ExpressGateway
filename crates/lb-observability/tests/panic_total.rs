@@ -43,9 +43,6 @@ fn panic_total_accessor_is_idempotent() {
     assert_eq!(b.get(), 2);
     // Only one family is registered (no duplicate).
     let fams = reg.gather();
-    let count = fams
-        .iter()
-        .filter(|f| f.get_name() == "panic_total")
-        .count();
+    let count = fams.iter().filter(|f| f.name() == "panic_total").count();
     assert_eq!(count, 1);
 }

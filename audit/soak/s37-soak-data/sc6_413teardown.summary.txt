@@ -1,0 +1,10 @@
+=== SOAK sc6_413teardown — BOUNDED (900s, 76 samples) ===
+      rss_kb [BOUNDED] rss_kb: bounded — last-third median 27204 vs first-third 26940 (+1.0%, within band 10% or non-monotone 49%) — first=20216 last=27196 min=20216 max=28132
+    vmhwm_kb [BOUNDED] vmhwm_kb: bounded — last-third median 28172 vs first-third 27384 (+2.9%, within band 10% or non-monotone 97%) — first=20216 last=28172 min=20216 max=28172
+         fds [BOUNDED] fds: bounded — last-third median 25 vs first-third 24 (+4.2%, within band 10% or non-monotone 56%) — first=11 last=27 min=11 max=29
+     threads [BOUNDED] threads: bounded — last-third median 9 vs first-third 9 (+0.0%, within band 10% or non-monotone 100%) — first=10 last=9 min=9 max=10
+  accept_inflight [BOUNDED] accept_inflight: bounded — last-third median 13 vs first-third 14 (-7.1%, within band 10% or non-monotone 57%) — first=4 last=15 min=4 max=18
+  panic_total [BOUNDED] panic_total: stayed zero across the run — first=0 last=0 min=0 max=0
+  load:
+    oversize_teardown: ok=0 err=78845
+    mid_stream_disconnect: ok=135299 err=0

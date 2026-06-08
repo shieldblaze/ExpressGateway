@@ -1,0 +1,132 @@
+[resoak 18:55:25] HEAD 937a879c; disk 8G; building eg-soak bin (cargo test --no-run skips bins)
+   Compiling libc v0.2.186
+   Compiling cc v1.2.60
+   Compiling memchr v2.8.0
+   Compiling nom v7.1.3
+   Compiling parking_lot_core v0.9.12
+   Compiling errno v0.3.14
+   Compiling signal-hook-registry v1.4.8
+   Compiling ring v0.17.14
+   Compiling parking_lot v0.12.5
+   Compiling mio v1.2.0
+   Compiling socket2 v0.6.4
+   Compiling itertools v0.13.0
+   Compiling tokio v1.51.1
+   Compiling cexpr v0.6.0
+   Compiling clang-sys v1.8.1
+   Compiling bitflags v2.11.0
+   Compiling futures-util v0.3.32
+   Compiling bindgen v0.72.1
+   Compiling getrandom v0.3.4
+   Compiling fslock v0.2.1
+   Compiling getrandom v0.2.17
+   Compiling cmake v0.1.58
+   Compiling rand_core v0.9.5
+   Compiling tracing-core v0.1.36
+   Compiling indexmap v2.14.0
+   Compiling tracing v0.1.44
+   Compiling tokio-util v0.7.18
+   Compiling rand_chacha v0.9.0
+   Compiling serde_core v1.0.228
+   Compiling time v0.3.47
+   Compiling h2 v0.4.14
+   Compiling rustls v0.23.40
+   Compiling rand v0.9.4
+   Compiling rustls-webpki v0.103.13
+   Compiling futures-channel v0.3.32
+   Compiling subtle v2.6.1
+   Compiling quiche v0.29.1
+   Compiling serde_json v1.0.150
+   Compiling tungstenite v0.29.0
+   Compiling boring-sys v4.21.2
+   Compiling hyper v1.10.1
+   Compiling anyhow v1.0.102
+   Compiling yasna v0.6.0
+   Compiling hyper-util v0.1.20
+   Compiling tokio-rustls v0.26.4
+   Compiling rcgen v0.14.8
+   Compiling tokio-tungstenite v0.29.0
+   Compiling boring v4.21.2
+   Compiling lb-soak v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/s36-verify/crates/lb-soak)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 41.95s
+[resoak 18:56:07] eg-soak present; disk 7G
+[resoak 18:56:07] BATCH dur=900s: sc1_h1h1 sc1b_h1h2 sc2_h2h2 sc3_slowloris ; disk 7G
+[run-soak] start Sun Jun  7 18:56:07 UTC 2026 duration=900s sample=12s scale=1 scenarios=sc1_h1h1 sc1b_h1h2 sc2_h2h2 sc3_slowloris
+[run-soak] eg-soak=/home/ubuntu/Code/eg-target/debug/eg-soak out=/home/ubuntu/Code/ExpressGateway/.claude/worktrees/s36-verify/audit/soak/s37-soak-data
+[run-soak] launched sc1_h1h1 pid=798291 
+[run-soak] launched sc1b_h1h2 pid=798311 
+[run-soak] launched sc2_h2h2 pid=798331 
+[run-soak] launched sc3_slowloris pid=798351 
+[run-soak] all launched; waiting for completion (this is the soak)…
+[run-soak] scenario sc1_h1h1 (pid 798291) completed OK
+[run-soak] scenario sc1b_h1h2 (pid 798311) completed OK
+[run-soak] scenario sc2_h2h2 (pid 798331) completed OK
+[run-soak] scenario sc3_slowloris (pid 798351) completed OK
+[run-soak] done Sun Jun  7 19:11:11 UTC 2026. markers:
+scenario=sc1_h1h1 duration_secs=900 samples=76 overall=BOUNDED
+scenario=sc1b_h1h2 duration_secs=900 samples=76 overall=BOUNDED
+scenario=sc2_h2h2 duration_secs=900 samples=76 overall=BOUNDED
+scenario=sc3_slowloris duration_secs=900 samples=76 overall=BOUNDED
+[run-soak] failures=0
+[resoak 19:11:11] batch rc=0 done; disk 7G
+[resoak 19:11:11] BATCH dur=900s: sc4_modeb sc5_modea sc6_413teardown sc7_h3terminate ; disk 7G
+[run-soak] start Sun Jun  7 19:11:11 UTC 2026 duration=900s sample=12s scale=1 scenarios=sc4_modeb sc5_modea sc6_413teardown sc7_h3terminate
+[run-soak] eg-soak=/home/ubuntu/Code/eg-target/debug/eg-soak out=/home/ubuntu/Code/ExpressGateway/.claude/worktrees/s36-verify/audit/soak/s37-soak-data
+[run-soak] launched sc4_modeb pid=798987 
+[run-soak] launched sc5_modea pid=799006 
+[run-soak] launched sc6_413teardown pid=799025 
+[run-soak] launched sc7_h3terminate pid=799045 
+[run-soak] all launched; waiting for completion (this is the soak)…
+[run-soak] scenario sc4_modeb (pid 798987) completed OK
+[run-soak] scenario sc5_modea (pid 799006) completed OK
+[run-soak] scenario sc6_413teardown (pid 799025) completed OK
+[run-soak] scenario sc7_h3terminate (pid 799045) completed OK
+[run-soak] done Sun Jun  7 19:26:17 UTC 2026. markers:
+scenario=sc4_modeb duration_secs=900 samples=76 overall=BOUNDED
+scenario=sc5_modea duration_secs=900 samples=76 overall=BOUNDED
+scenario=sc6_413teardown duration_secs=900 samples=76 overall=BOUNDED
+scenario=sc7_h3terminate duration_secs=900 samples=76 overall=BOUNDED
+[run-soak] failures=0
+[resoak 19:26:17] batch rc=0 done; disk 7G
+[resoak 19:26:17] BATCH dur=900s: sc8_ws_h1 sc8b_ws_h2 sc8c_ws_h3 ; disk 7G
+[run-soak] start Sun Jun  7 19:26:17 UTC 2026 duration=900s sample=12s scale=1 scenarios=sc8_ws_h1 sc8b_ws_h2 sc8c_ws_h3
+[run-soak] eg-soak=/home/ubuntu/Code/eg-target/debug/eg-soak out=/home/ubuntu/Code/ExpressGateway/.claude/worktrees/s36-verify/audit/soak/s37-soak-data
+[run-soak] launched sc8_ws_h1 pid=800156 
+[run-soak] launched sc8b_ws_h2 pid=800176 
+[run-soak] launched sc8c_ws_h3 pid=800224 
+[run-soak] all launched; waiting for completion (this is the soak)…
+[run-soak] scenario sc8_ws_h1 (pid 800156) completed OK
+[run-soak] scenario sc8b_ws_h2 (pid 800176) completed OK
+[run-soak] scenario sc8c_ws_h3 (pid 800224) completed OK
+[run-soak] done Sun Jun  7 19:41:20 UTC 2026. markers:
+scenario=sc8_ws_h1 duration_secs=900 samples=76 overall=BOUNDED
+scenario=sc8b_ws_h2 duration_secs=900 samples=76 overall=BOUNDED
+scenario=sc8c_ws_h3 duration_secs=900 samples=76 overall=BOUNDED
+[run-soak] failures=0
+[resoak 19:41:20] batch rc=0 done; disk 7G
+[resoak 19:41:20] BATCH dur=1800s: sc9_grpc_h3 ; disk 7G
+[run-soak] start Sun Jun  7 19:41:20 UTC 2026 duration=1800s sample=12s scale=1 scenarios=sc9_grpc_h3
+[run-soak] eg-soak=/home/ubuntu/Code/eg-target/debug/eg-soak out=/home/ubuntu/Code/ExpressGateway/.claude/worktrees/s36-verify/audit/soak/s37-soak-data
+[run-soak] launched sc9_grpc_h3 pid=800716 
+[run-soak] all launched; waiting for completion (this is the soak)…
+[run-soak] scenario sc9_grpc_h3 (pid 800716) completed OK
+[run-soak] done Sun Jun  7 20:11:21 UTC 2026. markers:
+scenario=sc9_grpc_h3 duration_secs=1800 samples=151 overall=BOUNDED
+[run-soak] failures=0
+[resoak 20:11:21] batch rc=0 done; disk 7G
+[resoak 20:11:21] === VERDICTS ===
+  sc1_h1h1: BOUNDED
+  sc1b_h1h2: BOUNDED
+  sc2_h2h2: BOUNDED
+  sc3_slowloris: BOUNDED
+  sc4_modeb: BOUNDED
+  sc5_modea: BOUNDED
+  sc6_413teardown: BOUNDED
+  sc7_h3terminate: BOUNDED
+  sc8_ws_h1: BOUNDED
+  sc8b_ws_h2: BOUNDED
+  sc8c_ws_h3: BOUNDED
+  sc9_grpc_h3: BOUNDED
+[resoak 20:11:21] sc9 rss_kb (vs S36 ref last~22036):
+  rss_kb BOUNDED first=20368.0 last=36956.0 max=37808.0
+[resoak 20:11:21] ALL DONE non_bounded=0

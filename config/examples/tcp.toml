@@ -1,0 +1,19 @@
+# Example: plain TCP (L4) listener.
+#
+# Raw byte shovel — the gateway forwards bytes between the client and a
+# round-robin-selected backend without parsing HTTP. Use for non-HTTP
+# protocols or when you want pure L4 load balancing.
+#
+# Boot: `expressgateway config/examples/tcp.toml`
+
+[[listeners]]
+address = "0.0.0.0:8080"
+protocol = "tcp"
+
+[[listeners.backends]]
+address = "127.0.0.1:3000"
+weight = 1
+
+[[listeners.backends]]
+address = "127.0.0.1:3001"
+weight = 1

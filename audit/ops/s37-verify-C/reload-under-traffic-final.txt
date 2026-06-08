@@ -1,0 +1,20 @@
+   Compiling lb-observability v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/s37-verify/crates/lb-observability)
+   Compiling lb-quic v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/s37-verify/crates/lb-quic)
+   Compiling lb-l7 v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/s37-verify/crates/lb-l7)
+   Compiling lb-integration-tests v0.1.0 (/home/ubuntu/Code/ExpressGateway/.claude/worktrees/s37-verify)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.91s
+     Running tests/reload_under_traffic.rs (/home/ubuntu/Code/eg-target/debug/deps/reload_under_traffic-7979231b72d00c50)
+
+running 9 tests
+test hup::proof_b_invalid_reload_no_blip ... ok
+test hup::proof_c_restart_required_logs_honest_warning ... ok
+test hup::proof_c_restart_required_no_silent_rebind ... ok
+test hup::proof_d_no_cross_talk ... ok
+test hup::proof_e_takes_effect_and_a_live_conn_survives ... ok
+test hup::proof_reload_summary_matches_observed_behavior ... ok
+test hup::signal_loss_terminal_after_nonterminal_still_drains ... ok
+test hup_async::proof_grpc_rpc_survives_reload ... ok
+test hup_async::proof_ws_tunnel_survives_reload ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 4.82s
+

@@ -1,0 +1,21 @@
+# Example: Mode A QUIC passthrough (stateless, no decryption).
+#
+# A top-level `[passthrough]` block routes QUIC flows to backends by
+# Connection ID WITHOUT decrypting — TLS is end-to-end client<->backend
+# and the gateway never holds TLS state. This is a parallel datapath, not
+# a `[[listeners]]` variant, so a passthrough-only config (no
+# `[[listeners]]`) is valid.
+#
+# The retry secret file is minted with mode 0600 on first boot if absent.
+#
+# Boot: `expressgateway config/examples/passthrough-mode-a.toml`
+
+[passthrough]
+bind_addr         = "0.0.0.0:8443"
+backends          = ["10.0.0.10:4443", "10.0.0.11:4443"]
+retry_secret_path = "/etc/expressgateway/quic/passthrough-retry.secret"
+# max_quic_connections   = 100000   # default; routing table = 2 * this
+# min_client_dcid_len    = 8        # default; cross-flow prefix-collision floor
+# strict_source_binding  = false    # default; true breaks NAT-rebind migration
+# mint_retry             = true     # default; LB mints stateless Retry
+# flow_idle_timeout_ms   = 60000    # default; 0 disables the idle reaper

@@ -1,10 +1,30 @@
 # Configuration Reference
 
-ExpressGateway is configured via a single TOML file passed as the first CLI argument; the default is `config/default.toml`. This document inventories every key the parser (`crates/lb-config/src/lib.rs`) accepts today, the PROMPT.md §19 specification it implements, and the delta.
+ExpressGateway is configured via a single TOML file passed as the first
+CLI argument (`expressgateway <config.toml>`); when omitted it defaults to
+`config/default.toml`. The binary reads the file, parses it
+(`lb_config::parse_config`), validates it (`lb_config::validate_config`),
+and **aborts boot with a non-zero exit** if either step fails — a
+misconfigured gateway never starts half-up.
+
+This document inventories every key the parser
+(`crates/lb-config/src/lib.rs`) accepts. The schema is the authority; this
+file tracks it. Runnable examples per listener type live in
+`config/examples/`.
+
+## Strict parsing (S37-B)
+
+Every config struct carries `#[serde(deny_unknown_fields)]`. An unknown or
+misspelled key — a typo'd block (`[listenrs]`), a fat-fingered knob
+(`max_keepalv_requests = 5`) — is a **parse error**, not a silent drop.
+Before S37 there was no `deny_unknown_fields` anywhere, so unknown keys
+parsed clean and the operator's override was silently ignored. If the
+gateway rejects a key you expect, check the spelling and the block it
+belongs under.
 
 ## Minimum working config
 
-`config/default.toml` is the minimum accepted config:
+`config/default.toml` is a minimal accepted config:
 
 ```toml
 [[listeners]]
@@ -20,133 +40,254 @@ address = "127.0.0.1:3001"
 weight = 1
 ```
 
-This produces a single L4 TCP listener on port 8080 that load-balances round-robin across two backends.
+This produces a single plain-TCP listener on port 8080 that load-balances
+round-robin across two backends. At least one `[[listeners]]` **or** a
+top-level `[passthrough]` block is required.
 
-## Keys (implemented)
+## Listener protocols (what the binary actually serves)
 
-### `[[listeners]]` — array of listener blocks
+The binary's listener spawn loop (`crates/lb/src/main.rs`) branches
+`protocol == "quic"` → `spawn_quic` (UDP) versus everything-else →
+`spawn_tcp` (TCP), and the TCP path dispatches a running implementation
+for exactly `tcp` / `tls` / `h1` / `h1s`. The **served listener-protocol
+set** is therefore:
 
-| Key | Type | Default | Reload | Description |
-|-----|------|---------|:------:|-------------|
-| `address` | `String` (socketaddr or `host:port`) | (required) | restart | Bind address. IPv6 literals must be bracketed: `[::1]:8080`. |
-| `protocol` | `String` (`"tcp"`) | `"tcp"` | restart | Listener protocol. Currently only TCP is wired in `crates/lb/src/main.rs`; UDP / QUIC / HTTP are scaffolded but not yet served from the binary. |
-| `drain_timeout_ms` | `Option<u64>` (`100..=300000`) | inherit `[runtime].drain_timeout_ms` | restart | ROUND-8 OPS-10: per-listener graceful-drain budget. Set per streaming listener (gRPC bidi / WS = 300000, SSE / long-poll = 60000). See RUNBOOK "Tuning the drain budget". |
-| `drain_jitter_ms` | `Option<u64>` (`0..=`effective `drain_timeout_ms`) | inherit derived `[runtime]` jitter | restart | ROUND-8 OPS-02: per-listener drain-cancel jitter ceiling. `0` disables jitter for this listener. |
-| `backends` | array | `[]` | SIGHUP | Backend pool (see below). A listener with an empty pool logs a warning and is skipped. |
+| `protocol` | Transport | Notes |
+|-----------|-----------|-------|
+| `"tcp"`  | plain TCP (L4) | Raw byte shovel to the backend. |
+| `"tls"`  | TLS over TCP | rustls termination. Requires `[listeners.tls]`. |
+| `"h1"`   | HTTP/1.1 over TCP | hyper-terminated L7 proxy. |
+| `"h1s"`  | HTTP/1.1 + HTTP/2 over TLS | ALPN advertises `h2` (preferred) then `http/1.1`. **HTTP/2 is served here** — there is no separate `"h2"` listener. Requires `[listeners.tls]`. |
+| `"quic"` | QUIC over UDP | Two modes: H3-terminate (default) or Mode B raw-QUIC proxy (`[listeners.quic.raw_proxy]`). **HTTP/3 is served here.** |
+
+**S37-B:** `"http"`, `"h2"`, and `"h3"` are **rejected as listener
+protocols** by `validate_config`. They are never served — before S37 they
+validated clean and then hard-errored at boot with "no runtime
+implementation". Use `"h1s"` (ALPN) for HTTP/2 and `"quic"` for HTTP/3.
+(These same tokens *are* valid for `[[listeners.backends]].protocol` —
+that is the upstream wire protocol, a different axis.)
+
+## `[[listeners]]` — array of listener blocks
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `address` | `String` (socketaddr or `host:port`) | required | Bind address. IPv6 literals must be bracketed: `[::1]:8080`. Must be non-empty. |
+| `protocol` | `String` | required | One of the served set above. |
+| `tls` | `[listeners.tls]` | absent | Required when `protocol = "tls"` or `"h1s"`; forbidden otherwise. |
+| `quic` | `[listeners.quic]` | absent | Required when `protocol = "quic"`; forbidden otherwise. |
+| `alt_svc` | `[listeners.alt_svc]` | absent | `Alt-Svc: h3` advertisement. Meaningful for `h1`/`h1s`. |
+| `http` | `[listeners.http]` | absent | Per-listener HTTP timeouts. Meaningful for `h1`/`h1s`. |
+| `h2_security` | `[listeners.h2_security]` | absent | HTTP/2 security thresholds. Meaningful for `h1s` (H2 via ALPN). |
+| `websocket` | `[listeners.websocket]` | absent | WebSocket capability. Meaningful for `h1`/`h1s`/`quic`. |
+| `grpc` | `[listeners.grpc]` | absent | gRPC capability. Requires `protocol = "h1s"`. |
+| `drain_timeout_ms` | `Option<u64>` (`100..=300000`) | inherit `[runtime].drain_timeout_ms` | OPS-10: per-listener graceful-drain budget. |
+| `drain_jitter_ms` | `Option<u64>` (`0..=` effective `drain_timeout_ms`) | inherit derived `[runtime]` jitter | OPS-02: per-listener drain-cancel jitter ceiling. `0` disables jitter. |
+| `backends` | `[[listeners.backends]]` array | `[]` | Backend pool. A non-QUIC listener with an empty pool logs a warning and is skipped. For a `quic` H3-terminate listener the binary forwards to backends only through the library/e2e path (see `config/examples`). |
 
 ### `[[listeners.backends]]`
 
-| Key | Type | Default | Reload | Description |
-|-----|------|---------|:------:|-------------|
-| `address` | `String` (socketaddr or `host:port`) | (required) | SIGHUP | Backend address. Hostnames (e.g. `origin.example:443`) are resolved through `lb_io::DnsResolver` at startup; IP literals are resolved identically so the code path is uniform. |
-| `weight` | `u32` | `1` | SIGHUP | Relative weight for round-robin / weighted-random selection. |
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `address` | `String` (socketaddr or `host:port`) | required | Resolved via `lb_io::DnsResolver` at startup. Must be non-empty. |
+| `protocol` | `String` (`tcp`/`h1`/`h2`/`h3`) | `"tcp"` | Upstream wire protocol. `tcp`/`h1` → HTTP/1.1 (or raw); `h2` → HTTP/2 over TCP+TLS (ALPN); `h3` → HTTP/3 over QUIC. |
+| `weight` | `u32` | `1` | Relative weight for round-robin selection. |
+| `tls_ca_path` | `Option<String>` | absent | PEM CA bundle to verify an `h3` backend. Required for `h3` unless `tls_verify_peer = false`. Rejected on non-`h3` backends. |
+| `tls_verify_hostname` | `Option<String>` | host of `address` | SNI override for `h3` backend verification. Rejected on non-`h3` backends. |
+| `tls_verify_peer` | `bool` | `true` | Set `false` to disable `h3` backend cert verification (**NOT RECOMMENDED**). Rejected on non-`h3` backends. |
 
-## Keys (specified in PROMPT.md §19, not yet wired)
+A `quic` H3-terminate listener forwards to **exactly one** backend
+protocol family (h1/tcp, h2, or h3) — mixing families is rejected, as is
+combining `[listeners.quic.raw_proxy]` with `[[listeners.backends]]`.
 
-PROMPT.md §19 describes a broader schema. The parser's `lb_config::ParsedConfig` type exists but the binary only acts on `[[listeners]]` + `[[listeners.backends]]` today. The remaining keys are accepted-but-ignored or return a `ConfigError` on presence.
+### `[listeners.tls]` (required for `tls` / `h1s`)
 
-### Runtime
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `cert_path` | `String` | required | PEM certificate chain. |
+| `key_path` | `String` | required | PEM private key (PKCS#8 or SEC1). |
+| `ticket_rotation_interval_seconds` | `u64` (`> 0`) | `86400` | Session-ticket key rotation window. |
+| `ticket_rotation_overlap_seconds` | `u64` | `86400` | Grace window for tickets under the previous key. |
 
-| Key | Spec type | Status |
-|-----|-----------|--------|
-| `[runtime]` table | object | Not yet parsed. |
-| `runtime.xdp_enabled` | `bool` | Spec, not wired; real XDP requires Pillar 4b (bpf-linker + CAP_BPF). |
-| `runtime.io_backend` | `"auto" \| "io_uring" \| "epoll"` | Spec; `Runtime::new()` auto-detects, `Runtime::with_backend` forces, but the TOML key is not routed through the parser yet. |
-| `runtime.worker_threads` | `u32` | Currently tokio's default (logical-CPU count). |
+### `[listeners.quic]` (required for `quic`)
 
-### TLS
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `cert_path` | `String` | required | PEM certificate chain. |
+| `key_path` | `String` | required | PEM private key. |
+| `retry_secret_path` | `String` | required | 32-byte retry-token signing key; minted with mode 0600 on first boot if absent. |
+| `max_idle_timeout_ms` | `u64` (`> 0`) | `30000` | QUIC connection idle timeout. |
+| `max_recv_udp_payload_size` | `u64` (`>= 1200`) | `1350` | Max accepted UDP payload (RFC 9000 §14). |
+| `raw_proxy` | `[listeners.quic.raw_proxy]` | absent | Present ⇒ Mode B raw-QUIC proxy; absent ⇒ H3-terminate. |
 
-| Key | Spec type | Status |
-|-----|-----------|--------|
-| `[[tls.sni_certs]]` | array of { `sni`, `cert_path`, `key_path`, `ocsp_stapling` } | Not wired. `rustls = "0.23"` is in workspace deps (Pillar 3a); binary has no TLS listener yet. |
-| `tls.ticket_rotation.interval_seconds` | `u64` | `TicketRotator` exists in `crates/lb-security/src/ticket.rs` (Step 5b); config key is Pillar 3b. |
-| `tls.ticket_rotation.overlap_seconds` | `u64` | Same. |
-| `tls.mtls.enabled` | `bool` | Not wired. |
-| `tls.mtls.ca_path` | `String` | Not wired. |
+### `[listeners.quic.raw_proxy]` (Mode B)
 
-### HTTP
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `backend_addr` | `String` (`host:port`) | required | Upstream QUIC backend to re-originate to. |
+| `sni` | `String` | required | SNI for the re-originated TLS handshake. |
+| `backend_ca_path` | `Option<String>` | absent | PEM CA to verify the backend. Absent ⇒ system trust roots (verification stays ON). |
+| `dgram_queue_cap` | `usize` | `1024` | Per-direction bounded DATAGRAM relay queue. |
+| `max_relay_streams` | `usize` | `256` | Per-connection relay stream-table ceiling. |
 
-| Key | Spec type | Status |
-|-----|-----------|--------|
-| `http.max_header_bytes` | `usize` | Constant `crates/lb-h1/src/parse.rs::MAX_HEADER_BYTES = 65_536` (Step 5a); parameter override via `parse_headers_with_limit` exists but is not surfaced through config. |
-| `http.max_body_bytes` | `usize` | Not wired. |
-| `http2.max_concurrent_streams` | `u32` | Not wired (no live H2 state machine). |
-| `http2.settings_flood_per_window` | `u32` | `SettingsFloodDetector::new(max_per_window, window)` exists; config key is Pillar 3b. |
-| `http2.ping_flood_per_window` | `u32` | Same, via `PingFloodDetector`. |
-| `http2.zero_window_stall_seconds` | `u64` | Same, via `ZeroWindowStallDetector`. |
+### `[listeners.alt_svc]`
 
-### QUIC / HTTP/3
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `h3_port` | `u16` | required | UDP port of the H3 listener to advertise via `Alt-Svc`. |
+| `max_age` | `u32` | `3600` | `ma=` value (seconds). |
 
-| Key | Spec type | Status |
-|-----|-----------|--------|
-| `quic.listen_address` | `String` | Not wired. `QuicEndpoint::server_on_loopback` exists (Pillar 3a) for tests; binary integration is Pillar 3b. |
-| `quic.zero_rtt_enabled` | `bool` | Spec; `ZeroRttReplayFilter` exists but is not invoked. |
-| `quic.alt_svc_advertise` | `bool` | Pillar 3c. |
+### `[listeners.http]` (timeouts; all `> 0`)
 
-### Pool
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `header_timeout_ms` | `u64` | `10000` | Request-line + headers read budget. |
+| `body_timeout_ms` | `u64` | `30000` | Body read / upstream-body budget. |
+| `total_timeout_ms` | `u64` | `60000` | Hard total-request-lifetime backstop. |
+| `head_timeout_ms` | `u64` | `60000` | Post-upload head-wait cap (CF-BODY-WALLCLOCK). |
 
-| Key | Spec type | Status |
-|-----|-----------|--------|
-| `pool.per_peer_max` | `usize` | Default hard-coded in `TcpPool::new` via `PoolConfig::default` (value from PROMPT.md §21). Config key is Pillar 2b. |
-| `pool.total_max` | `usize` | Same. |
-| `pool.idle_timeout_seconds` | `u64` | Same. |
-| `pool.max_age_seconds` | `u64` | Same. |
+### `[listeners.h2_security]`
 
-### DNS
+All fields are `Option` and default to the live `H2SecurityThresholds`
+defaults when omitted: `max_pending_accept_reset_streams`,
+`max_local_error_reset_streams`, `max_concurrent_streams`,
+`max_header_list_size`, `max_send_buf_size`, `keep_alive_interval_ms`,
+`keep_alive_timeout_ms`, `initial_stream_window_size`,
+`initial_connection_window_size`. See `audit/decisions/h2-edge-streams.md`.
 
-| Key | Spec type | Status |
-|-----|-----------|--------|
-| `dns.positive_ttl_cap_seconds` | `u64` | `ResolverConfig::default` (Step 5c); config key is Pillar 2b. |
-| `dns.negative_ttl_seconds` | `u64` | Same. |
-| `dns.refresh_interval_seconds` | `u64` | Same. |
+### `[listeners.websocket]`
 
-### PROXY protocol
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | `bool` | `true` (when the block is present) | Master switch. |
+| `idle_timeout_seconds` | `u64` (`> 0`) | `60` | Both-directions-idle close (1001). |
+| `max_message_size_bytes` | `usize` (`> 0`) | `16777216` | Single-message cap. |
+| `ping_rate_limit_per_window` | `u32` (`> 0`) | `50` | Client-Ping flood cap (then Close 1008). |
+| `ping_rate_limit_window_seconds` | `u64` (`> 0`) | `10` | Ping rate window. |
+| `read_frame_timeout_seconds` | `u64` (`> 0`) | `30` | Per-direction read-frame watchdog. |
+| `h2_extended_connect` | `bool` | `false` | RFC 8441 WS-over-H2. OFF by default (CF-S27-2 backpressure). |
+| `h3_extended_connect` | `bool` | `false` | RFC 9220 WS-over-H3. OFF by default. |
 
-| Key | Spec type | Status |
-|-----|-----------|--------|
-| `proxy_protocol.accept_v1` | `bool` | Parser in `crates/lb-core` accepts v1; listener wiring is Pillar 3b. |
-| `proxy_protocol.accept_v2` | `bool` | Same. |
-| `proxy_protocol.send_outbound_v2` | `bool` | Outbound send is not yet implemented. |
+### `[listeners.grpc]` (requires `protocol = "h1s"`)
 
-### Observability
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `enabled` | `bool` | `true` | Master switch. |
+| `max_deadline_seconds` | `u64` (`> 0`) | `300` | Upper bound on accepted `grpc-timeout`. |
+| `health_synthesized` | `bool` | `true` | Serve `/grpc.health.v1.Health/Check` locally. |
 
-| Key | Spec type | Status |
-|-----|-----------|--------|
-| `observability.prometheus_bind` | `String` | No `/metrics` endpoint ships; see `METRICS.md`. Config key is Pillar 3b. |
-| `observability.log_level` | `String` | Controlled via `RUST_LOG` env var, not TOML. See `RUNBOOK.md`. |
+## `[runtime]` — process-wide knobs (optional)
 
-### Security (PROTO-2-17)
+When absent, every default below applies. (Contrary to older docs, this
+block **is** parsed and acted on.)
 
-The optional `[security]` table carries process-wide HTTP-security toggles consumed by the shared `lb_security::HooksBundle` at startup.
+| Key | Type | Range | Default | Description |
+|-----|------|-------|---------|-------------|
+| `xdp_enabled` | `bool` | — | `false` | Attach the XDP data-plane on boot. Requires `xdp_interface`. |
+| `xdp_interface` | `Option<String>` | non-empty when `xdp_enabled` | absent | NIC to attach XDP to. |
+| `xdp_mode` | `"auto"\|"native"\|"skb"\|"hw"` | — | `"auto"` | XDP attach-mode selector. |
+| `drain_timeout_ms` | `u64` | `100..=300000` | `10000` | Graceful-drain budget on SIGTERM. |
+| `readiness_settle_ms` | `u64` | `0..=30000` | `11000` | Settle window between `/readyz` 503 and cancel. |
+| `drain_jitter_ms` | `Option<u64>` | `0..=drain_timeout_ms` | derive `drain_timeout_ms / 4` | Drain-cancel jitter ceiling. `Some(0)` disables. |
+| `handshake_timeout_ms` | `u64` | `100..=60000` | `5000` | TLS handshake wall-clock cap. |
+| `max_inflight_connections` | `u32` | `100..=2000000` | `65536` | Per-listener inflight cap (semaphore). |
+| `connect_timeout_ms` | `u64` | `100..=60000` | `5000` | Upstream dial timeout. |
+| `per_ip_connection_cap` | `u32` | `1..=2000000` | `1024` | Per-source-IP concurrent-connection cap. |
+| `header_underscore_policy` | `"reject"\|"drop"\|"allow"` | — | `"reject"` | `_` in inbound header names. |
+| `max_keepalive_requests` | `u32` | `0` (disable) or `1..=10000000` | `100` | H1/H2 requests per keep-alive connection before proactive close. **S37-B** added the range check (was unvalidated). |
+| `max_requests_per_h3_connection` | `u32` | `0` (disable) or `1..=10000000` | `1000` | H3 requests per connection before GOAWAY + recycle (S36-A; bounds quiche `StreamMap::collected`). `0` re-opens the leak/DoS vector — trusted listeners only. **S37-B** added the range check. |
+| `xdp_new_flow_cap_per_sec_per_cpu` | `u32` | `0` (disable) or `1000..=10000000` | `125000` | Per-CPU new-flow rate cap (Katran parity). |
+| `tls` | `[runtime.tls]` | — | absent | Process-wide TLS policy. |
+| `watchdog` | `[runtime.watchdog]` | — | absent | Slowloris / slow-POST watchdog. |
 
-| Key | Type | Default | Reload | Description |
-|-----|------|---------|:------:|-------------|
-| `[security]` table | object | absent | restart | Optional. When absent, all defaults apply. |
-| `security.strict_te` | `bool` | `false` | restart | When `true`, the `HooksBundle` is constructed with `SmuggleMode::H1Strict` instead of the lenient `SmuggleMode::H1`. Strict mode rejects any `Transfer-Encoding` codec other than `chunked` (RFC 9112 §7.1). The H2 path keeps its dynamic `SmuggleMode::H2` upgrade independent of this knob. Flip on for environments that can guarantee chunked-only ingress (e.g. behind a known CDN). |
+### `[runtime.tls]`
 
-Example:
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `tls13_only` | `bool` | `false` | TLS 1.3 only on every TLS listener. |
 
-```toml
-[security]
-strict_te = true
-```
+### `[runtime.watchdog]`
+
+| Key | Type | Range | Default | Description |
+|-----|------|-------|---------|-------------|
+| `header_deadline_ms` | `u64` | `100..=60000` | `5000` | Per-request header-phase deadline. |
+| `body_progress_min_bps` | `u64` | `0..=10000000` | `64` | Slow-POST rate floor (B/s); `0` disables. |
+| `sweep_interval_ms` | `u64` | `100..=60000` | `1000` | Stalled-connection sweep cadence. |
+
+## `[observability]`
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `metrics_bind` | `Option<String>` (socketaddr) | absent | Admin HTTP listener for `/metrics`, `/livez`, `/readyz`. When absent, no admin listener binds. Non-loopback binds require `[admin]`. Log level is via `RUST_LOG` (see `RUNBOOK.md`), not TOML. |
+
+## `[admin]` (SEC-2-06)
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `api_token_hash` | `Option<String>` | absent | 64-char hex SHA-256 of the admin bearer token. |
+| `allow_non_loopback` | `bool` | `false` | Allow the admin listener to bind non-loopback. Requires `api_token_hash` when `true`. |
+
+## `[security]` (PROTO-2-17)
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `strict_te` | `bool` | `false` | `true` ⇒ `SmuggleMode::H1Strict` (reject any `Transfer-Encoding` codec other than `chunked`). |
+
+## `[passthrough]` (Mode A QUIC passthrough)
+
+A top-level block (not under `[[listeners]]`) running the stateless
+QUIC-by-Connection-ID passthrough datapath. May be the **only** datapath
+(no `[[listeners]]` required).
+
+| Key | Type | Range | Default | Description |
+|-----|------|-------|---------|-------------|
+| `bind_addr` | `SocketAddr` | — | required | Listener UDP socket. |
+| `backends` | `[SocketAddr]` | non-empty | required | Maglev-hashed backend pool. |
+| `retry_secret_path` | `PathBuf` | non-empty | required | 32-byte retry secret; minted 0600 if absent. |
+| `max_quic_connections` | `usize` | `1..=2000000` | `100000` | Flow cap (routing table = `2 * cap`). |
+| `min_client_dcid_len` | `usize` | `8..=20` | `8` | Min client DCID (cross-flow prefix-collision defence). |
+| `per_flow_backlog` | `usize` | `1..=8192` | `32` | Per-flow datagram backlog (drop-newest). |
+| `strict_source_binding` | `bool` | — | `false` | Drop short-header packets whose 4-tuple differs from the flow's peer. |
+| `audit_throttle_window_secs` | `u64` | `> 0` | `60` | Audit-log throttle window. |
+| `max_dcid_len_routed` | `usize` | `1..=20` | `20` | Short-header DCID length to try first. |
+| `mint_retry` | `bool` | — | `true` | Mint stateless Retry on no-token Initials. |
+| `flow_idle_timeout_ms` | `u64` | — | `60000` | Idle-flow reaper window; `0` disables (LRU-only). |
 
 ## Reload semantics
 
-The configuration watcher sends SIGHUP → `crates/lb-controlplane/src/lib.rs` re-reads, validates, and publishes via `ArcSwap<Config>` (ADR-0008). Reload behavior per key:
-
-- **`restart`**: a socket bind change. Requires process restart or a graceful handover (ADR-0009; FD-passing is deferred to Pillar 3b follow-up). <!-- doc-lint-allow-fd-passing-aspirational -->
-- **`SIGHUP`**: applied atomically via `ArcSwap` swap. The backend list, weights, and (eventually) detectors' thresholds reload on the next acquired listener reference. Existing in-flight connections see the old value; new connections see the new one. This is tested by `tests/reload_zero_drop.rs`.
+As of this revision the binary loads the config **once at boot**; there is
+no live reload of `[[listeners]]` / backends. TLS certificate hot-reload is
+the only runtime config change today (SIGUSR1 re-reads cert/key files for
+TLS/`h1s` listeners and bumps `cert_rotation_*` metrics) — the rest of the
+config is fixed for the process lifetime. (A validate-first / atomic-swap
+SIGHUP reload is a separate in-progress workstream; this section will be
+updated when it lands.)
 
 ## Validation
 
-`lb_config::validate_config` runs after parse:
+`lb_config::validate_config` runs after parse and rejects, among others:
 
-- Listener addresses must parse as `SocketAddr`.
-- Backend `weight` must be `>= 1`.
-- Listener backend list must be non-empty (or the listener is skipped at runtime with a warning).
-- Further validation (TLS cert/key existence, QUIC config coherence) will land with the corresponding feature.
+- a config with neither `[[listeners]]` nor `[passthrough]`;
+- empty listener `address` / `protocol`;
+- an unserved listener protocol (`http`/`h2`/`h3`) — see S37-B above;
+- an unknown listener protocol;
+- a `[listeners.tls]` / `[listeners.quic]` block on the wrong protocol, or
+  a missing one when required;
+- numeric knobs outside their documented ranges (see the tables);
+- an `h3` backend without `tls_ca_path` (unless `tls_verify_peer = false`),
+  or `tls_*` knobs on a non-`h3` backend;
+- a `quic` listener mixing backend protocol families, or combining
+  `raw_proxy` with `[[listeners.backends]]`;
+- a `[listeners.grpc]` block on a non-`h1s` listener.
+
+Plus, from `deny_unknown_fields` at parse time: any unknown/misspelled key
+in any block.
 
 ## Invalid-config behavior
 
-On parse error, `lb` exits with a non-zero status and the parse error on stderr (`context`-wrapped via `anyhow`). On validation error, same. On SIGHUP validation failure, the old configuration stays in effect and the error is logged — zero-drop.
+On a parse error or a validation error, the binary exits non-zero and
+prints the `anyhow`-wrapped error chain to stderr — it does **not** start a
+partial listener set. Real-binary boot proofs (positive boots per protocol
++ refusal on an unserved protocol / unknown key) live in
+`tests/config_boot_matrix.rs`; the per-error-class negative coverage of
+`parse_config` / `validate_config` lives in the `crates/lb-config` unit
+tests.

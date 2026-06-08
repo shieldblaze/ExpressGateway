@@ -23,20 +23,22 @@ ignore = [
     "RUSTSEC-2026-0097",
     # rustls-pemfile unmaintained (v2)
     "RUSTSEC-2025-0134",
-    # time <0.3.47 RFC 2822 stack exhaustion — the fix ships in 0.3.47 which
-    # requires Rust 1.88; project MSRV is 1.85. Our only transitive consumer
-    # is rcgen (dev-dep only, Pillar 3a test certs) which uses time for
-    # internal validity ranges, not untrusted RFC 2822 string parsing. No
-    # reachable attack surface; revisit once MSRV bumps in Pillar 3b.
-    "RUSTSEC-2026-0009",
-    # yaml-rust 0.4 unmaintained. Transitive via foundations 4.5 (pinned to
-    # keep workspace MSRV at 1.85 — newer foundations pulls darling 0.23
-    # which requires rustc 1.88) -> serde_yaml 0.8 -> yaml-rust. foundations
-    # is Cloudflare-maintained and ships in tokio-quiche; its YAML surface
-    # is only used for their telemetry config parsing, not for any
-    # ExpressGateway-supplied input. Added in Pillar 3b.1; revisit once
-    # Cloudflare upgrades foundations to serde_yaml_ng or MSRV bumps.
+    # (RUSTSEC-2026-0009 time<0.3.47 RFC 2822 DoS — DROPPED S37-D: time bumped to
+    #  0.3.47 (the fix; MSRV is 1.88, which admits it). Advisory no longer applies.)
+    # yaml-rust 0.4 unmaintained. Transitive via foundations 4.5.0 (HELD-BY-UPSTREAM:
+    # quiche 0.29.1 -> qlog 0.18 -> foundations ^4, so foundations cannot move to 5.x
+    # without a quiche/qlog bump — quiche 0.29.1 is latest) -> serde_yaml 0.8 ->
+    # yaml-rust. foundations is Cloudflare-maintained and ships in tokio-quiche; its
+    # YAML surface parses only their telemetry config, never ExpressGateway-supplied
+    # input. Revisit once quiche/qlog adopt foundations 5.x (which drops serde_yaml).
     "RUSTSEC-2024-0320",
+    # proc-macro-error2 unmaintained (RUSTSEC-2026-0173, published 2026-06; first appeared
+    # mid-S37 as a NEW advisory). BUILD-TIME proc-macro only (getset derive), never in the
+    # runtime binary. Transitive via the SAME foundations 4.5.0 held-by-upstream chain:
+    # foundations -> cf-rustracing-jaeger -> local-ip-address -> neli -> getset (proc-macro)
+    # -> proc-macro-error2. Unmaintained advisory, not a vulnerability; no reachable runtime
+    # surface. Revisit once quiche/qlog adopt foundations 5.x (same trigger as RUSTSEC-2024-0320).
+    "RUSTSEC-2026-0173",
 ]
 
 [licenses]

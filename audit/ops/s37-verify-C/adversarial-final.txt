@@ -1,0 +1,39 @@
+S37-C verifier — independent adversarial wire checks vs FINAL binary @ 6e43b09c
+date: 2026-06-07
+
+=== F-S37-C-1 FIX independently re-verified (the bug I found, now fixed) ===
+LifecycleSignals::install() now creates the 4 tokio Signal streams ONCE before the loop
+(main.rs:2980); recv() selects on the persistent streams. tokio Signal latches deliveries,
+so a terminal signal arriving while servicing a non-terminal one is still observed next recv.
+  HUP-then-TERM:  0/6 trials stuck (was ~3/6 pre-fix). All drained.
+  USR1-then-TERM: 0/6 trials stuck (the pre-existing path). All drained.
+The lost-SIGTERM race is GONE for both orderings.
+
+=== max_keepalive_requests now SWAPPABLE — takes effect on the wire (honesty match) ===
+boot cap=2 -> one conn served exactly 2 reqs then Connection: close.
+SIGHUP raise 2->8 -> a NEW conn served exactly 8 then close. Log: "max_keepalive_requests
+changed — applied live (all L7 listeners)", applied_swappable=1. Behavior matches the diff's
+swappable classification.
+NOTE (LOW, doc-only): the rebuild_l7_proxies doc comment (main.rs:602-606) is STALE — it still
+says max_keepalive_requests is "PRESERVED ... keep their BOOT values ... diff reports ...
+restart-required". That contradicts the (correct) code+diff, which apply it live + classify it
+swappable. Misleading comment only; behavior is right. Recommend reload-eng fix the comment.
+
+=== reload-summary-matches-observed-behavior, BOTH directions, co-changed ===
+Co-changed backend(A->B) + drain_timeout_ms(3000->7777):
+  backend  -> "L7 config changed (backends) — applied live"  (swappable, observably hit B)
+  drain_timeout_ms -> "requires restart, not applied"          (restart-required, NOT applied)
+  summary: applied_swappable=1 restart_required=1. The inverse-dishonesty bug is GONE.
+http-only L7 change (header_timeout 10000->5000, no backend change):
+  -> "L7 config changed (http) — applied live" (swappable), applied_swappable=1
+     restart_required=0, gateway keeps serving 200. Correctly reported applied, not restart.
+
+=== could NOT defeat isolation or honesty ===
+- no config swap affects an in-flight connection (mid-stream + gRPC + WS all survive).
+- no restart-required field can be made to silently apply (drain_timeout/tls/quic/observability
+  all stay reported + not applied; ports not silently bound).
+- summary never lies in either direction across the field classes tested.
+
+QUIC/H3 backends: intentionally restart-required this session (CF-S37-C-H3-BACKEND-RELOAD).
+diff_listener reports `quic` changes as ListenerField restart-required (per-field WARN + metric),
+never silent — honest detection, not hot-reload. (verified by code-read; consistent with taxonomy.)

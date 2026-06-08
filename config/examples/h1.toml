@@ -1,0 +1,24 @@
+# Example: HTTP/1.1 (L7) listener over plain TCP.
+#
+# hyper terminates HTTP/1.1, applies the security hooks (header policy,
+# smuggle defence, timeouts), and proxies to the backend. The backend
+# `protocol` selects the upstream wire protocol: `h1`/`tcp` => HTTP/1.1,
+# `h2` => HTTP/2, `h3` => HTTP/3.
+#
+# Boot: `expressgateway config/examples/h1.toml`
+
+[[listeners]]
+address = "0.0.0.0:8080"
+protocol = "h1"
+
+# Optional per-listener HTTP timeouts (defaults shown).
+# [listeners.http]
+# header_timeout_ms = 10000
+# body_timeout_ms   = 30000
+# total_timeout_ms  = 60000
+# head_timeout_ms   = 60000
+
+[[listeners.backends]]
+address  = "127.0.0.1:3000"
+protocol = "h1"
+weight   = 1
