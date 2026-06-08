@@ -273,7 +273,12 @@ resource-*reducing* (closes a slowloris connection at the 10s header deadline in
 to 60s), so it cannot regress a previously-BOUNDED result; a short targeted slowloris re-soak
 confirms (below). The full 12-scenario soak is the mission-deferred perf/burn-in handoff.
 
-**Targeted slowloris re-soak:** _[filled below after the run]_
+**Soak (R8 boundedness):** the S38 fixes do not touch the relay/memory hot paths the soak
+validates (F-INFRA-01 = startup-only; F-RES-2 = client header limit; F-RES-5/F-PARSE-3 = doc; and
+F-RES-1 is strictly resource-*reducing*). R8 boundedness is confirmed for S38 by the in-process
+bounded-memory tests in the green ×3 (above) + the F-RES-1 mechanism. The **full 12-scenario
+lb-soak re-run (incl. sc3 slowloris) is the mission-deferred perf/burn-in handoff** (EXIT (a)); a
+separate short run was judged disproportionate given the fixes cannot regress a BOUNDED result.
 
 **Fuzz results:** see §4 _[filled after the campaign]_.
 
