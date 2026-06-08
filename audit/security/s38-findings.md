@@ -13,11 +13,33 @@ fixed-if-tractable else tiered · LOW/hardening → fixed-if-cheap else carried.
 
 ---
 
-## Findings table (live)
+## Findings table (live — Phase 1 complete, 4 auditors)
 
-| ID | Sev | Surface | Title | Status |
-|----|-----|---------|-------|--------|
-| _(none filed yet — Phase 1 in progress)_ | | | | |
+**Severity tally: CRITICAL 0 · HIGH 0 · MEDIUM 1 · LOW 7 · INFO 4.** No CRITICAL/HIGH, no
+product-fork, no dependency-implicating finding. Clean scopes are PROVEN (defense + test, R4),
+not asserted — consistent with a 37-session-hardened codebase whose wire parsing is delegated to
+hyper/h2/quiche/rustls/tungstenite. Detail in `s38-findings-{parser,protocol,resource,infra}.md`.
+
+| ID | Sev | Surface | Title | Disposition |
+|----|-----|---------|-------|-------------|
+| F-RES-1 | **MEDIUM** | H1 slowloris | hyper `header_read_timeout` INERT (no `.timer()` wired) → header phase bounded by 60s `total`, not 10s `header` | **FIX** (h1_proxy.rs:684) |
+| F-INFRA-01 | LOW(sec) | TLS/retry secret | retry-secret LOAD path doesn't perm-check existing file (asymmetric vs TLS key) → forge/Mode-A-flood-bypass if world-readable | **FIX** (listener.rs:481, passthrough.rs:~1260) |
+| F-RES-5 | LOW | slowloris watchdog | sweeper only logs+removes, never closes socket; `progress()` called once (header) → slow-POST eviction dead | FIX-or-document |
+| F-RES-2 | LOW | H2 client | upstream `Http2Pool` builder omits `max_header_list_size` (relies on h2 16KiB default) | **FIX** (parity, http2_pool.rs:425) |
+| F-RES-3 | LOW | QUIC | router `max_connections` hardcoded 100k, not config-wired; no per-IP QUIC sub-cap | tier/fix |
+| F-PARSE-3 | LOW | test-codec | lb-h1 `parse_chunk_size_hex` `checked_shl` inert behind 16-digit cap (comment wrong) | FIX (comment) |
+| F-PROTO-01 | LOW | H1 CL/TE | smuggle detector skips header pairs whose value fails `to_str()` (opaque bytes) — not exploitable | FIX-or-document |
+| F-PARSE-1 | LOW | test-codec | lb-h2 hpack `decode_string` add + no bomb cap (no prod call-site) | document |
+| F-PARSE-2 | LOW | test-codec | lb-h3-testcodec `decode_frame` total-len add (benign w/ cap) | document |
+| F-RES-4 | INFO | doc | `HttpTimeouts::header` stale doc-comment (feeds F-RES-1) | FIX (doc) |
+| F-PROTO-02 | INFO | gRPC | 200 path skips hop-by-hop strip (H2 binary, moot) | document |
+| F-PROTO-03 | INFO | WS | echoes client subprotocol w/o backend confirm | document |
+| F-PROTO-04 | INFO | H3 front | backend-head parser doesn't tchar-validate names (QPACK binary, moot) | document |
+
+**Baseline flake (NOT a finding, pre-existing on main):** `reload_under_traffic::proof_c_restart_required_no_silent_rebind`
+failed run 2/3 at the **pre-reload sanity assert (line 704)** — `get_backend_id == None` right after
+`boot()`, under full-suite saturation. NOT a reload-honesty bug (it's before the reload). Load-induced
+boot-readiness flake; run 1/3 passed. To characterize: isolated re-run (quiet box) — see §Baseline-flake.
 
 ---
 
