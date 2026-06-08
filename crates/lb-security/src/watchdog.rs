@@ -13,26 +13,50 @@
 //! let wd = Watchdog::new(WatchdogConfig::default());
 //! let conn_id = ConnId::new(socket.peer_addr()?, fd);
 //! wd.register(conn_id, Instant::now() + Duration::from_secs(5));
-//! // ... on every read, on every parsed body frame, etc.
+//! // ... checkpoint (today: once, at the header phase). To make the
+//! // SlowRate body check live, a caller would invoke this on every
+//! // parsed body frame — the production callers do NOT (see SCOPE below).
 //! wd.progress(conn_id, bytes_read_cumulative)?;
 //! // ... when the request is done:
 //! wd.deregister(conn_id);
 //! ```
 //!
-//! `progress` returns `Err(WatchdogError::Evicted)` when the
+//! `progress` returns `Err(WatchdogError::Deadline)` when the
 //! connection has exceeded its deadline (slow handshake / slowloris
-//! header phase) **or** its observed rate has dropped below the
-//! configured minimum (slow-POST body phase). The hot-path caller is
-//! expected to map that to either a 408 Request Timeout (if a
-//! response can still be written) or RST (if not).
+//! header phase) **or** `Err(WatchdogError::SlowRate)` when its
+//! observed rate has dropped below the configured minimum (slow-POST
+//! body phase).
 //!
-//! Eviction is **passive** — `progress` checks both conditions on
-//! every call. A separate sweeper task can be spawned via
-//! [`Watchdog::spawn_sweeper`] which calls
-//! [`Watchdog::sweep_expired`] on a tick; the sweeper emits
-//! eviction events through a [`tokio::sync::mpsc`] channel so the
-//! listener loop can close the offending socket even while it's
-//! parked in a slow-read.
+//! ## SCOPE: this is a DETECTION / OBSERVABILITY layer, not the enforcer
+//! (F-RES-5, S38)
+//!
+//! The Watchdog's job is to **detect and surface** stalled connections
+//! (warn logs + the `evicted` count for alerting), NOT to be the primary
+//! mechanism that closes them. The current wiring reflects this:
+//! * `progress` is called **once** per request (the H1/H2 header-phase
+//!   checkpoint, e.g. `h1_proxy.rs`), not on every body frame, so the
+//!   `SlowRate` slow-POST rate check is effectively dormant.
+//! * the production sweeper (`lb/src/main.rs`) calls
+//!   [`Watchdog::sweep_expired`] on a tick and **logs** the swept count;
+//!   it does NOT close the offending socket (there is no mpsc
+//!   eviction→close path wired today — closing a parked socket from the
+//!   sweeper would race the graceful-drain coordinator).
+//!
+//! ENFORCEMENT — the bounds that actually close a stalled connection —
+//! lives in the timeout stack, not here:
+//! * **slowloris header phase:** hyper's `header_read_timeout`
+//!   (`HttpTimeouts::header`, wired with a `Timer` in the H1/H2 builders;
+//!   F-RES-1, S38);
+//! * **slow-POST / no-forward-progress body phase:** the
+//!   `idle_bounded_send` Phase-A idle deadline + `HttpTimeouts::total`;
+//! * **H2 zero-window stall:** the keepalive PING / settings caps;
+//! * **QUIC idle:** `set_max_idle_timeout`.
+//!
+//! So a deployment can rely on the timeout stack for bounding and treat
+//! the Watchdog's metrics/logs as the alerting/visibility signal. If a
+//! future revision wants the Watchdog itself to enforce, wire an mpsc
+//! eviction channel from the sweeper to a per-connection cancel token and
+//! call `progress` from the body pump — both are deliberately absent today.
 //!
 //! Sweeper lifecycle is owned by Wave-2c's `lb_core::Shutdown`
 //! token; this crate exposes the entry points and a stable

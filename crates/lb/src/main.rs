@@ -2790,11 +2790,18 @@ async fn async_main() -> anyhow::Result<()> {
                     }
                     _ = ticker.tick() => {}
                 }
-                let evicted = wd.sweep_expired();
-                if !evicted.is_empty() {
+                // F-RES-5 (S38): the sweeper is OBSERVABILITY-only — it
+                // surfaces stalled connections for alerting; it does NOT
+                // close the socket (that would race the graceful-drain
+                // coordinator). The actual close is performed by the
+                // timeout stack (hyper `header_read_timeout` /
+                // `idle_bounded_send` / `total` / H2 keepalive / QUIC idle).
+                let detected = wd.sweep_expired();
+                if !detected.is_empty() {
                     tracing::warn!(
-                        evicted = evicted.len(),
-                        "Watchdog swept stalled connections (slow-loris/slow-POST)",
+                        detected = detected.len(),
+                        "Watchdog detected stalled connections (slow-loris/slow-POST); \
+                         enforcement is the timeout stack, this is an alerting signal",
                     );
                 }
             }

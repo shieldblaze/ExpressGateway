@@ -478,9 +478,43 @@ impl QuicListener {
     }
 }
 
+/// F-INFRA-01 (S38): on the LOAD path, refuse (strict) or warn (lax) when an
+/// existing retry-secret file is group/world-accessible. The secret is the
+/// HMAC key behind Retry-token address validation; a world-readable secret
+/// lets any local reader forge tokens and bypass the QUIC source-address
+/// check. This MIRRORS the TLS-key advisory (`assert_key_perm_advisory` in
+/// `lb/src/main.rs`): strict on release, lax (warn-only) on debug builds. The
+/// generate path already writes mode 0600 via `write_secret_file`; this
+/// closes the asymmetry on the read path.
+#[cfg(unix)]
+fn check_retry_secret_perms(path: &Path, strict: bool) -> std::io::Result<()> {
+    match lb_security::assert_owner_only(path, strict) {
+        Ok(lb_security::KeyPermAdvice::Ok | lb_security::KeyPermAdvice::NotApplicable) => Ok(()),
+        Ok(lb_security::KeyPermAdvice::TooPermissive { mode }) => {
+            tracing::warn!(
+                retry_secret = %path.display(),
+                mode = format!("{mode:o}"),
+                "retry-secret file permissions wider than 0o600 — tighten with `chmod 600`"
+            );
+            Ok(())
+        }
+        Err(e) => Err(std::io::Error::other(format!(
+            "retry-secret permission check failed for {}: {e}",
+            path.display()
+        ))),
+    }
+}
+
+#[cfg(not(unix))]
+fn check_retry_secret_perms(_path: &Path, _strict: bool) -> std::io::Result<()> {
+    Ok(())
+}
+
 fn load_or_generate_retry_secret(path: &Path) -> std::io::Result<RetryTokenSigner> {
     match std::fs::read(path) {
         Ok(bytes) => {
+            // F-INFRA-01: perm-gate the existing-file load (strict on release).
+            check_retry_secret_perms(path, !cfg!(debug_assertions))?;
             if bytes.len() != RETRY_SECRET_LEN {
                 return Err(std::io::Error::other(format!(
                     "retry secret file {} has wrong length: expected {} bytes, got {}",
@@ -572,4 +606,63 @@ fn build_server_config(
     cfg.load_cert_chain_from_pem_file(cert)?;
     cfg.load_priv_key_from_pem_file(key)?;
     Ok(cfg)
+}
+
+#[cfg(test)]
+#[cfg(unix)]
+mod retry_secret_perm_tests {
+    //! F-INFRA-01 (S38) regression — the retry-secret LOAD path must
+    //! perm-check an existing file (strict=reject, lax=warn), closing the
+    //! asymmetry vs the generate path (which already writes 0600).
+    use super::{check_retry_secret_perms, load_or_generate_retry_secret, RETRY_SECRET_LEN};
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
+
+    fn temp_secret(name: &str, mode: u32) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        p.push(format!("lb-quic-retry-secret-{nanos}-{name}"));
+        let mut f = std::fs::File::create(&p).unwrap();
+        f.write_all(&[0u8; RETRY_SECRET_LEN]).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(mode)).unwrap();
+        p
+    }
+
+    // NEGATIVE CONTROL: a world-readable (0644) existing secret is REJECTED
+    // in strict mode. Pre-fix this loaded silently; post-fix it errors.
+    #[test]
+    fn world_readable_secret_rejected_strict() {
+        let p = temp_secret("0644-strict", 0o644);
+        let res = check_retry_secret_perms(&p, /* strict */ true);
+        let _ = std::fs::remove_file(&p);
+        assert!(
+            res.is_err(),
+            "world-readable retry secret must be rejected in strict mode"
+        );
+    }
+
+    // A world-readable secret is WARNED (not rejected) in lax mode — load
+    // still succeeds (debug-build / operator-convenience parity with TLS key).
+    #[test]
+    fn world_readable_secret_warns_lax() {
+        let p = temp_secret("0644-lax", 0o644);
+        let res = check_retry_secret_perms(&p, /* strict */ false);
+        let _ = std::fs::remove_file(&p);
+        assert!(res.is_ok(), "lax mode must warn-and-continue, not error");
+    }
+
+    // A correctly-permissioned (0600) secret passes in strict mode AND the
+    // full load path returns a signer (proves the gate doesn't block the
+    // legitimate case).
+    #[test]
+    fn owner_only_secret_passes_strict_and_loads() {
+        let p = temp_secret("0600-strict", 0o600);
+        assert!(check_retry_secret_perms(&p, true).is_ok());
+        let signer = load_or_generate_retry_secret(&p);
+        let _ = std::fs::remove_file(&p);
+        assert!(signer.is_ok(), "0600 secret must load cleanly");
+    }
 }

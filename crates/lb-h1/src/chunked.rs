@@ -309,8 +309,14 @@ impl Default for ChunkedEncoder {
 /// - any byte outside `0-9A-Fa-f` (catches `+`, `-`, space, tab, NUL,
 ///   and Unicode digits — every variant HAProxy and hyper paid for).
 ///
-/// `checked_shl` defends against silent overflow even with the digit
-/// cap in place (belt-and-braces).
+/// F-PARSE-3 (S38): the 16-hex-digit cap above is the REAL overflow
+/// defense — a 16-digit hex number is always ≤ `u64::MAX`, so no shift
+/// can lose a bit. The `value.checked_shl(4)` below is INERT belt-and-
+/// braces under that cap: `checked_shl` only returns `None` when the
+/// shift amount (4) ≥ the bit width (64), which never happens here; it
+/// does NOT detect a high nibble shifted out. It would only matter if a
+/// future change RELAXED the 16-digit cap — do not rely on it as the
+/// overflow guard; keep the digit cap.
 fn parse_chunk_size_hex(line: &[u8]) -> Result<u64, H1Error> {
     if line.is_empty() {
         return Err(H1Error::InvalidChunkEncoding);
