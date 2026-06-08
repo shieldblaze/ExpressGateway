@@ -22,6 +22,29 @@ parsed clean and the operator's override was silently ignored. If the
 gateway rejects a key you expect, check the spelling and the block it
 belongs under.
 
+## Foot-gun knobs (`0` / `false` = disable a defense)
+
+A handful of knobs accept a sentinel value that **turns off a protection**.
+These are documented, range-bounded escapes (not silent), but they weaken
+the gateway — set them only for trusted listeners and understand the
+trade-off. The S38 security audit enumerated and confirmed each one is a
+documented sentinel, not a silent bypass (`audit/security/s38-findings-infra.md`
+L-INFRA-1).
+
+| Knob | Disable value | What turning it off costs |
+|------|---------------|---------------------------|
+| `[runtime].max_keepalive_requests` | `0` | No proactive H1/H2 keep-alive connection recycling. |
+| `[runtime].max_requests_per_h3_connection` | `0` | **Re-opens the quiche `StreamMap::collected` leak / H3 stream-flood DoS** that S36 closed. Trusted listeners only. |
+| `[runtime].xdp_new_flow_cap_per_sec_per_cpu` | `0` | No per-CPU new-flow (SYN-flood) rate cap in XDP. |
+| `[[listeners.backends]].tls_verify_peer` | `false` | **Disables H3-backend certificate verification — accepts a MITM upstream.** Valid only on `h3` backends; rejected elsewhere. |
+| `[passthrough].mint_retry` | `false` | No stateless Retry on Mode A → re-opens the QUIC Initial address-spoof flood vector. |
+| `[passthrough].strict_source_binding` | `false` (default) | Permits NAT-rebind connection migration (the default); `true` hardens against off-path 4-tuple confusion at the cost of breaking legitimate rebinds. |
+| `[passthrough].flow_idle_timeout_ms` | `0` | No idle-flow reaper (LRU eviction only). |
+
+All other range-bounded knobs reject out-of-range values at parse time
+(e.g. `max_keepalive_requests > 10_000_000` is a hard error), so a
+fat-finger that would *silently* break a defense is caught.
+
 ## Minimum working config
 
 `config/default.toml` is a minimal accepted config:
@@ -43,6 +66,26 @@ weight = 1
 This produces a single plain-TCP listener on port 8080 that load-balances
 round-robin across two backends. At least one `[[listeners]]` **or** a
 top-level `[passthrough]` block is required.
+
+## Worked examples (`config/examples/`)
+
+Each example boots with `expressgateway config/examples/<file>`. Pick the
+one that matches your deployment:
+
+| Example | Deployment it models |
+|---------|----------------------|
+| `tcp.toml` | Plain L4 TCP load balancing — raw byte shovel across a round-robin backend pool. Use for non-HTTP protocols or pure L4. |
+| `tls.toml` | L4 TLS termination — rustls decrypts the client TLS and forwards the cleartext byte stream to a raw-TCP backend (no HTTP awareness). |
+| `h1.toml` | L7 HTTP/1.1 over plain TCP — hyper-terminated, with the security hooks (header policy, smuggle defense, timeouts) and per-listener HTTP timeouts. |
+| `h1s.toml` | L7 HTTPS — HTTP/1.1 **and HTTP/2** over TLS on one port via ALPN (`h2` preferred, `http/1.1` fallback). This is the **only way HTTP/2 is served**. |
+| `h1s-grpc.toml` | gRPC over HTTP/2 (TLS) — adds `[listeners.grpc]` (deadline clamp + synthesized health check); the backend speaks `h2`. gRPC needs an H2 or H3 front. |
+| `h1s-websocket.toml` | WebSocket over HTTPS — RFC 6455 WS-over-HTTP/1.1, on by default once `[listeners.websocket]` is present. WS-over-HTTP/2 (RFC 8441) is opt-in and **off by default** (CF-S27-2). |
+| `quic-h3.toml` | HTTP/3 — a `quic` listener in H3-terminate mode (the default QUIC mode). This is the **only way HTTP/3 is served**; advertise it from an h1/h1s listener via `[listeners.alt_svc]`. |
+| `quic-mode-b.toml` | Mode B raw-QUIC proxy — `[listeners.quic.raw_proxy]` terminates the client QUIC and re-originates a dedicated upstream QUIC connection, relaying raw streams + datagrams (two distinct quiche connections). |
+| `passthrough-mode-a.toml` | Mode A QUIC passthrough — a top-level `[passthrough]` block routes QUIC by Connection ID **without decrypting** (TLS stays end-to-end client↔backend). A parallel datapath; valid as the *only* datapath. |
+
+`config/default.toml` is the minimal accepted config (a single plain-TCP
+listener); it is what the binary loads when you pass no path.
 
 ## Listener protocols (what the binary actually serves)
 
@@ -252,15 +295,33 @@ QUIC-by-Connection-ID passthrough datapath. May be the **only** datapath
 | `mint_retry` | `bool` | — | `true` | Mint stateless Retry on no-token Initials. |
 | `flow_idle_timeout_ms` | `u64` | — | `60000` | Idle-flow reaper window; `0` disables (LRU-only). |
 
-## Reload semantics
+## Reload semantics (SIGHUP hot reload)
 
-As of this revision the binary loads the config **once at boot**; there is
-no live reload of `[[listeners]]` / backends. TLS certificate hot-reload is
-the only runtime config change today (SIGUSR1 re-reads cert/key files for
-TLS/`h1s` listeners and bumps `cert_rotation_*` metrics) — the rest of the
-config is fixed for the process lifetime. (A validate-first / atomic-swap
-SIGHUP reload is a separate in-progress workstream; this section will be
-updated when it lands.)
+The binary supports **validate-first SIGHUP config hot reload** (S37-C).
+`systemctl reload expressgateway` (or `kill -HUP <pid>`) re-reads the
+config file on disk, parses + validates it, and — only if it is valid —
+applies the **swappable** subset live without dropping in-flight
+connections. The reload follows an **honesty contract**: every field is
+classified as either *swappable* or *restart-required*, and a
+restart-required change is **never silently applied**.
+
+| Reload class | Fields | Behaviour on SIGHUP |
+|---|---|---|
+| **Swappable** (applied live) | `[[listeners.backends]]` pool, the per-listener `[listeners.http]` timeouts | L7 proxy rebuilt + atomically swapped behind an `ArcSwap`; existing connections finish on their captured snapshot (RCU), new connections see the new config. |
+| **Restart-required** (logged, NOT applied) | `protocol`, `address`, `[listeners.tls]`, `[listeners.quic]`, `max_requests_per_h3_connection`, all `drain_*`, `[admin]`, `[security]`, `[passthrough]`, all `[runtime]`/XDP fields | Diff is logged (`field=… SIGHUP: …`) and `config_reload_restart_required_fields_total` is bumped; the live config keeps serving until you restart the process. |
+
+If the new config fails to parse or validate, the reload is **rejected
+atomically**: nothing is applied, the live config keeps running, and the
+gateway logs `SIGHUP: … rolling back, keeping live config` and bumps
+`config_reload_failed_total`. A successful swappable apply bumps
+`config_reload_succeeded_total` + `config_reload_applied_swappable_total`.
+See `RUNBOOK.md` "Configuration reload".
+
+**TLS certificate rotation is a separate path** on **SIGUSR1**: it
+re-reads the cert/key files for TLS/`h1s` listeners and atomically swaps
+the `TlsConfigBundle` (bumping `cert_rotation_*` metrics), keeping the
+previous session-ticket key valid for its overlap window. Use SIGUSR1
+after writing new cert/key PEMs; use SIGHUP after editing the TOML.
 
 ## Validation
 

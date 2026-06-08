@@ -42,6 +42,7 @@ FILES=(
     "CHANGELOG.md"
     "CONFIG.md"
     "SECURITY.md"
+    "docs/features.md"
 )
 
 # Patterns that MUST NOT appear in any of the above files. Each row is

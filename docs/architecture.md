@@ -1,5 +1,22 @@
 # ExpressGateway: Architecture
 
+> **Status note (kept current as of S38).** Parts of this document
+> describe an earlier era of the codebase (the crate-graph snapshot, LOC
+> table, and per-crate test counts are dated 2026-04-22 and are *not*
+> maintained). Since then the production data plane moved onto delegated
+> libraries: **production HTTP/1.1 is hyper, HTTP/2 is hyper/h2, HTTP/3 +
+> QUIC are quiche, TLS is rustls/BoringSSL, WS framing is tungstenite.**
+> The `lb-h1`/`lb-h2`/`lb-h3` crates are now the **test-codecs +
+> security-detector types**, not the live wire parsers; `lb-quic` and
+> `lb-l4-xdp` are **real** (quiche-backed QUIC and a compiled XDP BPF ELF),
+> not simulations. For the authoritative current picture see
+> [`features.md`](features.md), `CONFIG.md`, `SECURITY.md`,
+> [`known-limitations.md`](known-limitations.md), and the S38 audit under
+> `audit/security/`. The architectural shape below (layered crates,
+> protocol-neutral bridge pipeline, panic-free posture, ArcSwap reload)
+> remains accurate; the "simulation" framing and the numeric snapshots do
+> not.
+
 ## Mission
 
 ExpressGateway is a Rust rewrite of the Java ExpressGateway project: a
@@ -93,33 +110,18 @@ The crate counts and per-crate LOC recorded on 2026-04-22 were:
 
 ### L4 (lb-l4-xdp)
 
-`lb-l4-xdp` is the userspace model of an XDP/eBPF data plane. Its
-public surface is a `FlowKey` 5-tuple type (src IP, dst IP, src port,
-dst port, protocol), a conntrack table with a FIFO eviction policy and
-a default capacity of 1,000,000 flows, and a Maglev consistent-hash
-ring with prime-sized tables. The crate is declared at the top of
-`crates/lb-l4-xdp/src/lib.rs` as a simulation, in the module docstring
-itself:
-
-> Provides userspace simulation of the L4 XDP data plane. Real eBPF
-> programs cannot be tested in CI, so we simulate the conntrack table,
-> Maglev consistent hashing, and hot-swap behavior.
-
-The companion `crates/lb-l4-xdp/ebpf/src/main.rs` file is an empty
-`main()` stub kept alongside the production crate to pin the location
-where the real aya-bpf program will live once the deployment target
-(kernel version, NIC driver) is finalised. The eBPF stub is NOT in the
-workspace members list; it is a placeholder, documented as such in its
-own docstring, and is intentionally not compiled by `cargo build
---workspace`. ADR-0004 and ADR-0005 (written in parallel with this
-document) cover the eBPF framework choice and the BPF map schema that
-the userspace simulation is designed to match.
-
-The three mandatory L4 tests — `test_xdp_conntrack_flow_pinning`,
-`test_xdp_maglev_consistent_hash`, and `test_xdp_hotswap_no_flow_drop`
-— all run against this userspace model and all pass. See
-`tests/l4_xdp_conntrack.rs`, `tests/l4_xdp_maglev.rs`, and
-`tests/l4_xdp_hotswap.rs`.
+`lb-l4-xdp` hosts both a userspace model (conntrack table, Maglev
+consistent-hash ring with prime-sized tables, FIFO eviction at a default
+capacity of 1,000,000 flows) **and the real aya-ebpf XDP program**
+(`crates/lb-l4-xdp/ebpf/src/main.rs`). The **compiled BPF ELF ships in-tree**
+at `crates/lb-l4-xdp/src/lb_xdp.bin`; the userspace loader attaches it
+(`kernel_load` + `attach`), and the data path has been validated live on
+Linux 7.0 (native ENA `xdpdrv`). It is **not** a simulation. XDP is off by
+default; the L4 packet-parse path is bounds-checked (`checked_add` on every
+`data..data_end` deref → `XDP_PASS` on any parse failure) and carries a
+per-CPU new-flow (SYN-flood) rate cap. See `DEPLOYMENT.md` for the kernel
+floor and ENA constraints, and `audit/security/s38-findings-infra.md`
+(L-INFRA-6) for the bounds proofs.
 
 ### L7 (lb-l7 + lb-h1 + lb-h2 + lb-h3 + lb-quic + lb-grpc)
 
@@ -184,14 +186,15 @@ and handles unary and all three streaming modes (tests
 > bounded HTTP/1.1 encoding constraint that matches nginx. See
 > [Known Limitations](known-limitations.md) (CF-RESP-1 / CASE-ii).
 
-`lb-quic` is, like `lb-l4-xdp`, explicitly a simulation: the doc
-comment in `crates/lb-quic/src/lib.rs` states "Since we cannot run real
-QUIC without a network stack in CI, this crate provides simulated
-datagram and stream forwarding with validation." The `QuicDatagram`
-and `QuicStream` types are validated end-to-end via
-`test_quic_datagram_forwarding` and `test_quic_stream_forwarding`.
-ADR-0003 captures the plan for swapping the simulation for `quiche`
-when a real network integration test bed is available.
+`lb-quic` is the **real QUIC + HTTP/3 data plane**, built on `quiche`
+(BoringSSL). It terminates client QUIC connections and speaks HTTP/3 via
+`quiche::h3` (H3-terminate mode), runs the Mode B raw-QUIC
+terminate-and-re-originate relay, and provides the Mode A passthrough
+public-header parser. The crate carries `#![deny(indexing_slicing)]`
+(including in tests). Real-wire QUIC/H3 behaviour is exercised by the
+`quic_*` and `bridging_*_h3` integration tests and the h3spec conformance
+run (`scripts/ci/h3spec-check.sh`). (The earlier "simulation" framing
+predates the quiche migration — see the status note at the top.)
 
 ### Protocol bridging
 
@@ -255,11 +258,13 @@ security modules: `lb-h2/src/security.rs` hosts
 `ewma`, `session_affinity`. Each algorithm has a matching integration
 test under `tests/balancer_*.rs`.
 
-`lb-compression` provides streaming encoders and decoders for zstd,
-brotli, gzip, and deflate on top of `flate2` / `brotli` / `zstd` /
-`deflate` crates (see ADR-0007). The same crate hosts the
-decompression-bomb cap, the BREACH mitigation (`BreachGuard`), and the
-`Accept-Encoding` quality negotiator.
+`lb-compression` exists as a crate, but **the data plane does not
+decompress (or recompress) request or response bodies** — `Content-Encoding`
+is passed through verbatim, so there is **no decompression-bomb surface** in
+the proxy path (S38 audit L-RES-6, proven-clean: the `flate2`/`zstd`/
+`miniz_oxide` crates in the lock file are transitive via `qlog`/`backtrace`
+only, never wired to a body). Treat compression/BREACH as an origin-tier
+concern; the gateway is a transparent pass-through for content coding.
 
 `lb-observability` is a `DashMap<String, AtomicU64>`-backed metrics
 registry. Prometheus export, structured access logs, and tracing spans
@@ -280,9 +285,13 @@ return-error, then hands control to `async_main`. Bootstrap order:
 4. For each `ListenerConfig`, build a `ListenerState` with a
    `RoundRobin` balancer, resolved backend `SocketAddr`s, a shared
    `Arc<MetricsRegistry>`, and an `AtomicU64` connection gauge.
-5. `TcpListener::bind` each listener and spawn an accept loop per
-   listener.
-6. Park on `tokio::signal::ctrl_c` for shutdown.
+5. `TcpListener::bind` (or `UdpSocket` for `quic`/`[passthrough]`) each
+   listener and spawn an accept loop per listener.
+6. Register the signal handlers and run: **SIGHUP** = validate-first
+   config hot reload (swappable subset live, restart-required logged),
+   **SIGUSR1** = TLS cert rotation, **SIGTERM**/**SIGINT** = graceful
+   drain (lameduck `/readyz` → settle → cancel → bounded budget). See
+   `CONFIG.md` "Reload semantics" + `RUNBOOK.md`.
 
 Graceful drain is modelled end-to-end by the integration test
 `tests/reload_zero_drop.rs` / `test_reload_zero_drop_under_load`,

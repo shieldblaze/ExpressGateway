@@ -287,8 +287,9 @@ lb-l7 hook (REL-2-08 follow-up).
 
 | Family                              | Type    | Labels  | Wired   | Cardinality |
 |-------------------------------------|---------|---------|:-------:|-------------|
-| `cert_rotation_failed_total`        | Counter | —       | pending | 1           |
-| `cert_rotation_total`               | Counter | —       | pending | 1           |
+| `cert_rotation_succeeded_total`     | Counter | —       |  yes    | 1           |
+| `cert_rotation_failed_total`        | Counter | `reason`|  yes    | small       |
+| `cert_loaded_at_seconds`            | Gauge   | `listener` | yes  | 1 / listener|
 | `ticket_key_rotations_total`        | Counter | —       | pending | 1           |
 | `security_rapid_reset_tripped_total`        | Counter | —       | pending | 1   |
 | `security_continuation_flood_tripped_total` | Counter | —       | pending | 1   |
@@ -298,6 +299,20 @@ lb-l7 hook (REL-2-08 follow-up).
 | `security_zero_window_stall_total`          | Counter | —       | pending | 1   |
 | `security_slowloris_reaped_total`           | Counter | —       | pending | 1   |
 | `security_zero_rtt_replay_rejected_total`   | Counter | —       | pending | 1   |
+
+### Config reload (S37-C)
+
+Emitted by the SIGHUP validate-first config hot-reload handler in
+`crates/lb/src/main.rs` (registered once at boot). See `CONFIG.md`
+"Reload semantics" and `RUNBOOK.md` "Configuration reload".
+
+| Family                                        | Type    | Labels | Wired | Cardinality |
+|-----------------------------------------------|---------|--------|:-----:|-------------|
+| `config_reload_succeeded_total`               | Counter | —      | yes   | 1           |
+| `config_reload_failed_total`                  | Counter | —      | yes   | 1           |
+| `config_reload_applied_swappable_total`       | Counter | —      | yes   | 1           |
+| `config_reload_restart_required_fields_total` | Counter | —      | yes   | 1           |
+| `config_reload_applied_version`               | Gauge   | —      | yes   | 1           |
 
 ### Cardinality budget summary
 
