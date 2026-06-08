@@ -25,6 +25,12 @@ lb-h2 = { path = "../crates/lb-h2" }
 # S26: test-only codec for the H3 fuzz targets (fuzz crate is not a workspace
 # member, so this must be a normal [dependencies] entry).
 lb-h3-testcodec = { path = "../crates/lb-h3-testcodec" }
+# S38 security audit: fuzz OUR hand-rolled Mode A QUIC public-header parser
+# (lb_quic::public_header). Pull it WITHOUT default features and with the
+# passthrough-only marker so quiche/tokio-quiche/BoringSSL are NOT linked via
+# lb-quic — the public_header module is `pub mod` and not gated on
+# quic-terminate, so this keeps the fuzz build light.
+lb-quic = { path = "../crates/lb-quic", default-features = false, features = ["quic-passthrough-only"] }
 quiche = "0.28"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 
@@ -59,6 +65,36 @@ bench = false
 [[bin]]
 name = "tls_client_hello"
 path = "fuzz_targets/tls_client_hello.rs"
+test = false
+doc = false
+bench = false
+
+# --- S38 security-audit additions (close the recon-identified fuzz gaps) ---
+
+[[bin]]
+name = "h1_chunked"
+path = "fuzz_targets/h1_chunked.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "h2_hpack"
+path = "fuzz_targets/h2_hpack.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "h1_request_line"
+path = "fuzz_targets/h1_request_line.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "quic_public_header"
+path = "fuzz_targets/quic_public_header.rs"
 test = false
 doc = false
 bench = false

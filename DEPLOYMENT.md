@@ -1,10 +1,11 @@
 # Deployment
 
 This document covers running the `expressgateway` binary on Linux in a
-production-adjacent shape. XDP-dependent items are flagged because the
-BPF ELF is currently behind the toolchain caveat
-(see [XDP toolchain caveat](#xdp-toolchain-caveat)); the userspace
-loader is shipped.
+production-adjacent shape. The compiled XDP BPF ELF ships in-tree and the
+userspace loader attaches it (see
+[XDP toolchain & the shipped BPF ELF](#xdp-toolchain--the-shipped-bpf-elf));
+XDP is off by default and single-kernel (validated against a specific
+kernel window — see [Kernel floor](#kernel-floor)).
 
 ## Build
 
@@ -28,7 +29,7 @@ The crate is named `lb` but the binary it produces is `expressgateway`
 
 ### Cross-compile notes
 
-Cross-compiling to `aarch64-unknown-linux-gnu` or `x86_64-unknown-linux-musl` works from a stable 1.85 host **provided the cross cmake + C toolchain are installed**. The XDP ebpf crate is outside the workspace members list and is not built by `cargo build --workspace` — it has its own pinned nightly toolchain per ADR `docs/decisions/ebpf-toolchain-separation.md`.
+Cross-compiling to `aarch64-unknown-linux-gnu` or `x86_64-unknown-linux-musl` works from a stable host at the workspace MSRV (**1.88**) **provided the cross cmake + C toolchain are installed**. The XDP ebpf crate is outside the workspace members list and is not built by `cargo build --workspace` — it has its own pinned nightly toolchain per ADR `docs/decisions/ebpf-toolchain-separation.md`.
 
 ## Kernel floor
 
@@ -144,9 +145,18 @@ Create a dedicated service user: `useradd --system --shell /usr/sbin/nologin --h
 
 Certificate and key paths go in the TOML; see `CONFIG.md`. Rotation strategy:
 
-1. Write new `cert.pem` and `key.pem` into `/etc/expressgateway/tls/` atomically (rename, don't truncate).
-2. `systemctl reload expressgateway` (SIGHUP).
+1. Write new `cert.pem` and `key.pem` into `/etc/expressgateway/tls/` atomically (rename, don't truncate). The private key must be `0600` (group/other-readable keys are rejected at load).
+2. Send **SIGUSR1** (`kill -USR1 <pid>`) — this is the **TLS cert** reload path. (SIGHUP reloads the *config TOML*, not cert files; see "Signals" below.)
 3. The in-process `TicketRotator` (`crates/lb-security/src/ticket.rs`) keeps the previous ticket key valid for its `overlap` window so sessions encrypted before the reload continue to decrypt.
+
+### Signals
+
+| Signal | Action |
+|--------|--------|
+| **SIGHUP** | Re-read the config TOML; validate-first; apply the swappable subset (backends, HTTP timeouts) live; log + skip restart-required changes; roll back atomically on invalid config. `systemctl reload` (`ExecReload=/bin/kill -HUP $MAINPID`). |
+| **SIGUSR1** | Re-read TLS cert/key files and atomically swap the `TlsConfigBundle` under in-flight handshakes (REL-2-03). |
+| **SIGTERM** | Graceful drain (lameduck `/readyz` → settle → cancel → bounded budget). `systemctl stop`. |
+| **SIGINT** | Same drain path (interactive). |
 
 TLS listeners are wired through `tokio_rustls::TlsAcceptor`
 (`crates/lb/src/main.rs`). REL-2-03 closed the hot-reload path:
@@ -157,21 +167,33 @@ failure the old bundle stays live. See
 `audit/reliability/round-2-review.md` REL-2-03 for the audit
 closure.
 
-## XDP toolchain caveat
+## XDP toolchain & the shipped BPF ELF
 
-`crates/lb-l4-xdp/ebpf/src/main.rs` is a real aya-ebpf XDP program. Building the BPF ELF requires:
+`crates/lb-l4-xdp/ebpf/src/main.rs` is a real aya-ebpf XDP program, and the
+**compiled BPF ELF ships in-tree** at `crates/lb-l4-xdp/src/lb_xdp.bin`. The
+loader's `build.rs` picks it up via `#[cfg(lb_xdp_elf)]`, so a stock
+`cargo build --release` produces a binary whose XDP loader can `kernel_load`
++ `attach` the committed object. The data path has been **validated live on
+Linux 7.0** (native ENA `xdpdrv` attach on `ens5`, full data path + state
+restore — `audit/foundation-pass/d1-native-attach-result.md`).
+
+XDP is **off by default** (`[runtime].xdp_enabled = false`); when disabled,
+L4 traffic goes through the kernel TCP/UDP stack normally with no loss.
+
+### Rebuilding the ELF from source (optional)
+
+You only need this if you change the eBPF program. Building the BPF ELF
+requires:
 
 - `bpf-linker` (cargo subcommand): `cargo install bpf-linker --locked`.
 - LLVM-18 development headers (`llvm-18-dev` on Debian/Ubuntu).
 - A nightly rustc with the `rust-src` component.
 
-**At the time of this writing `bpf-linker`'s transitive dependencies require rustc ≥ 1.88, but the project's MSRV is 1.85.** The install fails on our pinned toolchain. Options:
-
-1. Bump the project MSRV to 1.88 (tracked as a Pillar 3b candidate; also drops `RUSTSEC-2026-0009`).
-2. Pin older versions of the transitive deps (`cargo-platform`, `libloading`, `time`) via `cargo update --precise`.
-3. Build the BPF ELF on a separate CI runner that has rustc 1.88 and commit the resulting `.bin` to `crates/lb-l4-xdp/src/lb_xdp.bin`; the loader's `build.rs` picks it up via `#[cfg(lb_xdp_elf)]`.
-
-Until one of those lands, the XDP loader happy paths (`kernel_load`, `attach`) are not exercised. L4 proxying goes through the kernel TCP stack as normal; no traffic is lost.
+The ebpf crate has its own pinned nightly toolchain (separate from the
+workspace MSRV 1.88) per `docs/decisions/ebpf-toolchain-separation.md`.
+Build it on a runner with that toolchain and commit the resulting `.bin`;
+`scripts/build-xdp.sh` drives the build, and the loader's CODE-2-07 size
+asserts pin the Rust↔ELF map layout so a stale `.bin` fails closed.
 
 ## ENA native-XDP requirements (hard deployment constraint)
 
@@ -230,14 +252,16 @@ jumbo-frame MTU without lowering it. Tracked in
 2. `journalctl -u expressgateway -n 20` → `lb-io runtime ready backend=io_uring` (or `epoll`), `TCP backend pool ready`, `DNS resolver ready`, one `listening on ...` line per listener.
 3. `ss -tln` → one socket per listener address in LISTEN state.
 4. Send a test request; verify upstream receives it; verify the connection count on the backend increments.
-5. `systemctl reload expressgateway`; watch logs for the
-   `subsequent lifecycle signal` line (and absence of errors); verify
-   no in-flight connections dropped. The internal `reload_zero_drop`
-   integration test in `tests/reload_zero_drop.rs` exercises the
-   `ConfigManager` reload path in-process. The full systemd reload
-   loop (SIGHUP → re-read TOML → atomic config swap) is the
-   REL-2-05 follow-up; until then `systemctl reload` works on
-   SIGUSR1 only.
+5. `systemctl reload expressgateway` (SIGHUP); watch logs for the
+   `SIGHUP config reload pass complete` line (and the absence of
+   `rolling back` / `rejected`), and verify no in-flight connections
+   dropped. A swappable change (e.g. an edited backend pool) logs the
+   per-field `SIGHUP: …` diff and applies live; a restart-required
+   change (e.g. `protocol`/`tls`) is logged and skipped, not applied.
+   The `reload_under_traffic` and `tests/reload_zero_drop.rs`
+   integration tests exercise the validate-first / atomic-swap /
+   honesty-contract path. To change a restart-required field, edit the
+   TOML and restart the unit.
 
 See `RUNBOOK.md` for ongoing operations.
 

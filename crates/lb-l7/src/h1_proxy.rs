@@ -46,7 +46,7 @@ use crate::h2_proxy::MAX_REQUEST_BODY_BYTES;
 use crate::h2_proxy::{H2_ABORT_OBSERVE_TIMEOUT, ProxyErr as H2ProxyErr, drive_h2_upstream_send};
 use hyper::header::{HeaderName, HeaderValue};
 use hyper::{Request, Response, StatusCode};
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::{TokioIo, TokioTimer};
 use lb_io::http2_pool::Http2Pool;
 use lb_io::pool::TcpPool;
 use lb_io::quic_pool::QuicUpstreamPool;
@@ -206,9 +206,12 @@ impl AltSvcConfig {
 /// Per-listener HTTP timeouts.
 #[derive(Debug, Clone, Copy)]
 pub struct HttpTimeouts {
-    /// Maximum time spent reading the request line + headers. Wrapped
-    /// around the entire upstream request future today since hyper's H1
-    /// server does not expose a separate header-receipt knob in 1.x.
+    /// Maximum time the client may take to deliver the complete request
+    /// line + header section (the slowloris header-read deadline). Wired
+    /// into hyper's H1 server via `header_read_timeout` (which requires a
+    /// `Timer`; see the builder in `serve_connection`). Also feeds the
+    /// WS upgrade-dial timeout. NOT the whole-request deadline — that is
+    /// `total`; the body/no-progress deadline is `body`.
     pub header: Duration,
     /// Maximum time the upstream side spends sending its response (and
     /// the client side spends sending its request body). Applied around
@@ -681,8 +684,16 @@ impl H1Proxy {
             cap,
             close_signal: Arc::clone(&close_signal),
         };
+        // F-RES-1 (S38): a `Timer` MUST be wired before `header_read_timeout`
+        // has any effect — without it hyper silently ignores the deadline and
+        // the header-read phase is bounded only by the connection `total`
+        // (slowloris hold). Mirror the H2 builder (h2_proxy.rs), which already
+        // runs `timer(..)` + `.with_upgrades()` for WS-over-H2, so timer +
+        // upgrades is a proven-compatible combination.
         let conn = hyper::server::conn::http1::Builder::new()
             .keep_alive(true)
+            .timer(TokioTimer::new())
+            .header_read_timeout(self.timeouts.header)
             .serve_connection(TokioIo::new(io), svc)
             .with_upgrades();
         tokio::pin!(conn);

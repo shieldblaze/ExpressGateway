@@ -88,6 +88,12 @@ pub const DEFAULT_H2_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Default upstream H2 send timeout.
 pub const DEFAULT_H2_SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// F-RES-2 (S38): max HPACK header-list size accepted from a backend on
+/// the upstream H2 leg. Matches the client-facing server policy
+/// (`lb_l7::h2_security` default, 64 KiB) so a malicious backend cannot
+/// push a larger decoded header list at us than a malicious client could.
+pub const MAX_HEADER_LIST_SIZE: u32 = 64 * 1024;
+
 /// Configuration for an [`Http2Pool`]. Defaults match the values
 /// documented on the module — Pingora-aligned.
 #[derive(Debug, Clone, Copy)]
@@ -426,6 +432,12 @@ impl Http2Pool {
         builder
             .initial_stream_window_size(self.inner.config.initial_stream_window)
             .max_concurrent_reset_streams(self.inner.config.max_concurrent_streams as usize)
+            // F-RES-2 (S38): cap the HPACK header-list size a malicious
+            // BACKEND can make us decode, for parity with the client-facing
+            // H2 server policy (64 KiB; see lb_l7::h2_security). Without this
+            // the upstream leg relies on the h2 crate's implicit 16 KiB
+            // default — strictly safe but undocumented; set it explicitly.
+            .max_header_list_size(MAX_HEADER_LIST_SIZE)
             .timer(TokioTimer::new());
         if !self.inner.config.keep_alive_interval.is_zero() {
             builder

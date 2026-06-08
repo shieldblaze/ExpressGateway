@@ -1262,9 +1262,40 @@ impl PassthroughListener {
 
 const RETRY_SECRET_LEN: usize = 32;
 
+/// F-INFRA-01 (S38): perm-gate the retry-secret LOAD path. Sibling of
+/// `lb_quic::listener::check_retry_secret_perms` (the two retry-secret
+/// loaders are deliberate cross-path duplicates — keep them in sync).
+/// Strict on release, warn-only (lax) on debug builds, mirroring the
+/// TLS-key advisory. Closes the asymmetry vs the 0600 generate path.
+#[cfg(unix)]
+fn check_retry_secret_perms(path: &std::path::Path, strict: bool) -> std::io::Result<()> {
+    match lb_security::assert_owner_only(path, strict) {
+        Ok(lb_security::KeyPermAdvice::Ok | lb_security::KeyPermAdvice::NotApplicable) => Ok(()),
+        Ok(lb_security::KeyPermAdvice::TooPermissive { mode }) => {
+            tracing::warn!(
+                retry_secret = %path.display(),
+                mode = format!("{mode:o}"),
+                "retry-secret file permissions wider than 0o600 — tighten with `chmod 600`"
+            );
+            Ok(())
+        }
+        Err(e) => Err(std::io::Error::other(format!(
+            "retry-secret permission check failed for {}: {e}",
+            path.display()
+        ))),
+    }
+}
+
+#[cfg(not(unix))]
+fn check_retry_secret_perms(_path: &std::path::Path, _strict: bool) -> std::io::Result<()> {
+    Ok(())
+}
+
 fn load_or_generate_retry_secret(path: &std::path::Path) -> std::io::Result<RetryTokenSigner> {
     match std::fs::read(path) {
         Ok(bytes) => {
+            // F-INFRA-01: perm-gate the existing-file load (strict on release).
+            check_retry_secret_perms(path, !cfg!(debug_assertions))?;
             if bytes.len() != RETRY_SECRET_LEN {
                 return Err(std::io::Error::other(format!(
                     "retry secret file {} has wrong length: expected {} bytes, got {}",

@@ -207,16 +207,32 @@ moved from plain text to JSON.
 systemctl reload expressgateway
 ```
 
-`ExecReload=/bin/kill -HUP $MAINPID` dispatches SIGHUP. SIGHUP plumbing
-through `ConfigManager` + atomic `ArcSwap` is the REL-2-05 follow-up
-and **is not yet wired** — see audit. SIGUSR1 is currently honored as
-the cert-reload trigger (REL-2-03 placeholder; logs and re-arms).
+`ExecReload=/bin/kill -HUP $MAINPID` dispatches **SIGHUP**, which runs the
+validate-first config hot reload (S37-C): the binary re-reads the TOML,
+parses + validates it, and — only if valid — applies the **swappable**
+subset live through the `ConfigManager` + atomic `ArcSwap`. The reload is
+governed by an honesty contract; restart-required changes are logged and
+**not** silently applied.
 
-What requires a full restart today:
-- Any TOML edit (no live reload yet).
-- Listener address/port changes — the socket is bound at startup.
-- Kernel I/O backend switch (`io_uring` ↔ `epoll`).
-- TLS cert/key swap.
+Watch the logs after a reload:
+- Success: `SIGHUP config reload pass complete`; a swappable change logs the
+  per-field `SIGHUP: L7 proxy rebuilt + swapped` line and bumps
+  `config_reload_succeeded_total` + `config_reload_applied_swappable_total`.
+- A restart-required field logs `SIGHUP: <field> requires a restart …` and
+  bumps `config_reload_restart_required_fields_total` (the live config keeps
+  serving).
+- Invalid config: `SIGHUP: … rolling back, keeping live config` and
+  `config_reload_failed_total` — nothing is applied.
+
+**Applied live by SIGHUP** (swappable): the `[[listeners.backends]]` pool
+and the per-listener `[listeners.http]` timeouts.
+
+**Requires a full restart** (restart-required — logged on SIGHUP, not
+applied): `protocol`, listener `address`/port (socket bound at startup),
+`[listeners.tls]`, `[listeners.quic]`, `max_requests_per_h3_connection`,
+all `drain_*`, `[admin]`, `[security]`, `[passthrough]`, all `[runtime]`/XDP
+fields, and the kernel I/O backend (`io_uring` ↔ `epoll`). **TLS cert/key
+files** rotate via **SIGUSR1**, not SIGHUP (see below).
 
 ## TLS certificate rotation
 
