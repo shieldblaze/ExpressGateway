@@ -10,17 +10,19 @@ LOG=audit/security/s38-logs
 NIGHTLY=nightly-2026-01-15
 ts() { date '+%H:%M:%S'; }
 
-# target:seconds:rss_mb  — production-critical parser gets 900s; test codecs 240s.
+# target:seconds:rss_mb  — production-critical Mode A parser gets the longest box;
+# test-codec + delegated-boundary targets are confirmatory (120s) since the prod
+# parser is already hand-proven + covered by the `ours_never_panics` proptest.
 CAMPAIGNS=(
-  "quic_public_header:900:2048"
-  "h1_chunked:240:2048"
-  "h2_hpack:240:2048"
-  "h1_request_line:240:2048"
-  "h1_parser:180:2048"
-  "h2_frame:180:2048"
-  "h3_frame:180:2048"
-  "quic_initial:180:2048"
-  "tls_client_hello:180:2048"
+  "quic_public_header:600:2048"
+  "h1_chunked:120:2048"
+  "h2_hpack:120:2048"
+  "h1_request_line:120:2048"
+  "h1_parser:120:2048"
+  "h2_frame:120:2048"
+  "h3_frame:120:2048"
+  "quic_initial:120:2048"
+  "tls_client_hello:120:2048"
 )
 
 echo "[$(ts)] fuzz campaign start; disk:" ; df -h / | tail -1

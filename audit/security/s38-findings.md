@@ -58,6 +58,22 @@ boot-readiness flake; run 1/3 passed. To characterize: isolated re-run (quiet bo
 
 ---
 
+## Baseline flake (CF-S38-RELOAD-BOOT-FLAKE) — characterized, NOT a finding
+
+`reload_under_traffic::proof_c_restart_required_no_silent_rebind` failed **run 2/3** of the cold
+baseline ×3 (verdict `fmt=0 clippy=0 test=2/3`). Root cause: the panic was at **line 704 — the
+PRE-reload sanity assert** (`get_backend_id(&listener) == Some("A")` immediately after `boot()`),
+not in the reload logic. Under full-suite saturation (3 back-to-back `--all-features` suites each
+spawning many in-proc gateways + 4 concurrent Opus auditor agents), the freshly-booted gateway's
+first probe got `None` (boot-readiness/CPU-starvation race in the TEST harness's `boot()` probe).
+**Confirmation (R2/R15):** isolated re-run of the binary on a quiet box = **5/5 PASS** (10/10 tests
+each); runs 1/3 and 3/3 of the ×3 also passed it. → load-induced flake, pre-existing on main, NOT a
+reload-honesty defect and NOT session-introduced. Matches the CF-SATURATION-1 / "16 in-proc
+gateways" pattern. **Disposition:** do NOT weaken the test (R5). Carry-forward CF-S38-RELOAD-BOOT-FLAKE;
+optional deflake = harden `boot()` to do a real request-round-trip readiness wait (test-robustness,
+not a product change) — handed to the perf/burn-in phase. The final promote ×3 will be run with
+controlled parallelism to avoid the saturation flake.
+
 ## Known carry-forwards reviewed (not new findings)
 
 ### CF-S7-RHU — `request_h3_upstream` 30s wall-clock cap, fails-safe
