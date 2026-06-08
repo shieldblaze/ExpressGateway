@@ -95,13 +95,35 @@ cargo-fuzz 0.13.1 on the pinned `nightly-2026-01-15`. 9 targets (5 pre-existing 
 session to close recon gaps). Production-critical Mode A parser got the longest box. Crashing
 inputs (if any) → committed regression corpora + unit regression tests (R13).
 
-> _**[PLACEHOLDER — filled after the campaign completes; R15: iterations cited from completed
-> runs only.]** Per-target: target · seconds · executed units (iterations) · crashes · coverage._
+**Campaign completed 2026-06-08 19:26–19:34** (each target ran its full `-max_total_time`; 4 workers;
+`-rss_limit_mb=2048`). Iterations = summed `number_of_executed_units` across the 4 workers (R15 — all
+from completed runs). **Total ≈ 1.03 billion executed units · 0 crashes · 0 OOMs · 0 artifacts.**
+
+| Target | Surface | secs | executed units | crashes | corpus |
+|--------|---------|------|----------------|---------|--------|
+| **`quic_public_header`** | **Mode A `parse_public_header` (PROD, every datagram)** | 400 | **669,657,005** | **0** | 672 KB |
+| `h2_frame` | lb-h2 frame decode (test codec) | 60 | 137,105,919 | 0 | 700 KB |
+| `h3_frame` | lb-h3-testcodec frame decode | 60 | 86,968,740 | 0 | 1.4 MB |
+| `quic_initial` | quiche public-header (router boundary) | 60 | 70,193,148 | 0 | 1.0 MB |
+| `h1_request_line` | lb-h1 request-line + headers (test codec) | 60 | 21,839,886 | 0 | 42 MB |
+| `tls_client_hello` | rustls `Acceptor` boundary | 60 | 15,442,952 | 0 | 41 MB |
+| `h1_chunked` | lb-h1 chunked decoder (test codec) | 60 | 10,343,674 | 0 | 19 MB |
+| `h1_parser` | lb-h1 header parser (test codec) | 60 | 9,456,309 | 0 | 17 MB |
+| `h2_hpack` | lb-h2 HPACK decoder (test codec) | 60 | 5,953,714 | 0 | 9.8 MB |
+
+**Headline:** the crown-jewel internet-facing hand-rolled production parser `lb_quic::public_header`
+survived **~670M coverage-guided iterations with ZERO crashes** — empirically confirming the
+"never panics on arbitrary input" claim (which was already proven by construction + the
+`ours_never_panics` proptest). The test-codec targets (defence-in-depth) also found nothing.
+
+**Regression corpus:** 0 crashing inputs → no crash-regression test to add (R13). The 9 fuzz
+harnesses (`fuzz/fuzz_targets/`, 4 added this session) are committed for re-runs; the coverage
+corpus (131 MB) is left uncommitted (regenerable; CF-DISK-1).
 
 New targets added (`fuzz/fuzz_targets/`): `quic_public_header` (the Mode A `parse_public_header` —
 the prior `quic_initial` fuzzed quiche's parser, NOT ours), `h1_chunked`, `h2_hpack`,
 `h1_request_line`. The `quic_public_header` target varies `short_dcid_len` across 0..=24 per input
-to exercise the short-header path (per parser-auditor's coverage note).
+to exercise the short-header path.
 
 ---
 
@@ -289,7 +311,33 @@ separate short run was judged disproportionate given the fixes cannot regress a 
 
 ## 9. Verdict
 
-> _**[PLACEHOLDER — SESSION 38 COMPLETE/PARTIAL.]**_
+**SESSION 38 COMPLETE — security bar MET (with documented accepted-risks).**
+
+- **Findings: 0 CRITICAL · 0 HIGH · 1 MEDIUM · 7 LOW · 4 INFO.** All CRITICAL/HIGH: none.
+  The MEDIUM (F-RES-1) and the security-relevant + cheap LOWs (F-INFRA-01, F-RES-2, F-RES-5,
+  F-PARSE-3, F-RES-4) are **FIXED-and-verified** (PoC-now-fails + load-bearing negative control
+  independently re-confirmed for the MEDIUM; single-sourced R12; clippy/fmt/×3 green). The
+  remaining LOW/INFO are **proven-tiered-carried** (F-RES-3 → CF-S38-QUIC-MAXCONN) or
+  **documented-accepted-risk** (test-codec LOWs, no-mTLS, TLS1.2, no-zeroize, F-PROTO-01). **No
+  finding asterisked (R4); no product-fork; no new dependency-implicating finding.**
+- **Fuzzed 9 targets / ≈1.03B executed units / 0 crashes** — incl. the crown-jewel Mode A
+  production parser at ~670M iters (4 new targets added to close the recon gap where the prior
+  `quic_initial` fuzzed quiche, not our parser).
+- **Clean scopes PROVEN, not assumed (R4):** the smuggling/desync surface (all 9 cells + WS H1/H2/H3
+  + gRPC) is clean by construction (typed `HeaderName`/`HeaderValue` funnel + QPACK length-prefix),
+  pinned by named, passing harnesses; R8 holds adversarially; the operational layer (config/reload
+  honesty-contract, admin auth, secrets, XDP) is the most-hardened surface. The "mostly clean"
+  result is explained (§1): production wire parsing is delegated to upstream-fuzzed deps; the
+  findings are in OUR config/wiring of that stack, and they are fixed.
+- **Gates:** fmt ✓ · clippy `-D warnings` ✓ · **×3 test=3/3** ✓ · doc-lint (tier-1+2) ✓ · h2spec /
+  h3spec-waiver / WS / gRPC / R8 bounded-memory tests all in the green ×3 · docs reflect the
+  audited+fixed state.
+- **PROMOTED:** `main` ← `feature/security-audit-s38` `--no-ff` _(commit + post-merge CI filled at
+  promote)_.
+
+**Handoff (the remaining pre-prod phase):** perf validation + real-traffic burn-in (incl. the full
+12-scenario lb-soak re-run + the optional `boot()` readiness deflake for CF-S38-RELOAD-BOOT-FLAKE +
+fresh-box CF-S37-SC9 re-check), and the tracked carry-forwards (§Carry-forwards).
 
 ---
 

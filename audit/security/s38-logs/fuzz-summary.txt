@@ -1,0 +1,18 @@
+[19:26:13] quic_public_header rc=0 crashes=0 iters=669657005
+?
+[19:27:15] h1_chunked rc=0 crashes=0 iters=10343674
+?
+[19:28:17] h2_hpack rc=0 crashes=0 iters=5953714
+?
+[19:29:18] h1_request_line rc=0 crashes=0 iters=21839886
+?
+[19:30:20] h1_parser rc=0 crashes=0 iters=9456309
+?
+[19:31:22] h2_frame rc=0 crashes=0 iters=137105919
+?
+[19:32:24] h3_frame rc=0 crashes=0 iters=86968740
+?
+[19:33:26] quic_initial rc=0 crashes=0 iters=70193148
+?
+[19:34:28] tls_client_hello rc=0 crashes=0 iters=15442952
+?
