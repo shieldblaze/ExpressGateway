@@ -294,8 +294,8 @@ test=3/3 / clippy results are unaffected (committed `81bef2c0`).
 `h2h3_memory_gauge_non_vacuous_and_load_bearing`, `h3h3_e2e_request_memory_bounded_through_stalled_backend`,
 `resp_backpressure_slow_client_streams_incrementally` (all PASS). F-RES-1 is strictly
 resource-*reducing* (closes a slowloris connection at the 10s header deadline instead of holding
-to 60s), so it cannot regress a previously-BOUNDED result; a short targeted slowloris re-soak
-confirms (below). The full 12-scenario soak is the mission-deferred perf/burn-in handoff.
+to 60s), so it cannot regress a previously-BOUNDED result. The full 12-scenario lb-soak is the
+mission-deferred perf/burn-in handoff (see the Soak note below).
 
 **Soak (R8 boundedness):** the S38 fixes do not touch the relay/memory hot paths the soak
 validates (F-INFRA-01 = startup-only; F-RES-2 = client header limit; F-RES-5/F-PARSE-3 = doc; and
@@ -334,8 +334,11 @@ separate short run was judged disproportionate given the fixes cannot regress a 
 - **Gates:** fmt ✓ · clippy `-D warnings` ✓ · **×3 test=3/3** ✓ · doc-lint (tier-1+2) ✓ · h2spec /
   h3spec-waiver / WS / gRPC / R8 bounded-memory tests all in the green ×3 · docs reflect the
   audited+fixed state.
-- **PROMOTED:** `main` ← `feature/security-audit-s38` `--no-ff` _(commit + post-merge CI filled at
-  promote)_.
+- **PROMOTED:** `main` `b8a99078 → 21c13775` (merge of `feature/security-audit-s38`, `--no-ff`).
+  **Post-merge CI GREEN:** both `CI` (18m39s) and `prod-readiness-gates` (11m53s) = success on
+  21c13775 (the unrelated Dependabot netty/maven failure is pre-existing noise). Independent
+  pre-promote verification: resource-auditor returned **GO** on all five checks (fix/gate/fuzz
+  reality, no-asterisk, severity-honesty).
 
 **Handoff (the remaining pre-prod phase):** perf validation + real-traffic burn-in (incl. the full
 12-scenario lb-soak re-run + the optional `boot()` readiness deflake for CF-S38-RELOAD-BOOT-FLAKE +
