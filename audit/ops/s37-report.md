@@ -116,7 +116,28 @@ Staged: patch group → prometheus 0.13→0.14 (held un-hold) + object→0.39 (f
 - **Full re-soak: ALL 12 scenarios BOUNDED** (`audit/soak/s37-soak-data/`, non_bounded=0) — sc1_h1h1, sc1b_h1h2, sc2_h2h2, sc3_slowloris, sc4_modeb, sc5_modea, sc6_413teardown, sc7_h3terminate, sc8_ws_h1, sc8b_ws_h2, sc8c_ws_h3, sc9_grpc_h3. 4 conservative batches (≤4 concurrent) + sc9 alone @1800s/151 samples. **sc9 BOUNDED, flat plateau** (rss 1st-third median 36660 vs last-third 36740 = rel_growth **0.22%**, fds/threads/panic flat) — **no leak** (R3 satisfied). DEVIATION (documented, R4): sc9 steady-state ~37MB vs the S36 ~22MB reference (+~15MB) — a higher *baseline*, NOT growth; load was ~half S36's (1.4M vs 3M RPCs) so not load-driven; most likely box fragmentation (11h uptime + swap in use) ± a small B/C/D footprint. Trivial absolute (37MB), well under the 80MB pre-fix DRIFT. **Watch-item → CF-S37-SC9-PLATEAU** (re-confirm on a fresh box in the perf/security-audit phase). The leak-fix property (BOUNDED, no unbounded growth) holds.
 - Coverage (D6) + docker-smoke (D5): CI-binding on push (disk-constrained locally); B lb-config 90.42% / C reload.rs 83.78% from earlier scoped runs.
 
-**PHASE 4 GATES: all green** — ×3 3/3 (1562/0/18) · clippy/fmt · h2spec 147/147 · h3spec 12-waiver · WS/gRPC-H3/R8 · WS-H2 gated · audit/deny clean · re-soak 12/12 BOUNDED · tokio regression caught+fixed. D6/D5/D2/D3a + the rest of ci.yml = CI-binding (confirm post-merge). **READY TO PROMOTE.**
+**PHASE 4 GATES: all green** — ×3 3/3 (1562/0/18) · clippy/fmt · h2spec 147/147 · h3spec 12-waiver · WS/gRPC-H3/R8 · WS-H2 gated · audit/deny clean · re-soak 12/12 BOUNDED · tokio regression caught+fixed.
+
+### PROMOTE
+- **PR #228** opened off `feature/ops-bcd-s37`; full CI run = **16/16 GREEN** @ `4403c0eb` (Check, Clippy, Test, Format, Doc-Lint, Panic-Freedom, Fuzz, MSRV, Release-Build, Security-Audit, gate-07-cargo-deny, D2-xdp, D3a-chaos, D4-conformance, **D5-docker-smoke**, **D6-coverage**). Two CI-only flakes hit + resolved en route: (i) D6 h2_proxy.rs 79.60% → added a committed h1s/H2 backend-reload test (`proof_h2_backend_reload_takes_effect`, filling a real C H2-reload gap) → 31/31 modules ≥80%; (ii) `gate-07-cargo-deny`/Security-Audit → a NEW advisory **RUSTSEC-2026-0173** (proc-macro-error2 unmaintained, build-time proc-macro via the foundations-held chain) published mid-session → justified ignore (mirrored deny.toml+audit.toml), verified `advisories ok`.
+- **Promoted to main `ab638330`** via `git merge --no-ff` (direct push; repo is squash-only so a merge-commit PR-merge was disallowed — owner chose --no-ff to preserve the B/C/D commits). Honest per-workstream merge message. PR #228 auto-marked merged.
+- **Post-merge main CI GREEN** @ `ab638330`: CI (ci.yml run 27145437741) = **success** (all 10 jobs); prod-readiness (run 27145437614) = **success** (deny/D4-conformance/D5-docker/D2-xdp/D3a-chaos/D6 all green). D6 needed one job re-run — h2_proxy.rs is a pre-existing **borderline-coverage flake** (79.6–80.x%, an UNCHANGED file): the *instrumented* fcap tests' coverage of the cap-enforcement lines varies run-to-run on the hosted runner. The H2-reload test raised it but not to a robust margin → **CF-S37-D6-H2PROXY-FLAKY** (harden with a deterministic small-cap H2 test in the next phase; re-run clears it meanwhile). main is honest-green.
+
+---
+
+## VERDICT — SESSION 37 COMPLETE
+
+**config + hot reload IN (reload PROVEN under traffic), deps latest (3 upgraded / 4 held+carried), all gates green, PROMOTED to main `ab638330` (--no-ff).**
+
+- **B** config management — deny_unknown_fields + protocol/range validation, 9 examples, CONFIG.md; real-binary valid/invalid/equivalent verified, zero findings.
+- **C** SIGHUP hot reload (L7) — live-connection preservation PROVEN under traffic (gRPC mid-RPC + live WS survive), bidirectional reload-summary honesty, F-S37-C-1 signal-loss fixed; QUIC-backend + per_ip/strict_te live-swap carried.
+- **D** latest deps — prometheus 0.14 (held un-hold) + object 0.39 + socket2 + time-0.3.47; tokio HELD 1.51.1 (caught + carried the 1.52 H2→H3 relay regression); WS-H2 stays gated (hyper#4050 unfixed); foundations held-by-upstream; reqwest held; new advisory RUSTSEC-2026-0173 justified-ignored.
+- Gates: ×3 1562/0/18 · h2spec 147/147 · h3spec 12-waiver · WS/gRPC-H3/R8 · re-soak 12/12 BOUNDED · all 16 PR CI + post-merge main CI green.
+
+**Carry-forward:** CF-S37-C-H3-BACKEND-RELOAD, CF-S37-C-PER-IP-STRICT-TE, CF-S37-D-TOKIO-1.52-RELAY, CF-S37-D-REQWEST-0.13, CF-S37-SC9-PLATEAU, CF-S37-D6-H2PROXY-FLAKY, CF-S27-2 (hyper#4050 / WS-H2). **NEXT: SECURITY AUDIT** (internet-facing + all-protocol incl. config/reload attack surface) + high-quality docs.
+
+### Carry-forward (S38+)
+- CF-S37-C-H3-BACKEND-RELOAD (QUIC/H3 backend hot-reload), CF-S37-C-PER-IP-STRICT-TE (accept-site/hooks live-swap), CF-S37-D-TOKIO-1.52-RELAY (tokio 1.52 H2→H3 relay throughput ~10× regression — re-adopt when upstream restores), CF-S37-D-REQWEST-0.13 (dev-only), CF-S37-SC9-PLATEAU (sc9 ~37MB vs S36 ~22MB — fresh-box re-check), RUSTSEC-2026-0173 ignore (revisit with foundations 5.x). CF-S27-2 hyper#4050 still open (WS-H2 gated). Handoff: SECURITY AUDIT (internet-facing + all-protocol, incl. config/reload attack surface) + high-quality docs.
 
 ### Phase 4 — (plan)
 ×3 · h2spec 147/147 · h3spec 12-waiver · WS matrix · gRPC-H3 · R8+R13 · full re-soak ALL BOUNDED (sc9 ~22MB) · docker-smoke from config · all CI gates · per-module cov. Promote `--no-ff` per R11.
