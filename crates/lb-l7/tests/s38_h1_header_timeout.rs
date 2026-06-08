@@ -120,9 +120,9 @@ async fn h1_partial_head_closed_at_header_timeout_not_total() {
     let closed = tokio::time::timeout(Duration::from_secs(6), async {
         loop {
             match client.read(&mut buf).await {
-                Ok(0) => break true,           // server closed (EOF)
-                Ok(_) => {}                    // maybe a 408 then close
-                Err(_) => break true,          // reset == closed
+                Ok(0) => break true,  // server closed (EOF)
+                Ok(_) => {}           // maybe a 408 then close
+                Err(_) => break true, // reset == closed
             }
         }
     })

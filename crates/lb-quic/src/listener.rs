@@ -614,7 +614,7 @@ mod retry_secret_perm_tests {
     //! F-INFRA-01 (S38) regression — the retry-secret LOAD path must
     //! perm-check an existing file (strict=reject, lax=warn), closing the
     //! asymmetry vs the generate path (which already writes 0600).
-    use super::{check_retry_secret_perms, load_or_generate_retry_secret, RETRY_SECRET_LEN};
+    use super::{RETRY_SECRET_LEN, check_retry_secret_perms, load_or_generate_retry_secret};
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
