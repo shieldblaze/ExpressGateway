@@ -136,7 +136,7 @@ libfuzzer-sys = "0.4"
 # listener. `default-features = false` drops the protobuf family so we
 # keep the text-format path only; `process` enables the
 # `process_collector` for OS-level RSS/CPU samples.
-prometheus = { version = "0.13", default-features = false, features = ["process"] }
+prometheus = { version = "0.14", default-features = false, features = ["process"] }
 # CODE-2-11: property-based testing for the H1 / H2 / H3 / QUIC parsers.
 # Dev-only; never enters release. The default-features include
 # `proptest-derive` machinery we do not need (regex-based generators)
