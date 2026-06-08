@@ -157,16 +157,92 @@ adversarially. (Detail + test names in the per-role findings files.)
 
 ## 6. Fixes (PoC-now-fails + negative-control evidence)
 
-> _**[PLACEHOLDER — filled as each fix lands: the diff, the negative-control test (FAILS pre-fix,
-> PASSES post-fix), the no-regression `cargo test -p` result, single-source check.]**_
+Author = parser-auditor (independent of the finders resource/infra-auditor). Confirmer = lead.
+Committed in `7f702188` (scoped to `crates/`). R13 layered verification per fix.
+
+### F-RES-1 (MEDIUM) — H1 slowloris header timeout now active
+- **Mechanism:** the H1 hyper builder (`h1_proxy.rs:684`) called `.keep_alive(true).serve_connection()`
+  with **no `.timer()`**, so hyper's `header_read_timeout` was silently inert — the request-head
+  read was bounded only by the 60s connection `total` (+ per-IP cap 1024), not the intended 10s
+  `header`. A slowloris header-trickle held a connection/slot 6× longer than designed.
+- **Fix:** `.timer(TokioTimer::new()).header_read_timeout(self.timeouts.header)` on the builder
+  (mirrors H2's proven `timer + with_upgrades` wiring at h2_proxy.rs:828). Stale doc-comment
+  (F-RES-4) corrected in the same edit.
+- **Negative control (load-bearing, independently re-confirmed by lead):**
+  `crates/lb-l7/tests/s38_h1_header_timeout.rs::h1_partial_head_closed_at_header_timeout_not_total`
+  (boots H1 listener header=1s/total=10s, sends a partial head, asserts close <5s).
+  **Pre-fix (HEAD~1 h1_proxy.rs): FAILED** — _"connection was NOT closed within 6 s — header
+  timeout is inert (slowloris hold bounded only by the 10 s total)"_. **Post-fix: PASSES** (closes
+  ~1s). Positive control `h1_complete_request_still_proxies_with_timer` passes.
+- **No-regression:** WS-over-H1 unaffected (timer+upgrades compatible — `round8_ws_upgrade_defer`
+  4/4, `keepalive_count_cap` 3/3); lb-l7 --lib 93/0.
+
+### F-INFRA-01 (LOW-security) — retry-secret load-path perm-check
+- **Mechanism:** the retry secret is GENERATED 0600 but an EXISTING file's load was not perm-checked
+  (asymmetric vs the TLS key, which IS checked at main.rs:980). A pre-placed/drifted world-readable
+  retry secret loaded silently → retry-token forge → Mode-A QUIC Initial-flood-defence bypass.
+- **Fix:** `check_retry_secret_perms(path, !cfg!(debug_assertions))` → `lb_security::assert_owner_only`
+  (lax=warn, strict=err) at the top of the load branch in BOTH loaders (`listener.rs:481` +
+  `passthrough.rs:1265`) — **single-sourced (R12)**, mirrors the TLS-key handling.
+- **Negative control:** `retry_secret_perm_tests` (world_readable_rejected_strict /
+  warns_lax / owner_only_passes) all PASS; the pre-fix hole was separately proven (old load of a
+  0644 secret returns `Ok` — silent accept). lb-quic --lib 97/0 (+3).
+
+### F-RES-2 (LOW) — H2-client header-list cap parity
+- `http2_pool.rs:425` H2-CLIENT builder now `.max_header_list_size(MAX_HEADER_LIST_SIZE=64KiB)` —
+  parity with the 64 KiB server policy (was implicit on hyper/h2's 16 KiB default; tightens the
+  explicitness, no behavioral regression). lb-io --lib 56/0.
+
+### F-RES-5 (LOW) — slowloris Watchdog documented observability-only
+- Confirmed the sweeper (main.rs:2793) only logs the swept count (never closes the socket) and
+  `progress()` is header-phase-only (slow-POST rate eviction is dormant). **Decision: document, no
+  behaviour change** (enforcing socket-close would race the drain coordinator; the timeout stack —
+  now incl. the live F-RES-1 header timeout + `idle_bounded_send` + `total` + H2 keepalive + QUIC
+  idle — is the real enforcement). Watchdog module doc + the sweeper log (`evicted`→`detected`,
+  "enforcement is the timeout stack") reworded. The dormant `SlowRate` path is now clearly framed.
+
+### F-PARSE-3 (LOW, test-codec) — comment correction
+- `chunked.rs:312`: the 16-digit cap is the real overflow defence; `checked_shl` is inert belt-and-
+  braces under it (would only matter if the cap were relaxed). Comment-only, no behaviour change.
+
+### F-RES-4 (INFO) — doc fixed inline with F-RES-1.
 
 ---
 
 ## 7. Tiered / accepted-risk (with rationale)
 
-> _**[PLACEHOLDER — F-RES-3 (QUIC per-IP cap → hardening carry-forward CF-S38-QUIC-MAXCONN, bounded
-> today by the 100k global cap + retry-token address validation), the test-codec LOWs, the INFO
-> items, CF-S7-RHU, and the documented accepted-risks (no zeroize / no server mTLS / TLS1.2).]**_
+**TIERED-carried (proven mechanism + bounded today):**
+- **F-RES-3 (LOW) → CF-S38-QUIC-MAXCONN.** The QUIC router `max_connections` is hardcoded 100_000
+  (listener.rs:416), not config-wired, and there is no per-source-IP QUIC connection sub-cap.
+  Bounded today by the 100k global cap + QUIC Retry-token **address validation** (an attacker must
+  complete a round-trip from a real address before consuming a connection slot — spoofed-source
+  floods are rejected at Retry). Tiered (not fixed) because the fix adds config surface
+  (field + validation + reload-diff classification + docs) that belongs in the ops/perf phase, and
+  the defence already exists. Severity LOW (bounded resource pressure, not LB-down).
+
+**ACCEPTED-risk (documented, with rationale):**
+- **F-PROTO-01 (LOW)** — the H1 CL/TE smuggle detector skips header pairs whose value fails
+  `to_str()` (opaque 0x80–0xFF bytes). NOT exploitable: hyper validates H1 framing independently and
+  the egress path strips CL/TE; the detector is defence-in-depth. Proven clean by the opaque-byte-TE
+  PoC (§5/§8). Optional lossy-decode hardening deferred (no security delta).
+- **F-PARSE-1 / F-PARSE-2 (LOW, test codecs)** — `lb-h2` HPACK `decode_string` add + `lb-h3-testcodec`
+  `decode_frame` total-len add. No production call-site (these crates are test infrastructure; prod
+  H2/H3 = hyper/quiche). Benign under sane caps. Accepted; covered by the (defensive) fuzz targets.
+- **F-PROTO-02/03/04 (INFO)** — gRPC 200 path skips hop-by-hop strip (H2 binary frames → moot); WS
+  echoes client subprotocol without backend confirmation (cosmetic, RFC-permitted); H3-front backend
+  response-head parser doesn't tchar-validate names (QPACK is binary length-prefixed → cannot split).
+- **No zeroize on rustls/ring-held keys** (F-INFRA-02) — no reachable leak path (infra-auditor: every
+  secret struct has a redacting `Debug`, no secret in any tracing call/metric label); zeroize would be
+  cosmetic given keys live for the listener lifetime in an Arc.
+- **No server-side mTLS** (F-INFRA-03) — intentional posture; documented in SECURITY.md as a
+  deployment consideration (front mTLS is an upstream-LB / service-mesh concern).
+- **TLS 1.2 enabled** — rustls's TLS 1.2 is downgrade-safe (no RSA key-exchange, AEAD-only); documented.
+- **bpffs pin-dir mode not locked by the loader** (F-INFRA-04) — operator/systemd responsibility;
+  loading requires CAP_BPF/root already.
+
+**CF-S7-RHU** (h3_bridge.rs:164) — `request_h3_upstream` 30s wall-clock cap can truncate a slow
+H1→H3/H2→H3 upload, but **fails CLOSED** (`Err(PrematureEof)` + Reset, never `End` → no response-
+splitting). Availability edge only, not a security finding; documented carry-forward.
 
 ---
 
