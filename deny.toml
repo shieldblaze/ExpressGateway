@@ -32,6 +32,13 @@ ignore = [
     # YAML surface parses only their telemetry config, never ExpressGateway-supplied
     # input. Revisit once quiche/qlog adopt foundations 5.x (which drops serde_yaml).
     "RUSTSEC-2024-0320",
+    # proc-macro-error2 unmaintained (RUSTSEC-2026-0173, published 2026-06; first appeared
+    # mid-S37 as a NEW advisory). BUILD-TIME proc-macro only (getset derive), never in the
+    # runtime binary. Transitive via the SAME foundations 4.5.0 held-by-upstream chain:
+    # foundations -> cf-rustracing-jaeger -> local-ip-address -> neli -> getset (proc-macro)
+    # -> proc-macro-error2. Unmaintained advisory, not a vulnerability; no reachable runtime
+    # surface. Revisit once quiche/qlog adopt foundations 5.x (same trigger as RUSTSEC-2024-0320).
+    "RUSTSEC-2026-0173",
 ]
 
 [licenses]

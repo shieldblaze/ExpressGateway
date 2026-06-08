@@ -32,4 +32,9 @@ ignore = [
     # parses only their telemetry config, never ExpressGateway-supplied input. Revisit
     # once quiche/qlog adopt foundations 5.x.
     "RUSTSEC-2024-0320",
+    # proc-macro-error2 unmaintained (RUSTSEC-2026-0173, NEW mid-S37). Build-time proc-macro
+    # only (getset derive), never in the runtime binary; transitive via the same foundations
+    # 4.5.0 held-by-upstream chain (foundations -> cf-rustracing-jaeger -> local-ip-address ->
+    # neli -> getset -> proc-macro-error2). Unmaintained advisory, not a vuln. Mirrors deny.toml.
+    "RUSTSEC-2026-0173",
 ]
