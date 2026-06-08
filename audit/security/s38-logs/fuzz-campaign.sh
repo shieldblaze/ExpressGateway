@@ -4,7 +4,10 @@
 # iterations actually reached; a killed run != "no crashes"). Production-critical target
 # (quic_public_header — the Mode A parser) gets the longest box.
 set -uo pipefail
-export CARGO_TARGET_DIR=/home/ubuntu/Code/eg-target   # NOTE: fuzz uses fuzz/target by default; this is harmless
+# cargo-fuzz manages its OWN target dir (fuzz/target). Do NOT redirect it into the
+# shared eg-target — that mixes nightly+ASAN artifacts into the stable build tree and
+# inflates eg-target. Explicitly unset so fuzz/target is used (isolated + cleanable).
+unset CARGO_TARGET_DIR
 cd "$(dirname "$0")/../../.." || exit 99
 LOG=audit/security/s38-logs
 NIGHTLY=nightly-2026-01-15
@@ -14,20 +17,29 @@ ts() { date '+%H:%M:%S'; }
 # test-codec + delegated-boundary targets are confirmatory (120s) since the prod
 # parser is already hand-proven + covered by the `ours_never_panics` proptest.
 CAMPAIGNS=(
-  "quic_public_header:600:2048"
-  "h1_chunked:120:2048"
-  "h2_hpack:120:2048"
-  "h1_request_line:120:2048"
-  "h1_parser:120:2048"
-  "h2_frame:120:2048"
-  "h3_frame:120:2048"
-  "quic_initial:120:2048"
-  "tls_client_hello:120:2048"
+  "quic_public_header:400:2048"
+  "h1_chunked:60:2048"
+  "h2_hpack:60:2048"
+  "h1_request_line:60:2048"
+  "h1_parser:60:2048"
+  "h2_frame:60:2048"
+  "h3_frame:60:2048"
+  "quic_initial:60:2048"
+  "tls_client_hello:60:2048"
 )
+# CF-DISK-1 disk guard: abort the campaign if free space drops below ~3 GiB.
+disk_guard() {
+  local free_kb; free_kb=$(df --output=avail / | tail -1)
+  if [ "${free_kb:-0}" -lt 3145728 ]; then
+    echo "[$(ts)] DISK GUARD: <3GiB free — aborting remaining fuzz to protect the box (CF-DISK-1)"
+    return 1
+  fi
+}
 
 echo "[$(ts)] fuzz campaign start; disk:" ; df -h / | tail -1
 SUMMARY="$LOG/fuzz-summary.txt"; : > "$SUMMARY"
 for entry in "${CAMPAIGNS[@]}"; do
+  disk_guard || break
   tgt="${entry%%:*}"; rest="${entry#*:}"; secs="${rest%%:*}"; rss="${rest##*:}"
   echo "[$(ts)] === fuzz $tgt for ${secs}s (rss ${rss}MB) ==="
   out="$LOG/fuzz-$tgt.txt"

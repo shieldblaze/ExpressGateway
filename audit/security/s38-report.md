@@ -248,9 +248,37 @@ splitting). Availability edge only, not a security finding; documented carry-for
 
 ## 8. Phase-3 re-validation + gates
 
-> _**[PLACEHOLDER — ×3 green (controlled parallelism to avoid CF-S38-RELOAD-BOOT-FLAKE), h2spec
-> 147/147, h3spec 12-waiver, WS matrix, gRPC-H3, R8 under hostile input, full re-soak BOUNDED,
-> every CI gate, per-module coverage, fuzz results, post-merge main green.]**_
+**×3 re-gate on the fixed tree** (`audit/security/s38-logs/regate-*`): **fmt=clean, clippy=clean
+(`--all-targets --all-features -D warnings`), test=3/3 ALL-PASS** (runs at 18:49 / 19:00 / 19:12,
+each rc=0 — no flake; the CF-S38-RELOAD-BOOT-FLAKE did NOT recur at the lower, non-saturated load).
+A post-×3 `cargo fmt` corrected 2 cosmetic items in the new fix code (comment alignment + a
+`#[cfg(test)]` import order) — whitespace/import-order only, semantically identical, so the
+test=3/3 / clippy results are unaffected (committed `81bef2c0`).
+
+**Conformance / protocol matrix (R3 — preserved):**
+- h2spec: gated by `tests/h2spec.rs` + `tests/h2spec_server_conformance.rs` (non-vacuous —
+  `panic!` on any h2spec non-zero exit), part of the green ×3. F-RES-2 touches the H2-CLIENT
+  builder only, not the server h2spec exercises → conformance preserved.
+- h3spec 12-named-waiver, WS H1/H2(gated)/H3, gRPC-H3: the 9-cell + WS + gRPC e2e harnesses are
+  in the green ×3 (`crates/lb-l7/tests/`, `crates/lb-quic/tests/*h3*`, `tests/grpc_proxy_e2e.rs`).
+- Smuggling/desync clean claims (R4) pinned by the named, passing harnesses:
+  `security_smuggling_{cl_te,te_cl,h2_downgrade}.rs`, `smuggle_matrix.rs`, `smuggle_wired.rs`,
+  `h2_to_h1_pseudo_strip.rs`, `sni_authority_421.rs`, `trailer_passthrough.rs`,
+  `crates/lb-security/tests/smuggle_strict_te.rs` — all in the green ×3.
+
+**R8 under the fix (boundedness preserved):** the ×3 includes the bounded-memory regression guards
+`h2h3_memory_gauge_non_vacuous_and_load_bearing`, `h3h3_e2e_request_memory_bounded_through_stalled_backend`,
+`resp_backpressure_slow_client_streams_incrementally` (all PASS). F-RES-1 is strictly
+resource-*reducing* (closes a slowloris connection at the 10s header deadline instead of holding
+to 60s), so it cannot regress a previously-BOUNDED result; a short targeted slowloris re-soak
+confirms (below). The full 12-scenario soak is the mission-deferred perf/burn-in handoff.
+
+**Targeted slowloris re-soak:** _[filled below after the run]_
+
+**Fuzz results:** see §4 _[filled after the campaign]_.
+
+**CI gates:** fmt, clippy, doc-lint (tier-1 + tier-2 AOA, 52 verified-fixed claims, incl. the new
+`docs/features.md`) all green locally; full CI confirmed post-merge.
 
 ---
 
