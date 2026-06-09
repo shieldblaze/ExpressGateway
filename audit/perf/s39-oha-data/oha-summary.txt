@@ -1,0 +1,19 @@
+# S39 oha 1.14.0 cross-validation (independent client). Single-call busy-wait
+# pattern (sleep/wait triggered a harness 144 on the cross-process serve).
+# 10s per point. h1 = plaintext H1 front -> H1 backend. h1s/h2 = TLS front ->
+# H2c backend (same serve: h1s_front advertises h2 + http/1.1).
+[h1  plaintext H1->H1]
+h1 c=1  rps=4300  ok=1.000 p50=225us p99=306us  p999=489us
+h1 c=8  rps=12118 ok=1.000 p50=602us p99=1641us p999=3059us
+h1 c=32 rps=13903 ok=1.000 p50=1940us p99=8604us p999=14997us
+h1 c=64 rps=14049 ok=1.000 p50=3843us p99=17921us p999=35024us
+[h1s  TLS H1->H2c]
+h1s c=1  rps=4482  ok=1.000 p50=207us p99=646us  p999=993us
+h1s c=8  rps=13972 ok=1.000 p50=519us p99=1387us p999=3612us
+h1s c=32 rps=22881 ok=1.000 p50=1214us p99=2899us p999=42199us
+h1s c=64 rps=28167 ok=1.000 p50=2043us p99=4440us p999=43638us
+[h2  TLS H2->H2c]
+h2 c=1  rps=4064  ok=1.000 p50=240us p99=296us  p999=411us
+h2 c=8  rps=12629 ok=1.000 p50=578us p99=1418us p999=3884us
+h2 c=32 rps=21554 ok=1.000 p50=1363us p99=2838us p999=41559us
+h2 c=64 rps=24527 ok=1.000 p50=2285us p99=5050us p999=43706us

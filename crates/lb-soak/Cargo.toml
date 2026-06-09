@@ -25,6 +25,14 @@ path = "src/lib.rs"
 name = "eg-soak"
 path = "src/bin/eg-soak.rs"
 
+# S39 perf characterization driver — closed-loop latency + throughput per
+# protocol path (RPS + p50/p99/p999 + gateway resource cost). Reuses the soak
+# library halves (gateway/backends/config_gen) but a SEPARATE load module
+# (`bench`) so the boundedness `loadgen` path stays byte-identical (R3).
+[[bin]]
+name = "eg-bench"
+path = "src/bin/eg-bench.rs"
+
 [dependencies]
 tokio = { workspace = true }
 tokio-util = { workspace = true }

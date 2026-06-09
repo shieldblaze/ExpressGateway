@@ -1,0 +1,10 @@
+=== SOAK sc2_h2h2 — BOUNDED (14400s, 481 samples) ===
+      rss_kb [BOUNDED] rss_kb: bounded — last-third median 24088 vs first-third 23924 (+0.7%, within band 10% or non-monotone 52%) — first=8592 last=24032 min=8592 max=25224
+    vmhwm_kb [BOUNDED] vmhwm_kb: bounded — last-third median 25284 vs first-third 25260 (+0.1%, within band 10% or non-monotone 100%) — first=8592 last=25284 min=8592 max=25284
+         fds [BOUNDED] fds: bounded — last-third median 18 vs first-third 18 (+0.0%, within band 10% or non-monotone 77%) — first=11 last=18 min=11 max=20
+     threads [BOUNDED] threads: bounded — last-third median 9 vs first-third 9 (+0.0%, within band 10% or non-monotone 100%) — first=10 last=9 min=9 max=10
+  accept_inflight [BOUNDED] accept_inflight: bounded — last-third median 6 vs first-third 6 (+0.0%, within band 10% or non-monotone 74%) — first=6 last=6 min=3 max=9
+  panic_total [BOUNDED] panic_total: stayed zero across the run — first=0 last=0 min=0 max=0
+  load:
+    h2_load: ok=15431048 err=0
+    rapid_reset: ok=320084243 err=0

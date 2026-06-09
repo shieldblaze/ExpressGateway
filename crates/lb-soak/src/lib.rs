@@ -34,6 +34,7 @@
 #![allow(clippy::too_many_arguments)]
 
 pub mod backends;
+pub mod bench;
 pub mod chaos;
 pub mod config_gen;
 pub mod loadgen;

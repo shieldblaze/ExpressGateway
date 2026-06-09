@@ -1,0 +1,9 @@
+=== SOAK sc9_grpc_h3 — BOUNDED (14400s, 481 samples) ===
+      rss_kb [BOUNDED] rss_kb: bounded — last-third median 30098 vs first-third 30774 (-2.2%, within band 10% or non-monotone 48%) — first=7904 last=29112 min=7904 max=33260
+    vmhwm_kb [BOUNDED] vmhwm_kb: bounded — last-third median 33468 vs first-third 33468 (+0.0%, within band 10% or non-monotone 100%) — first=7904 last=33468 min=7904 max=33468
+         fds [BOUNDED] fds: bounded — last-third median 12 vs first-third 12 (+0.0%, within band 10% or non-monotone 100%) — first=11 last=12 min=11 max=13
+     threads [BOUNDED] threads: bounded — last-third median 9 vs first-third 9 (+0.0%, within band 10% or non-monotone 100%) — first=10 last=9 min=9 max=10
+  panic_total [BOUNDED] panic_total: stayed zero across the run — first=0 last=0 min=0 max=0
+  load:
+    grpc_h3_sustained: ok=5191368 err=5190
+    grpc_h3_churn: ok=4294544 err=1
