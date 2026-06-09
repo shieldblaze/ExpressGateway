@@ -1,0 +1,14 @@
+[re-run h1+h2 with client TCP_NODELAY Mon Jun  8 23:48:40 UTC 2026]
+--- h1 ---
+h1 c=1 payload=0 | rps= 4139 ok=62097 err=637 | p50=237us p90=263us p99=321us p999=527us max=7150us mean=239us (measure=15s warmup=5s) gateway: cpu=90% rss_max=9.4MB vmhwm_max=9.4MB fds_max=13 threads_max=10 
+h1 c=8 payload=0 | rps= 11919 ok=178817 err=1873 | p50=627us p90=941us p99=1488us p999=2910us max=5974us mean=668us (measure=15s warmup=5s) gateway: cpu=163% rss_max=12.4MB vmhwm_max=12.5MB fds_max=27 threads_max=10 
+h1 c=32 payload=0 | rps= 13777 ok=206732 err=2118 | p50=2052us p90=3281us p99=7919us p999=12725us max=22977us mean=2317us (measure=15s warmup=5s) gateway: cpu=224% rss_max=16.9MB vmhwm_max=17.0MB fds_max=73 threads_max=10 
+h1 c=64 payload=0 | rps= 13822 ok=207381 err=2111 | p50=3764us p90=7208us p99=18231us p999=35254us max=59256us mean=4618us (measure=15s warmup=5s) gateway: cpu=271% rss_max=21.6MB vmhwm_max=21.6MB fds_max=133 threads_max=10 
+h1 c=128 payload=0 | rps= 18343 ok=275237 err=2807 | p50=6560us p90=9757us p99=15956us p999=22442us max=40739us mean=6964us (measure=15s warmup=5s) gateway: cpu=252% rss_max=28.0MB vmhwm_max=28.0MB fds_max=261 threads_max=10 
+--- h2 ---
+h2 c=1 payload=0 | rps= 3915 ok=58720 err=0 | p50=241us p90=262us p99=295us p999=575us max=41186us mean=253us (measure=15s warmup=5s) gateway: cpu=66% rss_max=10.7MB vmhwm_max=10.7MB fds_max=13 threads_max=10 
+h2 c=8 payload=0 | rps= 14543 ok=218747 err=0 | p50=519us p90=751us p99=1072us p999=2078us max=41900us mean=547us (measure=15s warmup=5s) gateway: cpu=158% rss_max=12.7MB vmhwm_max=12.7MB fds_max=20 threads_max=10 
+h2 c=32 payload=0 | rps= 24148 ok=363258 err=0 | p50=1234us p90=1758us p99=2555us p999=4924us max=43277us mean=1320us (measure=15s warmup=5s) gateway: cpu=177% rss_max=16.0MB vmhwm_max=16.0MB fds_max=44 threads_max=10 
+h2 c=64 payload=0 | rps= 27918 ok=419983 err=0 | p50=2125us p90=2965us p99=4156us p999=42844us max=44491us mean=2284us (measure=15s warmup=5s) gateway: cpu=180% rss_max=20.0MB vmhwm_max=20.0MB fds_max=76 threads_max=10 
+h2 c=128 payload=0 | rps= 32191 ok=484331 err=0 | p50=3753us p90=5185us p99=6998us p999=45162us max=50811us mean=3963us (measure=15s warmup=5s) gateway: cpu=191% rss_max=24.0MB vmhwm_max=24.2MB fds_max=140 threads_max=10 
+DONE Mon Jun  8 23:52:12 UTC 2026

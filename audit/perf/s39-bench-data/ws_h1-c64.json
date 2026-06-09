@@ -1,0 +1,1 @@
+{"summary":{"protocol":"ws_h1","conns":64,"payload":0,"warmup_secs":5,"measure_secs":15.008877055,"ok":607625,"err":0,"rps":40484.4,"p50_us":1514,"p90_us":2215,"p99_us":3093,"p999_us":4308,"max_us":9152,"mean_us":1579},"gateway":{"cpu_pct":179.0,"rss_max_kb":28568,"vmhwm_max_kb":28568,"fds_max":139,"threads_max":10}}

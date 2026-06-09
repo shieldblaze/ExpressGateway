@@ -1,0 +1,32 @@
+[s39-sweep Mon Jun  8 23:35:52 UTC 2026] protocols=h1 h2 h3 quic_modea ws_h1 concs=1 8 32 64 128 measure=15s warmup=5s payload=0
+--- h1 ---
+h1 c=1 payload=0 | rps= 4133 ok=62004 err=638 | p50=238us p90=264us p99=319us p999=473us max=3998us mean=239us (measure=15s warmup=5s) gateway: cpu=90% rss_max=9.5MB vmhwm_max=9.5MB fds_max=13 threads_max=10 
+h1 c=8 payload=0 | rps= 12020 ok=180311 err=1881 | p50=624us p90=930us p99=1465us p999=2700us max=4581us mean=663us (measure=15s warmup=5s) gateway: cpu=165% rss_max=12.6MB vmhwm_max=12.6MB fds_max=27 threads_max=10 
+h1 c=32 payload=0 | rps= 13796 ok=206980 err=2114 | p50=2061us p90=3323us p99=7447us p999=11519us max=21931us mean=2314us (measure=15s warmup=5s) gateway: cpu=225% rss_max=17.0MB vmhwm_max=17.0MB fds_max=75 threads_max=10 
+h1 c=64 payload=0 | rps= 9728 ok=145970 err=1474 | p50=6121us p90=10083us p99=14803us p999=19483us max=29200us mean=6567us (measure=15s warmup=5s) gateway: cpu=125% rss_max=23.5MB vmhwm_max=23.8MB fds_max=140 threads_max=10 
+h1 c=128 payload=0 | rps= 11204 ok=168281 err=1681 | p50=10683us p90=17225us p99=25671us p999=34378us max=57978us mean=11398us (measure=15s warmup=5s) gateway: cpu=162% rss_max=29.3MB vmhwm_max=29.3MB fds_max=265 threads_max=10 
+--- h2 ---
+h2 c=1 payload=0 | rps= 3593 ok=53893 err=0 | p50=252us p90=317us p99=427us p999=1252us max=41392us mean=276us (measure=15s warmup=5s) gateway: cpu=64% rss_max=11.1MB vmhwm_max=11.1MB fds_max=13 threads_max=10 
+h2 c=8 payload=0 | rps= 14279 ok=214785 err=0 | p50=526us p90=768us p99=1123us p999=2662us max=41752us mean=557us (measure=15s warmup=5s) gateway: cpu=155% rss_max=12.8MB vmhwm_max=12.8MB fds_max=20 threads_max=10 
+h2 c=32 payload=0 | rps= 23393 ok=351933 err=0 | p50=1186us p90=1708us p99=2435us p999=41307us max=44198us mean=1280us (measure=15s warmup=5s) gateway: cpu=176% rss_max=15.7MB vmhwm_max=15.8MB fds_max=44 threads_max=10 
+h2 c=64 payload=0 | rps= 28313 ok=425965 err=0 | p50=2121us p90=2970us p99=4159us p999=42512us max=46460us mean=2256us (measure=15s warmup=5s) gateway: cpu=182% rss_max=19.2MB vmhwm_max=19.3MB fds_max=76 threads_max=10 
+h2 c=128 payload=0 | rps= 32265 ok=485599 err=0 | p50=3782us p90=5194us p99=6880us p999=44328us max=48606us mean=3959us (measure=15s warmup=5s) gateway: cpu=193% rss_max=25.0MB vmhwm_max=25.0MB fds_max=140 threads_max=10 
+--- h3 ---
+h3 c=1 payload=0 | rps= 294 ok=4411 err=4 | p50=3474us p90=3517us p99=3587us p999=4998us max=6379us mean=3398us (measure=15s warmup=5s) gateway: cpu=11% rss_max=12.5MB vmhwm_max=12.5MB fds_max=12 threads_max=10 
+h3 c=8 payload=0 | rps= 2064 ok=31054 err=32 | p50=3407us p90=6348us p99=7003us p999=7747us max=43709us mean=3864us (measure=15s warmup=5s) gateway: cpu=46% rss_max=17.4MB vmhwm_max=17.4MB fds_max=12 threads_max=10 
+h3 c=32 payload=0 | rps= 8003 ok=120380 err=126 | p50=3852us p90=4902us p99=7667us p999=8776us max=43373us mean=3986us (measure=15s warmup=5s) gateway: cpu=106% rss_max=26.5MB vmhwm_max=26.5MB fds_max=12 threads_max=10 
+h3 c=64 payload=0 | rps= 14394 ok=216549 err=196 | p50=4285us p90=5599us p99=7932us p999=9359us max=44655us mean=4430us (measure=15s warmup=5s) gateway: cpu=161% rss_max=35.7MB vmhwm_max=35.7MB fds_max=12 threads_max=10 
+h3 c=128 payload=0 | rps= 18566 ok=279373 err=257 | p50=6501us p90=9417us p99=11623us p999=16147us max=45770us mean=6869us (measure=15s warmup=5s) gateway: cpu=188% rss_max=47.7MB vmhwm_max=47.7MB fds_max=12 threads_max=10 
+--- quic_modea ---
+quic_modea c=1 payload=0 | rps= 1585 ok=23771 err=0 | p50=624us p90=867us p99=1141us p999=1195us max=2805us mean=630us (measure=15s warmup=5s) gateway: cpu=10% rss_max=8.4MB vmhwm_max=8.4MB fds_max=12 threads_max=9 
+quic_modea c=8 payload=0 | rps= 1698 ok=25474 err=0 | p50=4747us p90=5952us p99=6596us p999=8168us max=12285us mean=4710us (measure=15s warmup=5s) gateway: cpu=11% rss_max=8.5MB vmhwm_max=8.5MB fds_max=19 threads_max=9 
+quic_modea c=32 payload=0 | rps= 1645 ok=24722 err=0 | p50=19459us p90=24298us p99=26073us p999=28047us max=29751us mean=19423us (measure=15s warmup=5s) gateway: cpu=11% rss_max=9.2MB vmhwm_max=9.2MB fds_max=43 threads_max=9 
+quic_modea c=64 payload=0 | rps= 1617 ok=24377 err=0 | p50=39455us p90=49388us p99=53151us p999=78936us max=79868us mean=39446us (measure=15s warmup=5s) gateway: cpu=11% rss_max=9.6MB vmhwm_max=9.6MB fds_max=75 threads_max=9 
+quic_modea c=128 payload=0 | rps= 1662 ok=25095 err=0 | p50=77800us p90=96323us p99=103260us p999=106013us max=106665us mean=76651us (measure=15s warmup=5s) gateway: cpu=11% rss_max=10.4MB vmhwm_max=10.4MB fds_max=139 threads_max=9 
+--- ws_h1 ---
+ws_h1 c=1 payload=0 | rps= 10136 ok=152045 err=0 | p50=96us p90=109us p99=125us p999=137us max=1347us mean=97us (measure=15s warmup=5s) gateway: cpu=57% rss_max=8.8MB vmhwm_max=8.8MB fds_max=13 threads_max=10 
+ws_h1 c=8 payload=0 | rps= 33490 ok=502455 err=0 | p50=227us p90=332us p99=489us p999=2022us max=6701us mean=238us (measure=15s warmup=5s) gateway: cpu=128% rss_max=11.4MB vmhwm_max=11.4MB fds_max=27 threads_max=10 
+ws_h1 c=32 payload=0 | rps= 42573 ok=638865 err=0 | p50=730us p90=1039us p99=1496us p999=2816us max=10431us mean=750us (measure=15s warmup=5s) gateway: cpu=157% rss_max=18.6MB vmhwm_max=18.6MB fds_max=75 threads_max=10 
+ws_h1 c=64 payload=0 | rps= 40484 ok=607625 err=0 | p50=1514us p90=2215us p99=3093us p999=4308us max=9152us mean=1579us (measure=15s warmup=5s) gateway: cpu=179% rss_max=27.9MB vmhwm_max=27.9MB fds_max=139 threads_max=10 
+ws_h1 c=128 payload=0 | rps= 28148 ok=422640 err=0 | p50=4418us p90=6180us p99=8184us p999=10345us max=19820us mean=4542us (measure=15s warmup=5s) gateway: cpu=209% rss_max=45.6MB vmhwm_max=45.6MB fds_max=267 threads_max=10 
+[s39-sweep Mon Jun  8 23:44:41 UTC 2026] DONE

@@ -1,0 +1,1 @@
+{"summary":{"protocol":"quic_modea","conns":8,"payload":0,"warmup_secs":5,"measure_secs":15.005871286000001,"ok":25474,"err":0,"rps":1697.6,"p50_us":4747,"p90_us":5952,"p99_us":6596,"p999_us":8168,"max_us":12285,"mean_us":4710},"gateway":{"cpu_pct":11.3,"rss_max_kb":8736,"vmhwm_max_kb":8736,"fds_max":19,"threads_max":9}}
