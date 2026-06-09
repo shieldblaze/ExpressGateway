@@ -175,4 +175,30 @@ TCP_NODELAY on every socket — verified in source.)
 - **Latency (below the box knee, gateway-reflective):** H1/H1s/H2 p50 ~0.2–0.6ms,
   p99 ~0.3–1.5ms; WS p50 ~0.1–0.2ms; H3 ~3.4ms service time (QUIC crypto + H3 + proxy).
 
+## Independent verifier review (author≠verifier, R5)
+A separate reviewer audited the harness CODE for measurement validity (not style):
+all 8 properties **PASS** — closed-loop RTT (full body/echo/FIN drained before the
+clock stops), warmup exclusion (record/count only in `[warmup_end, measure_end)`),
+percentile math (`pct` sorted nearest-rank, no off-by-one/panic), per-PID gateway
+CPU%/RSS/fd sampling (utime+stime fields 14/15, USER_HZ=100, post-warmup slice),
+and the persistent-connection concurrency model are all correctly implemented. Both
+"looked-like-gateway-but-isn't" attributions are **confirmed by code**:
+`set_nodelay(true)` is applied to BOTH client sockets (h1 + the raw tcp before TLS
+on h2), and `spawn_quic_echo_backend` is a strict single-task/single-socket/one-
+packet-per-loop serializer (the `p50 ≈ c/1650` linear fingerprint matches). Verdict:
+**no number retracted.** Reproducibility caveats it asked be stated:
+1. The RPS denominator is `total_wall − warmup` (measure window + a sub-1% teardown
+   drain tail) → RPS is marginally *conservative* (understated <1%), not inflated.
+2. The "H2 front" is the `h1s` listener's ALPN-h2 leg (front advertises `[h2,
+   http/1.1]`, dispatches by negotiation) — an honest H2 front, just configured via
+   the `h1s` listener type, not a distinct config.
+3. H3 ~3.4ms and Mode A ~0.6ms single-connection figures are **client+gateway
+   combined** (the closed-loop quiche pump is genuine client-side work) — NOT
+   gateway-isolated. The gateway's own share is small (it sits at 11% CPU at c=1).
+4. The QUIC client config uses a 1350-byte max UDP payload (sub-MTU) — H3/Mode-A
+   per-packet figures reflect 1350B datagrams, not 1500B/jumbo.
+5. Nit (never fired — gateway is boot-gated on /metrics 200): an H1/H2 TLS/handshake
+   failure *after* TCP connect is `continue`d without an err++; a fully-dead gateway
+   could under-count err on those two lines. No effect on the reported runs.
+
 
