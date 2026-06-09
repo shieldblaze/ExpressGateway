@@ -51,3 +51,40 @@ noise between two independent BOUNDED runs (this run did marginally LESS work ye
 sat marginally higher — i.e. not load-correlated), not a footprint regression.
 
 Artifacts: `audit/perf/s39-sc9-recheck/` (CSV + verdict.json + summary.txt + marker).
+
+---
+
+## §1 — Phase 1: perf characterization (full detail in `s39-perf-baseline.md`)
+
+Harness: `eg-bench` (closed-loop, per-request RTT; new `bench` module + bin in
+lb-soak, loadgen untouched) + `oha` 1.14 (independent cross-validation). Co-located
+8-core box (client+gateway+backend share cores). Independent verifier passed all 8
+measurement-validity checks; oha agrees with eg-bench within ~5% (H1) / ~10–15% (H2).
+
+**VERDICT — no gateway perf defect.** Every path bounded (RSS/fd/threads), err≈0
+or explained, panic=0. Efficiency (gateway CPU-µs/req): **WS ~37 < H2 ~59 < H3 ~101
+< H1 ~163**. Peak rps on the co-located box: WS ~42.5k · H2 ~32k · H3 ~18.5k · H1
+~14–18k; QUIC Mode A passthrough ≈0.6ms + ~11% CPU (throughput harness-bound by the
+single-task echo backend). Below-knee latency: H1/H2 p50 0.2–0.6ms p99 0.3–1.5ms;
+WS p50 ~0.1ms; H3 ~3.4ms service time (QUIC crypto + H3 + proxy; part client pump).
+
+**Two apparent issues — both proven harness/co-location, not the gateway** (R9 /
+the S21 measure-first lesson):
+1. ~40ms p999 H2 tail → load-client missing `TCP_NODELAY` (Nagle on H2 control
+   frames); fixed → 41ms→7.3ms. Residual high-concurrency tail is co-located
+   scheduling/delayed-ACK, **reproduced by the clean oha client** → not a gateway
+   floor (the gateway sets nodelay on every socket, verified in source).
+2. QUIC Mode A capped ~1650 rps → the single-task test echo backend serializes;
+   gateway passthrough idle at 11% CPU.
+
+**No owner perf TARGET set** → these are the honest current-state numbers; nothing
+indicates a tuning fix is needed (no Phase-3 source change required on perf grounds).
+
+---
+
+## §2 — Phase 2: extended burn-in  [IN PROGRESS]
+Full 12-scenario lb-soak, 14400s (4h) @ 30s sample, scale 1, all concurrent (the
+S31/S33 full-suite pattern). Watching slow-leak/fd-growth/degradation over hours.
+Early (t~150s): 12/12 alive, panic=0; sc5_modea (passthrough) is the resource-heavy
+path (216MB/1307fd, flows churning with eviction firing — the F-S20-2 reclaim) —
+the one to watch for plateau vs growth. Verdict pending the COMPLETED run (R15).
