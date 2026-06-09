@@ -161,4 +161,18 @@ the test rig's, not the gateway's).
   reasonable pre-prod bar. The system is VERIFIED-CORRECT, PERFORMANCE-
   CHARACTERIZED, and BURNED-IN → ready for a controlled production pilot.
 
-[GATE RESULT + PROMOTE COMMIT + POST-MERGE CI — appended after the gate runs]
+### Promote + post-merge CI — DONE
+- Merged `feature/perf-burnin-s39` → `main` **`f5934400`** (`--no-ff`), pushed.
+- **Post-merge main CI GREEN:** `CI` → success + `prod-readiness-gates` → success
+  (the authoritative full `--all-features ×3` + coverage + h3spec gate set, on
+  GitHub runners). Base was `main` @ `18afc8ad` (unmoved; no divergence).
+- No AI attribution in commits (standing rule).
+
+**SESSION 39 COMPLETE — perf baseline established (no gateway defect; no owner target
+set → meets a reasonable pre-prod bar), extended burn-in CLEAN over 4h (R8 held over
+billions of ops; the one DRIFT explained + isolated-confirmed as a co-location
+analyzer artifact, not a leak), sc9 fragmentation CONFIRMED (CF-S37-SC9-PLATEAU
+CLOSED), PROMOTED to main + post-merge CI GREEN. Pre-prod validation DONE — the
+system is verified-correct, performance-characterized, and burned-in → ready for a
+controlled production pilot. Carry: CF-S39-H3-REJECT-LOG-SPAM (LOW),
+CF-S37-D-TOKIO-1.52-RELAY, CF-S27-2, the deferred perf tiers (io_uring/XDP).**
