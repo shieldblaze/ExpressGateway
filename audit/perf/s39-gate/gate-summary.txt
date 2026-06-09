@@ -1,0 +1,11 @@
+[gate START Tue Jun  9 04:56:46 UTC 2026] free=34G
+--- 1. cargo check --workspace --all-features --all-targets ---
+   check rc=0  (0 errors)
+--- 2. cargo test -p lb-soak --all-features (the changed crate) ---
+   lb-soak test rc=0 passed=49 failed=0
+--- 3. clippy --workspace --all-targets --all-features -D warnings ---
+   clippy rc=0 (0 errors)
+--- 4. cargo fmt --check ---
+   fmt rc=0
+[gate DONE Tue Jun  9 04:59:35 UTC 2026] check=0 test=0 clippy=0 fmt=0 free=31G
+GATE: GREEN

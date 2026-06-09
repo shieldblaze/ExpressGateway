@@ -1,0 +1,9 @@
+=== SOAK sc3_slowloris — BOUNDED (1800s, 121 samples) ===
+      rss_kb [BOUNDED] rss_kb: bounded — last-third median 25842 vs first-third 24646 (+4.9%, within band 10% or non-monotone 61%) — first=7636 last=25516 min=7636 max=27916
+    vmhwm_kb [BOUNDED] vmhwm_kb: bounded — last-third median 27484 vs first-third 26084 (+5.4%, within band 10% or non-monotone 100%) — first=7636 last=28284 min=7636 max=28284
+         fds [BOUNDED] fds: bounded — last-third median 114 vs first-third 113 (+0.9%, within band 10% or non-monotone 61%) — first=11 last=113 min=11 max=115
+     threads [BOUNDED] threads: bounded — last-third median 9 vs first-third 9 (+0.0%, within band 10% or non-monotone 100%) — first=10 last=9 min=9 max=10
+  accept_inflight [BOUNDED] accept_inflight: bounded — last-third median 52 vs first-third 52 (+0.0%, within band 10% or non-monotone 90%) — first=52 last=52 min=4 max=54
+  panic_total [BOUNDED] panic_total: stayed zero across the run — first=0 last=0 min=0 max=0
+  load:
+    h1_baseline: ok=14451474 err=0

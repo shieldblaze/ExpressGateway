@@ -82,9 +82,83 @@ indicates a tuning fix is needed (no Phase-3 source change required on perf grou
 
 ---
 
-## §2 — Phase 2: extended burn-in  [IN PROGRESS]
-Full 12-scenario lb-soak, 14400s (4h) @ 30s sample, scale 1, all concurrent (the
-S31/S33 full-suite pattern). Watching slow-leak/fd-growth/degradation over hours.
-Early (t~150s): 12/12 alive, panic=0; sc5_modea (passthrough) is the resource-heavy
-path (216MB/1307fd, flows churning with eviction firing — the F-S20-2 reclaim) —
-the one to watch for plateau vs growth. Verdict pending the COMPLETED run (R15).
+## §2 — Phase 2: extended burn-in (full detail in `s39-burnin.md`)
+Full 12-scenario lb-soak, **14400s (4h)**, 481 samples/scenario, scale 1, all
+concurrent (the S31/S33 full-suite pattern). COMPLETED run (R15).
+
+**VERDICT — CLEAN over 4h: 11/12 BOUNDED, 1 analyzer-DRIFT (explained, not a leak),
+panic=0 across billions of ops.** R8 confirmed over HOURS: CVE-2023-44487 H2
+rapid-reset held **320M resets** bounded; F-MD-4 H3 reset-flood **49M** bounded;
+261M conn-floods bounded; WS/gRPC/QUIC all bounded; zero gateway errors on every
+non-adversarial path. No slow memory leak, no fd/thread growth — the "pages after
+days of uptime" class did not appear.
+
+The one DRIFT (**sc3_slowloris**) is NOT a leak: `rss_kb` BOUNDED (flat ~36MB),
+15.5M requests zero errors, panic=0; the DRIFT is on `accept_inflight`/`fds`, which
+**capped at ~144 = the harness's offered 144 concurrent slow connections** (96
+slowloris + 48 slow-post workers) and plateaued. The analyzer trips on the
+contention-delayed ramp (co-located first-2h ~50 → recovered ~146 as the box
+settled) — the known sc3 ramp-to-cap false-positive. **Isolated re-run confirmed
+BOUNDED** (accept_inflight flat ~52, RSS flat ~25MB — the co-located rise was
+co-location-induced reaper slowdown, not gateway accumulation; RSS flat regardless
+of accept_inflight = no per-connection buffering = R8 holds). sc5_modea (the
+resource-heavy passthrough path, 289MB) plateaued BOUNDED after a ~1h
+approach-to-equilibrium that an 1800s spot-check would have mis-flagged.
+
+The extended duration was load-bearing: it correctly classified both sc5_modea
+(ramp→plateau→BOUNDED) and sc3 (contention ramp→cap), which short runs would
+mis-call. Artifacts: `audit/perf/s39-burnin/` + `audit/perf/s39-sc3-isolated/`.
+
+---
+
+## §3 — Verdict + promote
+
+### Watch-item resolution
+- **CF-S37-SC9-PLATEAU: CLOSED** — fresh-box re-check returned to ~23MB (the S36
+  baseline), not the S37 ~37MB → the +15MB was box fragmentation (uptime + swap),
+  not real B/C/D footprint. The S36 recycling fix holds under 3M RPCs.
+- **CF-S38-RELOAD-BOOT-FLAKE / CF-S37-D6-H2PROXY-FLAKY** — not re-triggered this
+  session (no reload/H2-proxy flake observed across the perf campaign + 4h burn-in;
+  carried as known pre-existing, deterministic-deflake still optional).
+- **CF-S37-D-TOKIO-1.52-RELAY** — out of scope this session (its own investigation;
+  tokio held <1.52). Carried.
+
+### R1 gate
+Full `cargo test --workspace --all-features ×3` is **run by main's CI** (GitHub
+runners — adequate disk). Locally (this 67G box is disk-constrained for the ~38–40G
+`--all-features` build, CF-DISK-1; the only reclaimable space was the user's
+unrelated Java caches, NOT deleted) the **feasible pre-flight gate** ran:
+`cargo check --workspace --all-features --all-targets` + `cargo test -p lb-soak
+--all-features` (the one crate changed) + clippy `--all-targets -D warnings` + fmt.
+Sufficient because the change is **test-harness-only and purely additive** (new
+`bench` module + `eg-bench` bin; loadgen + all production crates byte-identical,
+reviewer-confirmed; zero new tests). **Result: GREEN** — `check --all-features
+--all-targets` 0 errors (whole workspace + every test target type-checks),
+`test -p lb-soak --all-features` 49 passed/0 failed, `clippy --workspace
+--all-targets --all-features -D warnings` clean, `fmt --check` clean. CI's full
+`--all-features ×3` is the authoritative post-merge run.
+
+### Burn-in finding carried (LOW, operability)
+**CF-S39-H3-REJECT-LOG-SPAM** — the H3-terminate front logs a WARN per request on
+the reject/backendless paths (sc7 produced 24.8M log lines / 3.3G over 4h). A
+log-amplification/disk-fill vector under adversarial H3 floods if logs aren't
+rate-limited/rotated. Not a correctness/memory issue (RSS bounded). See s39-burnin.md.
+
+### No production source change
+This session changed NO production source — only the lb-soak test-harness crate
+(additive). So no R3/R5 production-gating applies; nothing to regress. No perf
+tuning fix was indicated (the gateway is efficient + bounded; the limits found were
+the test rig's, not the gateway's).
+
+### Session verdict
+**SESSION 39 COMPLETE — pre-prod validation DONE.**
+- Perf baseline established per protocol (no gateway defect; efficiency
+  WS<H2<H3<H1; cross-validated + independently reviewed).
+- Extended burn-in CLEAN over 4h (R8 holds over hours; the one DRIFT explained +
+  isolated-confirmed as a co-location analyzer artifact, not a leak).
+- sc9 fragmentation question CLOSED.
+- No owner perf TARGET was set; the numbers are the honest current-state and meet a
+  reasonable pre-prod bar. The system is VERIFIED-CORRECT, PERFORMANCE-
+  CHARACTERIZED, and BURNED-IN → ready for a controlled production pilot.
+
+[GATE RESULT + PROMOTE COMMIT + POST-MERGE CI — appended after the gate runs]

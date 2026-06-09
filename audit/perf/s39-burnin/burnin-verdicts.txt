@@ -1,0 +1,13 @@
+  scenario=sc1_h1h1 duration_secs=14400 samples=481 overall=BOUNDED
+  scenario=sc1b_h1h2 duration_secs=14400 samples=481 overall=BOUNDED
+  scenario=sc2_h2h2 duration_secs=14400 samples=481 overall=BOUNDED
+  scenario=sc3_slowloris duration_secs=14400 samples=481 overall=DRIFT
+  scenario=sc4_modeb duration_secs=14400 samples=481 overall=BOUNDED
+  scenario=sc5_modea duration_secs=14400 samples=481 overall=BOUNDED
+  scenario=sc6_413teardown duration_secs=14400 samples=481 overall=BOUNDED
+  scenario=sc7_h3terminate duration_secs=14400 samples=481 overall=BOUNDED
+  scenario=sc8_ws_h1 duration_secs=14400 samples=481 overall=BOUNDED
+  scenario=sc8b_ws_h2 duration_secs=14400 samples=481 overall=BOUNDED
+  scenario=sc8c_ws_h3 duration_secs=14400 samples=481 overall=BOUNDED
+  scenario=sc9_grpc_h3 duration_secs=14400 samples=481 overall=BOUNDED
+[s39-burnin] BOUNDED=11 DRIFT=1 of 12
