@@ -152,7 +152,7 @@ the S38 audit. Operators should understand them before deploying.
   (60 s), H2 keepalive PING, and the QUIC 30 s idle timeout — each proven
   non-vacuous. (F-RES-5, LOW)
 - **XDP data plane is single-kernel.** The shipped BPF ELF is validated
-  against a specific kernel/verifier window (see `DEPLOYMENT.md`);
+  against a specific kernel/verifier window (see `docs/guide/DEPLOYMENT.md`);
   multi-kernel CO-RE portability is carried as F-ESC-1. The loader relies
   on the operator/systemd unit for the bpffs pin-dir mode (F-INFRA-04).
 

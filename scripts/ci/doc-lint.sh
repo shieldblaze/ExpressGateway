@@ -34,13 +34,15 @@ REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT"
 
 # Files scanned. Add new operator-facing docs here when they land.
+# S40: the operator references (RUNBOOK/DEPLOYMENT/METRICS/CONFIG) moved under
+# docs/guide/; README/CHANGELOG/SECURITY stay at root (GitHub conventions).
 FILES=(
     "README.md"
-    "RUNBOOK.md"
-    "DEPLOYMENT.md"
-    "METRICS.md"
+    "docs/guide/RUNBOOK.md"
+    "docs/guide/DEPLOYMENT.md"
+    "docs/guide/METRICS.md"
     "CHANGELOG.md"
-    "CONFIG.md"
+    "docs/guide/CONFIG.md"
     "SECURITY.md"
     "docs/features.md"
 )
