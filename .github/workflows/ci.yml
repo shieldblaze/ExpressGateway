@@ -168,7 +168,13 @@ jobs:
         with:
           toolchain: nightly
       - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --locked
+        # Build cargo-fuzz on +nightly (this job's installed toolchain), NOT the
+        # repo's pinned 1.88. Without an explicit +toolchain the repo's
+        # rust-toolchain.toml (1.88) overrides the default and a recent
+        # cargo-platform (MSRV 1.91, a cargo-fuzz dep) fails to build. nightly is
+        # the toolchain this job already installs and is what runs the targets
+        # below — so it is guaranteed present and new enough.
+        run: cargo +nightly install cargo-fuzz --locked
       - name: Smoke test all fuzz targets (10 seconds each)
         run: |
           cd fuzz

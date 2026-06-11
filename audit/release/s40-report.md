@@ -83,6 +83,17 @@ proven-merge; squash-aware — `--merged` alone misses squash merges, per S35).
 - **Green CI run on the branch (R15):** PR #230 — _<run id, recorded at promote>_.
 - Deliberate (NOT gate drops): legacy push triggers (`rust`,
   `prod-readiness/round-4`) dropped — `main` + all-PR coverage unchanged.
+- **Real gap surfaced + fixed (R1):** the first full run was green on 15/16 jobs;
+  `fuzz-smoke` failed at `cargo install cargo-fuzz` — a recent `cargo-platform@0.3.3`
+  (a cargo-fuzz dep) raised its MSRV to 1.91, and the install lacked an explicit
+  `+toolchain` so the repo's `rust-toolchain.toml` (1.88) overrode it. Fixed to
+  `cargo +nightly install cargo-fuzz --locked` (nightly is this job's installed
+  toolchain + new enough; matches the `+stable install` convention every other
+  tool job already uses to dodge the 1.88 pin). The gate's ASSERTION is unchanged
+  (each fuzz target still runs 10 s under nightly) — only the broken tool install
+  is corrected. **This is byte-identical to main's fuzz-smoke job, so main is
+  latently broken by the same upstream release** (it was green at f5934400 before
+  cargo-platform 0.3.3 shipped) — this fix repairs main too.
 
 ## 4. Soak release gate (dedicated EC2)
 
