@@ -152,7 +152,9 @@ single-sourced scripts:
   deletions, none load-bearing; doc-lint exit 0; dev docs intact; 0 crates/tests
   touched); soak scripts **PASS** (dry-run safe, verdict accurate).
 - **Green CI run:** PR #230 run **27373231328** — all 16 jobs SUCCESS (R15).
-- **Post-merge main CI green on the new workflows:** confirmed below (R11).
+- **Post-merge main CI green on the new workflows (R11):** merge `2047130a` →
+  run **27374433332** — **all 16 jobs SUCCESS** (Test + Fuzz Smoke + the 6 D-gates
+  all green on `main` with the new `ci.yml`).
 
 ## 7. Carry-forward / observations
 
@@ -172,8 +174,11 @@ single-sourced scripts:
 
 ---
 
-**VERDICT:** _finalized at promote_ — branches cleaned (7 local + 7 remote merged
+**VERDICT: SESSION A COMPLETE — PROMOTED main `2047130a` (--no-ff), post-merge CI
+GREEN (run 27374433332, all 16 jobs).** Branches cleaned (7 local + 7 remote merged
 deleted, unmerged surfaced); docs reorganized (3 deleted-approved, 4 operator docs
-relocated, guide/arch scaffolded); CI rewritten (gate-map: 0 dropped, actionlint +
-independent-verifier confirmed, green run cited); soak release gate scripted +
-validated; dev-setup documented. No production protocol source touched.
+relocated, guide/arch scaffolded); CI rewritten (4→3 workflows, gate-map: 0
+dropped, actionlint + independent-verifier confirmed, 2 latent breakages fixed);
+soak release gate scripted + validated; dev-setup documented. No production
+protocol source touched. Handoff: SESSION B = public-facing docs into docs/guide
++ docs/arch.
