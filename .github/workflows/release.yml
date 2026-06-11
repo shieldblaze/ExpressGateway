@@ -1,9 +1,22 @@
 name: Release
 
+# Tag push (`v*`)  -> build cross-arch binaries + multi-arch image + GH release.
+# Manual dispatch  -> the RELEASE SOAK GATE: provision a dedicated EC2, run the
+#                     full 12-scenario lb-soak, gate on all-BOUNDED + panic=0,
+#                     and tear the box down. Run this and confirm PASS BEFORE
+#                     tagging a release (hosted CI cannot soak — see
+#                     docs/arch/DEV-SETUP.md "Release soak gate").
+
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      soak_duration_secs:
+        description: 'Release soak duration (seconds)'
+        required: false
+        default: '14400'
 
 env:
   CARGO_TERM_COLOR: always
@@ -11,12 +24,60 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 jobs:
+
+  # ---------------------------------------------------------------
+  # RELEASE SOAK GATE (manual dispatch). Gates RELEASE, not PRs.
+  #
+  # On-demand model (S40): GitHub OIDC assumes a scoped IAM role (no long-lived
+  # keys), scripts/release-soak.sh provisions a c6a.2xlarge (8-core + ENA), runs
+  # the full 12-scenario soak for a release-grade duration, asserts every
+  # scenario BOUNDED + panic=0 (R8), and ALWAYS tears the box down (trap). The
+  # job fails if any scenario is not BOUNDED. Configure the repo vars/secrets
+  # below before first use (documented in scripts/release-soak.sh + DEV-SETUP).
+  # ---------------------------------------------------------------
+  soak-gate:
+    name: Release Soak Gate (12-scenario, dedicated EC2)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write          # GitHub OIDC -> assume the soak IAM role
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+      - name: Configure AWS credentials (OIDC, scoped role)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.SOAK_AWS_ROLE_ARN }}
+          aws-region: ${{ vars.SOAK_REGION }}
+      - name: Run the release soak gate (provision -> soak -> verdict -> teardown)
+        env:
+          SOAK_REGION: ${{ vars.SOAK_REGION }}
+          SOAK_AMI: ${{ vars.SOAK_AMI }}
+          SOAK_SUBNET_ID: ${{ vars.SOAK_SUBNET_ID }}
+          SOAK_SECURITY_GROUP_ID: ${{ vars.SOAK_SECURITY_GROUP_ID }}
+          SOAK_IAM_INSTANCE_PROFILE: ${{ vars.SOAK_IAM_INSTANCE_PROFILE }}
+          SOAK_S3_BUCKET: ${{ vars.SOAK_S3_BUCKET }}
+          SOAK_INSTANCE_TYPE: ${{ vars.SOAK_INSTANCE_TYPE }}   # optional; default c6a.2xlarge
+          SOAK_GIT_REF: ${{ github.sha }}
+          SOAK_DURATION_SECS: ${{ github.event.inputs.soak_duration_secs }}
+        run: bash scripts/release-soak.sh
+      - name: Upload soak summary artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-soak-summary
+          path: /tmp/eg-release-soak-summary.txt
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------
+  # PUBLISH pipeline (tag push only) — cross-arch binaries.
+  # ---------------------------------------------------------------
   build-binary:
     name: Build ${{ matrix.target }}
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -27,33 +88,26 @@ jobs:
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             artifact: expressgateway-linux-arm64
-
     steps:
       - uses: actions/checkout@v6
-
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
       - name: Install cross-compilation tools
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
-
       - uses: Swatinem/rust-cache@v2
-
       - name: Build release binary
         run: cargo build --release --target ${{ matrix.target }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-
       - name: Package binary
         run: |
           cp target/${{ matrix.target }}/release/expressgateway ${{ matrix.artifact }}
           chmod +x ${{ matrix.artifact }}
-
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
@@ -62,21 +116,22 @@ jobs:
 
   docker:
     name: Docker Multi-Arch
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     needs: build-binary
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v6
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
-
       - name: Login to GHCR
         uses: docker/login-action@v4
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v6
@@ -86,7 +141,6 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha
-
       - name: Build and push
         uses: docker/build-push-action@v7
         with:
@@ -101,14 +155,15 @@ jobs:
 
   release:
     name: Create Release
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     needs: [build-binary, docker]
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v6
-
       - name: Download artifacts
         uses: actions/download-artifact@v8
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:

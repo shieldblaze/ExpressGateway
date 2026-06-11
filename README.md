@@ -10,7 +10,7 @@ A globally distributed L4 + L7 load balancer written in Rust, featuring:
 - **L4 data plane**: XDP/eBPF-based TCP and UDP load balancing. The
   compiled BPF ELF (`crates/lb-l4-xdp/src/lb_xdp.bin`) ships in-tree and
   the userspace loader attaches it; validated live on Linux 7.0 (native
-  ENA `xdpdrv` attach). Single-kernel — see `DEPLOYMENT.md`.
+  ENA `xdpdrv` attach). Single-kernel — see `docs/guide/DEPLOYMENT.md`.
 - **QUIC-native proxying** via quiche, in two modes: **Mode A
   passthrough** (route by Connection ID, no decryption) and **Mode B
   terminate** (re-originate a fresh upstream QUIC connection).
@@ -41,7 +41,7 @@ A globally distributed L4 + L7 load balancer written in Rust, featuring:
   `SO_REUSEPORT` is set on listening sockets so a supervisor can run a
   replacement process side-by-side during a manual handover; the binary
   does not itself transfer FDs between processes (deferred). For the full
-  operator-driven restart procedure see `RUNBOOK.md` "Drain (graceful
+  operator-driven restart procedure see `docs/guide/RUNBOOK.md` "Drain (graceful
   shutdown)".
 - **Panic-free libraries**: every `crates/*/src/lib.rs` carries
   `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, ...)]`;
@@ -58,7 +58,7 @@ cargo build --release -p lb --bin expressgateway
 ```
 
 The produced artifact is `target/release/expressgateway`. See
-`DEPLOYMENT.md` for system-level prerequisites (cmake, clang
+`docs/guide/DEPLOYMENT.md` for system-level prerequisites (cmake, clang
 resource headers, kernel floor) and the systemd unit.
 
 ## Quickstart
@@ -77,7 +77,7 @@ expressgateway
 Pick a starting point from [`config/examples/`](config/examples/) (one per
 deployment shape — TCP, TLS, H1, HTTPS/H2, gRPC, WebSocket, HTTP/3, QUIC
 Mode A/B); each file's header comment shows the exact boot command. See
-`CONFIG.md` for the full schema.
+`docs/guide/CONFIG.md` for the full schema.
 
 On a config parse or validation error the binary **exits non-zero and
 never starts a partial listener set** — a misconfigured gateway does not
@@ -98,14 +98,14 @@ the admin HTTP listener:
 The admin listener defaults to **loopback-only**; binding a non-loopback
 address requires a bearer token (`[admin]`). Probes (`/livez` etc.) are
 intentionally token-exempt for kubelet use; `/metrics` is gated. See
-`METRICS.md` and `SECURITY.md`.
+`docs/guide/METRICS.md` and `SECURITY.md`.
 
 ### Reload
 
 `systemctl reload expressgateway` (SIGHUP) hot-reloads the swappable config
 subset (backends, HTTP timeouts) without dropping connections;
 restart-required changes are logged, never silently applied. SIGUSR1
-rotates TLS certs. See `CONFIG.md` "Reload semantics" and `RUNBOOK.md`.
+rotates TLS certs. See `docs/guide/CONFIG.md` "Reload semantics" and `docs/guide/RUNBOOK.md`.
 
 ## Testing
 
@@ -115,18 +115,18 @@ cargo test --workspace
 
 A `--all-features` run additionally enables optional surfaces
 (`quic_native`, `xdp_userspace`, etc.). h2spec / Autobahn-style
-conformance suites are opt-in and documented in `DEPLOYMENT.md`.
+conformance suites are opt-in and documented in `docs/guide/DEPLOYMENT.md`.
 
 ## Documentation
 
-- `RUNBOOK.md` — operational procedures, every alert that can fire,
+- `docs/guide/RUNBOOK.md` — operational procedures, every alert that can fire,
   triage matrix.
-- `DEPLOYMENT.md` — systemd unit, capabilities, sysctls, build-time
+- `docs/guide/DEPLOYMENT.md` — systemd unit, capabilities, sysctls, build-time
   deps, XDP toolchain caveat.
-- `METRICS.md` — every Prometheus family exported, label cardinality
+- `docs/guide/METRICS.md` — every Prometheus family exported, label cardinality
   budget, scrape configuration.
 - `CHANGELOG.md` — release-notes-format changelog.
-- `CONFIG.md` — TOML schema, reload semantics, worked examples.
+- `docs/guide/CONFIG.md` — TOML schema, reload semantics, worked examples.
 - `SECURITY.md` — threat model, defenses, S38 audit posture,
   disclosure policy.
 - `docs/features.md` — protocol matrix and supported / gated / waived

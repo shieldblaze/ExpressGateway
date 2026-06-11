@@ -37,3 +37,8 @@ Thumbs.db
 *.log
 audit/h-matrix/s7-j1-scratch.md
 audit/quic/verify-logs/*.lcov
+
+# Release soak gate working output (scripts/soak/release-soak-onbox.sh writes
+# release-soak-out/ in the repo root on the dedicated soak box). Keep soak
+# scratch out of git — the verdict/summary is the durable record, not the CSVs.
+release-soak-out/
