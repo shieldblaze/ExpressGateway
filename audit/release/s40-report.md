@@ -80,7 +80,10 @@ proven-merge; squash-aware — `--merged` alone misses squash merges, per S35).
   stripped) — **22/22 byte-equivalent, 0 dropped**, "Security Audit" name
   unchanged, publish jobs correctly gated to tags, permissions tightened to
   per-job least-privilege.
-- **Green CI run on the branch (R15):** PR #230 — _<run id, recorded at promote>_.
+- **Green CI run on the branch (R15):** PR #230, run **27373231328** — **all 16
+  jobs SUCCESS** (Check, Clippy, Test, Format, Doc Lint, Panic Freedom, Security
+  Audit, MSRV, Fuzz Smoke, Release Build, cargo-deny, Coverage, Conformance,
+  Chaos, Container Image, XDP Verifier Smoke).
 - Deliberate (NOT gate drops): legacy push triggers (`rust`,
   `prod-readiness/round-4`) dropped — `main` + all-PR coverage unchanged.
 - **Real gap surfaced + fixed (R1):** the first full run was green on 15/16 jobs;
@@ -148,8 +151,8 @@ single-sourced scripts:
   equivalent, 0 dropped); doc classification **PASS** (only the 3 approved
   deletions, none load-bearing; doc-lint exit 0; dev docs intact; 0 crates/tests
   touched); soak scripts **PASS** (dry-run safe, verdict accurate).
-- **Green CI run:** PR #230 final run — cited at promote (R15).
-- **Post-merge main CI green on the new workflows:** confirmed at promote (R11).
+- **Green CI run:** PR #230 run **27373231328** — all 16 jobs SUCCESS (R15).
+- **Post-merge main CI green on the new workflows:** confirmed below (R11).
 
 ## 7. Carry-forward / observations
 

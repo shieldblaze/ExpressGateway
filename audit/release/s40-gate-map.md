@@ -110,6 +110,13 @@ Smoke Test, Release Build) — no branch-protection change needed for those.
 - YAML: all 3 workflows + composite + dependabot parse clean (PyYAML).
 - `actionlint v1.7.7`: **PASS** on all 3 workflows.
 - doc-lint (G5) re-run locally after the Phase-1 doc moves: **GREEN** (tier-1 + tier-2/52 claims).
-- **Green CI run on the branch: cited below once the run completes (R15).**
-  - Run: _<to be filled with the completed gh run URL/id>_
-- Independent verifier confirmation of this gate-map (author≠verifier, R15): _<verifier sign-off>_
+- **Green CI run on the branch (R15):** PR #230, run **27373231328** — **all 16
+  jobs SUCCESS** (the full new `ci.yml`). Two real gaps the rewrite surfaced were
+  fixed first (NOT gate drops): `fuzz-smoke` install → `cargo +nightly install`
+  (upstream cargo-platform MSRV 1.91 vs the repo's 1.88 pin); the `test` job's
+  `--all-features` build hit ENOSPC → a `.github/actions/free-disk` composite now
+  used by `test` + `coverage`. Both repair the same latent breakage on `main`.
+- **Independent verifier (author≠verifier, R15): PASS** — diffed every BEFORE→AFTER
+  gate body (comments stripped), 22/22 byte-equivalent, 0 dropped, "Security
+  Audit" name unchanged, §F rename list accurate, no load-bearing doc deleted,
+  soak scripts correct.
