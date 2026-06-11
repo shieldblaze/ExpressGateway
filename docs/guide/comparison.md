@@ -6,13 +6,16 @@ It is written for an engineer evaluating proxies. It makes **no "faster than X"
 or "better than X" claims**; it states verifiable capabilities and is candid
 about where the incumbents are stronger.
 
-The factual comparison points for the other products are drawn from the
-reference-system research under [`../research/`](../research/) (e.g.
-[`envoy.md`](../research/envoy.md), [`haproxy.md`](../research/haproxy.md),
-[`nginx.md`](../research/nginx.md)). For ExpressGateway's own claims, every cell
-links back to its source elsewhere in these docs. Capabilities of fast-moving
-projects change between releases — verify against the incumbent's current
-documentation for a procurement decision.
+For ExpressGateway's own claims, every cell links back to its source elsewhere
+in these docs. For **Envoy, HAProxy, nginx, and Katran** the comparison points
+draw on the in-repo reference-system research under
+[`../research/`](../research/) ([`envoy.md`](../research/envoy.md),
+[`haproxy.md`](../research/haproxy.md), [`nginx.md`](../research/nginx.md),
+[`katran.md`](../research/katran.md)); **Traefik** and any fast-moving release
+details are summarized from each project's own current documentation, not an
+in-repo study. Capabilities of fast-moving projects change between releases —
+verify against the incumbent's current documentation for a procurement
+decision.
 
 ## Capability / protocol comparison
 

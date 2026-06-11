@@ -53,6 +53,12 @@ properties:
 | **Load balancing** | 11 algorithms (round-robin, weighted round-robin, random, weighted random, P2C, Maglev, ring hash, EWMA, least connections, least requests, session affinity) + active/passive health checks. | [`../../README.md`](../../README.md) |
 | **Operations** | File-backed control plane; SIGHUP config hot reload (honesty contract); SIGUSR1 cert rotation; graceful drain on SIGTERM; Prometheus `/metrics` + k8s probes. | [`CONFIG.md`](CONFIG.md), [`METRICS.md`](METRICS.md), [`RUNBOOK.md`](RUNBOOK.md) |
 
+> **Note on EWMA.** All 11 algorithms are implemented and selectable, but the
+> latency-weighted **EWMA** policy depends on per-request backend latency that
+> the request path does not yet feed into the balancer in this build — so EWMA
+> currently selects on load (its cold-start path), not measured latency. The
+> other ten use live connection/request counts and weights.
+
 A QUIC listener serves HTTP/3; HTTP/2 is served on an `h1s` (HTTPS) listener
 via ALPN. There is no separate `"h2"` or `"h3"` listener protocol — see
 [`CONFIG.md`](CONFIG.md) "Listener protocols".

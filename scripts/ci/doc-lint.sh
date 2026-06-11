@@ -45,6 +45,13 @@ FILES=(
     "docs/guide/CONFIG.md"
     "SECURITY.md"
     "docs/features.md"
+    # S41: public-facing narrative docs (Session B).
+    "docs/guide/overview.md"
+    "docs/guide/getting-started.md"
+    "docs/guide/capabilities.md"
+    "docs/guide/comparison.md"
+    "docs/guide/PERFORMANCE.md"
+    "CONTRIBUTING.md"
 )
 
 # Patterns that MUST NOT appear in any of the above files. Each row is

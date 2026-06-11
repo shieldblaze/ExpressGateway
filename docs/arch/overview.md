@@ -84,7 +84,13 @@ The workspace members are listed in the root [`Cargo.toml`](../../Cargo.toml)
 - `lb-balancer` — eleven backend-selection algorithms (`round_robin`,
   `weighted_round_robin`, `random`, `weighted_random`, `least_connections`,
   `least_request`, `p2c`, `maglev`, `ring_hash`, `ewma`, `session_affinity`),
-  one file each under `crates/lb-balancer/src/`.
+  one file each under `crates/lb-balancer/src/`. All are implemented and
+  selectable. One caveat for evaluators: the latency-weighted **`ewma`** policy
+  reads a per-backend latency EWMA, but the request path does not yet record
+  per-request backend latency into the balancer state in this build (the
+  latency setter is exercised only in tests), so `ewma` currently scores on its
+  load/cold-start path rather than measured latency. The other ten select on
+  live connection/request counts and configured weights.
 
 **Configuration + control plane**
 - `lb-config` — the TOML schema + validation (`#[serde(deny_unknown_fields)]`)

@@ -174,5 +174,67 @@ secrets, 2 Dependabot advisories), optional perf tiers (io_uring/XDP).
 
 ---
 
-## Phase 1 / 2 / 3
-_(to be filled as the session proceeds)_
+## Phase 1 + 2 — docs written (11 pages, ~1725 lines)
+
+Two writer agents (author≠verifier) produced, grounded in the Phase-0 ground truth:
+- **docs/guide/**: `overview.md`, `getting-started.md`, `capabilities.md`,
+  `comparison.md`, `PERFORMANCE.md`.
+- **docs/arch/**: `overview.md`, `protocol-model.md`, `quic-modes.md`,
+  `backpressure.md`, `security-and-conformance.md`; plus root `CONTRIBUTING.md`.
+
+Wiring (navigation only): `docs/guide/README.md` + `docs/arch/README.md` tables,
+top `README.md` "Start here" + Documentation pointers, and the
+`scripts/ci/doc-lint.sh` `FILES=()` array (new operator docs added for
+stale-pattern protection).
+
+## Phase 3 — fact-check + validate + promote
+
+### Independent fact-check (the "is this TRUE?" pass, R15)
+A third agent independently re-derived **every** non-obvious claim from source
+(code/config/tests/audit/S39), not from the writers' ledgers. **Verdict: no
+BLOCKERS — zero false capability/perf/security claims.** All S39 perf numbers
+exact-match `audit/perf/s39-perf-baseline.md`/`s39-burnin.md` with their
+conditions; S38 security verdict (0C/0H/1M/7L/4I), the ~670M/1.03B fuzz counts,
+delegated-parser set, h2spec 147/147, h3spec **exactly 12** waivers, and all
+cited config defaults verified against `crates/lb-config/src/lib.rs`. doc-lint
+stale-pattern grep: clean across all 11 docs. All relative links resolve; all 9
+example configs parse.
+
+Three WARNINGS found and FIXED:
+- **W3 (EWMA).** The latency-weighted `ewma` policy is implemented and selectable,
+  but the request path does not feed per-request backend latency into the
+  balancer in this build (the latency setter `lb-core/src/backend.rs:162` is
+  called only under `#[cfg(test)]`), so `ewma` scores on its load/cold-start
+  path, not measured latency. Added an honest caveat to `docs/arch/overview.md`
+  and `docs/guide/overview.md` (claim was not false — `ewma` IS a real,
+  selectable algorithm — but an evaluator picking it deserved the nuance).
+- **W2.** `security-and-conformance.md` cited the F-RES-1 fix at
+  `h1_proxy.rs:684` (actual ~`:695`). Dropped the rot-prone line number, kept the
+  file reference.
+- **W1.** `comparison.md` intro implied all competitor facts came from
+  `docs/research/`, but Traefik has no in-repo research file. Reworded the
+  sourcing: Envoy/HAProxy/nginx/Katran draw on the in-repo research; Traefik and
+  fast-moving details are summarized from each project's current documentation.
+  (The Traefik table claims themselves were verified accurate.)
+
+### Examples validated (R5 — run where feasible)
+- **Build:** `cargo build --release -p lb --bin expressgateway` → `Finished` in
+  11m54s, exit 0, produced `target/release/expressgateway` (real ELF).
+- **Quickstart boot test (docs/guide/getting-started.md):** booted
+  `expressgateway config/examples/h1.toml` against a `127.0.0.1:3000` backend,
+  `curl http://127.0.0.1:8080/` → **HTTP 200, 2676-byte body proxied
+  end-to-end**. Clean boot log (config loaded, file-backed control plane ready,
+  io_uring runtime, TCP pool). Processes reaped (R9).
+- **doc-lint:** `./scripts/ci/doc-lint.sh` → tier-1 OK (incl. the new docs),
+  tier-2 OK (52 audit-of-audit claims). GREEN.
+
+### Promote
+No production source touched (docs + `doc-lint.sh` FILES array + README pointers
+only). **CI-confirmation was waived per owner directive ("ignore CI and
+builds")**; promotion rests on local doc-lint green + the change being
+docs-only. Merged to `main` `--no-ff`.
+
+**Result: SESSION B COMPLETE** — public guide + arch docs written, every claim
+fact-checked-and-sourced, quickstart validated end-to-end, doc-lint green. The
+project is now release-friendly: maintainable (Session A) + approachable
+(Session B).

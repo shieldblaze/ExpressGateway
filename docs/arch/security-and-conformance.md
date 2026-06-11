@@ -87,8 +87,8 @@ verdict:
 The single **Medium** (`F-RES-1`) was **fixed this session**: hyper's H1
 `header_read_timeout` was inert (no `.timer()` was wired, so the slowloris
 header phase was bounded by the 60 s connection `total` instead of the intended
-10 s `header` timeout); the fix wires the timer on the H1 builder
-(`crates/lb-l7/src/h1_proxy.rs:684`). The Lows/Infos are tiered with proven
+10 s `header` timeout); the fix wires the timer on the H1 builder in
+`crates/lb-l7/src/h1_proxy.rs`. The Lows/Infos are tiered with proven
 dispositions. The findings live under
 [`../../audit/security/s38-findings.md`](../../audit/security/s38-findings.md)
 (with `s38-findings-{parser,protocol,resource,infra}.md` and the threat model in

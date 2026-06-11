@@ -51,6 +51,19 @@ A globally distributed L4 + L7 load balancer written in Rust, featuring:
   process continues. The `expect`/`unwrap` calls remaining in source
   live inside `#[cfg(test)] mod tests { ... }` blocks.
 
+## Start here
+
+- **New to ExpressGateway?** Read [`docs/guide/overview.md`](docs/guide/overview.md)
+  — what it is, the problem it solves, and the capabilities and limitations up front.
+- **Want to run it?** [`docs/guide/getting-started.md`](docs/guide/getting-started.md)
+  — build, configure, run, serve a request.
+- **Evaluating it?** [`docs/guide/capabilities.md`](docs/guide/capabilities.md)
+  (supported / gated / waived), [`docs/guide/comparison.md`](docs/guide/comparison.md)
+  (vs Envoy/Traefik/HAProxy/nginx), and [`docs/guide/PERFORMANCE.md`](docs/guide/PERFORMANCE.md)
+  (measured baseline).
+- **How does it work?** [`docs/arch/overview.md`](docs/arch/overview.md) and the
+  [architecture docs](docs/arch/).
+
 ## Building
 
 ```bash
@@ -119,6 +132,15 @@ conformance suites are opt-in and documented in `docs/guide/DEPLOYMENT.md`.
 
 ## Documentation
 
+- `docs/guide/` — user/operator guides: [overview](docs/guide/overview.md),
+  [getting-started](docs/guide/getting-started.md),
+  [capabilities & limitations](docs/guide/capabilities.md),
+  [comparison](docs/guide/comparison.md), [performance](docs/guide/PERFORMANCE.md).
+- `docs/arch/` — developer/architecture docs: [overview](docs/arch/overview.md),
+  [protocol model](docs/arch/protocol-model.md), [QUIC modes](docs/arch/quic-modes.md),
+  [backpressure](docs/arch/backpressure.md),
+  [security & conformance](docs/arch/security-and-conformance.md).
+- `CONTRIBUTING.md` — how to build, test, run the gates, and the project conventions.
 - `docs/guide/RUNBOOK.md` — operational procedures, every alert that can fire,
   triage matrix.
 - `docs/guide/DEPLOYMENT.md` — systemd unit, capabilities, sysctls, build-time
