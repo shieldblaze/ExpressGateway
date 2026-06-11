@@ -94,6 +94,17 @@ proven-merge; squash-aware — `--merged` alone misses squash merges, per S35).
   is corrected. **This is byte-identical to main's fuzz-smoke job, so main is
   latently broken by the same upstream release** (it was green at f5934400 before
   cargo-platform 0.3.3 shipped) — this fix repairs main too.
+- **Second real gap surfaced + fixed (R1):** after the fuzz fix, the `test` job
+  failed with `No space left on device` (linker ENOSPC) building the
+  `--workspace --all-features` test suite — the Test job had **no free-disk step**
+  (unlike `coverage`, which already reclaims ~15-20 GB). It fit by luck on the
+  first run; a warm rust-cache restore on re-runs tipped it over. Fix: extracted
+  the coverage job's proven free-disk reclaim into a **composite**
+  (`.github/actions/free-disk`, R12 single-source) and applied it to BOTH `test`
+  and `coverage`. Test assertions unchanged — only runner disk is freed. The
+  Test job is byte-identical to main's, so main has the same latent disk
+  fragility; this hardens it. (The 214× "502" log lines were expected
+  backend-down test output, not the failure cause.)
 
 ## 4. Soak release gate (dedicated EC2)
 

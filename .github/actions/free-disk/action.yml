@@ -1,0 +1,21 @@
+name: 'Free runner disk'
+description: >-
+  Reclaim ~15-20 GB on a GitHub-hosted runner by removing preinstalled
+  toolchains the gateway build never uses (dotnet, android, ghc/ghcup, swift,
+  CodeQL). The heavy `--workspace --all-features` builds need the headroom: the
+  test build links many large integration-test binaries and the instrumented
+  coverage build is ~28 GB — without this the linker hits "No space left on
+  device" (ENOSPC). Single-sourced (R12); used by ci.yml's `test` + `coverage`.
+runs:
+  using: 'composite'
+  steps:
+    - name: Free runner disk
+      shell: bash
+      run: |
+        before=$(df -h / | awk 'NR==2{print $4}')
+        sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+          /usr/local/lib/android /opt/hostedtoolcache/CodeQL \
+          /usr/share/swift 2>/dev/null || true
+        after=$(df -h / | awk 'NR==2{print $4}')
+        echo "free on / : ${before} -> ${after}"
+        df -h /

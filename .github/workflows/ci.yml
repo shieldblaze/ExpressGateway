@@ -115,6 +115,11 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/rust-setup
+      # The --all-features workspace test build links many large integration-test
+      # binaries; on a default hosted runner it can hit ENOSPC (esp. with a warm
+      # rust-cache restored). Reclaim ~15-20 GB first (the same step coverage
+      # uses). Test assertions are unchanged — this only frees runner disk.
+      - uses: ./.github/actions/free-disk
       # Mirror the canonical session gate (--all-features = test-gauges) +
       # --no-fail-fast. The heavy real-wire e2e binaries (grpc_h3_e2e, ws_*)
       # self-serialize via an in-file `static SUITE_SERIAL` tokio Mutex.
@@ -256,12 +261,7 @@ jobs:
           toolchain: ${{ env.RUST_MSRV }}
           components: llvm-tools-preview
           system-deps: 'true'
-      - name: Free runner disk (instrumented --workspace build is ~28 GB)
-        run: |
-          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
-            /usr/local/lib/android /opt/hostedtoolcache/CodeQL \
-            /usr/share/swift 2>/dev/null || true
-          df -h /
+      - uses: ./.github/actions/free-disk      # instrumented --workspace build is ~28 GB
       - name: Install cargo-llvm-cov + nextest
         run: |
           curl -fsSL https://github.com/taiki-e/cargo-llvm-cov/releases/latest/download/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C ~/.cargo/bin
