@@ -1,8 +1,0 @@
-=== ExpressGateway release-soak verdict ===
-out_dir=audit/soak/s31-soak-sc9-028-1800  generated=2026-06-11T18:45:32Z
-expected scenarios: 1
-
-  FAIL  sc9_grpc_h3 — overall=DRIFT samples=121 panics=0
-
-BOUNDED=0/1  FAILURES=1
-VERDICT: FAIL — release soak gate NOT satisfied (see failures above).
