@@ -1,90 +1,41 @@
 name: CI
 
+# ExpressGateway CI — every per-PR/push BLOCKING gate, in one workflow.
+#
+# S40 consolidation: the old `ci.yml` (fast checks + build/test) and
+# `prod-readiness-gates.yml` (the D-gates that need a real CI environment) were
+# two separate blocking workflows that both fired on every PR/push to main. They
+# are merged here into one coherent CI workflow, grouped into sections. NO gate
+# was dropped — see audit/release/s40-gate-map.md for the before->after mapping
+# (every old job -> its new home) and the required-status-check rename list.
+#
+# Shared setup (toolchain + cache + system-deps) is single-sourced via the
+# ./.github/actions/rust-setup composite (R12). Weekly informational scans live
+# in scheduled.yml; tag-triggered build/publish + the soak release gate live in
+# release.yml.
+
 on:
   push:
-    branches: [main, rust]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  # MSRV — matches rust-toolchain.toml (moved 1.85 -> 1.88 at S31 for quiche
+  # 0.29.1 + tokio-quiche 0.19, which hard-require Rust 1.88).
+  RUST_MSRV: "1.88"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# S35 consolidation: shared checkout+toolchain+cache setup is single-sourced via
-# ./.github/actions/rust-setup (R12). The informational scans that used to live
-# here (cargo-geiger "Unsafe Inventory", cargo-machete "Unused Deps") moved OFF
-# the PR critical path to .github/workflows/scheduled-scans.yml — they STILL RUN
-# (weekly), just not blocking every PR. See audit/ci/s35-gate-map.md.
 jobs:
-  check:
-    name: Check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/rust-setup
-      # --all-features is REQUIRED: the R8 memory integration tests in tests/
-      # read lb-l7's `#[cfg(feature = "test-gauges")]` gauges, forwarded by the
-      # root crate's `test-gauges` feature. Off by default; the canonical
-      # session gate has always built with --all-features (Cargo.toml:7-12).
-      - name: cargo check
-        run: cargo check --workspace --all-targets --all-features
 
-  clippy:
-    name: Clippy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/rust-setup
-        with:
-          components: clippy
-      - name: cargo clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: ./.github/actions/rust-setup
-
-      # Mirror the canonical session gate (--all-features = test-gauges) +
-      # --no-fail-fast. The heavy real-wire e2e binaries (grpc_h3_e2e, ws_*)
-      # already self-serialize via an in-file `static SUITE_SERIAL` tokio Mutex,
-      # and `cargo test` runs test binaries sequentially.
-      #
-      # CF-FCAP1-FLAKE / CF-SATURATION-1: fcap1_h2_over_cap_upload_yields_413
-      # must push a 66 MiB body past the 64 MiB cap to assert 413. On the 4-core
-      # hosted runner, sharing CPU with its ~14 sibling tests starves that upload
-      # (it stalls or the conn breaks before the cap — observed multiple modes),
-      # so it is isolated and run ALONE here (full CPU, uncontended → reliably
-      # reaches the cap). This is serialization, not weakening: same test, same
-      # `assert_eq!(status, 413)`. Everything ELSE runs parallel first.
-      - name: cargo test (suite minus the saturation-isolated fcap1)
-        run: cargo test --workspace --all-features --no-fail-fast -- --skip fcap1_h2_over_cap_upload_yields_413
-        timeout-minutes: 45
-      - name: cargo test (fcap1 over-cap, isolated / serial, retry on env-flake)
-        # fcap1 must transfer 66 MiB past the const 64 MiB cap; on a hosted
-        # runner the achievable rate varies (~0.3–1.1 MiB/s) so a single attempt
-        # can still be starved by a noisy neighbour even when isolated. The
-        # gateway deadlines are raised to 300 s (see the test), and we allow up
-        # to 3 attempts: a genuine cap regression fails ALL three (assertion
-        # unchanged), only a slow-transfer env-flake is retried. CF-SATURATION-1.
-        run: |
-          for attempt in 1 2 3; do
-            echo "::group::fcap1 attempt $attempt"
-            if cargo test -p lb-integration-tests --test h2h1_md_streaming_verify \
-                 --all-features -- --exact fcap1_h2_over_cap_upload_yields_413 --nocapture; then
-              echo "::endgroup::"; echo "fcap1 passed on attempt $attempt"; exit 0
-            fi
-            echo "::endgroup::"; echo "fcap1 attempt $attempt failed (env throughput?); retrying"
-          done
-          echo "::error::fcap1 failed all 3 attempts — this is a real cap-enforcement failure, not an env flake"
-          exit 1
-        timeout-minutes: 25
+  # =================================================================
+  # SECTION 1 — fast checks (format, compile, lint, doc + panic guards)
+  # =================================================================
 
   fmt:
     name: Format
@@ -95,32 +46,36 @@ jobs:
         with:
           components: rustfmt
           cache: 'false'
-      - name: cargo fmt
-        run: cargo fmt --all -- --check
+      - run: cargo fmt --all -- --check
 
-  doc-lint:
-    # REL-2-01 + ROUND8-OPS-09 + ROUND8-L4-10: guard the
-    # operator-facing docs against drift AND verify every
-    # `Status: Verified-Fixed(<sha>)` audit claim resolves to a
-    # SHA whose diff actually closes the recommendation.
-    name: Doc Lint
+  check:
+    name: Check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - uses: ./.github/actions/rust-setup
+      # --all-features is REQUIRED: the R8 memory integration tests in tests/
+      # read lb-l7's `#[cfg(feature = "test-gauges")]` gauges, forwarded by the
+      # root crate's `test-gauges` feature (off by default). The canonical
+      # session gate has always built with --all-features.
+      - run: cargo check --workspace --all-targets --all-features
+
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/rust-setup
         with:
-          # Tier 2 (audit-of-audit) walks `git cat-file` / `git show`
-          # / `git ls-tree` against historical SHAs cited in
-          # Verified-Fixed claims. Need full history.
-          fetch-depth: 0
-      - name: Run doc-lint (tier-1 stale patterns + tier-2 audit-of-audit)
-        run: bash scripts/ci/doc-lint.sh
+          components: clippy
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   panic-freedom:
     name: Panic Freedom Audit
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Verify panic-freedom deny lints are present
+      - name: Verify panic-freedom deny lints are present in every library crate
         run: |
           MISSING=""
           for lib in crates/*/src/lib.rs; do
@@ -136,52 +91,73 @@ jobs:
           fi
           echo "All library crates have panic-freedom deny lints."
 
-  audit:
-    name: Security Audit
+  doc-lint:
+    # Guards operator-facing docs against drift (tier-1 stale patterns) AND
+    # verifies every `Status: Verified-Fixed(<sha>)` audit claim resolves to a
+    # SHA whose diff actually closes the recommendation (tier-2 audit-of-audit).
+    name: Doc Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      # Newer cargo-audit needs a recent rustc to compile; the repo's
-      # rust-toolchain.toml pins 1.88, and we use `+stable` here so cargo-audit
-      # always builds on the latest toolchain independent of the project MSRV.
-      - uses: ./.github/actions/rust-setup
-      - name: Install cargo-audit
-        run: cargo +stable install cargo-audit --locked
-      # SEC-2-07: fail on ANY RUSTSEC advisory. Explicit ignores must
-      # be added to .cargo/audit.toml with a justification + link.
-      # This is the per-PR/push audit; a weekly schedule of the SAME strict
-      # audit runs in scheduled-scans.yml (folds the old codeql.yml job, which
-      # ran a WEAKER `cargo audit` without -D warnings — strengthened, not
-      # weakened). See audit/ci/s35-gate-map.md.
-      - name: cargo audit -D warnings
-        run: cargo audit -D warnings
+        with:
+          # Tier-2 walks `git show` / `git ls-tree` against historical SHAs
+          # cited in Verified-Fixed claims — needs full history.
+          fetch-depth: 0
+      - run: bash scripts/ci/doc-lint.sh
 
-  # S34 dedup: cargo-deny ran here AND as prod-readiness-gates'
-  # `gate-07-cargo-deny`. Removed this duplicate; gate-07 is the single source
-  # (it now runs the same explicit `check licenses advisories bans sources`
-  # subcommand list, so the gate scope is preserved, not shrunk).
-  #
-  # S35: the cargo-geiger "Unsafe Inventory" and cargo-machete "Unused Deps"
-  # jobs moved to scheduled-scans.yml (weekly) — they were already
-  # `continue-on-error` informational and are now off the PR critical path
-  # (the S34-deferred plan; named in s35-gate-map.md). machete is GREEN as of
-  # S35 (17 genuinely-unused deps removed).
+  # =================================================================
+  # SECTION 2 — build & test (suite, MSRV, fuzz smoke, release codegen)
+  # =================================================================
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/rust-setup
+      # Mirror the canonical session gate (--all-features = test-gauges) +
+      # --no-fail-fast. The heavy real-wire e2e binaries (grpc_h3_e2e, ws_*)
+      # self-serialize via an in-file `static SUITE_SERIAL` tokio Mutex.
+      #
+      # CF-FCAP1-FLAKE / CF-SATURATION-1: fcap1_h2_over_cap_upload_yields_413
+      # must push a 66 MiB body past the 64 MiB cap to assert 413. On the hosted
+      # runner, sharing CPU with its ~14 sibling tests starves that upload, so it
+      # is isolated and run ALONE below (full CPU, uncontended). This is
+      # serialization, not weakening: same test, same assert_eq!(status, 413).
+      - name: cargo test (suite minus the saturation-isolated fcap1)
+        run: cargo test --workspace --all-features --no-fail-fast -- --skip fcap1_h2_over_cap_upload_yields_413
+        timeout-minutes: 45
+      - name: cargo test (fcap1 over-cap, isolated / serial, retry on env-flake)
+        # fcap1 must transfer 66 MiB past the const 64 MiB cap; on a hosted
+        # runner the achievable rate varies (~0.3-1.1 MiB/s) so a single attempt
+        # can still be starved by a noisy neighbour even when isolated. The
+        # gateway deadlines are raised to 300 s (see the test); up to 3 attempts:
+        # a genuine cap regression fails ALL three (assertion unchanged), only a
+        # slow-transfer env-flake is retried. CF-SATURATION-1.
+        run: |
+          for attempt in 1 2 3; do
+            echo "::group::fcap1 attempt $attempt"
+            if cargo test -p lb-integration-tests --test h2h1_md_streaming_verify \
+                 --all-features -- --exact fcap1_h2_over_cap_upload_yields_413 --nocapture; then
+              echo "::endgroup::"; echo "fcap1 passed on attempt $attempt"; exit 0
+            fi
+            echo "::endgroup::"; echo "fcap1 attempt $attempt failed (env throughput?); retrying"
+          done
+          echo "::error::fcap1 failed all 3 attempts — this is a real cap-enforcement failure, not an env flake"
+          exit 1
+        timeout-minutes: 25
 
   msrv:
-    # MSRV moved 1.85 -> 1.88 at S31 (quiche 0.29.1 + tokio-quiche 0.19
-    # hard-require Rust 1.88). `cargo check --all-targets --all-features` on the
-    # MSRV toolchain is the canonical "compiles on the pinned MSRV" gate; the
-    # full-codegen build runs in `release-build` (stable). This subsumes the old
-    # prod-readiness `build-and-lint` MSRV build (folded at S35).
+    # `cargo check --all-targets --all-features` on the pinned MSRV is the
+    # canonical "compiles on 1.88" gate; full-codegen runs in release-build.
     name: MSRV (1.88)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/rust-setup
         with:
-          toolchain: '1.88'
-      - name: cargo check (MSRV)
-        run: cargo check --workspace --all-targets --all-features
+          toolchain: ${{ env.RUST_MSRV }}
+      - run: cargo check --workspace --all-targets --all-features
 
   fuzz-smoke:
     name: Fuzz Smoke Test
@@ -214,11 +190,273 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/rust-setup
-      - name: cargo build --release
-        run: cargo build --workspace --release
+      - run: cargo build --workspace --release
         timeout-minutes: 30
 
-  # S34 dedup: the Docker image was built here AND by prod-readiness-gates'
-  # `D5-image-scan`. Removed this duplicate; D5 is the single source that builds
-  # the image, and as of S35 also RUNS it and smoke-tests a real request
-  # through the live container (scripts/ci/docker-smoke.sh) before Trivy-scanning.
+  # =================================================================
+  # SECTION 3 — security & dependency gates
+  # =================================================================
+
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      # cargo-audit needs a recent rustc to build; rust-toolchain.toml pins 1.88
+      # but we `+stable install` so cargo-audit always builds on latest stable.
+      - uses: ./.github/actions/rust-setup
+      - name: Install cargo-audit
+        run: cargo +stable install cargo-audit --locked
+      # SEC-2-07: fail on ANY RUSTSEC advisory. Explicit ignores must live in
+      # .cargo/audit.toml with a justification + link. The SAME strict audit runs
+      # weekly in scheduled.yml to catch advisories published against unchanged
+      # deps between PRs.
+      - run: cargo audit -D warnings
+
+  cargo-deny:
+    # advisories / licenses / bans / sources. cargo-deny is a standalone prebuilt
+    # binary (no toolchain needed). The explicit subcommand list keeps a future
+    # cargo-deny "check" default from silently shrinking the gate. This is the
+    # SINGLE cargo-deny gate (the duplicate was removed at S34).
+    name: cargo-deny (licenses/advisories/bans/sources)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install cargo-deny (prebuilt binary)
+        run: |
+          VER=0.19.6
+          curl -fsSL "https://github.com/EmbarkStudios/cargo-deny/releases/download/${VER}/cargo-deny-${VER}-x86_64-unknown-linux-musl.tar.gz" \
+            | tar -xz --strip-components=1 -C /usr/local/bin --wildcards '*/cargo-deny'
+          cargo-deny --version
+      - run: cargo-deny check licenses advisories bans sources
+
+  # =================================================================
+  # SECTION 4 — coverage & protocol conformance
+  # =================================================================
+
+  coverage:
+    # Hot-path coverage, PER-MODULE >= 80% (audit/coverage-scope.md charter
+    # metric, NOT a whole-package aggregate). Runs the FULL workspace suite under
+    # instrumentation so the integration tests exercise the hot paths, then
+    # enforces >= 80% per hot-path module via scripts/ci/coverage-check.sh
+    # (lb-l4-xdp/src/loader.rs carved out by name — XDP load needs root, smoke-
+    # validated by the xdp-smoke job). A new hot-path module under 80% -> RED.
+    name: Coverage (per-module hot-path >= 80%)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/rust-setup
+        with:
+          toolchain: ${{ env.RUST_MSRV }}
+          components: llvm-tools-preview
+          system-deps: 'true'
+      - name: Free runner disk (instrumented --workspace build is ~28 GB)
+        run: |
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+            /usr/local/lib/android /opt/hostedtoolcache/CodeQL \
+            /usr/share/swift 2>/dev/null || true
+          df -h /
+      - name: Install cargo-llvm-cov + nextest
+        run: |
+          curl -fsSL https://github.com/taiki-e/cargo-llvm-cov/releases/latest/download/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C ~/.cargo/bin
+          curl -fsSL https://get.nexte.st/latest/linux | tar -xz -C ~/.cargo/bin
+      - name: Coverage (full workspace suite, --all-features)
+        # --ignore-run-fail: this is the COVERAGE gate, not the pass/fail gate
+        # (that is the `test` job). Measure what the suite covers even if a test
+        # flakes; coverage-check.sh below is the actual verdict.
+        run: |
+          cargo llvm-cov nextest \
+            --workspace --all-features --ignore-run-fail \
+            --lcov --output-path coverage.lcov
+      - name: Enforce per-module hot-path threshold (charter metric)
+        run: bash scripts/ci/coverage-check.sh coverage.lcov
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: coverage-lcov
+          path: coverage.lcov
+
+  conformance:
+    # HTTP/2 + HTTP/3 conformance against the REAL gateway: an h1s listener
+    # (TLS, ALPN h2/http1.1) on TCP :8443 -> h2spec; a quic listener
+    # (H3-terminate, quiche::h3) on UDP :8444 -> h3spec. Tool versions are PINNED
+    # so the h3spec waiver list (CF-QUICHE-UPGRADE) stays exact.
+    name: Conformance (h2spec --strict + h3spec)
+    runs-on: ubuntu-latest
+    env:
+      H2SPEC_VER: "v2.6.0"
+      H3SPEC_VER: "v0.1.13"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/rust-setup
+        with:
+          toolchain: ${{ env.RUST_MSRV }}
+          system-deps: 'true'
+      - run: cargo build -p lb
+      - name: Stub backend + test cert/key + QUIC retry secret
+        run: |
+          python3 -m http.server 3000 >/tmp/backend.log 2>&1 &
+          echo $! > backend.pid
+          # Self-signed cert (DNS + IP SANs); h2spec uses -k and h3spec uses -n
+          # so cert validation is skipped (protocol conformance, not PKI) — but
+          # the cert must still load into rustls + BoringSSL.
+          openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem \
+            -days 1 -nodes -subj "/CN=localhost" \
+            -addext "subjectAltName=DNS:localhost,IP:127.0.0.1"
+          head -c 32 /dev/urandom > retry.bin
+      - name: Write conformance config (lb-config schema)
+        run: |
+          cat > conformance.toml <<TOML
+          [runtime]
+          drain_timeout_ms = 5000
+          readiness_settle_ms = 100
+
+          # H1+H2 over TLS (ALPN h2 then http/1.1) -> h2spec target (TCP).
+          [[listeners]]
+          address  = "127.0.0.1:8443"
+          protocol = "h1s"
+          [listeners.tls]
+          cert_path = "$PWD/cert.pem"
+          key_path  = "$PWD/key.pem"
+          [[listeners.backends]]
+          address  = "127.0.0.1:3000"
+          protocol = "h1"
+          weight   = 1
+
+          # HTTP/3 over QUIC, H3-terminate (quiche::h3) -> h3spec target (UDP).
+          [[listeners]]
+          address  = "127.0.0.1:8444"
+          protocol = "quic"
+          [listeners.quic]
+          cert_path         = "$PWD/cert.pem"
+          key_path          = "$PWD/key.pem"
+          retry_secret_path = "$PWD/retry.bin"
+          [[listeners.backends]]
+          address  = "127.0.0.1:3000"
+          protocol = "h1"
+          weight   = 1
+
+          [observability]
+          metrics_bind = "127.0.0.1:9090"
+          TOML
+          cat conformance.toml
+      - name: Boot gateway + wait for BOTH listeners
+        run: |
+          ./target/debug/expressgateway conformance.toml >/tmp/gw.log 2>&1 &
+          echo $! > gw.pid
+          up=0
+          for i in $(seq 1 40); do
+            if ss -ltn | grep -q ':8443' && ss -lun | grep -q ':8444'; then up=1; break; fi
+            sleep 1
+          done
+          if [ "$up" -ne 1 ]; then
+            echo "::error::gateway listeners did not come up"; cat /tmp/gw.log; exit 1
+          fi
+          echo "both listeners up; gateway log:"; tail -5 /tmp/gw.log
+      - name: h2spec --strict (HTTP/2 conformance, TCP :8443)
+        run: |
+          curl -fsSL "https://github.com/summerwind/h2spec/releases/download/${H2SPEC_VER}/h2spec_linux_amd64.tar.gz" | tar -xz
+          # -k: skip cert validation (protocol conformance, not PKI). --strict:
+          # fail on ANY non-conformant case. The gateway passes 147/147.
+          ./h2spec -t -k -h 127.0.0.1 -p 8443 --strict
+      - name: h3spec (HTTP/3 conformance, UDP :8444) via named-waiver gate
+        run: |
+          curl -fsSL -o h3spec "https://github.com/kazu-yamamoto/h3spec/releases/download/${H3SPEC_VER}/h3spec-linux-x86_64"
+          chmod +x h3spec
+          # The wrapper runs h3spec -n and PASSES iff every failure is one of the
+          # 12 individually-named, documented quiche-0.29 limitations
+          # (CF-QUICHE-UPGRADE). A NEW/un-waived failure turns this RED.
+          bash scripts/ci/h3spec-check.sh ./h3spec 127.0.0.1 8444
+      - name: Stop gateway + backend
+        if: always()
+        run: |
+          kill "$(cat gw.pid)" 2>/dev/null || true
+          kill "$(cat backend.pid)" 2>/dev/null || true
+
+  chaos-attacks:
+    # The chaos ATTACK suite (the half that does not need a soak host): Rapid
+    # Reset, CONTINUATION flood, HPACK bomb, slowloris. The 4-hour soak (D-3b)
+    # is the release-soak gate (scripts/release-soak.sh), not a PR gate.
+    name: Chaos Attack Suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/rust-setup
+        with:
+          toolchain: ${{ env.RUST_MSRV }}
+          system-deps: 'true'
+      - name: Install cargo-nextest
+        run: curl -fsSL https://get.nexte.st/latest/linux | tar -xz -C ~/.cargo/bin
+      - run: cargo build -p lb
+      - name: Run chaos attack suite
+        # Round-8 wired Smuggle/Slowloris/SlowPost detectors + the
+        # CONTINUATION/Rapid-Reset caps. --all-features keeps the lb-l7/lb-h2
+        # test surface identical to the session gate.
+        run: |
+          cargo nextest run --all-features --package lb-h2 --package lb-l7 \
+            -E 'test(/chaos|rapid_reset|continuation|hpack|slowloris/)'
+
+  # =================================================================
+  # SECTION 5 — container image & XDP datapath
+  # =================================================================
+
+  image-scan:
+    # Real docker build + RUN+SERVE smoke + trivy scan. Builds the image ONCE
+    # and (a) proves it BOOTS and SERVES L7 traffic via docker-smoke.sh — a real
+    # HTTP/1.1 request through the live container must return the backend's
+    # 200 + body — and only then (b) Trivy-scans the same image. `docker build`
+    # exit-0 alone was never proof the container works (a pre-S35 image had a
+    # wrong CMD that could not boot — caught here now).
+    name: Container Image (build + serve smoke + trivy)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build image
+        run: |
+          docker build -f docker/Dockerfile \
+            --build-arg GIT_SHA="${GITHUB_SHA::8}" \
+            --build-arg BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --build-arg VERSION="ci-${GITHUB_SHA::8}" \
+            -t expressgateway:ci .
+      - name: Smoke — RUN the container and serve a real request through it
+        run: IMAGE=expressgateway:ci bash scripts/ci/docker-smoke.sh
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: expressgateway:ci
+          format: table
+          exit-code: "1"                 # fail the job on findings
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+
+  xdp-smoke:
+    # XDP verifier-accept smoke (RUNNER-KERNEL ONLY). Loads the committed XDP ELF
+    # (crates/lb-l4-xdp/src/lb_xdp.bin) into the verifier of the runner's OWN
+    # kernel (GitHub hosted = Linux 6.x) and asserts ACCEPT. A true, meaningful
+    # claim: "the shipped XDP object builds and the in-kernel verifier on a
+    # current kernel accepts it." It does NOT cover the full 5.15/6.1/6.6 matrix
+    # (that needs nested virt the hosted runners lack — F-ESC-1, self-hosted).
+    name: XDP Verifier Smoke (runner kernel)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/rust-setup
+        with:
+          toolchain: ${{ env.RUST_MSRV }}
+          system-deps: 'true'
+      - name: Print runner kernel (for the record — smoke is THIS kernel only)
+        run: uname -r
+      - name: Build the real-load verifier test (validates the embedded ELF too)
+        run: cargo test -p lb-l4-xdp --test round8_verifier_baseline_70 --no-run
+      - name: Load the committed XDP ELF and assert verifier ACCEPT
+        # The committed ELF (built by scripts/build-xdp.sh) uses aya LEGACY map
+        # definitions, which libbpf v1.0+ tools (bpftool, ip) REFUSE to load. aya
+        # is the only loader that can load it — and it is the gateway's OWN
+        # loader. round8_verifier_baseline_70 does a genuine BPF_PROG_LOAD via
+        # XdpLoader::load_from_bytes_pinned + kernel_load on the RUNNING kernel
+        # (no NIC/attach) and asserts real kernel facts (prog_id, tag,
+        # verified_insns > 0). Needs CAP_BPF + bpffs, hence sudo + --ignored.
+        run: |
+          set -euo pipefail
+          sudo -E env "PATH=$PATH" cargo test -p lb-l4-xdp \
+            --test round8_verifier_baseline_70 -- --ignored --nocapture
