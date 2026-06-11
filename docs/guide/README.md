@@ -1,8 +1,18 @@
 # ExpressGateway — User Guide
 
 Public, operator-facing documentation: how to configure, deploy, run, and
-operate ExpressGateway. Start at the root [`README.md`](../../README.md) for the
-project overview and quickstart, then use the references below.
+operate ExpressGateway. New here? Start with the narrative guides below, then
+drop into the reference docs.
+
+## Guides (start here)
+
+| Doc | What it covers |
+|-----|----------------|
+| [overview.md](overview.md) | **What ExpressGateway is**, the problem it solves, where it fits, headline capabilities and the key limitations up front. |
+| [getting-started.md](getting-started.md) | Quickstart: build → pick an example config → run → serve a request → check metrics. |
+| [capabilities.md](capabilities.md) | The consolidated supported / gated / waived / deferred matrix — what works and what to know before you rely on it. |
+| [comparison.md](comparison.md) | Factual positioning vs Envoy / Traefik / HAProxy / nginx, with honest tradeoffs. |
+| [PERFORMANCE.md](PERFORMANCE.md) | The S39 measured performance baseline, with its conditions and caveats. |
 
 ## Configuration & operation (reference)
 
@@ -21,9 +31,8 @@ project overview and quickstart, then use the references below.
 - [`../known-limitations.md`](../known-limitations.md) — bounded, documented operator-facing constraints.
 - [`../arch/`](../arch/) — developer/architecture documentation.
 
-## Scaffolded for Session B
+## Contributing
 
-This guide tree is the home for the public-facing **what-is-this / getting-started /
-usage / config-walkthrough** documentation. Session B writes those narrative
-pages here (e.g. `getting-started.md`, `usage.md`, an Envoy/Traefik-style
-"what is ExpressGateway"), linking the reference docs above.
+See the root [`CONTRIBUTING.md`](../../CONTRIBUTING.md) for how to build, test,
+and run the gates locally, and [`../arch/DEV-SETUP.md`](../arch/DEV-SETUP.md) for
+the detailed per-task box setup.
