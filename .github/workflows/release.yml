@@ -48,7 +48,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Configure AWS credentials (OIDC, scoped role)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.SOAK_AWS_ROLE_ARN }}
           aws-region: ${{ vars.SOAK_REGION }}
