@@ -75,7 +75,7 @@ rust-version = "1.88"
 # relay) — tests/h2h3_md_streaming_verify.rs h2h3_fcap1 forwards only ~30 MiB / 60s on
 # 1.52.3 (cap-arm never reached) vs 64 MiB / ~5.7s on 1.51.1. Reproduced 3/3 on a quiet
 # box. Carry the 1.52 bump until upstream restores throughput (CF-S37-D-TOKIO-1.52-RELAY).
-tokio = { version = ">=1.51, <1.52", features = ["full"] }
+tokio = { version = ">=1.51, <1.53", features = ["full"] }
 io-uring = "0.7"
 # Error handling
 thiserror = "2"
