@@ -157,7 +157,7 @@ For a P99 latency panel once latency histograms land:
 
 ## How this gap is tracked
 
-Every `❌` row above maps to a TODO in `docs/gap-analysis.md` under the "Observability" section. The **Pillar 3b** milestone promotes the registry from counters-only to full Prometheus exposition with histograms, gauges, and labels, at which point this file's "Ready" column fills in and the panels above can be assembled.
+Every `❌` row above is a metric the registry does not yet emit. As the metric surface is promoted from counters-only toward full Prometheus exposition (histograms, gauges, and labels), this file's "Ready" column fills in and the panels above can be assembled.
 
 ## REL-2-08: canonical label keys + cardinality budget
 

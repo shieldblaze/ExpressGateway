@@ -27,6 +27,7 @@ decision.
 | **QUIC passthrough (by Connection ID, no decrypt)** | ✅ Mode A | ⚠️ not a first-class mode | ⚠️ not a first-class mode | ⚠️ TCP/UDP forward, not QUIC-CID-aware | ⚠️ stream-level UDP proxy, not QUIC-CID-aware |
 | **gRPC proxy** | ✅ (H2/H3 front) | ✅ | ✅ | ✅ | ✅ |
 | **WebSocket** | ✅ H1; ⛔ H2 (gated); ☑️ H3 | ✅ incl. H2 (RFC 8441) | ✅ | ✅ | ✅ |
+| **Response compression** (gzip/brotli) | ❌ (pass-through only) | ✅ | ✅ | ✅ | ✅ |
 | **L4 / TCP load balancing** | ✅ | ✅ | ✅ | ✅ | ✅ (stream module) |
 | **L4 via XDP/eBPF (kernel data plane)** | ✅ (off by default, single-kernel) | ❌ (userspace) | ❌ | ❌ | ❌ |
 | **Language / memory safety** | Rust (panic-free libs, `unsafe` minimized) | C++ | Go | C | C |
@@ -47,7 +48,7 @@ Notes on the ExpressGateway column:
 - **HTTP/3 + QUIC** via quiche — h3spec passes with 12 named waivers
   ([`capabilities.md`](capabilities.md)).
 - **WebSocket over H2 is gated off by default** (a hyper backpressure
-  limitation, CF-S27-2); Envoy supports RFC 8441 WS-over-H2. Run WS over H1/H3
+  limitation); Envoy supports RFC 8441 WS-over-H2. Run WS over H1/H3
   ([`../known-limitations.md`](../known-limitations.md)).
 - **gRPC requires an H2/H3 front** (an H1 front cannot deliver `grpc-status`
   trailers — matches nginx) ([`../known-limitations.md`](../known-limitations.md)).
@@ -57,6 +58,9 @@ Notes on the ExpressGateway column:
   [`../research/katran.md`](../research/katran.md)).
 - **No server-side mTLS** (intentional); the incumbents offer it. Upstream
   verification is enforced ([`../../SECURITY.md`](../../SECURITY.md)).
+- **No response compression.** ExpressGateway passes content through unmodified;
+  it does not gzip/brotli responses. The incumbents all offer response
+  compression, and evaluators routinely look for it.
 
 ## Where ExpressGateway fits
 
@@ -73,12 +77,11 @@ HTTP/3 and QUIC. It is a strong fit when you want:
   CI, and wire parsing delegated to mature libraries (hyper, quiche/BoringSSL,
   rustls, tungstenite) so the hand-rolled surface is small and was fuzzed
   ([`../../SECURITY.md`](../../SECURITY.md)).
-- **An explicit, auditable security posture** — the S38 audit (0 Critical / 0
-  High / 1 Medium fixed / 7 Low / 4 Info) and a documented DoS-mitigation
+- **An explicit, auditable security posture** — the security audit (0 Critical /
+  0 High / 1 Medium fixed / 7 Low / 4 Info) and a documented DoS-mitigation
   catalog.
-- **Single-binary, single-config-file operation** with SIGHUP hot reload and an
-  honesty contract (restart-required changes are logged, never silently
-  applied).
+- **Single-binary, single-config-file operation** with SIGHUP hot reload
+  (restart-required changes are logged, never silently applied).
 - **An optional in-kernel XDP/eBPF L4 data plane** for environments that can run
   it on a validated kernel.
 
@@ -110,12 +113,26 @@ base to build, and an evaluator should weigh these:
 - **Operational features.** Hot binary restart via FD handover (Envoy, HAProxy
   `-sf`, Pingora), unified overload managers, circuit breakers, outlier
   detection / panic mode, retry budgets, and rich access logging are mature in
-  the incumbents; ExpressGateway has per-attack mitigations and active/passive
-  health checks but not all of these higher-level constructs
-  ([`../research/envoy.md`](../research/envoy.md) lists several as gaps).
+  the incumbents; ExpressGateway has per-attack mitigations but not these
+  higher-level constructs, and its health tracking is **passive and not yet
+  wired into backend selection** (active probing is deferred) — see
+  [`../known-limitations.md`](../known-limitations.md). The incumbents'
+  active/passive health checking is a genuine gap here
+  ([`../research/envoy.md`](../research/envoy.md) lists several constructs as gaps).
 - **WAF / policy / auth integrations and managed offerings.** The incumbents
   have established WAF integrations, auth filters, and (for some) commercial
   support tiers. ExpressGateway is the open data-plane binary.
+
+## Quick picker
+
+- **Pick ExpressGateway** if HTTP/3 + QUIC (including no-decrypt passthrough),
+  bounded-memory streaming, and a memory-safe, auditable data plane are your
+  priorities, and a single config file plus SIGHUP reload fits your operating
+  model.
+- **Pick Envoy or Traefik** if you need a dynamic / xDS control plane, service
+  discovery, or a user-extensible filter / plugin / WASM ecosystem.
+- **Pick HAProxy or nginx** if you need a decade-plus hyperscale track record,
+  response compression, server-side mTLS, or hot binary restart available today.
 
 ## Bottom line
 

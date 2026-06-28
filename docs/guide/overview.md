@@ -1,134 +1,138 @@
 # What is ExpressGateway?
 
-ExpressGateway is a Rust **L4 + L7 load balancer and reverse proxy**. On the
-L7 side it terminates and proxies HTTP/1.1, HTTP/2, and HTTP/3 across the full
-**9-cell front × back matrix** (any of {H1, H2, H3} on the client side,
-translated to any of {H1, H2, H3} on the backend side), streaming bodies
-frame-by-frame with bounded memory. On the L4 side it ships an XDP/eBPF TCP+UDP
-data plane and a QUIC-native datapath (route-by-Connection-ID passthrough, or
-terminate-and-re-originate). It is one statically-linked binary
-(`expressgateway`), configured by a single TOML file, with a file-backed
-control plane, Prometheus metrics, and graceful drain on `SIGTERM`.
+ExpressGateway is a memory-safe **L4 + L7 load balancer and reverse proxy**
+written in Rust. It is built for teams that want first-class HTTP/3 and QUIC,
+bounded-memory streaming across every HTTP version, and a security posture they
+can audit — operated as a single binary and one TOML file. Reach for it when
+those properties matter more than a mature plugin ecosystem or a dynamic xDS
+control plane; if you need those, a mature incumbent is the better fit, and this
+guide is candid about exactly where.
 
-This page is the orientation map. It states what the gateway is, where it
-fits, what it can and cannot do, and where to go next. Every capability below
-links to its canonical reference; every limitation links to the bounded reason
-in [`known-limitations.md`](../known-limitations.md). Nothing here is
-aspirational — if a feature is gated, deferred, or unmeasured, it says so.
+This page orients you: the shape of the system, how one request travels through
+it, and how to decide whether it fits. The reference docs handle the details;
+this page gives you the mental model to navigate them.
 
-## The problem it solves
+## The shape: two independent data planes
 
-You have HTTP (or raw TCP, or QUIC) traffic to spread across a backend pool,
-and you want to do it at the edge without (a) terminating a body into memory
-before forwarding it, (b) crashing on a malformed packet, or (c) being knocked
-over by a known protocol-level DoS. ExpressGateway is built around those three
-properties:
+ExpressGateway is built from two planes that share a process but not a code
+path. The **L7 plane** is a userspace HTTP proxy on Tokio — it terminates TLS,
+decodes the request, runs the security filters, picks a backend, and streams
+bodies through. The **L4 plane** is an optional in-kernel XDP/eBPF fast path that
+forwards established flows without the packet ever reaching userspace. The two
+are independent: you can run pure L7 (the default — XDP is off), pure L4, or
+both.
 
-- **Bounded memory on every cell.** The gateway never buffers a whole request
-  or response body; it streams frame-by-frame and enforces 64 MiB caps (and
-  returns `413` past them). This holds across all nine front×back combinations.
-- **Panic-free libraries.** Every library crate denies `unwrap`/`expect`/
-  `panic`/`indexing_slicing` at the crate root and CI's `panic-freedom` job
-  enforces it (the binary additionally installs a panic hook that increments
-  `panic_total` and logs rather than aborting). See
-  [`../../SECURITY.md`](../../SECURITY.md) "Panic-free posture".
-- **A DoS-mitigation catalog enforced on live listeners** — Rapid-Reset
-  (CVE-2023-44487), CONTINUATION flood (CVE-2024-27316), HPACK/QPACK bomb,
-  SETTINGS/PING flood, zero-window stall, slowloris, slow-POST, request
-  smuggling (CL.TE / TE.CL / H2-downgrade), QUIC 0-RTT replay. Full mapping in
-  [`../../SECURITY.md`](../../SECURITY.md).
+```mermaid
+flowchart TB
+    C["Client: HTTP/1.1, HTTP/2, HTTP/3 (QUIC)"]
 
-## Headline capabilities
+    C -->|"XDP enabled"| L4
+    C -->|"default (XDP off)"| L7
 
-| Capability | Summary | Reference |
-|------------|---------|-----------|
-| **9-cell HTTP matrix** | Front {H1, H2, H3} × back {H1, H2, H3}, streamed, bounded memory. | [`../features.md`](../features.md) |
-| **L4 / XDP data plane** | XDP/eBPF TCP+UDP load balancing; compiled BPF ELF ships in-tree, **off by default**, single-kernel, validated live on Linux 7.0. | [`DEPLOYMENT.md`](DEPLOYMENT.md) |
-| **QUIC Mode A passthrough** | Route QUIC flows by Connection ID **without decrypting** (TLS stays end-to-end client↔backend). | [`../features.md`](../features.md) |
-| **QUIC Mode B terminate** | Terminate the client QUIC and re-originate a fresh upstream QUIC connection, relaying raw streams + datagrams. | [`../features.md`](../features.md) |
-| **gRPC** | Native gRPC proxying — requires an **H2 or H3 front** and an `h2`/`h3` backend. | [`../known-limitations.md`](../known-limitations.md) |
-| **WebSocket** | Over H1 (RFC 6455, **on by default**); over H2 (RFC 8441, **gated off**); over H3 (RFC 9220, opt-in). | [`../features.md`](../features.md) |
-| **TLS** | rustls + BoringSSL; TLS 1.2 + 1.3 by default (downgrade-safe), `tls13_only` opt-in; no server-side mTLS (intentional), upstream verification enforced. | [`../../SECURITY.md`](../../SECURITY.md) |
-| **Conformance** | h2spec **147/147**; h3spec passes with **12 named waivers** (`CF-QUICHE-UPGRADE`). | [`../features.md`](../features.md) |
-| **Load balancing** | 11 algorithms (round-robin, weighted round-robin, random, weighted random, P2C, Maglev, ring hash, EWMA, least connections, least requests, session affinity) + active/passive health checks. | [`../../README.md`](../../README.md) |
-| **Operations** | File-backed control plane; SIGHUP config hot reload (honesty contract); SIGUSR1 cert rotation; graceful drain on SIGTERM; Prometheus `/metrics` + k8s probes. | [`CONFIG.md`](CONFIG.md), [`METRICS.md`](METRICS.md), [`RUNBOOK.md`](RUNBOOK.md) |
+    subgraph L4["L4 plane - XDP/eBPF, in-kernel (off by default)"]
+      X["conntrack-hit forward<br/>+ per-CPU new-flow (SYN-flood) rate cap"]
+    end
 
-> **Note on EWMA.** All 11 algorithms are implemented and selectable, but the
-> latency-weighted **EWMA** policy depends on per-request backend latency that
-> the request path does not yet feed into the balancer in this build — so EWMA
-> currently selects on load (its cold-start path), not measured latency. The
-> other ten use live connection/request counts and weights.
+    subgraph L7["L7 plane - userspace reverse proxy on Tokio"]
+      direction LR
+      T["TLS"] --> P["protocol probe"] --> K["codec"] --> F["security filters"] --> R["router"] --> B["bridge"] --> LB["balancer"] --> PU["pump"]
+    end
 
-A QUIC listener serves HTTP/3; HTTP/2 is served on an `h1s` (HTTPS) listener
-via ALPN. There is no separate `"h2"` or `"h3"` listener protocol — see
-[`CONFIG.md`](CONFIG.md) "Listener protocols".
+    X -->|"conntrack hit"| BE
+    X -. "miss / disabled: fall through" .-> L7
+    PU --> BE["Backend pool: H1, H2, H3"]
+```
 
-## Where it fits — an honest positioning
+*ExpressGateway's two data planes. The L7 pipeline is always available; the L4
+XDP fast path is optional and off by default. Both forward to the same backend
+pool.*
 
-ExpressGateway is a focused, memory-safe, protocol-complete data-plane proxy.
-Its strengths are concrete and verifiable: the full 9-cell HTTP matrix with
-bounded streaming, QUIC passthrough and terminate, a hand-audited DoS catalog
-(S38 security audit: 0 Critical / 0 High / 1 Medium / 7 Low / 4 Info — see
-[`../../SECURITY.md`](../../SECURITY.md)), and panic-free libraries. Wire
-parsing is delegated to mature, widely-deployed libraries — hyper (H1/H2),
-quiche/BoringSSL (H3/QUIC/TLS), rustls (TLS), tungstenite (WS) — so the
-gateway's own attack surface is small and was fuzzed extensively.
+## How a request flows
 
-It is **not** a drop-in replacement for envoy, traefik, HAProxy, or nginx in
-their mature roles. Those projects have years of battle-tested production scale,
-broad ecosystems (xDS / dynamic control planes, plugin and filter systems,
-WAFs, observability integrations), and operational tooling that a focused
-~41-development-session project does not. ExpressGateway has a file-backed
-control plane with a trait seam for future backends — not a full xDS-style
-dynamic control plane. If you need a large filter/plugin ecosystem, a proven
-hyperscale track record, or a managed control plane, the incumbents are
-stronger. See [`comparison.md`](comparison.md) for a factual,
-capability-by-capability breakdown and a candid "where the incumbents are
-stronger" section.
+A client connection lands on a listener. If the listener is TLS, **rustls**
+completes the handshake and ALPN decides whether the client is speaking HTTP/1.1
+or HTTP/2; a QUIC listener serves HTTP/3 directly. The matching **codec** —
+hyper for H1/H2, quiche for H3 — decodes the request into a protocol-neutral
+form. Before anything is forwarded, the **security filters** run: request-smuggling
+checks, slowloris and slow-POST timeouts, and the flood/bomb detectors.
 
-Use ExpressGateway when you want a memory-safe Rust proxy with first-class
-HTTP/3 and QUIC, bounded-memory streaming, and an explicit, auditable security
-posture, and you are comfortable operating it from a single config file plus
-SIGHUP reload.
+The **router** then matches the request to a backend cluster, the **bridge**
+translates the neutral request into the backend's protocol (this is the 9-cell
+matrix in action — an H2 client can reach an H1 backend, an H1 client an H3
+backend, and so on), and the **balancer** picks a concrete backend. From there
+the gateway **pumps** the request and response bodies frame-by-frame, never
+holding a whole body in memory.
 
-## Key limitations to know up front
+The L4 plane is different in kind. When XDP is enabled, the kernel program looks
+each packet up in a connection-tracking table and, on a hit, rewrites and
+forwards it in-kernel — those packets never reach the userspace pipeline at all.
+A miss (or a kernel without XDP loaded) simply falls through to L7. The
+stage-by-stage walk-through, with the concurrency and panic-free model, is in the
+[architecture overview](../arch/overview.md).
 
-These are the constraints most likely to affect an evaluation. Each is bounded
-and documented; the canonical "why" lives in
-[`known-limitations.md`](../known-limitations.md) and the supported/gated/waived
-matrix in [`features.md`](../features.md). The consolidated view with
-"who-does-this-affect" framing is [`capabilities.md`](capabilities.md).
+## Use it when… / look elsewhere when…
 
-- **gRPC requires an HTTP/2 or HTTP/3 front.** An HTTP/1.1 front cannot deliver
-  `grpc-status` trailers on a streamed response (this matches nginx). Terminate
-  gRPC clients on an `h1s` (H2-via-ALPN) or `quic` (H3) listener.
-- **WebSocket over HTTP/2 (RFC 8441) is gated OFF by default.** A hyper H2
-  upgrade-path limitation (CF-S27-2) can buffer unbounded against a stalled
-  peer, so the feature ships off; run WS over H1 (default) or H3. Opt in only
-  behind a trusted client tier.
-- **The L4 XDP data plane is single-kernel and off by default.** The shipped
-  BPF ELF is validated against a specific kernel window (5.15 / 6.1 / 6.6 LTS,
-  plus live on 7.0); it is not built CO-RE-portable in this drive. With XDP
-  off (the default), L4 traffic goes through the kernel stack normally.
-- **No server-side mTLS** (intentional for an internet-facing proxy); upstream
-  certificate verification **is** enforced.
-- **Deferred performance tiers.** io_uring and XDP-offload throughput are **not
-  yet characterized**. The measured numbers come from one co-located 8-core box
-  (see [`PERFORMANCE.md`](PERFORMANCE.md)) — read the conditions before relying
-  on any figure.
+**ExpressGateway is a strong fit when you want:**
+
+- the full HTTP/1.1 ↔ HTTP/2 ↔ HTTP/3 matrix with hard memory bounds on every
+  cell;
+- QUIC you can **pass through without decrypting** (TLS end-to-end) or terminate
+  and re-originate;
+- a Rust data plane whose wire parsing is delegated to fuzzed libraries and whose
+  libraries cannot panic;
+- one binary, one config file, SIGHUP reload, and an explicit, auditable security
+  posture.
+
+**Look elsewhere — for now — when you need:**
+
+- a dynamic / xDS control plane or built-in service-discovery integrations;
+- a user-extensible filter / plugin / WASM ecosystem, or a WAF;
+- server-side mTLS, response compression, or hot binary restart by
+  socket-descriptor handover;
+- a proven hyperscale production track record.
+
+Most of those are deliberate, documented gaps rather than oversights — the
+[comparison](comparison.md) page weighs each one against the incumbents.
+
+## The marquee, briefly
+
+| Capability | In one line |
+|------------|-------------|
+| **9-cell HTTP matrix** | Front {H1, H2, H3} × back {H1, H2, H3}, streamed, bounded memory. |
+| **QUIC Mode A / Mode B** | Route by Connection ID without decrypting, or terminate and re-originate. |
+| **DoS-mitigation catalog** | Rapid-Reset, CONTINUATION/SETTINGS/PING flood, HPACK/QPACK bomb, smuggling, 0-RTT replay. |
+| **Panic-free libraries** | Crate-root deny lints + `panic = "abort"`, enforced in CI. |
+| **Optional L4 XDP plane** | In-kernel TCP/UDP fast path, off by default, single-kernel. |
+
+The complete, legend-coded view is in [capabilities.md](capabilities.md).
+
+## A few constraints to weigh first
+
+These are the ones most likely to affect an evaluation. Each links its canonical
+home rather than restating it here:
+
+- **Load balancing is round-robin in this build** (Maglev-by-Connection-ID for
+  QUIC passthrough). Ten further algorithms exist in the library but are **not
+  yet selectable from config** — [features.md](../features.md) "Load balancing".
+- **It is stateless**: scale horizontally by running N instances behind an L4/L3
+  load balancer; there is **no built-in clustering or failover** —
+  [deployment-patterns.md](deployment-patterns.md).
+- **Several capabilities are bounded or deferred**: health tracking is passive
+  and not yet wired into selection (active probing deferred), gRPC needs an H2/H3
+  front, WebSocket-over-H2 is gated off, the XDP plane is single-kernel and off
+  by default, and there is no server-side mTLS or response compression. Each is
+  explained in [known-limitations.md](../known-limitations.md).
+- **The performance numbers come from one co-located 8-core box** — read the
+  conditions before relying on any figure: [PERFORMANCE.md](PERFORMANCE.md).
+
+Wire parsing is delegated to mature, fuzzed libraries (hyper, quiche/BoringSSL,
+rustls, tungstenite), so the gateway's own hand-written parser surface is small;
+the security model and the security-audit verdict are in [`SECURITY.md`](../../SECURITY.md).
 
 ## Where to next
 
-| If you want to… | Go to |
-|-----------------|-------|
-| Build it and serve your first request | [`getting-started.md`](getting-started.md) |
-| See the full supported / gated / waived view | [`capabilities.md`](capabilities.md) + [`../features.md`](../features.md) |
-| Understand the bounded constraints in detail | [`../known-limitations.md`](../known-limitations.md) |
-| Compare it to envoy / traefik / HAProxy / nginx | [`comparison.md`](comparison.md) |
-| Read the measured performance baseline | [`PERFORMANCE.md`](PERFORMANCE.md) |
-| Configure every knob | [`CONFIG.md`](CONFIG.md) |
-| Deploy to production (systemd, capabilities, XDP) | [`DEPLOYMENT.md`](DEPLOYMENT.md) |
-| Operate it (alerts, drain, triage) | [`RUNBOOK.md`](RUNBOOK.md) |
-| Scrape metrics | [`METRICS.md`](METRICS.md) |
-| Review the security model | [`../../SECURITY.md`](../../SECURITY.md) |
-| Read the architecture / crate graph | [`../architecture.md`](../architecture.md), [`../arch/`](../arch/) |
+Ready to run it? The [getting-started guide](getting-started.md) takes you from
+zero to a served request — a container quickstart first, then a from-source
+build and an HTTPS/HTTP-2 walkthrough. From there, [CONFIG.md](CONFIG.md) is the
+knob-by-knob reference, and the pages linked above cover capabilities, the
+comparison, performance, and the internals.

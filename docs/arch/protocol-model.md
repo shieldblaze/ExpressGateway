@@ -37,6 +37,60 @@ same way. The bridge files are one per cell — `h1_to_h1.rs`, `h1_to_h2.rs`,
 streaming proxies (`h1_proxy.rs`, `h2_proxy.rs`) and the H3 relay
 (`crates/lb-quic/src/h3_bridge.rs`).
 
+```mermaid
+flowchart LR
+    subgraph FRONT["Front codec — decode"]
+        FH1["H1<br/>hyper"]
+        FH2["H2<br/>hyper · h2"]
+        FH3["H3<br/>quiche::h3"]
+    end
+    SR["StrippedRequest<br/>(protocol-neutral)<br/><br/>typed HeaderName / HeaderValue (H1 · H2)<br/>QPACK (H3) · MAX_HEADERS = 256<br/>hop-by-hop headers stripped"]
+    subgraph BACK["Back codec — encode"]
+        BH1["H1<br/>hyper"]
+        BH2["H2<br/>hyper · h2"]
+        BH3["H3<br/>quiche::h3"]
+    end
+    FH1 --> SR
+    FH2 --> SR
+    FH3 --> SR
+    SR --> BH1
+    SR --> BH2
+    SR --> BH3
+```
+
+*Nine cells, one pipeline: any of three front codecs decodes into the neutral
+`StrippedRequest`, which re-encodes to any of three back codecs (3 × 3 = 9).*
+
+Drawn as a single request's round trip, that same pipeline is a straight line —
+decode, translate, re-encode, and the response back the same way:
+
+```mermaid
+flowchart LR
+    C(Client)
+    U(Backend)
+    subgraph GW["Gateway — bridge (h?_to_h?)"]
+        direction TB
+        FD["front decode"]
+        SRq["StrippedRequest"]
+        BRq["bridge_request()<br/>strip hop-by-hop · retarget<br/>pseudo-headers · MAX_HEADERS"]
+        BE["back encode"]
+        BD["back decode"]
+        BRs["bridge_response()"]
+        FE["front encode"]
+        FD --> SRq --> BRq --> BE
+        BD --> BRs --> FE
+    end
+    C ==>|"request (streamed frame-by-frame)"| FD
+    BE ==>|"request"| U
+    U ==>|"response (streamed frame-by-frame)"| BD
+    FE ==>|"response"| C
+```
+
+*One request through the bridge: decode to the neutral representation, transform
+(`bridge_request`), re-encode for the backend; the response mirrors it
+(`bridge_response`). Bodies stream frame-by-frame — never whole-buffered (see
+[`backpressure.md`](backpressure.md)).*
+
 Properties that hold across all cells:
 
 - **Hop-by-hop headers are stripped** at the boundary (Connection, Keep-Alive,

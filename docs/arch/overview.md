@@ -5,14 +5,11 @@ is put together: the crate layout, the two independent data planes, the L7
 request path, the concurrency model, and the panic-free error posture. It is
 written for an engineer reading the code or reviewing a change.
 
-> **On `docs/architecture.md`.** The older
-> [`../architecture.md`](../architecture.md) is kept for ADR-level history and
-> still describes the layered shape correctly, but (per its own status note)
-> its crate-graph snapshot, LOC table, and per-crate test counts are dated and
-> *not* maintained, and its "simulation"/"simulator" framing **predates the
-> quiche migration and is wrong now**. Treat *this* page as the current
-> narrative. Where the two disagree on what is "real" vs "simulated", this page
-> wins.
+> **On `docs/architecture.md`.** That page is the canonical developer **crate
+> map** — the 18 crates by layer plus a crate-dependency graph; go there for the
+> crate-by-crate layout. *This* page is the architecture **narrative**: the two
+> data planes, the request lifecycle, the concurrency model, and the panic-free
+> posture.
 
 ## The one thing to understand first: parsing is delegated
 
@@ -81,16 +78,17 @@ The workspace members are listed in the root [`Cargo.toml`](../../Cargo.toml)
   (`dns.rs`).
 
 **Load balancing**
-- `lb-balancer` — eleven backend-selection algorithms (`round_robin`,
-  `weighted_round_robin`, `random`, `weighted_random`, `least_connections`,
-  `least_request`, `p2c`, `maglev`, `ring_hash`, `ewma`, `session_affinity`),
-  one file each under `crates/lb-balancer/src/`. All are implemented and
-  selectable. One caveat for evaluators: the latency-weighted **`ewma`** policy
-  reads a per-backend latency EWMA, but the request path does not yet record
-  per-request backend latency into the balancer state in this build (the
-  latency setter is exercised only in tests), so `ewma` currently scores on its
-  load/cold-start path rather than measured latency. The other ten select on
-  live connection/request counts and configured weights.
+- `lb-balancer` — the backend-selection library. **Round-robin** is the live
+  selection policy today (L7 HTTP via `RoundRobinUpstreams`, raw-TCP via
+  `lb_balancer::RoundRobin`); QUIC Mode-A passthrough additionally uses **Maglev**
+  hashing over the Connection ID (`passthrough.rs`). Ten further algorithms
+  (weighted round-robin, P2C, ring-hash, EWMA, least-connections, least-request,
+  random, weighted-random, session-affinity, and Maglev-for-L7) are implemented
+  here — one file each under `crates/lb-balancer/src/` — but are **not yet
+  selectable via configuration** (there is no policy key; the schema rejects
+  unknown keys), and EWMA's latency input is fed only in tests. See
+  [`../features.md`](../features.md) for the operator-facing load-balancing
+  status.
 
 **Configuration + control plane**
 - `lb-config` — the TOML schema + validation (`#[serde(deny_unknown_fields)]`)
@@ -106,9 +104,12 @@ The workspace members are listed in the root [`Cargo.toml`](../../Cargo.toml)
 - `lb-security` — the DoS-detector catalog (slowloris/slow-POST timeouts,
   request-smuggling CL.TE/TE.CL/H2-downgrade, 0-RTT replay guard, retry-token
   signer, ticket rotator). Protocol-specific flood/bomb detectors live next to
-  their codec (`lb-h2/src/security.rs`, `lb-h3/src/security.rs`).
-- `lb-health` — active health checks (rise/fall thresholds + a TTL result
-  cache).
+  their codec (`lb-h2/src/security.rs`, `lb-h3-testcodec/src/security.rs`).
+- `lb-health` — **passive** per-backend health-status tracking
+  (consecutive-success/failure state, default 3 successes → Healthy, 2 failures
+  → Unhealthy). In this build it is seeded but **not yet wired into backend
+  selection** (the balancer does not consult it); **active probing**
+  (interval/path/expected-status) is **deferred (REL-2-05)**.
 - `lb-observability` — the metrics registry (`DashMap<String, AtomicU64>`),
   Prometheus exposition, and tracing init.
 - `lb-core` — foundation types (`Backend`, `Cluster`, `LbPolicy`, `Shutdown`).
@@ -163,7 +164,53 @@ never depends on XDP being loaded.
 
 ## The L7 request path
 
-A stylized single-connection walk-through (one worker task):
+The sequence below is the whole path at a glance — a stylized single-connection
+walk-through (one worker task, TLS listener). The request streams *down* the
+participants and the response streams *back* frame-by-frame under a bounded
+in-flight window. The numbered notes that follow zoom in on each stage.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor C as Client
+    participant L as Listener<br/>(accept loop)
+    participant T as TLS<br/>(rustls · BoringSSL)
+    participant K as Codec<br/>(hyper · quiche::h3)
+    participant F as Security<br/>filters
+    participant R as Router
+    participant B as Bridge<br/>(h?_to_h?)
+    participant LB as Balancer<br/>(round-robin)
+    participant P as Pool<br/>(lb-io)
+    actor U as Backend
+
+    C->>L: TCP connect / QUIC Initial
+    L->>T: handshake
+    T-->>K: probe selects front codec (h2 · http/1.1 · h3)
+    C->>K: request head (+ frames)
+    K->>F: decoded head (already parsed)
+    Note over F: smuggling · slowloris · slow-POST · flood/bomb · 0-RTT replay
+    F->>R: admit
+    R->>B: destination cluster
+    B->>LB: need a backend
+    LB-->>B: round-robin pick
+    B->>P: lease upstream connection
+    P-->>B: pooled / fresh conn
+    B->>U: re-encoded request head
+    loop request body — frame-by-frame, bounded window
+        C->>K: body chunk
+        K->>U: forward (read-pause when window full)
+    end
+    U-->>B: response head (+ trailers)
+    loop response body — frame-by-frame, bounded window
+        U-->>B: body chunk
+        B-->>C: forward (read-pause when window full)
+    end
+```
+
+*Life of a request on the L7 terminate path. Parsing is delegated to the codec;
+everything above it (filters, routing, bridging, balancing, streaming) is this
+project's own code. The bounded window is detailed in
+[`backpressure.md`](backpressure.md).*
 
 1. **Accept** — a per-listener accept loop accepts a TCP connection (H1/H2) or
    reads a QUIC datagram (H3).
@@ -180,8 +227,9 @@ A stylized single-connection walk-through (one worker task):
 7. **Bridge** — `lb_l7::h{1,2,3}_to_h{1,2,3}` translates the request into the
    backend protocol (the protocol-neutral pipeline; see
    [`protocol-model.md`](protocol-model.md)).
-8. **Balancer** — one of the eleven algorithms picks a backend; the upstream
-   pool (`lb-io`) supplies a connection.
+8. **Balancer** — round-robin picks a backend (the live selection policy; see
+   [`../features.md`](../features.md)); the upstream pool (`lb-io`) supplies a
+   connection.
 9. **Pump** — the request body is streamed upstream and the response body
    streamed back **frame-by-frame**, with no whole-body buffering. The bounded
    in-flight model is in [`backpressure.md`](backpressure.md).

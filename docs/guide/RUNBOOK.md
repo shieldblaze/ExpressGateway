@@ -259,8 +259,8 @@ a short `rotation_interval`, wait one cycle, restore to daily.
 ## Reading logs
 
 Default log level is `info`. Override at startup via
-`Environment=RUST_LOG=debug` in the unit file. The default formatter
-is plain text; JSON exporter is REL-2-06 follow-up.
+`Environment=RUST_LOG=debug` in the unit file. Log output defaults to
+**JSON**; set `LB_LOG_FORMAT=text` (or `plain`) for human-readable text.
 
 Useful filters:
 

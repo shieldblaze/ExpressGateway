@@ -3,16 +3,6 @@
 Developer-facing documentation: internals, design decisions, and the
 reference-system research that informed them.
 
-> **Why some docs live one level up (`docs/…`) and not under `docs/arch/`.**
-> Several developer references are cited **by path from production source,
-> tests, config, and `manifest/required-artifacts.txt`** (e.g.
-> `crates/lb-config/src/lib.rs` → `docs/edge-defaults.md`,
-> `crates/lb-quic/src/lib.rs` → `docs/decisions/quinn-to-quiche-migration.md`).
-> The S40 hygiene pass keeps them at their established paths so production
-> source is **not** touched (the session's hard constraint). This index gives
-> the clean developer-doc structure without moving the path-coupled files;
-> a future session that is willing to touch source comments may consolidate them.
-
 ## Start here — the technical narrative
 
 | Doc | What it covers |
@@ -27,7 +17,8 @@ reference-system research that informed them.
 
 | Doc | What it covers |
 |-----|----------------|
-| [`../architecture.md`](../architecture.md) | Original crate-graph / data-plane reference (historical; see [overview.md](overview.md) for the current picture). |
+| [`../architecture.md`](../architecture.md) | The workspace **crate map** + crate-dependency diagram (the contributor's map of the 18 crates). |
+| [`extending.md`](extending.md) | **How to extend the gateway** — the contributor how-to (adding a protocol path, a balancer policy, a security filter, or a config knob). |
 | [`../features.md`](../features.md) | The 9-cell front×back protocol matrix; supported / gated / waived. |
 | [`../known-limitations.md`](../known-limitations.md) | Bounded, documented constraints (WS-H2 gating, gRPC-front requirement, named waivers). |
 | [`../edge-defaults.md`](../edge-defaults.md) | The edge-default constant table (cross-referenced by `crates/lb-l7` + tests). |
@@ -58,3 +49,14 @@ gate outputs, conformance/soak/perf data, security findings). It is **kept
 wholesale** — `scripts/ci/doc-lint.sh` tier-2 (audit-of-audit) walks the
 `audit/**/round-*-review.md` Verified-Fixed claims, and `audit/coverage-scope.md`
 is the coverage charter. Do not relocate files out of `audit/`.
+
+## Note — why some references live in `docs/`, not `docs/arch/`
+
+> Several developer references are cited **by path from production source,
+> tests, config, and `manifest/required-artifacts.txt`** (e.g.
+> `crates/lb-config/src/lib.rs` → `docs/edge-defaults.md`,
+> `crates/lb-quic/src/lib.rs` → `docs/decisions/quinn-to-quiche-migration.md`).
+> The S40 hygiene pass keeps them at their established paths so production
+> source is **not** touched. This index gives the clean developer-doc structure
+> without moving the path-coupled files; a future session that is willing to
+> touch source comments may consolidate them.
