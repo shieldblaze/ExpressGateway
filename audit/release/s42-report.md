@@ -1,10 +1,13 @@
 # S42 — Public + Developer Docs: Depth/Structure Revision (Session B2)
 
 **Branch:** `feature/docs-revision-s42` · **Base:** `main` @ `ffac8705` ·
-**Phase 1+2 commit:** `05ebfe5d` · **Production source changed:** NONE (docs,
-diagrams, config comments only). **Status:** all gates green (3 personas PASS,
-fact-check 0 blockers, doc-lint OK, 415 links resolve) — promoting to main via `--no-ff`;
-post-merge CI confirmed below.
+**Phase 1+2 commit:** `05ebfe5d` · **Remediation:** `ff3a8858` · **Promoted:** `677dae0e`
+(`--no-ff` merge to main). **Production source changed:** NONE (docs, diagrams, config
+comments only). **Status:** SESSION COMPLETE — docs promoted, release-grade (3 personas
+PASS, fact-check 0 blockers, doc-lint OK, 415 links resolve). Post-merge CI is **14/16
+green**; the 2 reds (Security Audit advisory + a Coverage boundary flicker) are
+**pre-existing / external, not docs-caused**, and tracked as carry-forward (§8a, §11) per
+the owner's "keep docs, fix the reds in their proper session" decision.
 
 This session took the S41 public docs — diagnosed as *correct but hollow* (depth +
 structure problem, `audit/release/doc-analysis.md`) — to release-grade, with three
@@ -92,15 +95,33 @@ glossary.md (~30 terms — the differentiator).
 
 ## 8. Validation
 - **doc-lint**: PASS (tier-1 + tier-2, 52 claims). New pages added to FILES[].
-- **Links**: 407 internal .md links resolve; `features.md#load-balancing` anchor present.
-- **Diagrams**: 10 mermaid blocks, balanced fences + valid types.
-- **Configs**: task-pages validated all cookbook/example configs via a lb-config-only
-  harness (parse_config + validate_config, BoringSSL-free) — 9/9 OK incl. dual-:443 and
-  quic-with-backends. _<fact-check re-confirmation PENDING>_
+- **Links**: 415 internal .md links resolve; `features.md#load-balancing` anchor present.
+- **Diagrams**: 11 mermaid blocks, balanced fences + valid types (all 11 verified vs code by
+  the fact-checker).
+- **Configs**: validated all cookbook/example/quickstart configs via a lb-config-only
+  harness (parse_config + validate_config, BoringSSL-free) — re-confirmed by the fact-checker
+  (incl. dual-:443 and quic-with-backends).
 - **Container quickstart**: static + CI-backed (owner-approved) — mirrors the
   `docker-smoke` CI gate which builds+boots+serves the image every run (no docker on the
-  writing box).
+  writing box); the post-merge **Container Image** CI job passed.
 - **Git scope**: only docs/ + config/ + README + scripts/ci/doc-lint.sh; NO crates/ (R1).
+
+### 8a. Post-merge CI (run 28334977156) — 14/16 green; 2 pre-existing reds (carry-forward)
+The pre-merge main tip (`ffac8705`) was fully green (run 27379018511); this merge touched
+**zero `crates/` / `Cargo.*`** files, so neither red is docs-caused or docs-fixable (R1).
+**Green (14):** Clippy · Check · Test · MSRV · Panic-Freedom · Conformance (h2spec+h3spec) ·
+Format · Chaos · Fuzz-Smoke · Container Image (build+serve+trivy) · Doc-Lint · cargo-deny ·
+XDP-Verifier · Release-Build.
+**Red (2), both external/pre-existing:**
+- **Security Audit** — `cargo audit -D warnings` trips **RUSTSEC-2026-0185** (high, 7.5; fix:
+  upgrade affected crate to ≥0.11.15), a newly-published advisory fetched fresh from the
+  RustSec DB against the unchanged Cargo.lock. Will not clear without a dependency bump
+  → **deps session** (production-source change, out of R1 scope).
+- **Coverage (per-module hot-path ≥80%)** — the coverage step passed; the threshold step
+  failed on `lb-l7/src/h2_proxy.rs` measuring **79.6–79.7%** (two runs) vs the 80% floor, on
+  **unchanged code+tests** (ffac8705 passed by boundary luck). → **code session**: add a real
+  h2_proxy.rs test (honest fix) or a consciously-considered waiver — *not* slipped into a docs
+  merge. Owner decision: keep the docs; fix both reds in their proper session.
 
 ## 9. Persona-review gate (the quality gate) — ALL 3 PASS
 Each reviewer walked their journey read-only against the committed docs (05ebfe5d) and
@@ -154,6 +175,11 @@ The fact-checker re-derived every claim FROM CODE (not docs). Verdict: **zero bl
   crate-dep graph adds the `lb-quic⇢lb-grpc` dev edge; SIGTERM-drain qualifier footnote.
 
 ## 11. Carry-forward (owner action items)
+- **[CI red, do soon] Security Audit — RUSTSEC-2026-0185** (high; fix: upgrade affected crate
+  to ≥0.11.15). New advisory on the unchanged Cargo.lock; reds main on any commit. → deps session.
+- **[CI red, do soon] Coverage — `lb-l7/src/h2_proxy.rs` at 79.6–79.7%** vs the 80% charter
+  floor (unchanged code; ffac8705 passed by boundary luck). → code session: add a real test
+  (honest fix) or a consciously-considered named waiver — not in a docs merge.
 - Optional 1-line code fixes the docs now document as deferred: wire `weight` → a weighted
   picker; wire `header_underscore_policy` drop/allow; wire passive health into selection;
   add a policy config key to expose the 10 library algorithms; active-health probe loop
@@ -182,8 +208,12 @@ glossary + a developer/contributor track added, all 3 personas PASS, research-be
 fact-check 0 blockers — PROMOTED to main (`--no-ff`).** The docs are release-grade for all
 audiences (evaluator / operator / SRE / DevOps / contributor).
 
-Not a partial: every targeted section reached release-grade. §11 carry-forward is owner
-action items (optional code fixes the docs now honestly document as deferred), not
+Not a partial on the documentation: every targeted section reached release-grade. The one
+honest asterisk is the **post-merge CI status — 14/16 green, 2 pre-existing/external reds**
+(Security Audit advisory + a Coverage boundary flicker, §8a) that are neither docs-caused nor
+docs-fixable under R1 and are tracked as carry-forward (§11) per the owner's decision to keep
+the docs and fix the reds in their proper sessions. §11 carry-forward is owner action items
+(those 2 CI reds + optional code fixes the docs now honestly document as deferred), not
 unfinished documentation work.
 
 Handoff → production pilot; owner action items in §11 (the deferred-feature wiring, the
