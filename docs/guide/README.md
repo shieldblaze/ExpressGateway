@@ -14,6 +14,15 @@ drop into the reference docs.
 | [comparison.md](comparison.md) | Factual positioning vs Envoy / Traefik / HAProxy / nginx, with honest tradeoffs. |
 | [PERFORMANCE.md](PERFORMANCE.md) | The S39 measured performance baseline, with its conditions and caveats. |
 
+## Tasks & recipes
+
+| Doc | What it covers |
+|-----|----------------|
+| [cookbook.md](cookbook.md) | Complete, annotated configs for named scenarios — production HTTPS + HTTP/2, terminating gRPC, rolling out HTTP/3 via `alt_svc`, DoS hardening, QUIC Mode A — plus a combined-config capstone. |
+| [troubleshooting.md](troubleshooting.md) | First-run FAQ + symptom-indexed fixes: config rejected, won't boot, 502-to-everything, gRPC status missing, WebSocket on H2, cert reload, XDP attach. |
+| [deployment-patterns.md](deployment-patterns.md) | Topology & scaling: stateless horizontal scale-out behind an external L4/L3 LB, `SO_REUSEPORT` handover, single-node / k8s patterns — and the HA it does **not** provide. |
+| [observability.md](observability.md) | What to actually monitor: golden signals, what healthy looks like, a starter Prometheus scrape + alert set. |
+
 ## Configuration & operation (reference)
 
 | Doc | What it covers |
@@ -27,9 +36,11 @@ drop into the reference docs.
 
 - [`../../SECURITY.md`](../../SECURITY.md) — threat model, defenses, audit posture, disclosure policy.
 - [`../../CHANGELOG.md`](../../CHANGELOG.md) — release-notes-format changelog.
-- [`../features.md`](../features.md) — the front×back protocol matrix (supported / gated / waived).
-- [`../known-limitations.md`](../known-limitations.md) — bounded, documented operator-facing constraints.
-- [`../arch/`](../arch/) — developer/architecture documentation.
+- [`../features.md`](../features.md) — the front×back protocol matrix + load-balancing reality (supported / gated / waived / deferred).
+- [`../known-limitations.md`](../known-limitations.md) — bounded, documented operator-facing constraints (with who-it-affects).
+- [`../glossary.md`](../glossary.md) — definitions of the terms used across these docs (Mode A/B, 9-cell, CID, Maglev, …).
+- [`../architecture.md`](../architecture.md) — the developer crate map + crate-dependency graph.
+- [`../arch/`](../arch/) — developer/architecture documentation (incl. [`extending.md`](../arch/extending.md) — how to extend the codebase).
 
 ## Contributing
 

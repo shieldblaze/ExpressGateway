@@ -9,23 +9,16 @@ enforcement, the S38 audit verdict, and the conformance gates.
 
 ## The core strategy: delegate parsing to fuzzed libraries
 
-Defense-in-depth here starts with **not writing the wire parsers**. The bytes on
-the wire are decoded by mature, independently-fuzzed upstreams:
-
-- **hyper / h2** — HTTP/1.1 + HTTP/2 (+ HPACK).
-- **quiche** (BoringSSL) — HTTP/3 + QUIC (+ QPACK).
-- **rustls** (ring) — TLS over TCP.
-- **tungstenite** — WebSocket framing.
-
-Their codecs are the same ones running at large scale elsewhere, with their own
-continuous fuzzing. ExpressGateway's surface above them — bridging, routing,
-balancing, the security *filters* (which inspect *already-parsed* headers) — is
-where this project's own correctness work concentrates.
-
-The `lb-h1` / `lb-h2` / `lb-h3-testcodec` crates are **test codecs +
-security-detector types**, not live wire parsers. Do not read their presence as
-a second, hand-rolled HTTP stack (see
-[`overview.md`](overview.md#the-one-thing-to-understand-first-parsing-is-delegated)).
+Defense-in-depth starts with **not writing the wire parsers** — HTTP/1.1 + HTTP/2
+on hyper/h2, HTTP/3 + QUIC on quiche (BoringSSL), TLS on rustls, WebSocket
+framing on tungstenite. The full delegation map (and why the `lb-h1` / `lb-h2` /
+`lb-h3-testcodec` crates are **not** a second, hand-rolled HTTP stack) is
+documented once in
+[`overview.md`](overview.md#the-one-thing-to-understand-first-parsing-is-delegated).
+What this page covers is the surface ExpressGateway *does* own above those
+codecs: the one hand-rolled parser and its fuzzing, panic-freedom, and the
+conformance gates. Note that the security *filters* inspect *already-parsed*
+headers — they are not parsers.
 
 ## The one hand-rolled production parser
 
@@ -54,25 +47,16 @@ hardware.)
 
 ## Panic-freedom is structural
 
-A panic in a release build aborts (the process is `panic = "abort"`), so an
-*unhandled* panic is a hard outage — which is exactly why panics are forbidden by
-construction rather than caught:
-
-- Every `crates/*/src/lib.rs` carries
-  `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic,
-  clippy::indexing_slicing, clippy::todo, clippy::unimplemented,
-  clippy::unreachable, missing_docs)]`. The `#[cfg(test)]` block re-allows the
-  test-only subset; `lb-quic` keeps `indexing_slicing` denied even in tests.
-- `[profile.release]` sets `panic = "abort"` (root `Cargo.toml`) so a panic
-  can't unwind across an `unsafe` block into a half-restored invariant.
-- The binary installs a process-wide panic hook (`init_panic_hook`,
-  `crates/lb/src/main.rs`) that logs, bumps `panic_total`, then aborts — so a
-  panic that does slip through is observable, not silent.
-- CI enforces all of the above (a panic-freedom job + a halting-gate `awk`
-  grep); a new `unwrap`/`expect`/`panic`/indexing on a library path turns CI red.
-
-Rationale and history:
-[`../decisions/ADR-0010-panic-free-enforcement.md`](../decisions/ADR-0010-panic-free-enforcement.md).
+A panic in a release build aborts (`panic = "abort"`), so an *unhandled* panic is
+a hard outage. Panics are therefore forbidden **by construction** — every library
+crate `#![deny]`s `unwrap`/`expect`/`panic`/indexing (with `lb-quic` keeping
+`indexing_slicing` denied even in tests), the binary installs an aborting panic
+hook (`init_panic_hook`), and CI turns red on any new offender. The full
+mechanism and rationale live in
+[`overview.md`](overview.md#error--panic-free-model) and
+[`ADR-0010`](../decisions/ADR-0010-panic-free-enforcement.md). The security
+consequence is the point here: there is **no wire-reachable panic** an attacker
+can turn into a crash, and the S38 audit (below) found none.
 
 ## The S38 audit verdict
 

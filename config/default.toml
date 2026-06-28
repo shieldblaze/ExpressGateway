@@ -22,11 +22,11 @@ protocol = "tcp"
 
 [[listeners.backends]]
 address = "127.0.0.1:3000"
-weight = 1
+weight = 1  # accepted but not yet enforced (round-robin ignores weight in this build)
 
 [[listeners.backends]]
 address = "127.0.0.1:3001"
-weight = 1
+weight = 1  # accepted but not yet enforced (round-robin ignores weight in this build)
 
 # ---------------------------------------------------------------------
 # Runtime defaults (commented — apply automatically when [runtime] is
@@ -68,6 +68,9 @@ weight = 1
 # #   "reject" — return 400 Bad Request (default).
 # #   "drop"   — silently strip the header before forwarding.
 # #   "allow"  — pass through verbatim. Set only if you know why.
+# # NOTE: in this build only "reject" is ENFORCED. "drop"/"allow" parse and
+# # validate but are not yet applied by the proxies (the proxy keeps its
+# # compile-time "reject" default). See docs/guide/CONFIG.md.
 # header_underscore_policy = "reject"
 
 # ---------------------------------------------------------------------

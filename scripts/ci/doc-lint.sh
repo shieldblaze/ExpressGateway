@@ -52,6 +52,12 @@ FILES=(
     "docs/guide/comparison.md"
     "docs/guide/PERFORMANCE.md"
     "CONTRIBUTING.md"
+    # S42: task-oriented operator pages + glossary (depth/structure revision).
+    "docs/guide/cookbook.md"
+    "docs/guide/troubleshooting.md"
+    "docs/guide/deployment-patterns.md"
+    "docs/guide/observability.md"
+    "docs/glossary.md"
 )
 
 # Patterns that MUST NOT appear in any of the above files. Each row is

@@ -22,6 +22,20 @@ parsed clean and the operator's override was silently ignored. If the
 gateway rejects a key you expect, check the spelling and the block it
 belongs under.
 
+### Validating a config (there is no dry-run flag)
+
+There is **no dedicated `--check` / dry-run flag** today. The binary validates
+the *whole* config at boot — parse (`deny_unknown_fields`) then
+`validate_config` — and **exits non-zero without starting any listener** on the
+first parse or validation error (fail-fast; see "Invalid-config behavior"
+below). So a CI "does this config parse?" check means **booting the binary
+against it**, which has side effects: it binds the configured listener ports
+and, for a `quic` / `[passthrough]` config, mints the QUIC retry-secret file
+(mode 0600) if it is absent. Run such a check against a throwaway config (free
+ports, a temp `retry_secret_path`) or in a sandbox, and stop the process once
+it logs its listener lines. A validate-only mode that parses and validates
+without binding is a deferred enhancement.
+
 ## Foot-gun knobs (`0` / `false` = disable a defense)
 
 A handful of knobs accept a sentinel value that **turns off a protection**.
@@ -64,8 +78,11 @@ weight = 1
 ```
 
 This produces a single plain-TCP listener on port 8080 that load-balances
-round-robin across two backends. At least one `[[listeners]]` **or** a
-top-level `[passthrough]` block is required.
+round-robin across the two backends. (`weight` is shown here for
+completeness but is **not yet enforced** — the live picker is round-robin
+regardless of weight; see the `[[listeners.backends]]` table below.) At
+least one `[[listeners]]` **or** a top-level `[passthrough]` block is
+required.
 
 ## Worked examples (`config/examples/`)
 
@@ -125,7 +142,7 @@ that is the upstream wire protocol, a different axis.)
 | `grpc` | `[listeners.grpc]` | absent | gRPC capability. Requires `protocol = "h1s"`. |
 | `drain_timeout_ms` | `Option<u64>` (`100..=300000`) | inherit `[runtime].drain_timeout_ms` | OPS-10: per-listener graceful-drain budget. |
 | `drain_jitter_ms` | `Option<u64>` (`0..=` effective `drain_timeout_ms`) | inherit derived `[runtime]` jitter | OPS-02: per-listener drain-cancel jitter ceiling. `0` disables jitter. |
-| `backends` | `[[listeners.backends]]` array | `[]` | Backend pool. A non-QUIC listener with an empty pool logs a warning and is skipped. For a `quic` H3-terminate listener the binary forwards to backends only through the library/e2e path (see `config/examples`). |
+| `backends` | `[[listeners.backends]]` array | `[]` | Backend pool. A non-QUIC listener with an empty pool logs a warning and is skipped. For a `quic` H3-terminate listener the binary forwards to the **first** backend in the pool (H3-terminate is not load-balanced across multiple backends — see [Load balancing](../features.md#load-balancing)). |
 
 ### `[[listeners.backends]]`
 
@@ -133,7 +150,7 @@ that is the upstream wire protocol, a different axis.)
 |-----|------|---------|-------------|
 | `address` | `String` (socketaddr or `host:port`) | required | Resolved via `lb_io::DnsResolver` at startup. Must be non-empty. |
 | `protocol` | `String` (`tcp`/`h1`/`h2`/`h3`) | `"tcp"` | Upstream wire protocol. `tcp`/`h1` → HTTP/1.1 (or raw); `h2` → HTTP/2 over TCP+TLS (ALPN); `h3` → HTTP/3 over QUIC. |
-| `weight` | `u32` | `1` | Relative weight for round-robin selection. |
+| `weight` | `u32` | `1` | **Accepted but not yet enforced** — the live picker is round-robin and ignores `weight` in this build (weighted selection is implemented in the `lb-balancer` library but not wired). See [Load balancing](../features.md#load-balancing). |
 | `tls_ca_path` | `Option<String>` | absent | PEM CA bundle to verify an `h3` backend. Required for `h3` unless `tls_verify_peer = false`. Rejected on non-`h3` backends. |
 | `tls_verify_hostname` | `Option<String>` | host of `address` | SNI override for `h3` backend verification. Rejected on non-`h3` backends. |
 | `tls_verify_peer` | `bool` | `true` | Set `false` to disable `h3` backend cert verification (**NOT RECOMMENDED**). Rejected on non-`h3` backends. |
@@ -235,7 +252,7 @@ block **is** parsed and acted on.)
 | `max_inflight_connections` | `u32` | `100..=2000000` | `65536` | Per-listener inflight cap (semaphore). |
 | `connect_timeout_ms` | `u64` | `100..=60000` | `5000` | Upstream dial timeout. |
 | `per_ip_connection_cap` | `u32` | `1..=2000000` | `1024` | Per-source-IP concurrent-connection cap. |
-| `header_underscore_policy` | `"reject"\|"drop"\|"allow"` | — | `"reject"` | `_` in inbound header names. |
+| `header_underscore_policy` | `"reject"\|"drop"\|"allow"` | — | `"reject"` | Handling of `_` in inbound header names. **Only the default `reject` is enforced in this build**; `drop`/`allow` parse and validate but are not yet applied by the proxies (the proxy keeps its compile-time `reject` default). |
 | `max_keepalive_requests` | `u32` | `0` (disable) or `1..=10000000` | `100` | H1/H2 requests per keep-alive connection before proactive close. **S37-B** added the range check (was unvalidated). |
 | `max_requests_per_h3_connection` | `u32` | `0` (disable) or `1..=10000000` | `1000` | H3 requests per connection before GOAWAY + recycle (S36-A; bounds quiche `StreamMap::collected`). `0` re-opens the leak/DoS vector — trusted listeners only. **S37-B** added the range check. |
 | `xdp_new_flow_cap_per_sec_per_cpu` | `u32` | `0` (disable) or `1000..=10000000` | `125000` | Per-CPU new-flow rate cap (Katran parity). |

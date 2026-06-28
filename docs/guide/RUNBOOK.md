@@ -259,8 +259,8 @@ a short `rotation_interval`, wait one cycle, restore to daily.
 ## Reading logs
 
 Default log level is `info`. Override at startup via
-`Environment=RUST_LOG=debug` in the unit file. The default formatter
-is plain text; JSON exporter is REL-2-06 follow-up.
+`Environment=RUST_LOG=debug` in the unit file. Log output defaults to
+**JSON**; set `LB_LOG_FORMAT=text` (or `plain`) for human-readable text.
 
 Useful filters:
 
@@ -372,7 +372,9 @@ almost always an under-budget drain for that workload.
 
 **Trigger**: `accept_inflight / max_inflight > 0.8 for 2m`
 **Severity**: warn
-**Wired**: pending (REL-2-09).
+**Wired**: yes — `accept_inflight{listener}` is emitted (REL-2-09); compare it
+against the configured `max_inflight_connections` (the denominator is config,
+not a metric).
 **Diagnose**:
 1. Identify the saturated listener via the `listener` label.
 2. `lsof -p $(pidof expressgateway) | wc -l` vs `LimitNOFILE` —
@@ -385,7 +387,7 @@ almost always an under-budget drain for that workload.
 
 **Trigger**: `rate(accept_errors_total[1m]) > 10`
 **Severity**: page (EMFILE risk)
-**Wired**: pending (REL-2-10).
+**Wired**: yes (`accept_errors_total{listener,kind}`; REL-2-10).
 **Kinds** (`accept_errors_total{listener, kind}`): `emfile`, `enfile`,
 `eintr`, `econnaborted`, `eagain`, `other`.
 **Diagnose**:
@@ -401,8 +403,8 @@ almost always an under-budget drain for that workload.
 
 **Trigger**: `rate(accept_shed_total[5m]) > 0`
 **Severity**: warn
-**Wired**: pending (REL-2-09 partner). Counter increments when the
-listener inflight cap rejects an accept.
+**Wired**: yes (`accept_shed_total{listener}`; REL-2-09 partner). Counter
+increments when the listener inflight cap rejects an accept.
 **Diagnose**: pair with `LbAcceptSaturation` above; same triage.
 
 ### LbXdpConntrackFull — XDP flow-table at cap
@@ -465,9 +467,11 @@ ELF was rebuilt without updating the loader's map names.
 **Wired**: yes (per-connection histogram; per-request latency hook is
 the lb-l7 follow-up in `METRICS.md`).
 **Diagnose**:
-1. Identify the slow listener / version.
-2. `backend_request_duration_seconds` per backend tells you whether
-   the latency is local or upstream.
+1. Identify the slow listener / version from the emitted
+   `http_request_duration_seconds` (labelled `listener`, `version`).
+2. Split gateway-local vs upstream latency: the per-backend
+   `backend_request_duration_seconds` is pending (not yet emitted), so today
+   use the backend's own latency metrics/logs alongside the gateway figure.
 3. `pool_acquires_total` vs `pool_probe_failures_total` — pool churn
    adds connect-time per request.
 
@@ -476,8 +480,10 @@ the lb-l7 follow-up in `METRICS.md`).
 **Trigger**: `sum by (listener) (rate(http_requests_total{status_class="5xx"}[5m])) / sum by (listener) (rate(http_requests_total[5m])) > 0.05`
 **Severity**: warn
 **Wired**: yes.
-**Diagnose**: pair with `backend_requests_total{status_class="5xx"}`
-to attribute to specific upstreams.
+**Diagnose**: today, attribute the 5xx with the emitted frontend
+`http_requests_total{listener,status_class="5xx"}` (per listener) plus the
+backend logs. Per-backend attribution via `backend_requests_total{backend,
+status_class="5xx"}` is pending (not yet emitted).
 
 ### LbDnsCacheMiss — DNS cache thrashing
 
@@ -506,7 +512,9 @@ half-closing idle connections faster than `idle_timeout`.
 
 **Trigger**: `connections_inflight > 0.9 * <local-listener-cap>`
 **Severity**: warn
-**Wired**: yes (label_budget canonical family).
+**Wired**: pending (reserved in `label_budget`; not yet emitted). Until it
+lands, use `accept_inflight` (emitted) as the live saturation signal — see
+`LbAcceptSaturation`.
 **Diagnose**: paired with `LbAcceptSaturation`; same triage.
 
 ## XDP diagnosis
@@ -658,8 +666,8 @@ journalctl -u expressgateway -r | head -20    # most recent startup
 | `LbXdpAttachMode`           | `ip link show dev <iface>`                                      |
 | `LbXdpSamplerErrors`        | `journalctl -u expressgateway -g 'xdp sampler'`                 |
 | `LbCertRotationFailed`      | `journalctl -u expressgateway -g 'rotation'`                    |
-| `LbReqDuration`             | `curl 127.0.0.1:9090/metrics \| grep backend_request_duration`  |
+| `LbReqDuration`             | `curl 127.0.0.1:9090/metrics \| grep http_request_duration_seconds` |
 | `LbReq5xx`                  | `curl 127.0.0.1:9090/metrics \| grep '_total{.*5xx'`            |
 | `LbDnsCacheMiss`            | `curl 127.0.0.1:9090/metrics \| grep dns_cache`                 |
 | `LbPoolProbeFailures`       | `curl 127.0.0.1:9090/metrics \| grep pool_`                     |
-| `LbConnectionsInflight`     | `curl 127.0.0.1:9090/metrics \| grep connections_inflight`      |
+| `LbConnectionsInflight`     | `curl 127.0.0.1:9090/metrics \| grep accept_inflight` (connections_inflight pending) |

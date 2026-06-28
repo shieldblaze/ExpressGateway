@@ -25,4 +25,4 @@ read_frame_timeout_seconds = 30
 [[listeners.backends]]
 address  = "127.0.0.1:3000"
 protocol = "h1"
-weight   = 1
+weight   = 1  # accepted but not yet enforced (round-robin ignores weight in this build)

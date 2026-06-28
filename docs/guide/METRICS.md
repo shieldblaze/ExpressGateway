@@ -51,8 +51,8 @@ Loopback-only is the expected posture; there is no built-in mTLS yet. The listen
 | `pool_idle_gauge` | Gauge | — | Sampled once per second via the background sampler (`TcpPool::idle_count`). |
 | `dns_cache_entries` | Gauge | — | Same sampler (`DnsResolver::cache_size`). |
 | `dns_cache_hits_total` / `dns_cache_misses_total` | Counter | — | `spawn_tcp` compares `cache_size` before/after `DnsResolver::resolve` to infer hit vs. miss for each backend entry at startup/reload. |
-| `http_requests_total` | CounterVec | `version` (h1, h2) × `status_class` (2xx, 5xx) | Per-connection at the L7 dispatch site inside `run_listener`. |
-| `http_request_duration_seconds` | HistogramVec | `version` | Observed from accept to `serve_connection` return. |
+| `http_requests_total` | CounterVec | `listener`, `route`, `version`, `status_class` | Per-connection at the L7 dispatch site inside `run_listener` (`listener` = bind address; `route` is emitted empty today). |
+| `http_request_duration_seconds` | HistogramVec | `listener`, `route`, `version` | Observed from accept to `serve_connection` return. |
 
 These are intentionally a small set — per-request HTTP telemetry will land when lb-l7 grows a stats hook. The remaining `❌` rows below stay deferred.
 
@@ -72,8 +72,8 @@ The spec lists 30+ metrics across five families. Status summary (present = name 
 
 | Metric | Present | Ready | Notes |
 |--------|:-------:|:-----:|-------|
-| `http_requests_total{version,status_class}` | partial | ✅ | Wired per-connection in `run_listener`; per-request granularity requires a lb-l7 hook. |
-| `http_request_duration_seconds{version}` | partial | ✅ | Histogram observed from accept to `serve_connection` return (connection scope). |
+| `http_requests_total{listener,route,version,status_class}` | partial | ✅ | Wired per-connection in `run_listener`; per-request granularity requires a lb-l7 hook. |
+| `http_request_duration_seconds{listener,route,version}` | partial | ✅ | Histogram observed from accept to `serve_connection` return (connection scope). |
 | `http2.streams.active` | ❌ | ❌ | Requires live H2 state machine. |
 | `http2.settings.rejected` | ❌ | ❌ | `SettingsFloodDetector` exists but is not yet invoked. |
 | `http3.qpack.decoder_stream_bytes` | ❌ | ❌ | Requires live H3 session. |
@@ -115,7 +115,7 @@ Shipped in Task #21. See the "Present-day surface" section above for the concret
 - XDP counters (`xdp.packets.forwarded/dropped`, `xdp.conntrack.entries`) — blocked on Pillar 4b userspace BPF map pull.
 - mTLS-protected admin listener; push-gateway support; OTLP export.
 
-Cardinality bound for today's label set: `http_requests_total{version,status_class}` has at most `2 versions × 2 status classes = 4` series. Keep listener-scoped labels OFF request-rate metrics if the deployment hosts thousands of listeners.
+Cardinality bound: `http_requests_total{listener,route,version,status_class}` is governed by the closed-set REL-2-08 label budget (see the canonical table below). The startup `LabelBudget` check refuses to boot if the configured shape would exceed `[observability].max_label_cardinality` (default 10 000 series). `route` is emitted empty today, so the effective cardinality is `listeners × versions × status_classes`; the budget caps the listener dimension for deployments hosting many listeners.
 
 ## Sample Grafana panel
 
@@ -157,7 +157,7 @@ For a P99 latency panel once latency histograms land:
 
 ## How this gap is tracked
 
-Every `❌` row above maps to a TODO in `docs/gap-analysis.md` under the "Observability" section. The **Pillar 3b** milestone promotes the registry from counters-only to full Prometheus exposition with histograms, gauges, and labels, at which point this file's "Ready" column fills in and the panels above can be assembled.
+Every `❌` row above is a metric the registry does not yet emit. As the metric surface is promoted from counters-only toward full Prometheus exposition (histograms, gauges, and labels), this file's "Ready" column fills in and the panels above can be assembled.
 
 ## REL-2-08: canonical label keys + cardinality budget
 
@@ -251,9 +251,9 @@ lb-l7 hook (REL-2-08 follow-up).
 
 | Family                              | Type       | Labels                                            | Wired   | Cardinality |
 |-------------------------------------|------------|---------------------------------------------------|:-------:|-------------|
-| `accept_inflight`                   | GaugeVec   | `listener`                                        | pending | 8           |
-| `accept_shed_total`                 | CounterVec | `listener`                                        | pending | 8           |
-| `accept_errors_total`               | CounterVec | `listener`, `kind` (`emfile`/`enfile`/`eintr`/`econnaborted`/`eagain`/`other`) | pending | 48 |
+| `accept_inflight`                   | GaugeVec   | `listener`                                        |   yes   | 8           |
+| `accept_shed_total`                 | CounterVec | `listener`                                        |   yes   | 8           |
+| `accept_errors_total`               | CounterVec | `listener`, `kind` (`emfile`/`enfile`/`eintr`/`econnaborted`/`eagain`/`other`) | yes | 48 |
 
 ### TCP pool (`lb-io::pool`)
 

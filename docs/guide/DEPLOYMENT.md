@@ -232,10 +232,10 @@ jumbo-frame MTU without lowering it. Tracked in
 
 ## Observability
 
-- **Logs**: `RUST_LOG=info` at start. Default formatter is plain text;
-  the JSON formatter (`tracing_subscriber::fmt::format::json`) is
-  available behind a config flag — see REL-2-06 in the audit for
-  current status. Route with journald: `journalctl -u expressgateway -f`.
+- **Logs**: `RUST_LOG=info` at start. Log output defaults to **JSON**
+  (`tracing_subscriber::fmt::format::json`); set `LB_LOG_FORMAT=text`
+  (or `plain`) for human-readable text. Route with journald:
+  `journalctl -u expressgateway -f`.
 - **Metrics**: Prometheus text exposition at the
   `[observability].metrics_bind` address (default `127.0.0.1:9090`).
   `GET /metrics` is `text/plain; version=0.0.4`; `GET /healthz` returns

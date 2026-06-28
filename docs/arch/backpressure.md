@@ -50,7 +50,32 @@ allocation (`h2_proxy.rs`, `H2_REQ_CHANNEL_DEPTH`).
 
 ## The read-pause mechanism
 
-Backpressure is "stop reading, and the transport propagates the pause":
+Backpressure is "stop reading, and the transport propagates the pause". The two
+bounds work as two domino chains — a soft window that paces the sender and a hard
+ceiling that rejects:
+
+```mermaid
+flowchart TB
+    subgraph soft["Soft bound — bounded in-flight window (the read-pause)"]
+        direction TB
+        A["Downstream peer reads slowly / stops reading"]
+        B["Bounded in-flight window fills<br/>(H3 ≈ 64 KiB · H2 ≈ 64 KiB · Mode B 256 KiB/stream)"]
+        C["Gateway stops reading the upstream<br/>(stops calling the codec's receive)"]
+        D["Transport stops extending the peer's<br/>flow-control window (quiche · h2)"]
+        E["Upstream pauses sending — the gateway buffers nothing"]
+        A --> B --> C --> D --> E
+    end
+    subgraph hard["Hard bound — total-size ceiling"]
+        direction TB
+        X["Body exceeds the 64 MiB cap<br/>(MAX_REQUEST_BODY_BYTES)"]
+        Y["413 Payload Too Large<br/>never an unbounded allocation"]
+        X --> Y
+    end
+```
+
+*Two bounds, one goal: the bounded window turns a slow reader into a paused
+sender with no buffering in between, while the 64 MiB ceiling caps total body
+size with a `413`.*
 
 - **H1 / H2 / H3 body pump.** The inbound body is fed to the upstream through a
   **bounded `mpsc` channel**. When the channel is full, the pump stops calling

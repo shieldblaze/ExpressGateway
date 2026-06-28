@@ -22,6 +22,24 @@ In Mode A the gateway holds **zero quiche/BoringSSL TLS state** — TLS stays
 end-to-end between client and backend. It is a parallel datapath: a top-level
 `[passthrough]` block, no `[[listeners]]` needed.
 
+```mermaid
+flowchart LR
+    C(Client)
+    B(Backend)
+    subgraph GW["Gateway — Mode A (passthrough)"]
+        direction TB
+        PH["read cleartext public header<br/>(form · version · DCID/SCID · token)<br/>never decrypts the payload"]
+        MG["Maglev pick over the Connection ID<br/>immutable for the flow"]
+        PH --> MG
+    end
+    C -->|"encrypted QUIC packets"| PH
+    MG -->|"forward packets unchanged"| B
+    C -.->|"end-to-end QUIC + TLS · the gateway holds no key material"| B
+```
+
+*Mode A: the gateway routes by Connection ID using only cleartext header bytes
+and never decrypts; TLS stays end-to-end between client and backend.*
+
 How a flow is routed:
 
 1. **Parse the public header without decrypting.** `parse_public_header`
@@ -56,6 +74,24 @@ Sizing:
 ## Mode B — terminate (dual connections, raw relay)
 
 Source: `crates/lb-quic/src/raw_proxy.rs`.
+
+```mermaid
+flowchart LR
+    C(Client)
+    B(Backend)
+    subgraph GW["Gateway — Mode B (terminate)"]
+        direction TB
+        CC["client quiche::Connection<br/>(terminated · decrypted)"]
+        UC["upstream quiche::Connection<br/>(fresh · re-originated · verifies cert)"]
+        CC <-->|"relay raw STREAM bytes + DATAGRAMs<br/>(256 KiB / stream window)"| UC
+    end
+    C <==>|"QUIC / TLS #1"| CC
+    UC <==>|"QUIC / TLS #2"| B
+```
+
+*Mode B: two distinct QUIC connections — the gateway terminates the client's TLS
+and originates a fresh, certificate-verified upstream connection, relaying raw
+streams and datagrams between them.*
 
 In Mode B the gateway terminates the client QUIC connection **and** dials a
 **fresh upstream QUIC connection** on a separate UDP socket with the same ALPN —
