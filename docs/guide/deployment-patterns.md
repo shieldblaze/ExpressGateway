@@ -142,12 +142,19 @@ spec:
       # With the defaults that is 11 + 10 + 2 = 23 s; 30 leaves headroom.
       # See RUNBOOK.md "Tuning readiness_settle_ms".
       terminationGracePeriodSeconds: 30
-      securityContext:
+      securityContext:                   # pod-level — mirrors the systemd unit
         runAsNonRoot: true
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: expressgateway
           image: expressgateway:<tag>
           args: ["/etc/expressgateway/config.toml"]   # positional; NOT --config
+          securityContext:               # container-level — mirrors the systemd hardening
+            readOnlyRootFilesystem: true            # ProtectSystem=strict / ReadOnlyPaths=/
+            allowPrivilegeEscalation: false         # NoNewPrivileges=true
+            capabilities:
+              drop: [ALL]
+              add: [NET_BIND_SERVICE]               # bind :443 as non-root (unit keeps CAP_NET_BIND_SERVICE)
           ports:
             - { name: https,      containerPort: 443,  protocol: TCP }
             - { name: https-quic, containerPort: 443,  protocol: UDP }  # HTTP/3
@@ -164,9 +171,12 @@ spec:
             periodSeconds: 10
           volumeMounts:
             - { name: config, mountPath: /etc/expressgateway, readOnly: true }
+            - { name: state,  mountPath: /run/expressgateway }   # writable: QUIC retry secret under readOnlyRootFilesystem
       volumes:
         - name: config
           configMap: { name: expressgateway-config }
+        - name: state
+          emptyDir: {}
 ```
 
 Why each piece:
@@ -181,10 +191,40 @@ Why each piece:
   *before* connections are cancelled. This is the [lameduck](../glossary.md)
   signal that makes rolling deploys connection-safe; the settle/drain timing
   it pairs with is in [`RUNBOOK.md`](RUNBOOK.md) "Drain (graceful shutdown)".
+  Caveat: a long-lived connection still open when the drain budget elapses is
+  force-closed, not gracefully signalled (no proactive per-protocol `GOAWAY` /
+  `Connection: close` yet) — size `drain_timeout_ms` to the workload. See
+  [`../known-limitations.md`](../known-limitations.md) "Graceful drain does not
+  emit proactive per-protocol close signals".
 - **`terminationGracePeriodSeconds`** — must exceed the gateway's own drain
   budget or the kubelet `SIGKILL`s mid-drain. Raise it (and the per-listener
   `drain_timeout_ms`) for streaming/long-poll/gRPC-bidi/WebSocket
   listeners — see [`RUNBOOK.md`](RUNBOOK.md) "Tuning the drain budget".
+- **`securityContext`** mirrors the systemd unit: non-root, read-only root
+  filesystem, `RuntimeDefault` seccomp, all capabilities dropped except
+  `NET_BIND_SERVICE` (needed to bind `:443` as non-root). Because the root
+  filesystem is read-only, the QUIC retry secret — minted at runtime if absent
+  — needs a writable mount: the `state` `emptyDir` above, with the config's
+  `retry_secret_path` pointing under `/run/expressgateway` (or pre-provision it
+  as a read-only Secret).
+- **The probes need a reachable admin bind.** The kubelet probes the Pod IP,
+  not loopback, so the admin listener must bind non-loopback **with a token**
+  — the default loopback bind makes the Pod-IP probes fail. The mounted
+  ConfigMap must therefore carry:
+
+  ```toml
+  # expressgateway-config, mounted at /etc/expressgateway/config.toml
+  [observability]
+  metrics_bind = "0.0.0.0:9090"     # Pod-IP-reachable for kubelet probes
+
+  [admin]
+  allow_non_loopback = true
+  api_token_hash     = "<sha256-hex of your metrics bearer token>"
+  ```
+
+  The probes stay anonymous; only `/metrics` requires the bearer token. Full
+  rationale in [Health probes for the fronting
+  layer](#health-probes-for-the-fronting-layer) below.
 
 ### Health probes for the fronting layer
 

@@ -62,8 +62,8 @@ truth, not this one).
 |--------|--------|-----------|
 | **Throughput** | `http_requests_total` (rate) | Requests/sec; a sudden drop means clients can't reach you or aren't being accepted. |
 | **Errors** | `http_requests_total{status_class="5xx"}` (ratio) | The fraction of responses the gateway/backends failed. The first thing to alert on. |
-| **Latency** | `http_request_duration_seconds` (p99) | Tail latency; pair with `backend_request_duration_seconds` to split gateway vs upstream. |
-| **Saturation** | `connections_inflight` / `accept_inflight` vs the listener cap | How close a listener is to its admission ceiling. |
+| **Latency** | `http_request_duration_seconds` (p99) | Tail latency, per listener/version. A per-backend split (`backend_request_duration_seconds`) is pending — until it lands, compare this against the backend's own latency to tell gateway from upstream. |
+| **Saturation** | `accept_inflight` vs the listener cap | How close a listener is to its admission ceiling. (`connections_inflight` is pending — `accept_inflight` is the emitted signal today.) |
 | **Drain health** | `shutdown_aborted_connections_total`, `shutdown_drain_seconds_*` | Whether deploys finish cleanly or truncate connections. |
 | **Backend churn** | `pool_acquires_total` vs `pool_probe_failures_total` | Connection-pool reuse; high probe-failure ratio means upstream is half-closing idle conns. |
 | **Crashes** | `panic_total` | A caught panic in the binary. Should be flat at zero. |
@@ -80,9 +80,11 @@ A boring, healthy instance, steady-state:
 - **`panic_total` is flat at 0.** Any increase is a real defect — page on it.
 - **5xx ratio is low and stable** (well under ~1% for most workloads); a
   step change tracks a backend going bad.
-- **p99 latency is stable**, and `backend_request_duration_seconds` is the
-  dominant term (the gateway adds little) — a rising *gateway* p99 with flat
-  backend latency points at saturation or pool churn, not the upstream.
+- **p99 latency (`http_request_duration_seconds`) is stable**, and the gateway
+  adds little over the backend's own latency — a rising *gateway* p99 with a
+  flat backend points at saturation or pool churn, not the upstream. (A
+  per-backend `backend_request_duration_seconds` split is pending; until it
+  lands, read this against the backend's own latency metric.)
 - **`pool_probe_failures_total` is small relative to `pool_acquires_total`**
   — most cached connections are still good when reused.
 - **`shutdown_aborted_connections_total` only moves during deploys**, and

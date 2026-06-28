@@ -192,6 +192,7 @@ flowchart TD
     quic -.->|quic-terminate| core
     quic -.->|quic-terminate| io
     quic -.->|dev/test| h3tc
+    quic -.->|dev/test| grpc
 
     bal --> core
     obs --> xdp

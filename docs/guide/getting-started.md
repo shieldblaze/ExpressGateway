@@ -231,12 +231,14 @@ lines omitted for brevity):
 # TYPE connections_total counter
 connections_total 1
 # TYPE http_requests_total counter
-http_requests_total{version="h1",status_class="2xx"} 1
+http_requests_total{listener="0.0.0.0:8080",route="",version="h1",status_class="2xx"} 1
 # TYPE http_request_duration_seconds histogram
-http_request_duration_seconds_count{version="h1"} 1
+http_request_duration_seconds_count{listener="0.0.0.0:8080",route="",version="h1"} 1
 ```
 
-The probes are plain HTTP:
+The `listener` label carries the listener's bind address; `route` is currently
+emitted empty (per-request route attribution is a follow-up). The probes are
+plain HTTP:
 
 ```bash
 curl -s http://127.0.0.1:9090/livez      # 200 while alive

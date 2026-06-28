@@ -130,7 +130,7 @@ run pure L7, pure L4, or both.
                     ┌───────────────────────────────────────────┐
    client traffic   │                                           │
    ───────────────► │   L4 XDP/eBPF  (in-kernel, off by default)│
-                    │   conntrack-hit forward by Maglev table   │
+                    │   conntrack-hit forward (XDP_TX)          │
                     │   + per-CPU new-flow (SYN-flood) rate cap │
                     └───────────────────────────────────────────┘
                             │ (XDP_PASS / not enabled)

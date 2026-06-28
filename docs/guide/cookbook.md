@@ -399,6 +399,10 @@ address  = "10.0.0.11:8080"
 protocol = "h1"
 
 # ── HTTP/3 front (QUIC/UDP, same port) ──────────────────────────────
+# An H3-terminate listener forwards to the FIRST backend only — it is not
+# load-balanced across a pool (see features.md "Load balancing"), so one
+# backend entry is shown here. Spread H3 load by fronting several instances
+# with an L4 LB (see deployment-patterns.md), not by listing more backends.
 [[listeners]]
 address  = "0.0.0.0:443"
 protocol = "quic"                     # Recipe 3
@@ -410,10 +414,6 @@ retry_secret_path = "/etc/expressgateway/quic/retry.secret"
 
 [[listeners.backends]]
 address  = "10.0.0.10:8080"
-protocol = "h1"
-
-[[listeners.backends]]
-address  = "10.0.0.11:8080"
 protocol = "h1"
 ```
 

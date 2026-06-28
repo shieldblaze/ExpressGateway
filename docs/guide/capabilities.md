@@ -92,6 +92,7 @@ with no loss.
 |---------|--------|--------|
 | SIGHUP config hot reload (swappable subset) | ✅ | [`CONFIG.md`](CONFIG.md) |
 | SIGUSR1 cert rotation · SIGTERM graceful drain | ✅ | [`RUNBOOK.md`](RUNBOOK.md) |
+| ↳ proactive per-protocol drain signal (H1 `Connection: close` / H2 `GOAWAY` / H3 `CONNECTION_CLOSE`) | ⏳ | in progress; today = lameduck + bounded drain + force-close — [`../known-limitations.md`](../known-limitations.md) |
 | Binary hot-restart via socket-descriptor handover | ⚠️ deferred (`SO_REUSEPORT` side-by-side only) | [deployment-patterns.md](deployment-patterns.md) |
 | Per-IP + in-flight connection caps | ✅ | [`CONFIG.md`](CONFIG.md) |
 | Topology / HA (stateless; no built-in clustering) | ⚠️ | [deployment-patterns.md](deployment-patterns.md) |

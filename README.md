@@ -48,8 +48,11 @@ Beyond the four pillars, ExpressGateway ships:
 - **HTTP/3 rollout** by advertising `Alt-Svc: h3` from an H1/H1s listener.
 - **Conformance** — h2spec 147/147; h3spec passes with 12 named waivers.
 - **Operations** — SIGHUP config hot reload, SIGUSR1 cert rotation, graceful
-  drain on SIGTERM, per-IP and in-flight connection caps, Prometheus `/metrics`
-  + Kubernetes probes, `LB_LOG_FORMAT` (json/text/plain).
+  drain on SIGTERM (lameduck + bounded drain; proactive per-protocol `GOAWAY` /
+  `Connection: close` emission is in progress —
+  [`docs/known-limitations.md`](docs/known-limitations.md)), per-IP and
+  in-flight connection caps, Prometheus `/metrics` + Kubernetes probes,
+  `LB_LOG_FORMAT` (json/text/plain).
 
 For the full supported / gated / waived view, see
 [`docs/guide/capabilities.md`](docs/guide/capabilities.md) and the matrix in
@@ -62,6 +65,10 @@ For the full supported / gated / waived view, see
   Ten further algorithms are implemented in the `lb-balancer` library but are
   **not yet selectable from config** — [`docs/features.md`](docs/features.md)
   "Load balancing".
+- **QUIC H3-terminate and Mode B forward to a single backend** (not
+  load-balanced across a pool; Mode A passthrough is the exception, hashing
+  flows across its pool) — [`docs/features.md`](docs/features.md) "Load
+  balancing".
 - **Health tracking is passive** and, in this build, **not yet wired into
   backend selection**; active probing is deferred —
   [`docs/known-limitations.md`](docs/known-limitations.md).

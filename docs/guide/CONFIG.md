@@ -22,6 +22,20 @@ parsed clean and the operator's override was silently ignored. If the
 gateway rejects a key you expect, check the spelling and the block it
 belongs under.
 
+### Validating a config (there is no dry-run flag)
+
+There is **no dedicated `--check` / dry-run flag** today. The binary validates
+the *whole* config at boot — parse (`deny_unknown_fields`) then
+`validate_config` — and **exits non-zero without starting any listener** on the
+first parse or validation error (fail-fast; see "Invalid-config behavior"
+below). So a CI "does this config parse?" check means **booting the binary
+against it**, which has side effects: it binds the configured listener ports
+and, for a `quic` / `[passthrough]` config, mints the QUIC retry-secret file
+(mode 0600) if it is absent. Run such a check against a throwaway config (free
+ports, a temp `retry_secret_path`) or in a sandbox, and stop the process once
+it logs its listener lines. A validate-only mode that parses and validates
+without binding is a deferred enhancement.
+
 ## Foot-gun knobs (`0` / `false` = disable a defense)
 
 A handful of knobs accept a sentinel value that **turns off a protection**.

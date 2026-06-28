@@ -116,9 +116,11 @@ usable response from the backend. The usual causes:
 `protocol` matches the upstream. Re-check after `SIGHUP` if you edited the
 pool.
 
-**Confirm.** Attribute it with `backend_requests_total{status_class="5xx"}`
-to find which upstream is failing; for the live-traffic version of this,
-[`RUNBOOK.md`](RUNBOOK.md) `LbReq5xx` has the full triage.
+**Confirm.** Watch the emitted `http_requests_total{listener,status_class="5xx"}`
+(per listener) and the backend logs to see the failures; per-backend
+attribution via `backend_requests_total` is pending (not yet emitted). For the
+live-traffic version of this, [`RUNBOOK.md`](RUNBOOK.md) `LbReq5xx` has the full
+triage.
 
 ## Symptom: gRPC client gets no status / RST_STREAM
 

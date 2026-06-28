@@ -235,7 +235,68 @@ patterns are covered in
 
 ---
 
+## QUIC H3-terminate and Mode B are single-backend (not load-balanced)
+
+**What:** a `quic` **H3-terminate** listener forwards to the **first**
+`[[listeners.backends]]` entry only — additional entries are ignored, and the
+pool is not round-robined. **Mode B** (`[listeners.quic.raw_proxy]`)
+re-originates to a single `backend_addr` by schema. Neither spreads load
+across multiple upstreams. (QUIC **Mode A passthrough** is the exception: it
+Maglev-hashes flows across its `[passthrough].backends` pool.)
+
+**Why:** H3-terminate and Mode B each manage one upstream QUIC/HTTP
+connection per client connection; multi-backend selection on these paths is
+not wired in this build. The live round-robin picker runs on the L7 HTTP and
+raw-TCP paths.
+
+**Who it affects:** anyone expecting an H3 (`quic`) listener, or a Mode B
+proxy, to balance across a backend pool. Not affected: L7 HTTP / raw-TCP
+listeners (round-robin across the pool) and Mode A passthrough
+(Maglev-by-Connection-ID).
+
+**Mitigation:** put multiple H3-terminate / Mode B instances behind an L4/L3
+load balancer to spread load (see
+[`guide/deployment-patterns.md`](guide/deployment-patterns.md)), or use Mode A
+passthrough, where the gateway itself spreads QUIC flows across the pool. The
+schema detail is in [`guide/CONFIG.md`](guide/CONFIG.md)
+"`[[listeners.backends]]`" and the policy detail in
+[`features.md`](features.md) "Load balancing".
+
+---
+
+## Graceful drain does not emit proactive per-protocol close signals
+
+**What:** on `SIGTERM` the gateway drains by flipping `/readyz` to 503
+(lameduck), settling for the upstream-probe window, then waiting a bounded
+budget for in-flight requests to finish before force-closing any survivors.
+It does **not** yet emit proactive per-protocol drain signals — HTTP/1.1
+`Connection: close`, HTTP/2 `GOAWAY`, or HTTP/3 `CONNECTION_CLOSE` — to tell
+live clients to stop reusing the connection. A long-lived connection still
+open when the drain budget elapses is **force-closed (aborted), not
+gracefully signalled**.
+
+**Why:** the per-protocol emission code exists but is not yet plumbed into the
+per-connection serve loops; it is a tracked follow-up. Until it lands, the
+drain relies on the lameduck → settle → bounded-wait sequence, which is
+connection-safe for short-request workloads (they finish well inside the
+budget) but cannot proactively wind down a long-lived stream.
+
+**Who it affects:** deployments with long-lived connections (gRPC bidi,
+WebSocket, SSE, long-poll) that want a *graceful* per-connection wind-down on
+deploy. Not affected: short-request HTTP, which completes inside the drain
+budget.
+
+**Mitigation:** size the drain budget to your workload — raise the
+per-listener `drain_timeout_ms` for streaming listeners so in-flight work
+finishes before the deadline, and keep the fronting LB's lameduck /
+endpoint-removal aligned with `readiness_settle_ms` so new traffic stops
+before the drain starts. The drain sequence, the per-protocol drain-signal
+matrix, and the budget-tuning guidance are in
+[`guide/RUNBOOK.md`](guide/RUNBOOK.md) "Drain (graceful shutdown)" and "Tuning
+the drain budget".
+
+---
+
 _Maintained alongside the front×back protocol matrix in
 [`features.md`](features.md). As the matrix and protocol support evolve,
 new bounded limitations are recorded here for operators._
-</content>
