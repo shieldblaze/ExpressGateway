@@ -27,7 +27,7 @@ jobs:
     name: Dependency Audit (weekly, strict)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-setup
       - name: Install cargo-audit
         run: cargo +stable install cargo-audit --locked
@@ -43,7 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-setup
       - name: Install cargo-geiger
         run: cargo +stable install cargo-geiger --locked
@@ -65,7 +65,7 @@ jobs:
     name: Unused Deps (cargo-machete)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-setup
         with:
           cache: 'false'
