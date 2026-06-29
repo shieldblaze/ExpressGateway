@@ -41,7 +41,7 @@ jobs:
     name: Format
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-setup
         with:
           components: rustfmt
@@ -52,7 +52,7 @@ jobs:
     name: Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-setup
       # --all-features is REQUIRED: the R8 memory integration tests in tests/
       # read lb-l7's `#[cfg(feature = "test-gauges")]` gauges, forwarded by the
@@ -64,7 +64,7 @@ jobs:
     name: Clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-setup
         with:
           components: clippy
@@ -74,7 +74,7 @@ jobs:
     name: Panic Freedom Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Verify panic-freedom deny lints are present in every library crate
         run: |
           MISSING=""
@@ -98,7 +98,7 @@ jobs:
     name: Doc Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Tier-2 walks `git show` / `git ls-tree` against historical SHAs
           # cited in Verified-Fixed claims — needs full history.
@@ -113,7 +113,7 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-setup
       # The --all-features workspace test build links many large integration-test
       # binaries; on a default hosted runner it can hit ENOSPC (esp. with a warm
@@ -158,7 +158,7 @@ jobs:
     name: MSRV (1.88)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-setup
         with:
           toolchain: ${{ env.RUST_MSRV }}
@@ -168,7 +168,7 @@ jobs:
     name: Fuzz Smoke Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-setup
         with:
           toolchain: nightly
@@ -199,7 +199,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [check, clippy, test, fmt, panic-freedom, doc-lint]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-setup
       - run: cargo build --workspace --release
         timeout-minutes: 30
@@ -212,7 +212,7 @@ jobs:
     name: Security Audit
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       # cargo-audit needs a recent rustc to build; rust-toolchain.toml pins 1.88
       # but we `+stable install` so cargo-audit always builds on latest stable.
       - uses: ./.github/actions/rust-setup
@@ -232,7 +232,7 @@ jobs:
     name: cargo-deny (licenses/advisories/bans/sources)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install cargo-deny (prebuilt binary)
         run: |
           VER=0.19.6
@@ -255,7 +255,7 @@ jobs:
     name: Coverage (per-module hot-path >= 80%)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-setup
         with:
           toolchain: ${{ env.RUST_MSRV }}
@@ -293,7 +293,7 @@ jobs:
       H2SPEC_VER: "v2.6.0"
       H3SPEC_VER: "v0.1.13"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-setup
         with:
           toolchain: ${{ env.RUST_MSRV }}
@@ -386,7 +386,7 @@ jobs:
     name: Chaos Attack Suite
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-setup
         with:
           toolchain: ${{ env.RUST_MSRV }}
@@ -416,7 +416,7 @@ jobs:
     name: Container Image (build + serve smoke + trivy)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Build image
         run: |
           docker build -f docker/Dockerfile \
@@ -445,7 +445,7 @@ jobs:
     name: XDP Verifier Smoke (runner kernel)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-setup
         with:
           toolchain: ${{ env.RUST_MSRV }}

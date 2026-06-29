@@ -46,9 +46,9 @@ jobs:
       id-token: write          # GitHub OIDC -> assume the soak IAM role
       contents: read
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Configure AWS credentials (OIDC, scoped role)
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v6
         with:
           role-to-assume: ${{ secrets.SOAK_AWS_ROLE_ARN }}
           aws-region: ${{ vars.SOAK_REGION }}
@@ -89,7 +89,7 @@ jobs:
             os: ubuntu-latest
             artifact: expressgateway-linux-arm64
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -123,7 +123,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
       - name: Login to GHCR
@@ -161,7 +161,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Download artifacts
         uses: actions/download-artifact@v8
       - name: Create GitHub Release
