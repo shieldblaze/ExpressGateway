@@ -75,7 +75,7 @@ rust-version = "1.88"
 # relay) — tests/h2h3_md_streaming_verify.rs h2h3_fcap1 forwards only ~30 MiB / 60s on
 # 1.52.3 (cap-arm never reached) vs 64 MiB / ~5.7s on 1.51.1. Reproduced 3/3 on a quiet
 # box. Carry the 1.52 bump until upstream restores throughput (CF-S37-D-TOKIO-1.52-RELAY).
-tokio = { version = ">=1.51, <1.52", features = ["full"] }
+tokio = { version = ">=1.51, <1.53", features = ["full"] }
 io-uring = "0.7"
 # Error handling
 thiserror = "2"
@@ -129,10 +129,10 @@ futures-util = { version = "0.3", default-features = false, features = ["std", "
 # Utilities
 rand = "0.10"
 # XDP / eBPF (Pillar 4a: aya userspace loader; Linux-only in consumers)
-aya = "0.13"
+aya = "0.14"
 # Pillar 4b-1: aya-obj gives us the kernel-free ELF parser (no CAP_BPF
 # required) for the real_elf_parses integration test.
-aya-obj = "0.2"
+aya-obj = "0.3"
 # Pillar 4b-1: CAP_BPF probe before attempting XDP attach.
 caps = "0.5"
 # Fuzzing (Step 6). Consumed only by the out-of-workspace `fuzz/` crate;
