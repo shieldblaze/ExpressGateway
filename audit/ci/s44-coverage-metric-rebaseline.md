@@ -145,9 +145,28 @@ pass and fail. The gate is non-vacuous.
 ## 6. What this does NOT fix — stated plainly
 
 The correction raises the *level*, not the *variance*. Run-to-run jitter of ~0.6 pp is still
-present (h2_proxy reads 80.96 / 81.57 / 81.52 across the three samples), and its source —
-almost certainly timing-dependent branches taken unevenly between runs — was **not**
-investigated here.
+present (h2_proxy reads 80.96 / 81.57 / 81.52 across the three samples), and its source is
+**still unexplained**.
+
+One obvious explanation was tested and **REFUTED**. The coverage job runs
+`cargo llvm-cov nextest --ignore-run-fail`, so a flaking test still counts as executed-but-
+failed and its lines could plausibly drop out of the profile — and there is a known flake
+named for this exact job and module (CF-S37-D6-H2PROXY-FLAKY). The data says otherwise:
+
+| run | tests failed inside the coverage run | h2_proxy (old metric) |
+|---|---:|---:|
+| 30745595161 (RED) | **0** — 1565/1565 passed | **79.65%** (lowest) |
+| 30749813681 (green) | **2** failed | 80.23% |
+| 30751410142 (green) | 0 — 1565/1565 passed | 80.13% |
+
+The run with *zero* failures produced the *lowest* coverage, and the run with two failures
+produced the highest. The correlation runs opposite to the hypothesis, so flaky test
+failures are not the mechanism. Do not re-chase this one.
+
+Remaining candidates, untested: nondeterministic scheduling across the two instantiations,
+llvm-cov profile-merge races under `--ignore-run-fail`, or genuinely timing-dependent
+branches. Any future attempt should start by diffing the per-line `DA:` sets of two runs to
+see *which* lines move, rather than reasoning from totals.
 
 So `h2_proxy.rs` remains the tightest hot-path module. It now sits ~1.0–1.6 pp above the
 floor instead of straddling it, which is a real margin rather than a coin flip, but it is
