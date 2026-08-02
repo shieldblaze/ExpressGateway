@@ -525,15 +525,23 @@ const AUDIT_NEVER: u64 = u64::MAX;
 /// `fetch_update` so two threads racing the same window emit exactly once.
 fn audit_allow(last_emit: &AtomicU64, now_ms: u64, window: Duration) -> bool {
     let window_ms = u64::try_from(window.as_millis()).unwrap_or(u64::MAX);
-    last_emit
-        .fetch_update(Ordering::AcqRel, Ordering::Acquire, |prev| {
-            if prev == AUDIT_NEVER || now_ms.saturating_sub(prev) >= window_ms {
-                Some(now_ms)
-            } else {
-                None
-            }
-        })
-        .is_ok()
+    // TOOLCHAIN SHIM: nightly (>= the 2026-07 toolchains) deprecates
+    // `fetch_update` in favour of `try_update`, which does NOT exist on our
+    // MSRV (1.88, pinned in rust-toolchain.toml). The fuzz-smoke job is the
+    // only lane on nightly and it builds with `-D warnings`, so the
+    // deprecation is a hard error there while stable still requires the old
+    // name. Silence it narrowly — not crate-wide — so any *other* deprecation
+    // still turns the lane red. Drop this and switch to `try_update` when the
+    // MSRV moves past its stabilisation.
+    #[allow(deprecated)]
+    let won_window = last_emit.fetch_update(Ordering::AcqRel, Ordering::Acquire, |prev| {
+        if prev == AUDIT_NEVER || now_ms.saturating_sub(prev) >= window_ms {
+            Some(now_ms)
+        } else {
+            None
+        }
+    });
+    won_window.is_ok()
 }
 
 /// Hash a DCID into a Maglev pick.
