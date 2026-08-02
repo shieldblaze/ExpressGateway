@@ -25,6 +25,34 @@
 #     LCOV paths are wrong); a single non-matching pattern is loud-warned so a
 #     legitimate rename surfaces without wedging the gate.
 #
+# METRIC CORRECTION (S44) — score merged DA: records, not the LF:/LH: summary.
+#   `lb-l7` (and 25 other modules) are compiled twice; llvm-cov merges both
+#   instantiations into ONE `SF:` record whose LF:/LH: summary counts shared
+#   source lines TWICE, while the per-line DA: records do not. For h2_proxy.rs
+#   the record declared LF:1887 while emitting only 1780 distinct DA: lines —
+#   107 phantom lines, and 596 FN: entries split across two crate
+#   disambiguators (CsdExPruU9iqX_5lb_l7 / CsbnMibX7jh97_5lb_l7). The second
+#   instantiation is the lib-unit-test build, which CANNOT reach the request
+#   hot path at all (`hyper::body::Incoming` has no public constructor), so its
+#   unhit lines were being scored as genuine misses. That put the gate on a
+#   coin flip: 3 RED / 3 green on byte-identical production source.
+#
+#   So: a source line is counted ONCE, and is "hit" if ANY instantiation
+#   executed it. This is the charter's stated metric ("per-module line
+#   coverage") measured correctly.
+#
+#   This is a CORRECTION, NOT a relaxation, and the evidence is that it moves
+#   numbers in BOTH directions — random.rs 86.21 -> 85.71, conn_gate.rs
+#   91.14 -> 90.91, conn_actor.rs 85.01 -> 84.79 all get STRICTER, because
+#   double-counted *hit* lines are removed from the numerator too. A loosening
+#   would only ever move numbers up. The 80% threshold is unchanged, no module
+#   is exempted, and no module falls below 80% under the corrected metric.
+#   Full 31-module before/after table: audit/ci/s44-coverage-metric-rebaseline.md
+#
+#   Records whose declared LF: exceeds their distinct DA: line count are
+#   reported as "dual-instantiated" so the artifact stays VISIBLE rather than
+#   silently drifting back.
+#
 # Usage: coverage-check.sh <coverage.lcov>
 
 set -uo pipefail
@@ -33,26 +61,47 @@ test -f "$LCOV" || { echo "::error::LCOV file $LCOV not found"; exit 1; }
 THRESHOLD=80.0
 
 python3 - "$LCOV" "$THRESHOLD" <<'PY'
-import re, sys
+import re, sys, collections
 
 lcov_path, threshold = sys.argv[1], float(sys.argv[2])
 
-# Parse LCOV: per record, SF:<file> ... LF:<found> LH:<hit> end_of_record.
-files = {}
+# Parse LCOV per-LINE (DA:<line>,<count>), merging every record and every
+# instantiation of a file. A source line is counted ONCE; it is "hit" if ANY
+# instantiation executed it. See the METRIC CORRECTION note in the header.
+# `declared_lf` is retained ONLY to surface dual-instantiation, never to score.
+lines_by_file = collections.defaultdict(dict)   # file -> {line_no: max_count}
+declared_lf = collections.Counter()             # file -> sum of LF: across records
 cur = None
-lf = lh = 0
 for line in open(lcov_path):
     line = line.strip()
     if line.startswith("SF:"):
-        cur, lf, lh = line[3:], 0, 0
-    elif line.startswith("LF:"):
-        lf = int(line[3:])
-    elif line.startswith("LH:"):
-        lh = int(line[3:])
-    elif line == "end_of_record" and cur is not None:
-        if lf > 0:
-            files[cur] = 100.0 * lh / lf
+        cur = line[3:]
+    elif line.startswith("LF:") and cur is not None:
+        declared_lf[cur] += int(line[3:])
+    elif line.startswith("DA:") and cur is not None:
+        # DA:<line>,<count>[,<checksum>]
+        parts = line[3:].split(",")
+        try:
+            ln, cnt = int(parts[0]), int(parts[1])
+        except (ValueError, IndexError):
+            continue
+        # ALWAYS assign: a line whose every instantiation reports 0 must still
+        # land in the dict, or it silently leaves the DENOMINATOR and every
+        # file scores 100%. (`if cnt > d.get(ln, 0)` is the trap — 0 > 0 is
+        # False, so never-executed lines would never be inserted at all.)
+        d = lines_by_file[cur]
+        d[ln] = max(d.get(ln, 0), cnt)
+    elif line == "end_of_record":
         cur = None
+
+files = {}
+dual = []
+for f, lns in lines_by_file.items():
+    if not lns:
+        continue
+    files[f] = 100.0 * sum(1 for c in lns.values() if c > 0) / len(lns)
+    if declared_lf[f] > len(lns):
+        dual.append((f, declared_lf[f], len(lns)))
 
 # Charter hot-path modules mapped to the CURRENT file layout. "bridges::*" =
 # the cross-protocol h*_to_h*.rs files; lb-balancer "* (all)" = every
@@ -85,8 +134,22 @@ for pat in REQUIRED:
         (below if p + 1e-9 < threshold else checked).append((n, p))
 
 print(f"D-6 per-module hot-path coverage gate (threshold {threshold:.0f}% lines)")
+print("  metric: merged DA: per-line (each source line counted once, hit if ANY "
+      "instantiation ran it)")
 print(f"  {len(checked)} hot-path modules passed, {len(below)} below, "
       f"{len(empty_pats)} pattern(s) unmatched")
+
+# Visibility, not a gate: report files llvm-cov emitted with more declared LF:
+# than distinct source lines. Scoring off LF:/LH: here would double-count them.
+dual_hot = sorted((f, lf, n) for f, lf, n in dual
+                  if any(hit(p, f) for p in REQUIRED) or hit(EXEMPT, f))
+if dual_hot:
+    print(f"  note: {len(dual_hot)} hot-path module(s) are dual-instantiated "
+          "(declared LF: > distinct source lines); scored once each:")
+    for f, lf, n in dual_hot[:6]:
+        print(f"        {f.split('crates/')[-1]:<40} LF:{lf} distinct:{n} (+{lf-n})")
+    if len(dual_hot) > 6:
+        print(f"        … and {len(dual_hot)-6} more")
 for n, p in sorted(checked):
     print(f"    OK     {p:6.2f}%  {n}")
 if exempt_hit:
