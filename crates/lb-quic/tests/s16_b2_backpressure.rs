@@ -1,29 +1,19 @@
-//! Mode B — the R8 BOUNDED-WINDOW / BACKPRESSURE proof: when the BACKEND stops
-//! reading a stream while the client keeps sending, the relay must NOT buffer
-//! the client's send without bound — it must propagate backpressure so the
-//! CLIENT itself stalls, and on resume the full payload must arrive intact.
+//! Mode B — the R8 BOUNDED-WINDOW / BACKPRESSURE proof: when the BACKEND stops reading while the
+//! client keeps sending, the relay must propagate backpressure rather than buffer without bound.
 //!
-//! Mechanism: the backend stops `stream_recv` ⇒ the upstream send window fills
-//! ⇒ the relay's `c2u` pending reaches `STREAM_RELAY_WINDOW` ⇒ the relay stops
-//! calling `client.stream_recv` ⇒ quiche stops extending the client's
-//! `MAX_STREAM_DATA` ⇒ the client's `stream_send` stalls once its credit is
-//! spent. Retained bytes do NOT grow with the (much larger) total payload.
+//! Mechanism: the backend stops `stream_recv` ⇒ the upstream send window fills ⇒ the relay's
+//! `c2u` pending reaches `STREAM_RELAY_WINDOW` ⇒ the relay stops calling `client.stream_recv` ⇒
+//! quiche stops extending `MAX_STREAM_DATA` ⇒ the client's `stream_send` stalls.
 //!
-//! LOAD-BEARING assertions (timing-robust): (1) while the backend refuses to
-//! read it echoes ZERO bytes — the relay honours the destination's flow
-//! control; (2) the round-trip does NOT complete during the stall, so the
-//! transfer is genuinely GATED, not buffered through; (3) on resume the ENTIRE
-//! payload is echoed back BYTE-IDENTICAL, so nothing was dropped or reordered.
+//! LOAD-BEARING (timing-robust): (1) while the backend refuses to read it echoes ZERO bytes;
+//! (2) the round-trip does NOT complete during the stall, so the transfer is GATED not buffered;
+//! (3) on resume the ENTIRE payload is echoed byte-identical.
 //!
-//! Honest scope: a black-box test cannot read the LB's in-process
-//! `half.pending.len()`, and the client's `stream_send` cursor is NOT a tight
-//! in-flight proxy (quiche buffers locally beyond the peer's window, and under
-//! CPU starvation that inflates the cursor — the CF-SATURATION-1 class). So the
-//! cursor ceiling is a LOOSE secondary witness that only falsifies a gross
-//! buffer-everything relay; the exact 256 KiB bound is the `pump_dir` read gate,
-//! confirmed by code-read.
-//!
-//! Driven with `--features test-gauges`.
+//! Honest scope: a black-box test cannot read the LB's `half.pending.len()`, and the client's
+//! `stream_send` cursor is NOT a tight in-flight proxy (quiche buffers locally beyond the peer's
+//! window, and CPU starvation inflates it — the CF-SATURATION-1 class). The cursor ceiling is a
+//! LOOSE secondary witness; the exact 256 KiB bound is the `pump_dir` read gate, confirmed by
+//! code-read.
 
 #![cfg(feature = "test-gauges")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -50,32 +40,24 @@ const TEST_SNI: &str = "expressgateway.test";
 const H3_ALPN: &[u8] = b"h3";
 const MAX_UDP: usize = 65_535;
 const HANDSHAKE_BUDGET: Duration = Duration::from_secs(5);
-/// The stalled stream relayed end-to-end.
 const STREAM_ID: u64 = 0;
 
-/// Total payload the client WANTS to send on the stalled stream — much larger
-/// than (client credit + relay window), so an unbounded relay would march the
+/// Much larger than (client credit + relay window), so an unbounded relay would march the
 /// client's cursor to the full payload while a bounded one stalls it early.
 const PAYLOAD_LEN: usize = 4 * 1024 * 1024;
 
-/// Stream-0 send credit the LB grants the CLIENT. Small and fixed, so the
-/// client's stall ceiling is a constant independent of `PAYLOAD_LEN`.
+/// Small and fixed, so the client's stall ceiling is a constant independent of `PAYLOAD_LEN`.
 const LB_GRANT_TO_CLIENT: usize = 128 * 1024;
 
-/// Per-stream + connection receive credit the BACKEND advertises. Keeping it
-/// small bounds what a STALLED backend can hold unread, so data accumulates only
-/// in `client grant + STREAM_RELAY_WINDOW + BACKEND_RECV_WINDOW` — a small
-/// constant. With a multi-MiB backend window the client's plateau would drift up
-/// toward it and become scheduling-dependent under gate saturation.
+/// Keeping the BACKEND's advertised credit small bounds what a stalled backend holds unread, so
+/// data accumulates only in `client grant + STREAM_RELAY_WINDOW + BACKEND_RECV_WINDOW`. With a
+/// multi-MiB backend window the client's plateau drifts toward it and becomes scheduling-dependent.
 const BACKEND_RECV_WINDOW: usize = 128 * 1024;
 
-/// GENEROUS secondary sanity ceiling for the client's `stream_send` cursor
-/// during the stall. The cursor counts bytes accepted into quiche's LOCAL send
-/// buffer, which exceeds the peer's advertised window and inflates under CPU
-/// starvation — so this is a LOOSE witness whose only job is to falsify a gross
-/// "the LB drained the entire payload into its own memory" relay. The SOUND
-/// proof is the load-bearing pair (backend echoed 0 + transfer not complete
-/// while stalled) plus full byte-identical completeness on resume.
+/// GENEROUS secondary sanity ceiling for the client's `stream_send` cursor during the stall. The
+/// cursor counts bytes accepted into quiche's LOCAL send buffer, which exceeds the peer's window
+/// and inflates under CPU starvation — a LOOSE witness whose only job is to falsify a gross
+/// "the LB drained the entire payload into its own memory" relay.
 const STALL_CEILING: usize = 3 * 1024 * 1024;
 
 static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -147,10 +129,9 @@ fn make_payload(seed: u64, len: usize) -> Vec<u8> {
     out
 }
 
-/// CLIENT-facing SERVER config. CRITICAL: grants only `LB_GRANT_TO_CLIENT` of
-/// per-stream credit so the stall ceiling is a small constant, while
-/// `initial_max_data` stays generous — the PER-STREAM backpressure must be the
-/// binding constraint, not a coincidental connection-level cap.
+/// CLIENT-facing SERVER config. CRITICAL: grants only `LB_GRANT_TO_CLIENT` per-stream credit
+/// while `initial_max_data` stays generous, so PER-STREAM backpressure is the binding constraint
+/// rather than a coincidental connection-level cap.
 fn lb_server_config(certs: &TestCerts) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
     cfg.set_application_protos(&[H3_ALPN]).unwrap();
@@ -172,7 +153,6 @@ fn lb_server_config(certs: &TestCerts) -> quiche::Config {
     cfg
 }
 
-/// The real downstream CLIENT config.
 fn client_config(certs: &TestCerts) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
     cfg.set_application_protos(&[H3_ALPN]).unwrap();
@@ -193,10 +173,8 @@ fn client_config(certs: &TestCerts) -> quiche::Config {
     cfg
 }
 
-/// The BACKEND's SERVER config: advertises only a SMALL receive window, so a
-/// stalled backend holds at most `BACKEND_RECV_WINDOW` unread and the client's
-/// stall plateau stays a small constant. Distinct from `lb_server_config`, where
-/// the conn window is deliberately generous.
+/// The BACKEND's SERVER config advertises only a SMALL receive window, so the client's stall
+/// plateau stays a small constant. Deliberately unlike `lb_server_config`.
 fn backend_config(certs: &TestCerts) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
     cfg.set_application_protos(&[H3_ALPN]).unwrap();
@@ -207,8 +185,7 @@ fn backend_config(certs: &TestCerts) -> quiche::Config {
     cfg.set_max_idle_timeout(30_000);
     cfg.set_max_recv_udp_payload_size(1_350);
     cfg.set_max_send_udp_payload_size(1_350);
-    // Small connection-level window (2× the per-stream window) so the
-    // backend cannot absorb more than a small constant of unread data.
+    // 2× the per-stream window, so the backend cannot absorb more than a small constant unread.
     cfg.set_initial_max_data((2 * BACKEND_RECV_WINDOW) as u64);
     cfg.set_initial_max_stream_data_bidi_local(BACKEND_RECV_WINDOW as u64);
     cfg.set_initial_max_stream_data_bidi_remote(BACKEND_RECV_WINDOW as u64);
@@ -220,9 +197,8 @@ fn backend_config(certs: &TestCerts) -> quiche::Config {
     cfg
 }
 
-/// The backend dial config factory. The backend grants the LB-as-client a
-/// generous per-stream window, which does NOT matter here: the binding throttle
-/// is the backend refusing to READ, which backs up into the relay's window.
+/// The backend grants the LB-as-client a generous per-stream window, which does NOT matter: the
+/// binding throttle is the backend refusing to READ, which backs up into the relay's window.
 fn upstream_config_factory(
     ca: PathBuf,
 ) -> Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> {
@@ -247,10 +223,9 @@ fn upstream_config_factory(
     })
 }
 
-/// A BACKEND that, while `reading_enabled` is FALSE, does NOT call
-/// `stream_recv` — it still pumps the connection so handshake/ACKs proceed, but
-/// leaves stream data unread so its receive window stays closed. Flipped TRUE it
-/// drains + echoes everything and FINs.
+/// While `reading_enabled` is FALSE this backend does NOT call `stream_recv` — it still pumps the
+/// connection so handshake/ACKs proceed, leaving its receive window shut. Flipped TRUE it drains,
+/// echoes everything and FINs.
 fn spawn_stalling_echo_backend(
     certs: &TestCerts,
     reading_enabled: Arc<AtomicBool>,
@@ -259,9 +234,8 @@ fn spawn_stalling_echo_backend(
     let std_sock = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     std_sock.set_nonblocking(true).unwrap();
     let addr = std_sock.local_addr().unwrap();
-    // Use the SMALL-window backend config so unread data cannot pile up in the
-    // backend's own receive buffer, keeping the client's stall plateau a small,
-    // scheduling-STABLE constant rather than drifting toward a multi-MiB buffer.
+    // The SMALL-window backend config keeps the client's stall plateau a scheduling-STABLE
+    // constant rather than drifting toward a multi-MiB buffer.
     let mut config = backend_config(certs);
 
     tokio::spawn(async move {
@@ -278,8 +252,8 @@ fn spawn_stalling_echo_backend(
                 return;
             }
             if let Some(c) = conn.as_mut() {
-                // While disabled, deliberately leave readable data un-read so
-                // the backend's flow-control window stays shut.
+                // Deliberately leave readable data un-read so the backend's flow-control window
+                // stays shut.
                 if reading_enabled.load(Ordering::Relaxed) {
                     let readable: Vec<u64> = c.readable().collect();
                     for sid in readable {
@@ -406,9 +380,8 @@ async fn try_recv_one(
     }
 }
 
-/// THE B2 backpressure verify: a stalled backend throttles the client
-/// (bounded, payload-independent), and on resume the full payload arrives
-/// byte-identical.
+/// THE B2 backpressure verify: a stalled backend throttles the client (bounded,
+/// payload-independent), and on resume the full payload arrives byte-identical.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn s16_b2_backpressure_client_throttled_then_complete_on_resume() {
     let certs = generate_loopback_certs();
@@ -485,9 +458,8 @@ async fn s16_b2_backpressure_client_throttled_then_complete_on_resume() {
 
     let payload = make_payload(0xBEEF, PAYLOAD_LEN);
 
-    // `transfer_complete` flips true ONLY when the client has read the FULL
-    // echo back + FIN — the load-bearing completion witness, which must stay
-    // false while the backend is stalled.
+    // Flips true ONLY when the client has read the FULL echo back + FIN — the load-bearing
+    // completion witness, which must stay false while the backend is stalled.
     let sent_cursor = Arc::new(AtomicUsize::new(0));
     let fin_queued = Arc::new(AtomicBool::new(false));
     let transfer_complete = Arc::new(AtomicBool::new(false));
@@ -517,8 +489,6 @@ async fn s16_b2_backpressure_client_throttled_then_complete_on_resume() {
         }
     });
 
-    // Client driver: relentlessly push the unsent tail + FIN, keep the conn
-    // live, and collect echoed bytes until FIN.
     let (done_tx, done_rx) = tokio::sync::oneshot::channel::<Vec<u8>>();
     let client_cancel = cancel.clone();
     let payload_for_driver = payload.clone();
@@ -599,8 +569,6 @@ async fn s16_b2_backpressure_client_throttled_then_complete_on_resume() {
         pool,
         addr: backend_addr,
         sni: TEST_SNI.to_string(),
-        // B6 (R14/R12): caps now carried on RawBackend; the const
-        // defaults keep these tests byte-identical in behaviour.
         dgram_queue_cap: lb_quic::DGRAM_QUEUE_CAP,
         max_relay_streams: lb_quic::MAX_RELAY_STREAMS,
     };
@@ -624,15 +592,12 @@ async fn s16_b2_backpressure_client_throttled_then_complete_on_resume() {
     };
     let actor = tokio::spawn(run_raw_proxy_actor_for_test(params));
 
-    // PHASE A: backend STALLED, held for a fixed settle window. We do NOT try
-    // to detect a precise "plateau instant": the cursor counts bytes accepted
-    // into quiche's LOCAL send buffer, so under CPU starvation it keeps inching
-    // up while the actor is descheduled, making an instantaneous ceiling
-    // scheduling-FRAGILE. The sound, timing-robust signals are asserted below.
+    // PHASE A: backend STALLED for a fixed settle window. We do NOT detect a precise "plateau
+    // instant": the cursor counts bytes accepted into quiche's LOCAL send buffer, so under CPU
+    // starvation it keeps inching up while the actor is descheduled.
     let settle = tokio::time::Instant::now() + Duration::from_secs(3);
     while tokio::time::Instant::now() < settle {
-        // Bail early if the transfer (wrongly) completes while stalled — we
-        // want to catch that as a failure, not wait out the whole window.
+        // Bail early if the transfer (wrongly) completes while stalled — catch it as a failure.
         if transfer_complete.load(Ordering::Relaxed) {
             break;
         }
@@ -651,9 +616,8 @@ async fn s16_b2_backpressure_client_throttled_then_complete_on_resume() {
          cursor sanity ceiling = {STALL_CEILING}"
     );
 
-    // ASSERT 1a (LOAD-BEARING): while the backend refuses to read, NOTHING
-    // traverses back to it. A relay ignoring the destination's flow control
-    // would have pushed data the backend could echo.
+    // ASSERT 1a (LOAD-BEARING): while the backend refuses to read, NOTHING traverses back to it.
+    // A relay ignoring the destination's flow control would have pushed data it could echo.
     assert!(
         echoed_during_stall == 0,
         "backend echoed {echoed_during_stall} bytes while it was NOT reading \
@@ -661,10 +625,8 @@ async fn s16_b2_backpressure_client_throttled_then_complete_on_resume() {
          honouring its flow control"
     );
 
-    // ASSERT 1b (LOAD-BEARING): the round-trip did NOT complete while stalled.
-    // A relay that fabricated a clean end, or buffered and echoed locally,
-    // would wrongly complete here. With PHASE B completeness this proves the
-    // transfer is GATED on the destination, not buffered through.
+    // ASSERT 1b (LOAD-BEARING): the round-trip did NOT complete while stalled. A relay that
+    // fabricated a clean end, or buffered and echoed locally, would wrongly complete here.
     assert!(
         !complete_while_stalled,
         "the transfer COMPLETED while the backend was stalled — the relay \
@@ -672,11 +634,9 @@ async fn s16_b2_backpressure_client_throttled_then_complete_on_resume() {
          read nothing (it is buffering/fabricating instead of back-pressuring)"
     );
 
-    // ASSERT 1c (secondary, GENEROUS): the client did not get its WHOLE payload
-    // drained. An unbounded buffer-everything relay would pull all of it into LB
-    // memory. The cursor is a LOOSE proxy (local send-buffering inflates it
-    // under saturation), so the ceiling has wide margin — its only role is to
-    // falsify a gross "drained everything" relay.
+    // ASSERT 1c (secondary, GENEROUS): the client did not get its WHOLE payload drained. The
+    // cursor is a LOOSE proxy, so the ceiling has wide margin — its only role is to falsify a
+    // gross "drained everything" relay.
     assert!(
         queued_while_stalled < STALL_CEILING,
         "client queued {queued_while_stalled} bytes while the backend was \
@@ -692,16 +652,14 @@ async fn s16_b2_backpressure_client_throttled_then_complete_on_resume() {
 
     reading_enabled.store(true, Ordering::Relaxed);
 
-    // Generous budget: the small backend window makes the resumed transfer
-    // advance in stop-and-wait steps, each costing scheduling time under gate
-    // saturation. Far above the real need — bump timeouts, don't weaken.
+    // Generous budget: the small backend window makes the resumed transfer advance in
+    // stop-and-wait steps under gate saturation. Bump timeouts, don't weaken.
     let received = tokio::time::timeout(Duration::from_secs(90), done_rx)
         .await
         .expect("after resume, the client must receive the full echoed payload")
         .expect("client driver must deliver the received bytes");
 
-    // ASSERT 2: NO LOSS / NO REORDER. The entire payload round-tripped
-    // byte-identical despite the mid-transfer backpressure stall.
+    // ASSERT 2: NO LOSS / NO REORDER despite the mid-transfer backpressure stall.
     assert_eq!(
         received.len(),
         payload.len(),
