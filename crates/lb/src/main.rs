@@ -134,9 +134,8 @@ struct TlsReloadEntry {
 
 #[derive(Clone)]
 enum ReloadableProxies {
-    H1 {
-        proxy: SharedH1Proxy,
-    },
+    /// Plain HTTP/1.1 listener.
+    H1 { proxy: SharedH1Proxy },
     H1s {
         h1_proxy: SharedH1Proxy,
         h2_proxy: SharedH2Proxy,
@@ -551,14 +550,16 @@ async fn rebuild_l7_proxies(
 }
 
 enum ListenerMode {
+    /// Plain TCP — forward the socket directly.
     PlainTcp,
+    /// TLS over TCP; `_rotator` is held so the ticket-rotation ticker stays alive.
     Tls {
         bundle: lb_security::SharedTlsBundle,
         _rotator: Arc<PlMutex<TicketRotator>>,
     },
-    H1 {
-        proxy: SharedH1Proxy,
-    },
+    /// Plain HTTP/1.1.
+    H1 { proxy: SharedH1Proxy },
+    /// HTTPS offering h2 + http/1.1 via ALPN.
     H1s {
         h1_proxy: SharedH1Proxy,
         h2_proxy: SharedH2Proxy,
