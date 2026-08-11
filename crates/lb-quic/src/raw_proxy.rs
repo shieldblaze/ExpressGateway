@@ -1,21 +1,16 @@
 //! Mode B — terminate-and-re-originate raw-QUIC proxy actor.
 //!
-//! Unlike Mode A ([`crate::passthrough`], which routes by Connection ID without
-//! decrypting), Mode B **terminates** the client QUIC connection and
-//! **re-originates** a fresh, dedicated upstream one mirroring the negotiated
-//! ALPN: two [`quiche::Connection`] objects, two SCIDs, two TLS key schedules,
-//! bound 1:1 by this actor. NOT a CID bridge.
-//!
-//! Both connections live in [`run_raw_proxy_actor`] and both pumps run in one
+//! Unlike Mode A ([`crate::passthrough`], which routes by Connection ID without decrypting), Mode
+//! B **terminates** the client QUIC connection and **re-originates** a fresh, dedicated upstream
+//! one mirroring the negotiated ALPN: two [`quiche::Connection`] objects, two SCIDs, two TLS key
+//! schedules. NOT a CID bridge. Both live in [`run_raw_proxy_actor`] and both pumps run in one
 //! `tokio::select!`, so the relay has `&mut` access to both and needs no mutex.
-//! [`relay_streams`] copies raw STREAM bytes both ways under an identity
-//! stream-ID map with a bounded per-stream window ([`STREAM_RELAY_WINDOW`] —
-//! the R8 mechanism): a slow destination keeps the window full, the relay stops
-//! reading the source, and quiche stops extending that stream's flow-control
-//! window. FIN is propagated only after all buffered bytes drain, and a peer
-//! RESET_STREAM / STOP_SENDING is propagated onward (B3) while the affected
-//! half is still dropped without a FIN — a truncated transfer must never look
-//! complete. [`relay_datagrams`] carries RFC 9221 DATAGRAMs independently.
+//!
+//! [`relay_streams`] copies raw STREAM bytes both ways under an identity stream-ID map with a
+//! bounded per-stream window ([`STREAM_RELAY_WINDOW`] — the R8 mechanism). FIN is propagated only
+//! after all buffered bytes drain, and a peer RESET_STREAM / STOP_SENDING is propagated onward
+//! (B3) while the affected half is still dropped without a FIN — a truncated transfer must never
+//! look complete. [`relay_datagrams`] carries RFC 9221 DATAGRAMs independently.
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -28,43 +23,37 @@ use lb_io::quic_pool::{DedicatedQuic, QuicUpstreamPool};
 
 use crate::conn_actor::{ActorParams, drain_conn_send};
 
-/// Application `CONNECTION_CLOSE` code on graceful shutdown of either raw leg.
-/// Mode B proxies raw QUIC with no H3 layer, so unlike
-/// [`crate::conn_actor::H3_NO_ERROR`] (`0x0100`, an HTTP/3 code) it is a bare
-/// application `0`.
+/// Application `CONNECTION_CLOSE` code on graceful shutdown of either raw leg. Mode B proxies raw
+/// QUIC with no H3 layer, so unlike [`crate::conn_actor::H3_NO_ERROR`] it is a bare application `0`.
 pub const RAW_NO_ERROR: u64 = 0x0000;
 
-/// Budget for pumping the client handshake (Phase 1). Matches the upstream
-/// dial budget in [`lb_io::quic_pool`] so neither leg out-waits the other.
+/// Budget for the client handshake (Phase 1), matched to the [`lb_io::quic_pool`] dial budget so
+/// neither leg out-waits the other.
 const CLIENT_HANDSHAKE_BUDGET: Duration = Duration::from_secs(5);
 
-/// Budget for pumping a connection after `close()` — quiche drains for
-/// `3 * PTO`, comfortably under this.
+/// Budget for pumping after `close()` — quiche drains for `3 * PTO`, comfortably under this.
 const GRACEFUL_CLOSE_BUDGET: Duration = Duration::from_millis(500);
 
-/// Fallback tick when a connection reports no quiche timeout, so the select
-/// loop never parks indefinitely on a connection with no timer armed.
+/// Fallback tick when a connection reports no quiche timeout, so the select loop never parks
+/// indefinitely on a connection with no timer armed.
 const IDLE_TICK: Duration = Duration::from_millis(100);
 
-/// Construction parameters for a Mode B re-origination. Cheap to [`Clone`], so
-/// one configured backend fans out to every per-connection actor.
+/// Construction parameters for a Mode B re-origination; cheap to [`Clone`] so one configured
+/// backend fans out to every per-connection actor.
 #[derive(Clone)]
 pub struct RawBackend {
-    /// The upstream QUIC pool. Mode B uses [`QuicUpstreamPool::dial_dedicated`],
-    /// which does NOT pool the result — the actor owns the connection 1:1 —
-    /// but the pool owns the dial machinery + `config_factory` (R12).
+    /// The upstream QUIC pool. Mode B uses [`QuicUpstreamPool::dial_dedicated`], which does NOT
+    /// pool the result — the actor owns the connection 1:1 — but the pool owns the dial machinery.
     pub pool: QuicUpstreamPool,
     /// Resolved upstream backend address to re-originate to.
     pub addr: std::net::SocketAddr,
     /// SNI presented to the upstream on the re-originated handshake.
     pub sni: String,
-    /// B4 — per-direction bounded DATAGRAM queue capacity. Single-sourced
-    /// with the `enable_dgram` queue length advertised on the wire; defaults
-    /// to [`DGRAM_QUEUE_CAP`].
+    /// B4 — per-direction bounded DATAGRAM queue capacity, single-sourced with the `enable_dgram`
+    /// queue length advertised on the wire; defaults to [`DGRAM_QUEUE_CAP`].
     pub dgram_queue_cap: usize,
-    /// B5 — ceiling on the per-connection relay stream table. Gated on here,
-    /// not on the bare const, so it is single-sourced with `lb_config`;
-    /// defaults to [`MAX_RELAY_STREAMS`].
+    /// B5 — ceiling on the per-connection relay stream table. Gated here rather than on the bare
+    /// const so it is single-sourced with `lb_config`; defaults to [`MAX_RELAY_STREAMS`].
     pub max_relay_streams: usize,
 }
 
@@ -79,10 +68,9 @@ impl std::fmt::Debug for RawBackend {
     }
 }
 
-/// Mechanism-level summary of an established Mode B proxy — the
-/// two-connections proof handle. Distinct `client_scid` vs `upstream_scid`
-/// (and distinct trace_ids) prove two genuinely separate connections with
-/// independent key schedules, NOT a CID bridge.
+/// Mechanism-level summary of an established Mode B proxy — the two-connections proof handle.
+/// Distinct `client_scid` vs `upstream_scid` (and distinct trace_ids) prove two genuinely separate
+/// connections with independent key schedules, NOT a CID bridge.
 #[derive(Debug, Clone)]
 pub struct RawProxyOutcome {
     /// Client-facing connection's source CID bytes.
@@ -97,41 +85,36 @@ pub struct RawProxyOutcome {
     pub negotiated_alpn: Vec<u8>,
 }
 
-/// Drive a Mode B (terminate-and-re-originate) raw-QUIC proxy connection.
-/// Dispatched from [`crate::conn_actor::run_actor`] when
-/// [`ActorParams::raw_quic_backend`] is `Some`.
+/// Drive a Mode B (terminate-and-re-originate) raw-QUIC proxy connection, dispatched from
+/// [`crate::conn_actor::run_actor`] when [`ActorParams::raw_quic_backend`] is `Some`.
 ///
 /// # Errors
-///
-/// Never surfaces an operational fault — like
-/// [`run_actor`](crate::conn_actor::run_actor) it logs and swallows them; the
-/// `io::Result<()>` shape exists for call-site chaining.
+/// Never surfaces an operational fault — like [`run_actor`](crate::conn_actor::run_actor) it logs
+/// and swallows them; the `io::Result<()>` shape exists for call-site chaining.
 pub async fn run_raw_proxy_actor(params: ActorParams) -> std::io::Result<()> {
     match run_raw_proxy_actor_inner(params).await {
         Ok(_outcome) => Ok(()),
         Err(e) => {
             tracing::warn!(error = %e, "Mode B raw-proxy actor exited with error");
-            // Parity with `run_actor`: swallowed after logging so the
-            // spawned task's `JoinHandle` is always Ok.
+            // Parity with `run_actor`: swallowed after logging so the spawned task's
+            // `JoinHandle` is always Ok.
             Ok(())
         }
     }
 }
 
-/// Test hook: as [`run_raw_proxy_actor`] but returns the [`RawProxyOutcome`]
-/// so the verifier can assert two distinct connections by mechanism. Not used
-/// in production.
+/// Test hook: as [`run_raw_proxy_actor`] but returns the [`RawProxyOutcome`] so the verifier can
+/// assert two distinct connections by mechanism. Not used in production.
 ///
 /// # Errors
-///
 /// Surfaces the dial / handshake / pump error verbatim.
 #[cfg(any(test, feature = "test-gauges"))]
 pub async fn run_raw_proxy_actor_for_test(params: ActorParams) -> std::io::Result<RawProxyOutcome> {
     run_raw_proxy_actor_inner(params).await
 }
 
-/// The fallible core: Phase 1 drives the client handshake and dials the
-/// dedicated upstream; Phase 2 runs both pumps until either side finishes.
+/// The fallible core: Phase 1 drives the client handshake and dials the dedicated upstream;
+/// Phase 2 runs both pumps until either side finishes.
 async fn run_raw_proxy_actor_inner(mut params: ActorParams) -> std::io::Result<RawProxyOutcome> {
     // The seam guarantees `Some`, but the crate denies `unwrap`/`expect`.
     let Some(backend) = params.raw_quic_backend.clone() else {
@@ -142,7 +125,6 @@ async fn run_raw_proxy_actor_inner(mut params: ActorParams) -> std::io::Result<R
 
     let mut out_buf = vec![0u8; 65_535];
 
-    // ---- Phase 1: drive the CLIENT-facing connection to established ----
     let established = drive_client_to_established(
         &mut params.conn,
         &params.socket,
@@ -158,8 +140,7 @@ async fn run_raw_proxy_actor_inner(mut params: ActorParams) -> std::io::Result<R
         ));
     }
 
-    // Capture the ALPN BEFORE the dial — the `application_proto()` borrow
-    // must not overlap the dial await.
+    // Capture the ALPN BEFORE the dial — the `application_proto()` borrow must not overlap it.
     let negotiated_alpn = params.conn.application_proto().to_vec();
     let client_scid = params.conn.source_id().as_ref().to_vec();
     let client_trace_id = params.conn.trace_id().to_owned();
@@ -170,8 +151,8 @@ async fn run_raw_proxy_actor_inner(mut params: ActorParams) -> std::io::Result<R
         "Mode B: client established; dialing dedicated upstream"
     );
 
-    // Mirror the negotiated client ALPN upstream. An empty one ⇒ pass `&[]`
-    // so the upstream config factory's own ALPN is used.
+    // Mirror the negotiated client ALPN upstream; an empty one ⇒ pass `&[]` so the upstream
+    // config factory's own ALPN is used.
     let alpn_protos: Vec<&[u8]> = if negotiated_alpn.is_empty() {
         Vec::new()
     } else {
@@ -198,17 +179,15 @@ async fn run_raw_proxy_actor_inner(mut params: ActorParams) -> std::io::Result<R
         negotiated_alpn,
     };
 
-    // B6: the gauge is decremented on EVERY return path by `ActiveConnGuard`,
-    // so a graceful close, an early fault or a cancel all restore it.
+    // B6: `ActiveConnGuard` decrements the gauge on EVERY return path — close, fault or cancel.
     let modeb_metrics = params.quic_modeb_metrics.clone();
     if let Some(m) = modeb_metrics.as_ref() {
         m.connections_total.inc();
     }
     let _active_guard = ActiveConnGuard::new(modeb_metrics.clone());
 
-    // ---- Phase 2: both pumps + the B2 raw-STREAM relay, until either leg
-    // closes. The two memory bounds are single-sourced from the operator
-    // config via `backend`. ----
+    // Phase 2: both pumps + the B2 raw-STREAM relay until either leg closes. Both memory bounds
+    // are single-sourced from the operator config via `backend`.
     run_dual_pump(
         &mut params,
         &mut upstream,
@@ -226,9 +205,8 @@ async fn run_raw_proxy_actor_inner(mut params: ActorParams) -> std::io::Result<R
     Ok(outcome)
 }
 
-/// B6 — RAII guard for the `quic_modeb_connections` active gauge, so every
-/// exit from Phase 2 (close, fault, unwind, cancel) restores it without
-/// scattered `dec()` calls. `None` ⇒ a no-op guard.
+/// B6 — RAII guard for the `quic_modeb_connections` active gauge, so every exit from Phase 2
+/// (close, fault, unwind, cancel) restores it without scattered `dec()` calls. `None` ⇒ a no-op.
 struct ActiveConnGuard {
     gauge: Option<lb_observability::IntGauge>,
 }
@@ -251,8 +229,8 @@ impl Drop for ActiveConnGuard {
     }
 }
 
-/// Phase 1 pump: drive ONLY the client-facing connection until established.
-/// Returns `false` if it closed or the cancel token fired first.
+/// Phase 1 pump: drive ONLY the client-facing connection until established. `false` if it closed
+/// or the cancel token fired first.
 async fn drive_client_to_established(
     conn: &mut quiche::Connection,
     socket: &Arc<UdpSocket>,
@@ -297,48 +275,40 @@ async fn drive_client_to_established(
     }
 }
 
-/// Phase 2 pump: drive BOTH legs in one `tokio::select!` (biased cancel →
-/// client inbound → upstream recv → both timeouts) and run [`relay_streams`]
-/// plus [`relay_datagrams`] after every wake, where the H3 actor runs
-/// `poll_h3`. The relay both reads newly readable data AND flushes bytes still
-/// pending from a previous turn, so a stream backpressured against a full
-/// destination resumes the moment that destination frees window.
+/// Phase 2 pump: drive BOTH legs in one `tokio::select!` (biased cancel → client inbound →
+/// upstream recv → both timeouts) and run [`relay_streams`] plus [`relay_datagrams`] after every
+/// wake. The relay both reads newly readable data AND flushes bytes pending from a previous turn,
+/// so a stream backpressured against a full destination resumes the moment it frees window.
 ///
-/// While the relay holds any in-flight state the select wait is capped at
-/// [`RELAY_TICK`]: quiche's idle timeout can be hundreds of ms and would
-/// throttle a mid-transfer stream to a crawl. This does NOT defeat
-/// backpressure — [`STREAM_RELAY_WINDOW`] still caps in-flight bytes; we
-/// merely poll the gate more often. When idle the loop parks on the real
-/// quiche timeout, so there is no busy-spin.
+/// While the relay holds in-flight state the select wait is capped at [`RELAY_TICK`]: quiche's
+/// idle timeout can be hundreds of ms and would throttle a mid-transfer stream to a crawl. This
+/// does NOT defeat backpressure — [`STREAM_RELAY_WINDOW`] still caps in-flight bytes; we merely
+/// poll the gate more often. When idle the loop parks on the real quiche timeout (no busy-spin).
 async fn run_dual_pump(
     params: &mut ActorParams,
     upstream: &mut DedicatedQuic,
     out_buf: &mut [u8],
-    // B6: the relay bumps metrics ONLY here at the per-pass aggregate level,
-    // so `relay_datagrams`/`pump_dir` keep their signatures. `None` ⇒ no-op.
+    // B6: metrics are bumped ONLY here at the per-pass aggregate level, so
+    // `relay_datagrams`/`pump_dir` keep their signatures. `None` ⇒ no-op.
     metrics: Option<&lb_observability::QuicModeBMetrics>,
     // B4 datagram-queue cap, single-sourced from `RawBackend`/`lb_config`.
     dgram_queue_cap: usize,
-    // B5 relay-stream-table cap, single-sourced; threaded into
-    // `relay_streams` → `admit_or_refuse`.
+    // B5 relay-stream-table cap, single-sourced; threaded into `relay_streams` → `admit_or_refuse`.
     max_relay_streams: usize,
 ) {
-    // The upstream leg recv_from's straight off its dedicated socket, so it
-    // needs its own inbound buffer (the client side gets owned `Vec`s).
+    // The upstream leg recv_from's straight off its dedicated socket, so it needs its own buffer.
     let mut up_in_buf = vec![0u8; 65_535];
     let upstream_local = upstream.local;
 
-    // B2: the bounded per-stream relay table (R8). An entry lives until BOTH
-    // directions are terminally done.
+    // B2: the bounded per-stream relay table (R8); an entry lives until BOTH directions are done.
     let mut streams: HashMap<u64, RawStreamState> = HashMap::new();
 
-    // B4: the two bounded drop-newest datagram queues. Datagrams have no FIN,
-    // reset or ordering, so they live OUTSIDE the stream table.
+    // B4: the two bounded drop-newest datagram queues. Datagrams have no FIN, reset or ordering,
+    // so they live OUTSIDE the stream table.
     let mut c2u_q = BoundedDgramQueue::new(dgram_queue_cap);
     let mut u2c_q = BoundedDgramQueue::new(dgram_queue_cap);
 
-    // B6: only the DELTA of the queues' monotonic per-lifetime `dropped` is
-    // fed into the process-cumulative counter.
+    // B6: only the DELTA of the queues' monotonic per-lifetime `dropped` feeds the counter.
     let mut last_dropped_total: u64 = 0;
 
     loop {
@@ -351,11 +321,8 @@ async fn run_dual_pump(
 
         let mut client_wait = params.conn.timeout().unwrap_or(IDLE_TICK);
         let mut upstream_wait = upstream.conn.timeout().unwrap_or(IDLE_TICK);
-        // While any stream is mid-transfer or a datagram is queued, poll the
-        // relay gate often so a backpressured stream resumes promptly AND
-        // datagram-only traffic is pumped without waiting out quiche's idle
-        // timeout. The bounded window/queue still holds — see fn docs. Fully
-        // idle ⇒ fall through to the real timeouts (no busy-spin).
+        // While any stream is mid-transfer or a datagram is queued, poll the relay gate often so
+        // a backpressured stream resumes promptly. Fully idle ⇒ fall through to the real timeouts.
         if !streams.is_empty() || !c2u_q.is_empty() || !u2c_q.is_empty() {
             client_wait = client_wait.min(RELAY_TICK);
             upstream_wait = upstream_wait.min(RELAY_TICK);
@@ -399,9 +366,8 @@ async fn run_dual_pump(
             }
         }
 
-        // B2 relay: runs every wake so both freshly readable data AND
-        // previously-backpressured pending bytes make progress. Next turn's
-        // `drain_conn_send` ships whatever it handed to quiche.
+        // B2 relay: runs every wake so both freshly readable data AND previously-backpressured
+        // pending bytes make progress.
         relay_streams(
             &mut params.conn,
             &mut upstream.conn,
@@ -409,14 +375,11 @@ async fn run_dual_pump(
             max_relay_streams,
         );
 
-        // B4 relay: forward RFC 9221 DATAGRAMs verbatim both ways. A full
-        // queue drops the NEWEST payload (the R8 bound); a payload quiche
-        // could not accept this turn stays queued and is retried next wake.
+        // B4 relay: forward RFC 9221 DATAGRAMs verbatim both ways. A full queue drops the NEWEST
+        // payload (the R8 bound); one quiche could not accept stays queued for the next wake.
         relay_datagrams(&mut params.conn, &mut upstream.conn, &mut c2u_q, &mut u2c_q);
 
-        // B6 per-pass aggregate: `streams_active` from the post-reclamation
-        // table size, and the DELTA of both queues' drop-newest counters
-        // (`saturating_*` so no boundary can panic under the no-panic bar).
+        // B6 per-pass aggregate; `saturating_*` so no boundary can panic under the no-panic bar.
         if let Some(m) = metrics {
             #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
             let table_len = i64::try_from(streams.len()).unwrap_or(i64::MAX);
@@ -432,79 +395,58 @@ async fn run_dual_pump(
     }
 }
 
-/// Bounded per-stream relay window, in bytes, **per stream per direction**
-/// (R8 — the memory-safety mechanism, NOT a body/total cap).
-///
-/// The relay reads a source stream ONLY while that direction's pending buffer
-/// is under this. quiche extends a stream's flow-control window as a side
-/// effect of `stream_recv`, so not reading stops the window growing and the
-/// *peer* pauses — genuine end-to-end backpressure. 256 KiB is a few BDPs on a
-/// short-RTT path while keeping per-stream memory bounded and independent of
-/// transfer size; total per-connection memory is
+/// Bounded per-stream relay window, in bytes, **per stream per direction** (R8 — the memory-safety
+/// mechanism, NOT a body/total cap). The relay reads a source stream ONLY while that direction's
+/// pending buffer is under this: quiche extends a stream's flow-control window as a side effect of
+/// `stream_recv`, so not reading stops the window growing and the *peer* pauses — genuine
+/// end-to-end backpressure. Total per-connection memory is
 /// `MAX_RELAY_STREAMS * 2 * STREAM_RELAY_WINDOW`.
 const STREAM_RELAY_WINDOW: usize = 256 * 1024;
 
-/// B5 — explicit, defense-in-depth CEILING on the per-connection relay stream
-/// table, making worst-case per-connection relay memory a hard constant:
-/// `MAX_RELAY_STREAMS * 2 * STREAM_RELAY_WINDOW = 256 * 2 * 256 KiB = 128 MiB`
-/// (never approached).
+/// B5 — explicit, defense-in-depth CEILING on the per-connection relay stream table, making
+/// worst-case per-connection relay memory a hard constant:
+/// `MAX_RELAY_STREAMS * 2 * STREAM_RELAY_WINDOW = 256 * 2 * 256 KiB = 128 MiB` (never approached).
 ///
-/// This is NOT the primary bound in practice: quiche's negotiated grant
-/// (`initial_max_streams_bidi/uni(16)`) already caps a conforming client at
-/// ~32 concurrent streams, and [`relay_streams`] evicts each stream once BOTH
-/// directions finish, so the table tracks the *concurrent*, not the *total*,
-/// stream count. It exists so the ceiling is INDEPENDENT of the quiche config:
-/// were `max_streams` ever mis-set huge, the grant would no longer bound the
-/// table and this constant still would. `256` is an 8× margin over the
-/// negotiated grant, so a correctly-configured connection never hits it.
+/// NOT the primary bound in practice: quiche's negotiated grant already caps a conforming client
+/// at ~32 concurrent streams, and [`relay_streams`] evicts each stream once BOTH directions
+/// finish. It exists so the ceiling is INDEPENDENT of the quiche config — were `max_streams` ever
+/// mis-set huge, the grant would no longer bound the table and this constant still would.
 ///
-/// This is the canonical DEFAULT; the runtime value is single-sourced from
-/// [`RawBackend::max_relay_streams`]. `pub` so the params layer can use it as
-/// the documented fallback and tests can pin it.
+/// The canonical DEFAULT; the runtime value is single-sourced from [`RawBackend::max_relay_streams`].
 pub const MAX_RELAY_STREAMS: usize = 256;
 
-/// Short poll interval while ANY stream is mid-transfer, so a partial or
-/// backpressured copy resumes without waiting out quiche's idle timeout. The
-/// loop only ticks this fast while there is pending relay work.
+/// Short poll interval while ANY stream is mid-transfer, so a partial or backpressured copy
+/// resumes without waiting out quiche's idle timeout.
 const RELAY_TICK: Duration = Duration::from_millis(2);
 
-/// One direction of a relayed raw stream: a BOUNDED pending buffer (the R8
-/// bound and the backpressure point) plus FIN/cancellation bookkeeping. The
-/// FIN flags ensure a clean end is emitted only AFTER every buffered byte has
-/// been accepted — never a FIN ahead of data.
+/// One direction of a relayed raw stream: a BOUNDED pending buffer (the R8 bound and the
+/// backpressure point) plus FIN/cancellation bookkeeping, so a clean end is emitted only AFTER
+/// every buffered byte has been accepted — never a FIN ahead of data.
 #[derive(Default)]
 struct RelayHalf {
-    /// Read from the source, not yet accepted by `dst`. Capped at
-    /// [`STREAM_RELAY_WINDOW`]: the source is not read while at/over the cap.
+    /// Read from the source, not yet accepted by `dst`; capped at [`STREAM_RELAY_WINDOW`], and
+    /// the source is not read while at/over the cap.
     pending: Vec<u8>,
-    /// Source returned `fin=true`. The destination FIN is deferred until
-    /// `pending` is fully drained.
+    /// Source returned `fin=true`; the destination FIN is deferred until `pending` fully drains.
     src_fin_seen: bool,
     /// A clean FIN was delivered to the destination — terminal.
     fin_sent: bool,
     /// Finished (FIN sent, or dropped with a cancellation propagated — B3).
-    /// The entry is reclaimed once both directions are done.
     done: bool,
-    /// B3: the application error code once a cancellation has been PROPAGATED
-    /// for this half. Records the code and makes the propagation idempotent —
-    /// a half is only ever shut down once.
+    /// B3: the app error code once a cancellation has been PROPAGATED for this half, making the
+    /// propagation idempotent — a half is only ever shut down once.
     reset_code: Option<u64>,
 }
 
 impl RelayHalf {
-    /// B3 — propagate a stream cancellation onto `peer` ONCE and mark this
-    /// half terminally done WITHOUT a clean FIN (the smuggling guard: a
-    /// truncated transfer must never look complete).
+    /// B3 — propagate a stream cancellation onto `peer` ONCE and mark this half terminally done
+    /// WITHOUT a clean FIN (the smuggling guard: a truncated transfer must never look complete).
     ///
-    /// `dir_for_peer` is COUNTERINTUITIVE in quiche — swapping the arms
-    /// silently emits the wrong frame:
-    /// * [`quiche::Shutdown::Write`] ⇒ **RESET_STREAM** toward `peer`
-    ///   (relaying a source RESET_STREAM onward to `dst`).
-    /// * [`quiche::Shutdown::Read`] ⇒ **STOP_SENDING** toward `peer`
-    ///   (relaying a destination STOP_SENDING back to `src`).
-    ///
-    /// Idempotent; `Err(Done)` (that side already gone) counts as success and
-    /// any other error is logged and swallowed — never a panic.
+    /// `dir_for_peer` is COUNTERINTUITIVE in quiche — swapping the arms silently emits the wrong
+    /// frame: [`quiche::Shutdown::Write`] ⇒ **RESET_STREAM** toward `peer` (relaying a source
+    /// RESET_STREAM onward to `dst`); [`quiche::Shutdown::Read`] ⇒ **STOP_SENDING** toward `peer`
+    /// (relaying a destination STOP_SENDING back to `src`). Idempotent; `Err(Done)` counts as
+    /// success and any other error is logged and swallowed — never a panic.
     fn propagate_cancel(
         &mut self,
         peer: &mut quiche::Connection,
@@ -513,16 +455,15 @@ impl RelayHalf {
         dir_for_peer: quiche::Shutdown,
         dir: Direction,
     ) {
-        // Explicit idempotency latch: a half can be reset in one direction
-        // while we are mid-pass, so `done` alone is not enough.
+        // Explicit idempotency latch: a half can be reset in one direction while we are mid-pass,
+        // so `done` alone is not enough.
         if self.reset_code.is_some() {
             self.pending.clear();
             self.done = true;
             return;
         }
         match peer.stream_shutdown(sid, dir_for_peer, code) {
-            // Propagated, or the peer was already gone — either way it is
-            // (or will be) reflected to the peer.
+            // Propagated, or the peer was already gone — either way it is reflected to the peer.
             Ok(()) | Err(quiche::Error::Done) => {}
             Err(e) => {
                 // Do NOT panic: the half is failing anyway and the pump goes on.
@@ -533,20 +474,16 @@ impl RelayHalf {
                 );
             }
         }
-        // Smuggling guard (B2, kept): drop unsent bytes, terminate this half,
-        // NEVER a clean FIN.
+        // Smuggling guard (B2, kept): drop unsent bytes, terminate this half, NEVER a clean FIN.
         self.pending.clear();
         self.reset_code = Some(code);
         self.done = true;
     }
 }
 
-/// Bounded per-stream relay state: an identity stream-ID map, so the SAME
-/// `sid` indexes both connections. Each direction is an independent
-/// [`RelayHalf`], so a B3 cancellation tears down ONLY the affected
-/// unidirectional half — a bidi stream's other direction stays live — and the
-/// B2 smuggling guard is kept: the half is dropped and **never** given a clean
-/// FIN. See the `// B3:` arms in [`pump_dir`].
+/// Bounded per-stream relay state under an identity stream-ID map, so the SAME `sid` indexes both
+/// connections. Each direction is an independent [`RelayHalf`], so a B3 cancellation tears down
+/// ONLY the affected unidirectional half and the half is **never** given a clean FIN.
 #[derive(Default)]
 struct RawStreamState {
     /// client → upstream direction.
@@ -562,30 +499,22 @@ impl RawStreamState {
     }
 }
 
-/// B2 — one bidirectional raw-STREAM relay pass. Identity stream-ID mapping:
-/// the role-quadrants line up (LB is server to the client, client to the
-/// backend), so no translation table is needed.
+/// B2 — one bidirectional raw-STREAM relay pass. Identity stream-ID mapping: the role-quadrants
+/// line up (LB is server to the client, client to the backend), so no translation table is needed.
 ///
-/// The candidate set each turn is `client.readable()` ∪ `upstream.readable()`
-/// ∪ every `sid` already tracked — so a stream backpressured last turn, or
-/// awaiting a deferred FIN, is revisited and resumes when the destination
-/// frees window. `readable()` is a snapshot, so it is re-collected every pass.
-///
-/// `max_relay_streams` is the B5 ceiling, single-sourced from the operator
-/// config; it defaults to [`MAX_RELAY_STREAMS`].
+/// The candidate set each turn is `client.readable()` ∪ `upstream.readable()` ∪ every tracked
+/// `sid`, so a stream backpressured last turn, or awaiting a deferred FIN, is revisited and
+/// resumes when the destination frees window. `readable()` is a snapshot, re-collected every pass.
 fn relay_streams(
     client: &mut quiche::Connection,
     upstream: &mut quiche::Connection,
     streams: &mut HashMap<u64, RawStreamState>,
     max_relay_streams: usize,
 ) {
-    // Union of readable streams on both legs + every sid with live relay state,
-    // de-duped via the state map.
-    //
-    // B5: a NEW readable sid is admitted only while the table is below the cap;
-    // an already-tracked sid is ALWAYS re-processed (correctness — never drop a
-    // live stream mid-transfer). Over-cap is only reachable with a
-    // mis-configured `max_streams` grant.
+    // Union of readable streams on both legs + every sid with live relay state, de-duped via the
+    // state map. B5: a NEW readable sid is admitted only while the table is below the cap; an
+    // already-tracked sid is ALWAYS re-processed (correctness — never drop a live stream
+    // mid-transfer).
     for sid in client.readable() {
         admit_or_refuse(streams, sid, max_relay_streams);
     }
@@ -614,29 +543,24 @@ fn relay_streams(
         );
     }
 
-    // Reclaim entries whose BOTH directions are done. This is what keeps the
-    // table bounded by the CONCURRENT stream count rather than the total over
-    // the connection's life — the load-bearing eviction.
+    // Reclaim entries whose BOTH directions are done — the load-bearing eviction that keeps the
+    // table bounded by the CONCURRENT stream count rather than the total over the connection.
     streams.retain(|_, st| !st.is_complete());
 }
 
-/// B5 — admit a NEW relay-stream `sid` iff the table is below
-/// `max_relay_streams`; an already-tracked `sid` is left untouched (an
-/// explicit `contains_key` short-circuit, so the always-process-existing
-/// invariant is unmistakable). Over the cap a NEW sid is REFUSED — a fail-safe
-/// ceiling independent of the quiche `max_streams` grant.
+/// B5 — admit a NEW relay-stream `sid` iff the table is below `max_relay_streams`; an
+/// already-tracked `sid` is left untouched (an explicit `contains_key` short-circuit). Over the cap
+/// a NEW sid is REFUSED — a fail-safe ceiling independent of the quiche `max_streams` grant.
 fn admit_or_refuse(streams: &mut HashMap<u64, RawStreamState>, sid: u64, max_relay_streams: usize) {
     if streams.contains_key(&sid) {
-        // Already tracked: ALWAYS re-processed; no growth, so the cap
-        // does not apply.
+        // Already tracked: ALWAYS re-processed; no growth, so the cap does not apply.
         return;
     }
     if streams.len() < max_relay_streams {
         streams.entry(sid).or_default();
     } else {
-        // Over the ceiling — refuse to track this new sid. Only reachable with
-        // a mis-configured huge `max_streams`. `debug!` keeps the log
-        // rate-bounded under a flood.
+        // Over the ceiling. Only reachable with a mis-configured huge `max_streams`; `debug!`
+        // keeps the log rate-bounded under a flood.
         tracing::debug!(
             stream_id = sid,
             table_len = streams.len(),
@@ -647,55 +571,40 @@ fn admit_or_refuse(streams: &mut HashMap<u64, RawStreamState>, sid: u64, max_rel
     }
 }
 
-/// B4 — capacity (in datagrams) of ONE [`BoundedDgramQueue`], per direction.
-/// The R8 bound for the datagram relay: worst-case memory for one direction is
-/// `DGRAM_QUEUE_CAP * MAX_DGRAM_SIZE`, independent of total traffic. `1024`
-/// matches quiche's own recv/send-queue default — large enough to absorb a
-/// normal burst, small enough that a flooding peer cannot grow memory without
-/// bound (over-cap arrivals are drop-newest).
-///
-/// This is the canonical DEFAULT; the runtime value is single-sourced from
-/// [`RawBackend::dgram_queue_cap`]. `pub` so the params layer can use it as
-/// the documented fallback and tests can pin it.
+/// B4 — capacity (in datagrams) of ONE [`BoundedDgramQueue`], per direction: the R8 bound for the
+/// datagram relay, so worst-case memory for one direction is `DGRAM_QUEUE_CAP * MAX_DGRAM_SIZE`,
+/// independent of total traffic. `1024` matches quiche's own recv/send-queue default. The
+/// canonical DEFAULT; the runtime value is single-sourced from [`RawBackend::dgram_queue_cap`].
 pub const DGRAM_QUEUE_CAP: usize = 1024;
 
-/// B4 — scratch size for one `dgram_recv`. `65_535` is the absolute UDP
-/// payload ceiling, so `BufferTooShort` is unreachable in practice and that
-/// arm is defensive only.
+/// B4 — scratch size for one `dgram_recv`; the absolute UDP payload ceiling, so the
+/// `BufferTooShort` arm is defensive only.
 const MAX_DGRAM_SIZE: usize = 65_535;
 
-/// B4 — outcome of a [`BoundedDgramQueue::push`], returned so the recv-drain
-/// and the tests observe the drop-newest decision by mechanism rather than by
-/// inspecting the counter.
+/// B4 — outcome of a [`BoundedDgramQueue::push`], so callers and tests observe the drop-newest
+/// decision by mechanism rather than by inspecting the counter.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DgramPushOutcome {
     /// The payload was appended to the back of the queue.
     Queued,
-    /// The queue was full; the payload was DISCARDED and `dropped`
-    /// incremented (drop-newest).
+    /// The queue was full; the payload was DISCARDED and `dropped` incremented (drop-newest).
     Dropped,
 }
 
-/// B4 — a bounded FIFO of QUIC DATAGRAM (RFC 9221) payloads with an explicit
-/// **drop-newest** full-policy (the R8 bound for the datagram relay). Payloads
-/// are stored verbatim; a zero-length datagram is a legitimate, distinct
-/// datagram and is preserved as an empty `Vec`.
+/// B4 — a bounded FIFO of QUIC DATAGRAM (RFC 9221) payloads with an explicit **drop-newest**
+/// full-policy (the R8 bound for the datagram relay). Payloads are stored verbatim; a zero-length
+/// datagram is a legitimate, distinct datagram and is preserved as an empty `Vec`.
 ///
-/// At capacity, [`push`](Self::push) DISCARDS the *arriving* payload and
-/// increments [`dropped`](Self::dropped), keeping the older queued payloads in
-/// order — mirroring quiche's own recv-queue overflow behaviour. Datagrams are
-/// unreliable by contract, so there is no retransmission obligation and no
-/// ordering to violate. The alternatives would either let a flooding peer grow
-/// relay memory without bound (the R8 violation this type prevents) or
-/// silently reorder by evicting head-of-line payloads.
+/// At capacity, [`push`](Self::push) DISCARDS the *arriving* payload and keeps the older queued
+/// ones in order, mirroring quiche's own recv-queue overflow. Datagrams are unreliable by
+/// contract, so there is no retransmission obligation and no ordering to violate; the alternatives
+/// would either let a flooding peer grow relay memory without bound or silently reorder.
 struct BoundedDgramQueue {
     /// FIFO of datagram payloads (verbatim bytes, front = oldest).
     q: VecDeque<Vec<u8>>,
-    /// Maximum queued payloads — the R8 bound. A `push` at this length drops
-    /// the newest.
+    /// Maximum queued payloads — the R8 bound. A `push` at this length drops the newest.
     cap: usize,
-    /// Drop-newest events over this queue's lifetime, surfaced for the B6
-    /// metric. `saturating_add` to honour the crate's no-panic bar.
+    /// Drop-newest events over this queue's lifetime (B6 metric); `saturating_add` for no-panic.
     dropped: u64,
 }
 
@@ -709,9 +618,8 @@ impl BoundedDgramQueue {
         }
     }
 
-    /// Enqueue `payload` verbatim unless the queue is full, in which case the
-    /// ARRIVING payload is discarded and `dropped` incremented (drop-newest).
-    /// Returns which branch was taken so the caller observes the policy.
+    /// Enqueue `payload` verbatim unless the queue is full, in which case the ARRIVING payload is
+    /// discarded and `dropped` incremented. Returns which branch was taken.
     fn push(&mut self, payload: Vec<u8>) -> DgramPushOutcome {
         if self.q.len() >= self.cap {
             // The bound holds even for `cap == 0` (then every push drops).
@@ -723,8 +631,7 @@ impl BoundedDgramQueue {
         }
     }
 
-    /// Borrow the front (oldest) payload, so the send-drain can peek before
-    /// `dgram_send` and leave it queued on a full send queue.
+    /// Borrow the front (oldest) payload, so the send-drain can peek and leave it queued.
     fn front(&self) -> Option<&Vec<u8>> {
         self.q.front()
     }
@@ -751,9 +658,8 @@ impl BoundedDgramQueue {
     }
 }
 
-/// B4 — one bidirectional DATAGRAM (RFC 9221) relay pass. Datagrams have no
-/// FIN, reset or ordering guarantee, so this NEVER touches stream state and is
-/// fully independent of [`relay_streams`].
+/// B4 — one bidirectional DATAGRAM (RFC 9221) relay pass. Datagrams have no FIN, reset or ordering
+/// guarantee, so this NEVER touches stream state and is fully independent of [`relay_streams`].
 fn relay_datagrams(
     client: &mut quiche::Connection,
     upstream: &mut quiche::Connection,
@@ -764,20 +670,15 @@ fn relay_datagrams(
     pump_dgram_dir(upstream, client, u2c_q, Direction::UpstreamToClient);
 }
 
-/// B4 — relay ONE direction for this turn: recv-drain every datagram quiche
-/// has queued on `src` into the bounded `q` (drop-newest when full), then
-/// send-drain `q` into `dst` front-first.
+/// B4 — relay ONE direction for this turn: recv-drain every datagram quiche has queued on `src`
+/// into the bounded `q` (drop-newest when full), then send-drain `q` into `dst` front-first.
 ///
-/// The `dgram_send` arms are not interchangeable:
-/// * `Err(Done)` — `dst`'s own send queue is full ⇒ **stop this turn**,
-///   leaving the payload queued for the next wake. Transient backpressure, NOT
-///   a drop.
-/// * `Err(BufferTooShort)` — the payload exceeds `dst`'s peer
-///   `max_datagram_frame_size` and can NEVER be forwarded ⇒ drop THIS payload
-///   and continue, or it blocks the queue forever.
-/// * `Err(InvalidState)` — `dst` never negotiated DATAGRAM (mis-wired;
-///   negotiation is a config-time invariant) ⇒ drain and discard the whole
-///   queue so a non-negotiating peer cannot pin relay memory.
+/// The `dgram_send` arms are NOT interchangeable: `Err(Done)` — `dst`'s own send queue is full ⇒
+/// stop this turn, leaving the payload queued (transient backpressure, NOT a drop);
+/// `Err(BufferTooShort)` — the payload exceeds `dst`'s peer `max_datagram_frame_size` and can
+/// NEVER be forwarded ⇒ drop THIS payload and continue, or it blocks the queue forever;
+/// `Err(InvalidState)` — `dst` never negotiated DATAGRAM ⇒ drain and discard the whole queue so a
+/// non-negotiating peer cannot pin relay memory.
 fn pump_dgram_dir(
     src: &mut quiche::Connection,
     dst: &mut quiche::Connection,
@@ -789,8 +690,7 @@ fn pump_dgram_dir(
     loop {
         match src.dgram_recv(&mut buf) {
             Ok(len) => {
-                // Verbatim copy of exactly `len` bytes (binary-safe,
-                // zero-length preserved); `get(..len)` cannot panic.
+                // Verbatim copy of exactly `len` bytes (binary-safe, zero-length preserved).
                 let payload = buf.get(..len).unwrap_or(&[]).to_vec();
                 if q.push(payload) == DgramPushOutcome::Dropped {
                     tracing::trace!(
@@ -826,11 +726,10 @@ fn pump_dgram_dir(
             Ok(()) => {
                 let _ = q.pop_front();
             }
-            // `dst`'s send queue is full: transient backpressure, so leave
-            // the payload queued and retry next wake.
+            // `dst`'s send queue is full: transient backpressure, so leave the payload queued.
             Err(quiche::Error::Done) => break,
-            // Larger than `dst`'s peer max writable: it can NEVER be
-            // forwarded, so drop THIS one or it blocks the queue forever.
+            // Larger than `dst`'s peer max writable: it can NEVER be forwarded, so drop THIS one
+            // or it blocks the queue forever.
             Err(quiche::Error::BufferTooShort) => {
                 let _ = q.pop_front();
                 q.dropped = q.dropped.saturating_add(1);
@@ -840,8 +739,8 @@ fn pump_dgram_dir(
                      writable); dropping this datagram"
                 );
             }
-            // `dst` never negotiated DATAGRAM (mis-wired). Nothing can be
-            // forwarded, so discard the whole queue rather than pin memory.
+            // `dst` never negotiated DATAGRAM (mis-wired): discard the whole queue rather than
+            // pin memory.
             Err(quiche::Error::InvalidState) => {
                 let drained = q.len() as u64;
                 while q.pop_front().is_some() {}
@@ -885,30 +784,23 @@ impl Direction {
     }
 }
 
-/// Relay ONE direction of ONE stream for this turn: gate-read from `src` into
-/// the bounded pending buffer, drain pending into `dst` honouring partial
-/// writes / `Done` / `StreamLimit`, and propagate a clean FIN only after ALL
-/// pending bytes are accepted — so a FIN can never overtake buffered data.
+/// Relay ONE direction of ONE stream for this turn: gate-read from `src` into the bounded pending
+/// buffer, drain pending into `dst` honouring partial writes / `Done` / `StreamLimit`, and
+/// propagate a clean FIN only after ALL pending bytes are accepted — so a FIN can never overtake
+/// buffered data.
 ///
-/// Backpressure (R8): `src.stream_recv` runs ONLY while
-/// `half.pending.len() < STREAM_RELAY_WINDOW`. quiche extends a stream's
-/// flow-control window as a side effect of `stream_recv`, so NOT reading stops
-/// the window growing and the source peer blocks once its credit is spent. A
-/// short write or `Done` leaves the remainder in `pending` (drained
-/// front-first, no reorder, no drop). `StreamLimit` — the mirror stream cannot
-/// be opened yet — keeps the bytes pending and retries; it is stream-grant
-/// backpressure, never a drop.
+/// Backpressure (R8): `src.stream_recv` runs ONLY while `half.pending.len() <
+/// STREAM_RELAY_WINDOW`. quiche extends a stream's flow-control window as a side effect of
+/// `stream_recv`, so NOT reading stops the window growing and the source peer blocks once its
+/// credit is spent. `StreamLimit` — the mirror stream cannot be opened yet — keeps the bytes
+/// pending and retries; it is stream-grant backpressure, never a drop.
 ///
-/// Reset / stop (B3): `Err(StreamReset(code))` from `stream_recv` is RELAYED
-/// onward as a RESET_STREAM toward `dst` with the same code;
-/// `Err(StreamStopped(code))` from `stream_send` is RELAYED back toward `src`
-/// as a STOP_SENDING. Both then drop THIS direction's pending bytes and mark
-/// it done — and **never** synthesise a clean FIN, which would present a
-/// truncated transfer as complete (the F-MD-4 smuggling bug). Only the
-/// affected unidirectional half is torn down. A GENERIC (non-reset/stop) error
-/// also fails safe with no FIN, but does NOT synthesise a reset toward the
-/// peer: it is not a peer cancellation with a meaningful app code and usually
-/// accompanies a connection teardown.
+/// Reset / stop (B3): `Err(StreamReset(code))` from `stream_recv` is RELAYED onward as a
+/// RESET_STREAM toward `dst` with the same code; `Err(StreamStopped(code))` from `stream_send` is
+/// RELAYED back toward `src` as a STOP_SENDING. Both then drop THIS direction's pending bytes and
+/// **never** synthesise a clean FIN, which would present a truncated transfer as complete (the
+/// F-MD-4 smuggling bug). A GENERIC error also fails safe with no FIN, but does NOT synthesise a
+/// reset toward the peer: it is not a peer cancellation with a meaningful app code.
 fn pump_dir(
     sid: u64,
     src: &mut quiche::Connection,
@@ -920,14 +812,12 @@ fn pump_dir(
         return;
     }
 
-    // Read gate: pull from src only while pending is below the window AND the
-    // source FIN has not been observed. Loop so a burst moves in one turn.
+    // Read gate: pull from src only while pending is below the window AND the source FIN has not
+    // been observed. Loop so a burst moves in one turn.
     //
-    // CF-S16-RELAY-STALL: once the source FIN is read, quiche has COLLECTED the
-    // stream, so re-issuing `stream_recv` returns `Err(InvalidStreamState)` and
-    // the generic read-error arm below would DROP the still-pending tail + the
-    // FIN. There is nothing more to read after the FIN — the `!src_fin_seen`
-    // gate is the fix.
+    // CF-S16-RELAY-STALL: once the source FIN is read, quiche has COLLECTED the stream, so
+    // re-issuing `stream_recv` returns `Err(InvalidStreamState)` and the generic read-error arm
+    // below would DROP the still-pending tail + the FIN. The `!src_fin_seen` gate is the fix.
     while !half.src_fin_seen && half.pending.len() < STREAM_RELAY_WINDOW {
         let room = STREAM_RELAY_WINDOW.saturating_sub(half.pending.len());
         // Read at most `room` so pending never exceeds the window in one recv.
@@ -944,10 +834,9 @@ fn pump_dir(
                 }
             }
             Err(quiche::Error::Done) => break,
-            // B3: peer RESET_STREAM on its send side. The transfer is
-            // TRUNCATED and must NOT become a clean FIN on `dst` (F-MD-4
-            // smuggling guard). Propagate it onward with the SAME code; only
-            // THIS half is torn down, the reverse direction stays live.
+            // B3: peer RESET_STREAM on its send side. The transfer is TRUNCATED and must NOT
+            // become a clean FIN on `dst` (F-MD-4 smuggling guard); propagate it onward with the
+            // SAME code, tearing down only THIS half.
             Err(quiche::Error::StreamReset(code)) => {
                 tracing::debug!(
                     stream_id = sid,
@@ -959,10 +848,9 @@ fn pump_dir(
                 half.propagate_cancel(dst, sid, code, quiche::Shutdown::Write, dir);
                 return;
             }
-            // Generic read error (NOT a peer RESET_STREAM). Fail safe: drop
-            // this half WITHOUT a clean FIN. Deliberately no synthetic reset —
-            // a generic fault is not a peer cancellation with a meaningful app
-            // code, and usually means `dst` is already being torn down.
+            // Generic read error (NOT a peer RESET_STREAM). Fail safe: drop this half WITHOUT a
+            // clean FIN, and deliberately no synthetic reset — a generic fault is not a peer
+            // cancellation with a meaningful app code.
             Err(e) => {
                 tracing::debug!(
                     stream_id = sid, dir = dir.as_str(), error = %e,
@@ -988,8 +876,8 @@ fn pump_dir(
                     break;
                 }
             }
-            // Mirror stream not openable yet (peer MAX_STREAMS not granted):
-            // hold the bytes and retry — stream-grant backpressure, not a drop.
+            // Mirror stream not openable yet: hold the bytes and retry — stream-grant
+            // backpressure, not a drop.
             Err(quiche::Error::StreamLimit) => {
                 tracing::trace!(
                     stream_id = sid,
@@ -998,9 +886,8 @@ fn pump_dir(
                 );
                 break;
             }
-            // B3: peer STOP_SENDING on the stream we are writing. Propagate it
-            // back toward `src` with the SAME code so the source stops, then
-            // drop this half without a FIN (smuggling guard).
+            // B3: peer STOP_SENDING on the stream we are writing. Propagate it back toward `src`
+            // with the SAME code, then drop this half without a FIN (smuggling guard).
             Err(quiche::Error::StreamStopped(code)) => {
                 tracing::debug!(
                     stream_id = sid,
@@ -1012,9 +899,8 @@ fn pump_dir(
                 half.propagate_cancel(src, sid, code, quiche::Shutdown::Read, dir);
                 return;
             }
-            // Generic write error (NOT a peer STOP_SENDING). Fail safe: drop
-            // the half without a FIN and no synthetic reset — same rationale
-            // as the read-side generic arm.
+            // Generic write error (NOT a peer STOP_SENDING). Fail safe: drop the half without a
+            // FIN and no synthetic reset — same rationale as the read-side generic arm.
             Err(e) => {
                 tracing::debug!(
                     stream_id = sid, dir = dir.as_str(), error = %e,
@@ -1039,11 +925,9 @@ fn pump_dir(
                 half.fin_sent = true;
                 half.done = true;
             }
-            // The mirror stream cannot be OPENED yet — reachable for a
-            // zero-data FIN-only stream whose first send IS this empty FIN. Do
-            // NOT mark done/fin_sent: leave the half live so a later turn
-            // retries once credit is granted. Dropping here would silently lose
-            // the FIN and never create the mirror stream.
+            // The mirror stream cannot be OPENED yet — reachable for a zero-data FIN-only stream
+            // whose first send IS this empty FIN. Do NOT mark done/fin_sent: leave the half live
+            // so a later turn retries, or the FIN is silently lost and the mirror never created.
             Err(quiche::Error::StreamLimit) => {
                 tracing::trace!(
                     stream_id = sid,
@@ -1051,8 +935,7 @@ fn pump_dir(
                     "Mode B B2: dst StreamLimit on FIN-only stream; retrying FIN next turn"
                 );
             }
-            // B3: dst STOP_SENDING on the FIN itself. Propagate back toward
-            // `src`; the half is terminal anyway (`pending` is already empty).
+            // B3: dst STOP_SENDING on the FIN itself; the half is terminal anyway.
             Err(quiche::Error::StreamStopped(code)) => {
                 tracing::debug!(
                     stream_id = sid,
@@ -1073,14 +956,12 @@ fn pump_dir(
     }
 }
 
-/// Largest single `stream_recv` read per [`pump_dir`] iteration — bounds the
-/// per-call scratch allocation, not the window ([`STREAM_RELAY_WINDOW`] is
-/// still the R8 bound).
+/// Largest single `stream_recv` read per [`pump_dir`] iteration — bounds the per-call scratch
+/// allocation, not the window ([`STREAM_RELAY_WINDOW`] is still the R8 bound).
 const MAX_RELAY_READ: usize = 16 * 1024;
 
-/// Emit an application `CONNECTION_CLOSE` ([`RAW_NO_ERROR`]) and pump until
-/// quiche reports closed or [`GRACEFUL_CLOSE_BUDGET`] elapses. Idempotent:
-/// `close()` on an already-closed connection returns `Done`.
+/// Emit an application `CONNECTION_CLOSE` ([`RAW_NO_ERROR`]) and pump until quiche reports closed
+/// or [`GRACEFUL_CLOSE_BUDGET`] elapses. Idempotent: `close()` on a closed connection returns `Done`.
 async fn graceful_close(conn: &mut quiche::Connection, socket: &UdpSocket, out_buf: &mut [u8]) {
     match conn.close(true, RAW_NO_ERROR, b"shutdown") {
         Ok(()) | Err(quiche::Error::Done) => {}
@@ -1106,12 +987,9 @@ async fn graceful_close(conn: &mut quiche::Connection, socket: &UdpSocket, out_b
 
 #[cfg(test)]
 mod tests {
-    //! Deterministic, socket-free unit coverage for the [`pump_dir`] FIN-retry
-    //! logic: `StreamLimit` on the zero-data FIN-only `stream_send` must NOT
-    //! drop the FIN — the half stays live and retries once credit is granted.
-    //! These drive REAL `quiche::Connection`s but pump packets in-memory, so
-    //! the MAX_STREAMS limit is enforced exactly by quiche with no timing
-    //! coupling.
+    //! Deterministic, socket-free unit coverage for the [`pump_dir`] FIN-retry logic. These drive
+    //! REAL `quiche::Connection`s but pump packets in-memory, so the MAX_STREAMS limit is enforced
+    //! exactly by quiche with no timing coupling.
 
     use super::{
         BoundedDgramQueue, DGRAM_QUEUE_CAP, DgramPushOutcome, Direction, MAX_DGRAM_SIZE,
@@ -1181,8 +1059,7 @@ mod tests {
         scid
     }
 
-    /// Server (= the LB's upstream PEER) config; `bidi_limit` is the granted
-    /// client-initiated bidi stream count.
+    /// Server (= the LB's upstream PEER) config; `bidi_limit` is the granted bidi stream count.
     fn server_config(certs: &TestCerts, bidi_limit: u64) -> quiche::Config {
         let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
         cfg.set_application_protos(&[ALPN]).unwrap();
@@ -1347,8 +1224,7 @@ mod tests {
         (client, server, caddr, saddr)
     }
 
-    /// Build a relay `src` for stream 0: a server conn whose peer opened
-    /// stream 0 with a zero-data FIN.
+    /// Build a relay `src` for stream 0: a server conn whose peer opened it with a zero-data FIN.
     fn src_server_with_fin_only_stream0(
         certs: &TestCerts,
     ) -> (quiche::Connection, quiche::Connection) {
@@ -1384,10 +1260,9 @@ mod tests {
         (src, peer_client)
     }
 
-    /// THE DEFECT REGRESSION (refuse leg): a zero-data FIN-only stream whose
-    /// mirror open is refused with `StreamLimit` MUST NOT drop the FIN — the
-    /// half stays live so a later turn retries. Pre-fix the FIN block's
-    /// catch-all `Err` arm set `done = true`, silently losing it.
+    /// THE DEFECT REGRESSION (refuse leg): a zero-data FIN-only stream whose mirror open is
+    /// refused with `StreamLimit` MUST NOT drop the FIN. Pre-fix the FIN block's catch-all `Err`
+    /// arm set `done = true`, silently losing it.
     #[test]
     fn fin_only_stream_limit_does_not_drop_fin() {
         let certs = gen_certs();
@@ -1425,9 +1300,8 @@ mod tests {
         );
     }
 
-    /// THE DEFECT REGRESSION (grant leg): with credit available the SAME
-    /// FIN-only `pump_dir` delivers a clean FIN — together with the refuse leg
-    /// this proves the retry is real.
+    /// THE DEFECT REGRESSION (grant leg): with credit available the SAME FIN-only `pump_dir`
+    /// delivers a clean FIN — together with the refuse leg this proves the retry is real.
     #[test]
     fn fin_only_delivered_when_stream_credit_available() {
         let certs = gen_certs();
@@ -1460,8 +1334,7 @@ mod tests {
         );
     }
 
-    /// Server config with a deliberately TINY per-stream window, so the
-    /// relay's drain into `dst` short-writes.
+    /// Server config with a deliberately TINY per-stream window, so the drain short-writes.
     fn server_config_small_stream_window(
         certs: &TestCerts,
         bidi_remote_window: u64,
@@ -1521,9 +1394,8 @@ mod tests {
         (client, server, caddr, saddr)
     }
 
-    /// Build a relay `src` for stream 0 carrying `payload` + FIN, so a single
-    /// `pump_dir` read pulls `(payload.len(), fin=true)` and quiche COLLECTS
-    /// the stream. (`payload` must fit the 64 KiB per-stream window.)
+    /// Build a relay `src` for stream 0 carrying `payload` + FIN, so a single `pump_dir` read
+    /// pulls `(payload.len(), fin=true)` and quiche COLLECTS the stream.
     fn src_server_with_payload_fin_stream0(
         certs: &TestCerts,
         payload: &[u8],
@@ -1565,22 +1437,17 @@ mod tests {
         (src, peer_client)
     }
 
-    /// CF-S16-RELAY-STALL — the post-FIN re-read drop regression. Turn 1 reads
-    /// the whole payload + FIN in one `stream_recv` (so quiche COLLECTS the
-    /// source) but short-writes into `dst`, leaving a pending tail. Turn 2's
-    /// read gate is where the bug lived: PRE-FIX it re-issued `stream_recv` on
-    /// the collected source, hit `Err(InvalidStreamState)`, and the generic
-    /// read-error arm dropped the tail AND the FIN.
-    ///
-    /// Load-bearing: revert the one-line `!half.src_fin_seen` gate and this
-    /// test FAILS (tail dropped, `fin_sent` false, backend never sees the full
-    /// payload).
+    /// CF-S16-RELAY-STALL — the post-FIN re-read drop regression. Turn 1 reads the whole payload +
+    /// FIN in one `stream_recv` (so quiche COLLECTS the source) but short-writes into `dst`,
+    /// leaving a pending tail. Turn 2's read gate is where the bug lived: PRE-FIX it re-issued
+    /// `stream_recv` on the collected source, hit `Err(InvalidStreamState)`, and the generic
+    /// read-error arm dropped the tail AND the FIN. Revert the one-line `!half.src_fin_seen` gate
+    /// and this test FAILS.
     #[test]
     fn post_fin_short_write_reread_does_not_drop_tail() {
         let certs = gen_certs();
 
-        // A multi-KiB payload — larger than the backend's tiny window below, so
-        // the drain necessarily short-writes.
+        // Larger than the backend's tiny window below, so the drain necessarily short-writes.
         let payload: Vec<u8> = (0..10_240u32).map(|i| (i % 251) as u8).collect();
 
         // `src` = client-leg conn with stream 0 = payload + FIN, collected.
@@ -1623,8 +1490,7 @@ mod tests {
             "the half must still be live after turn 1 (a tail remains to drain)"
         );
 
-        // Complete the bidi stream 0 on `src` so quiche COLLECTS it — the
-        // precondition for the pre-fix InvalidStreamState.
+        // Complete stream 0 on `src` so quiche COLLECTS it — the pre-fix InvalidStreamState precondition.
         src.stream_send(0, &[], true).unwrap();
         peer.stream_send(0, &[], true).ok();
         for _ in 0..8 {
@@ -1757,10 +1623,8 @@ mod tests {
         assert_eq!(q.pop_front(), None, "pop on empty yields None");
     }
 
-    /// (b) DROP-NEWEST NEGATIVE CONTROL: push `cap + K` and assert the OLDEST
-    /// `cap` survived in order and `dropped == K`. An unbounded queue (the
-    /// pre-fix shape) would hold all `cap + K` and report `dropped == 0` —
-    /// this test fails it.
+    /// (b) DROP-NEWEST NEGATIVE CONTROL: push `cap + K` and assert the OLDEST `cap` survived in
+    /// order with `dropped == K`. An unbounded queue would hold all `cap + K` and report 0.
     #[test]
     fn dgram_queue_drop_newest_negative_control() {
         const CAP: usize = 16;
@@ -1806,8 +1670,7 @@ mod tests {
         assert!(q.is_empty(), "nothing beyond the oldest cap survived");
     }
 
-    /// (c) BINARY / ZERO-LENGTH payloads round-trip VERBATIM — no UTF-8
-    /// assumption, no length-implied truncation.
+    /// (c) BINARY / ZERO-LENGTH payloads round-trip VERBATIM — no UTF-8 or length assumption.
     #[test]
     fn dgram_queue_preserves_binary_and_zero_length_verbatim() {
         let mut q = BoundedDgramQueue::new(8);
@@ -1865,8 +1728,7 @@ mod tests {
         assert_eq!(q.dropped(), 1);
     }
 
-    /// A `quiche::Config` pair granting MANY bidi streams (> the relay cap),
-    /// so the relay table can be driven OVER [`MAX_RELAY_STREAMS`].
+    /// A config pair granting MANY bidi streams (> the relay cap), so the table can be driven over.
     fn over_cap_server_config(certs: &TestCerts, bidi_limit: u64) -> quiche::Config {
         let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
         cfg.set_application_protos(&[ALPN]).unwrap();
@@ -1906,9 +1768,8 @@ mod tests {
         cfg
     }
 
-    /// Establish a peer→server pair where the peer opens `open_count` bidi
-    /// streams (one byte + FIN each) and ferries them so `server` sees them all
-    /// readable. `bidi_limit` (the grant) must be >= `open_count`.
+    /// Establish a peer→server pair where the peer opens `open_count` bidi streams (one byte + FIN
+    /// each) and ferries them so `server` sees them all readable; `bidi_limit` must be >= `open_count`.
     fn server_with_n_readable_streams(
         certs: &TestCerts,
         open_count: u64,
@@ -1960,13 +1821,10 @@ mod tests {
         (server, peer)
     }
 
-    /// B5 — THE per-stream cap holds: a peer opens `OPEN > MAX_RELAY_STREAMS`
-    /// streams over a grant that EXCEEDS the cap, so quiche is NOT the limiter.
-    ///
-    /// Load-bearing negative control: the fixture asserts the server observes
-    /// ALL `OPEN` streams readable, so the table would reach `OPEN` without the
-    /// `admit_or_refuse` ceiling. Remove the gate and the final assert flips
-    /// from `== cap` to `== OPEN`.
+    /// B5 — THE per-stream cap holds: a peer opens `OPEN > MAX_RELAY_STREAMS` streams over a grant
+    /// that EXCEEDS the cap, so quiche is NOT the limiter. Load-bearing negative control: the
+    /// fixture asserts the server observes ALL `OPEN` streams readable, so removing the
+    /// `admit_or_refuse` gate flips the final assert from `== cap` to `== OPEN`.
     #[test]
     fn relay_table_clamped_to_max_relay_streams_under_flood() {
         let certs = gen_certs();
@@ -2006,9 +1864,8 @@ mod tests {
         );
     }
 
-    /// B5 — `admit_or_refuse` directly: an ALREADY-TRACKED sid is kept even AT
-    /// the cap (the cap must never drop a live stream mid-transfer), while a
-    /// genuinely NEW sid at the cap is REFUSED.
+    /// B5 — `admit_or_refuse` directly: an ALREADY-TRACKED sid is kept even AT the cap (it must
+    /// never drop a live stream mid-transfer), while a genuinely NEW sid at the cap is REFUSED.
     #[test]
     fn admit_or_refuse_keeps_tracked_refuses_new_at_cap() {
         let mut streams: HashMap<u64, RawStreamState> = HashMap::new();
@@ -2067,9 +1924,8 @@ mod tests {
         );
     }
 
-    /// `quiche::Config` for a pair where DATAGRAM negotiation is independently
-    /// switchable per side; `None` leaves it OFF (so `dgram_send` returns
-    /// `InvalidState`).
+    /// A config pair where DATAGRAM negotiation is independently switchable per side; `None`
+    /// leaves it OFF (so `dgram_send` returns `InvalidState`).
     fn dgram_pair(
         certs: &TestCerts,
         client_dgram: Option<usize>,
@@ -2114,14 +1970,12 @@ mod tests {
         (client, server, caddr, saddr)
     }
 
-    /// B4 — the `dgram_send` InvalidState arm: a `dst` that never negotiated
-    /// DATAGRAM drains + counts the whole queue, so a non-negotiating peer
-    /// cannot pin relay memory. Reachable only if mis-wired, but it must hold.
+    /// B4 — the `dgram_send` InvalidState arm: a `dst` that never negotiated DATAGRAM drains +
+    /// counts the whole queue, so a non-negotiating peer cannot pin relay memory.
     #[test]
     fn pump_dgram_dir_invalid_state_drains_and_disables() {
         let certs = gen_certs();
-        // quiche returns `InvalidState` when the LOCAL side's peer never
-        // enabled DATAGRAM.
+        // quiche returns `InvalidState` when the LOCAL side's peer never enabled DATAGRAM.
         let (mut src, mut dst, _caddr, _saddr) = dgram_pair(&certs, None, Some(1200));
         assert!(
             dst.dgram_max_writable_len().is_none(),
@@ -2151,9 +2005,8 @@ mod tests {
         );
     }
 
-    /// B4 — the `dgram_send` BufferTooShort arm: an oversized payload is
-    /// dropped and counted while the send-drain CONTINUES, so it cannot block
-    /// the queue forever — a normal payload queued after it still arrives.
+    /// B4 — the `dgram_send` BufferTooShort arm: an oversized payload is dropped and counted while
+    /// the send-drain CONTINUES, so a normal payload queued after it still arrives.
     #[test]
     fn pump_dgram_dir_buffer_too_short_drops_one_continues() {
         let certs = gen_certs();
