@@ -251,3 +251,88 @@ into the summary line first so nothing was lost. **Lint-safety verified before d
   declarations documented by their own `//!` inner docs — pre-existing and correct).
 - `cargo check -p lb-observability` for the single code deletion.
 - **NOT run** (per the brief, the lead gates centrally): build, clippy, test.
+
+---
+
+## Mandatory self-check proof (lead-required)
+
+### 1. Attribute audit — no code attribute lost
+
+```
+$ git diff main -- crates/lb-security crates/lb-io crates/lb-config crates/lb-observability \
+    crates/lb-core crates/lb-balancer crates/lb-controlplane crates/lb-health crates/lb-cp-client \
+  | grep -E '^-\s*#\['
+      1 -#[doc(hidden)]
+      1 -#[allow(dead_code)]
+```
+
+Exactly two removed attribute lines in the entire area, both belonging to the authorised
+`_gauge_vec_anchor` deletion and both in that single hunk. `xdp_metrics.rs` is the only file with
+any removed attribute. No `#[inline]`, `#[cfg]`, `#[derive]`, `#[must_use]` or `#[test]` was lost.
+`#[allow(clippy::too_many_arguments)]` in `http2_pool.rs` survived the doc-block collapse above it.
+
+### 2. Code-identity proof
+
+```
+$ python3 audit/craft/s45a-code-identity.py main
+S45A code-identity proof — 231 .rs files changed vs main
+  2 file(s) with real code changes — each needs justification:
+    CODE DIFFERS   crates/lb-observability/src/xdp_metrics.rs
+    CODE DIFFERS   crates/lb-quic/src/h3_bridge.rs
+```
+
+- **`xdp_metrics.rs` — mine, INTENDED.** Comment-stripped diff is exactly the authorised deletion:
+  ```
+  @@ -126,7 +126,4 @@
+  -#[doc(hidden)]
+  -#[allow(dead_code)]
+  -fn _gauge_vec_anchor() {}
+  ```
+- **`h3_bridge.rs` — NOT in my area.** `crates/lb-quic` belongs to the lb-quic sweeper; that is
+  commit `1f638a2f` (author `proto`). Verified none of my commits touch lb-quic.
+
+### 3. Test-pinned string intact
+
+```
+$ grep -n "ROUND8-L7-10 — API contract for future H1 upstream reuse" crates/lb-io/src/pool.rs
+301:    /// **ROUND8-L7-10 — API contract for future H1 upstream reuse.** No production caller today
+
+$ grep -n 'ROUND8-L7-10 — API contract' crates/lb-l7/tests/round8_body_overread.rs
+88:        src.contains("ROUND8-L7-10 — API contract for future H1 upstream reuse"),
+```
+
+The h2 pin `ROUND8-L7-10 — H2 cousin of the H1 take-and-discard pattern` is likewise present in
+`http2_pool.rs`.
+
+### 4. SAFETY / unsafe in lb-io
+
+| file | SAFETY main→now | code `unsafe` sites main→now |
+|---|---|---|
+| ring.rs | 11 → 11 | 13 → 13 |
+| sockopts.rs | 2 → 2 | 2 → 2 |
+| lib.rs | 1 → 1 | 1 → 1 |
+| tests/miri_ring.rs | 1 → 1 | 1 → 1 |
+
+A raw `grep -c unsafe` on `ring.rs` reads 13→14, but the extra hit is **prose in the new module
+doc** ("that synchronicity is what makes the `unsafe` pushes below sound"), not a code site.
+
+Coverage checked directly rather than by comparing bare counts:
+
+```
+TOTAL code-level unsafe sites: 17, covered by a SAFETY/# Safety within 6 lines: 17
+Uncovered sites (identical set on main — pre-existing):   <none>
+```
+
+The apparent 11-SAFETY-vs-13-unsafe gap in `ring.rs` is not a gap: the two `unsafe fn`
+declarations (`push_sqe`, `sockaddr_storage_to_socketaddr`) carry `# Safety` doc sections rather
+than inline `// SAFETY:` comments.
+
+The only `SAFETY`-bearing line removed anywhere in lb-io:
+
+```
+$ git diff main -- crates/lb-io | grep -E '^-.*SAFETY'
+-    // SAFETY rationale: we own `send_fut` by value, then immediately pin
+```
+
+That is `idle_send.rs`, a file with **zero** `unsafe`, where the prefix was decorative; the actual
+pinning-contract fact was preserved. Lead-ruled correct.
