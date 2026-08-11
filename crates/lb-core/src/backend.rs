@@ -55,9 +55,7 @@ pub enum BackendHealth {
     Unknown,
 }
 
-/// Runtime state tracking for a backend: connections, requests, and latency.
-///
-/// Uses atomics for lock-free concurrent access on the hot path.
+/// Lock-free runtime state for a backend: connections, requests, latency.
 #[derive(Debug)]
 pub struct BackendState {
     active_connections: AtomicU64,
@@ -82,27 +80,13 @@ impl BackendState {
         self.active_connections.load(Ordering::Relaxed)
     }
 
-    /// Increment the active connection count by one.
+    /// Increment the active connection count.
     ///
-    /// CODE-2-04 G-classification (per appendix table): the
-    /// `active_connections` counter is an enforcement-gate input —
-    /// the scheduler reads it and uses the value to drive a
-    /// load-balance pick (least-connections, P2C, etc.). The matching
-    /// mutation publishes with `AcqRel` so the scheduler-visible
-    /// store-after-fetch ordering is preserved on weakly-ordered
-    /// platforms (aarch64). On x86 this collapses to the same
-    /// `lock xadd` as `Relaxed`; cost is zero. On aarch64 it is the
-    /// correctness-fix that the round-2 review §CODE-2-04
-    /// reproduction note calls out as a real concern hidden by x86.
-    ///
-    /// Wave-2 appendix sweep (full table) follows in a subsequent
-    /// commit on this branch; this single site is the
-    /// representative enforcement-gate publish the round-4 task
-    /// brief calls for.
+    /// `AcqRel`, unlike the `Relaxed` request counters, because the SCHEDULER reads this value to
+    /// drive a pick — it is an enforcement-gate input. Free on x86 (same `lock xadd`); on
+    /// aarch64 it is the ordering fix, which is why the inconsistency here is deliberate.
     pub fn inc_connections(&self) {
-        // CLIPPY-OK: G-site (enforcement gate). AcqRel publishes the
-        // new count so a paired Acquire load in the scheduler / gauge
-        // observes the increment in causal order with this write.
+        // CLIPPY-OK: G-site. AcqRel publishes to the scheduler's paired Acquire load.
         self.active_connections.fetch_add(1, Ordering::AcqRel);
     }
 
