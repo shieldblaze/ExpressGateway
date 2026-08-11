@@ -31,12 +31,9 @@ pub enum ConfigError {
     Validation(String),
 }
 
-/// Top-level load balancer configuration.
-///
-/// Every config struct here carries `#[serde(deny_unknown_fields)]`. With 88 `#[serde(default)]`
-/// keys and no such guard, a misspelled key used to parse clean and the operator never learned
-/// their override was ignored. Do not add `#[serde(flatten)]` to these structs — it is
-/// incompatible with `deny_unknown_fields` and would silently reopen the hole.
+/// Top-level load balancer configuration. Every struct here carries `#[serde(deny_unknown_fields)]`
+/// so a misspelled key fails instead of being silently ignored; `#[serde(flatten)]` is incompatible
+/// with that guard and would reopen the hole.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LbConfig {
@@ -49,38 +46,32 @@ pub struct LbConfig {
     /// Admin listener settings; absent means no admin HTTP listener and an in-process registry.
     #[serde(default)]
     pub observability: Option<ObservabilityConfig>,
-    /// `[admin]` auth block. ABSENT means every admin request is served unauthenticated, which is
-    /// why the listener then refuses to bind a non-loopback address.
+    /// `[admin]` auth block; ABSENT means unauthenticated, so the listener refuses a non-loopback bind.
     #[serde(default)]
     pub admin: Option<AdminConfig>,
     /// `[security]` toggles; absent means the lenient RFC 9112 baseline.
     #[serde(default)]
     pub security: Option<SecurityConfig>,
-    /// `[passthrough]` block: routes QUIC by Connection ID WITHOUT decrypting — no TLS state, no
-    /// handshake. Independent of `[[listeners]]`; coexists with terminating listeners.
+    /// `[passthrough]`: routes QUIC by Connection ID WITHOUT decrypting. Independent of `[[listeners]]`.
     #[serde(default)]
     pub passthrough: Option<PassthroughConfig>,
 }
 
-/// Process-wide HTTP security toggles, kept out of the per-listener blocks because they are
-/// deployment policy rather than listener configuration.
+/// Process-wide HTTP security toggles (deployment policy, not listener configuration).
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SecurityConfig {
-    /// Reject any `Transfer-Encoding` codec other than `chunked`. The lenient default accepts
-    /// anything hyper can parse, which is a smuggle vector against permissive backends — but
-    /// strict mode breaks legitimate `gzip, chunked` clients, so it is opt-in.
+    /// Reject any `Transfer-Encoding` codec but `chunked`. The lenient default is a smuggle vector
+    /// against permissive backends; strict mode breaks legitimate `gzip, chunked` clients (opt-in).
     #[serde(default)]
     pub strict_te: bool,
 }
 
-/// Bearer-token + bind policy for the admin listener. The token is a SHA-256 digest, never the
-/// plaintext, and a configured token alone does NOT permit a non-loopback bind.
+/// Admin-listener bearer-token + bind policy. The token is a SHA-256 digest, never plaintext.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AdminConfig {
-    /// 64-hex SHA-256 of the bearer token. `None` disables auth entirely, which forces a
-    /// loopback-only bind.
+    /// 64-hex SHA-256 of the bearer token; `None` disables auth and forces a loopback-only bind.
     #[serde(default)]
     pub api_token_hash: Option<String>,
     /// Allow a non-loopback admin bind. Requires `api_token_hash`, or the gateway refuses to start.
@@ -88,8 +79,7 @@ pub struct AdminConfig {
     pub allow_non_loopback: bool,
 }
 
-/// Admin HTTP listener (`/metrics`, `/healthz`). Loopback-only is the expected posture — there is
-/// NO built-in mTLS.
+/// Admin HTTP listener (`/metrics`, `/healthz`). NO built-in mTLS; loopback-only is the posture.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ObservabilityConfig {
@@ -98,88 +88,67 @@ pub struct ObservabilityConfig {
     pub metrics_bind: Option<String>,
 }
 
-/// Process-wide runtime configuration. Every field is opt-in, so a config with no `[runtime]`
-/// block keeps pure-userspace behaviour.
+/// Process-wide runtime configuration; every field is opt-in.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeConfig {
-    /// Attach the XDP program at startup. Needs `CAP_BPF` + `CAP_NET_ADMIN` and a compiled ELF;
-    /// missing either WARNS and continues without XDP rather than failing.
+    /// Attach XDP at startup; a missing capability or ELF only WARNS and continues without XDP.
     #[serde(default)]
     pub xdp_enabled: bool,
     /// Interface to attach XDP to; required when `xdp_enabled`.
     #[serde(default)]
     pub xdp_interface: Option<String>,
-    /// XDP attach mode. `Auto` probes Drv-then-Skb; use `"native"` on production NICs so startup
-    /// FAILS instead of silently degrading to 1-3 Mpps SKB mode.
+    /// XDP attach mode; `"native"` FAILS startup instead of silently degrading to 1-3 Mpps SKB.
     #[serde(default)]
     pub xdp_mode: XdpModeChoice,
-    /// Graceful-drain budget on SIGTERM; tasks still running past it are ABORTED with a warn.
-    /// Range 100..=300_000 ms.
+    /// Graceful-drain budget on SIGTERM (100..=300_000 ms); tasks still running past it are ABORTED.
     #[serde(default = "default_drain_timeout_ms")]
     pub drain_timeout_ms: u64,
-    /// Settle window between flipping `/readyz` to 503 and starting the cancel. MUST exceed the
-    /// upstream health-check interval or traffic keeps arriving at a draining pod — the 11 s
-    /// default is one kubelet `periodSeconds: 10` plus margin. Range 0..=30_000 ms.
+    /// Settle window between `/readyz`→503 and the cancel (0..=30_000 ms). MUST exceed the upstream
+    /// health-check interval or traffic keeps landing on a draining pod (kubelet 10 s + margin).
     #[serde(default = "default_readiness_settle_ms")]
     pub readiness_settle_ms: u64,
-    /// Drain-cancel jitter ceiling. Without it every replica cancels at the same instant on a
-    /// deploy-wide SIGTERM and the reconnect storm hits the shared upstream LB (Envoy hit this in
-    /// production past 2-3 replicas). `None` derives `drain_timeout_ms / 4`; `Some(0)` disables
-    /// jitter for deterministic testing. Range `0..=drain_timeout_ms`.
+    /// Drain-cancel jitter ceiling (`0..=drain_timeout_ms`); `None` derives `drain_timeout_ms / 4`.
+    /// Without it a deploy-wide SIGTERM makes every replica cancel at once and storm the upstream LB.
     #[serde(default)]
     pub drain_jitter_ms: Option<u64>,
     /// TLS handshake budget, capping accept-side slowloris. Range 100..=60_000 ms.
     #[serde(default = "default_handshake_timeout_ms")]
     pub handshake_timeout_ms: u64,
-    /// Per-listener inflight cap; saturation sheds with a 503, or a silent close before ALPN.
-    /// Range `100..=2_000_000`.
+    /// Per-listener inflight cap (`100..=2_000_000`); saturation sheds a 503, or closes before ALPN.
     #[serde(default = "default_max_inflight_connections")]
     pub max_inflight_connections: u32,
     /// Upstream dial budget, so a SYN black hole cannot monopolise a worker. Range `100..=60_000`.
     #[serde(default = "default_connect_timeout_ms")]
     pub connect_timeout_ms: u64,
-    /// Per-source-IP concurrent-connection cap. Saturation closes the socket WITHOUT a response —
-    /// replying would make the cap an amplification lever. Range `1..=2_000_000`.
+    /// Per-source-IP concurrent-connection cap (`1..=2_000_000`). Saturation closes the socket
+    /// WITHOUT a response: replying would make the cap an amplification lever.
     #[serde(default = "default_per_ip_cap")]
     pub per_ip_connection_cap: u32,
     /// `[runtime.tls]` policy block; absent means the rustls default `&[&TLS12, &TLS13]`.
     #[serde(default)]
     pub tls: Option<RuntimeTlsConfig>,
-    /// `[runtime.watchdog]` block. Absent leaves the proxies on NoopHooks: hyper's header timeout
-    /// still bites, but the rate floor is dormant.
+    /// `[runtime.watchdog]` block; absent leaves NoopHooks — hyper's header timeout still bites,
+    /// but the rate floor is dormant.
     #[serde(default)]
     pub watchdog: Option<RuntimeWatchdogConfig>,
-    /// How to handle `_` in header names. An underscore is an AUTH-BYPASS primitive against
-    /// backends that normalise `_` <-> `-` (Java middleware, some Python frameworks, SAP
-    /// gateways), which is why both Envoy and nginx refuse to pass it through at the edge.
+    /// How to handle `_` in header names. An underscore is an AUTH-BYPASS primitive against backends
+    /// that normalise `_` <-> `-`; Envoy and nginx both refuse to pass it through at the edge.
     #[serde(default)]
     pub header_underscore_policy: HeaderUnderscorePolicy,
     /// Requests (H1) / lifetime streams (H2) per keep-alive connection before a proactive close.
-    /// Cloudflare added this to Pingora after per-connection accounting growth, TLS-session-age
-    /// and FD-pinning pain at the edge.
-    ///
-    /// `0` disables the cap. Otherwise `1..=10_000_000` — the ceiling exists so a fat-fingered
-    /// value cannot leave an operator believing they set a bound when they did not.
+    /// `0` disables; otherwise `1..=10_000_000`, the ceiling rejecting a fat-fingered pseudo-bound.
     #[serde(default = "default_max_keepalive_requests")]
     pub max_keepalive_requests: u32,
     /// Request streams per HTTP/3 connection before a GOAWAY + graceful recycle (RFC 9114 §5.2).
-    ///
-    /// Deliberately SEPARATE from [`Self::max_keepalive_requests`]: an H3 recycle pays a full
-    /// QUIC+TLS handshake plus congestion-control ramp, so it is tuned an order higher.
-    ///
-    /// The cap is what bounds quiche's insert-only per-connection `StreamMap::collected` set. `0`
-    /// disables it and RE-OPENS both the RSS-staircase leak and a single-connection DoS vector —
-    /// only safe on trusted listeners. Otherwise `1..=10_000_000`.
+    /// SEPARATE from [`Self::max_keepalive_requests`]: an H3 recycle pays a full QUIC+TLS handshake.
+    /// Bounds quiche's insert-only `StreamMap::collected` — `0` RE-OPENS both the RSS-staircase leak
+    /// and a single-connection DoS vector. Otherwise `1..=10_000_000`.
     #[serde(default = "default_max_requests_per_h3_connection")]
     pub max_requests_per_h3_connection: u32,
-    /// Per-CPU new-flow-rate cap for XDP SYN-flood mitigation (Katran `MAX_CONN_RATE`). Excess
-    /// new flows skip the conntrack populate, so a unique-5-tuple spray cannot thrash the LRU and
-    /// evict established connections.
-    ///
-    /// `0` disables it. Otherwise `1_000..=10_000_000`: below 1k/s/CPU normal traffic stops being
-    /// CT-inserted and falls to the kernel stack instead of `XDP_TX`; above 10M/s/CPU is past NIC
-    /// line rate. The gate is PER-PROCESS, so multi-replica deployments size it per replica.
+    /// Per-CPU new-flow-rate cap for XDP SYN-flood mitigation (Katran `MAX_CONN_RATE`): excess flows
+    /// skip the conntrack populate, so a unique-5-tuple spray cannot evict established connections.
+    /// `0` disables; otherwise `1_000..=10_000_000`, and the gate is PER-PROCESS (size per replica).
     #[serde(default = "default_xdp_new_flow_cap_per_sec_per_cpu")]
     pub xdp_new_flow_cap_per_sec_per_cpu: u32,
 }
@@ -194,8 +163,7 @@ const fn default_max_keepalive_requests() -> u32 {
     100
 }
 
-/// Default H3 per-connection request cap; higher than the H1/H2 cap because a recycle costs a
-/// full handshake. There is no upstream reference value — tokio-quiche ships uncapped.
+/// Default H3 per-connection request cap; no upstream reference value (tokio-quiche ships uncapped).
 const fn default_max_requests_per_h3_connection() -> u32 {
     1000
 }
@@ -255,8 +223,7 @@ pub struct RuntimeWatchdogConfig {
     /// Body-phase rate floor in B/s; `0` disables the check. Range `0..=10_000_000`.
     #[serde(default = "default_watchdog_body_progress_min_bps")]
     pub body_progress_min_bps: u64,
-    /// Sweep cadence for fully stalled connections, which make no `progress` calls at all.
-    /// Range `100..=60_000` ms.
+    /// Sweep cadence for fully stalled connections that make no `progress` calls (`100..=60_000` ms).
     #[serde(default = "default_watchdog_sweep_interval_ms")]
     pub sweep_interval_ms: u64,
 }
@@ -290,8 +257,8 @@ const fn default_watchdog_sweep_interval_ms() -> u64 {
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeTlsConfig {
-    /// Restrict every TLS listener to TLS 1.3. This is a COMPLIANCE knob (PCI-DSS 4.0 §4.2.1.1,
-    /// NIST SP 800-52r2), not a security gain — rustls's TLS 1.2 suites are downgrade-safe.
+    /// Restrict every TLS listener to TLS 1.3. A COMPLIANCE knob (PCI-DSS 4.0 §4.2.1.1), not a
+    /// security gain — rustls's TLS 1.2 suites are downgrade-safe.
     #[serde(default)]
     pub tls13_only: bool,
 }
@@ -301,15 +268,12 @@ const fn default_drain_timeout_ms() -> u64 {
     10_000
 }
 
-/// Serde default for `RuntimeConfig::readiness_settle_ms`: one kubelet probe period (10 s) plus
-/// margin. Anything under the probe interval lets a pod cancel connections while still listed
-/// Ready in Endpoints, so new connections keep landing on it.
+/// Serde default for `RuntimeConfig::readiness_settle_ms`: one kubelet probe period (10 s) + margin.
 const fn default_readiness_settle_ms() -> u64 {
     11_000
 }
 
-/// Serde default for `RuntimeConfig::handshake_timeout_ms`; a healthy TLS 1.3 handshake is
-/// <100 ms, so this bites only on stalled clients.
+/// Serde default for `RuntimeConfig::handshake_timeout_ms`; a healthy TLS 1.3 handshake is <100 ms.
 const fn default_handshake_timeout_ms() -> u64 {
     5_000
 }
@@ -350,47 +314,35 @@ pub enum XdpModeChoice {
 pub struct ListenerConfig {
     /// Bind address (e.g. `"0.0.0.0:8080"`).
     pub address: String,
-    /// Protocol selector: `"tcp"`, `"tls"`, `"h1"`, `"h1s"`, or `"quic"`.
-    ///
-    /// There is NO `"h2"` or `"h3"` listener — H2 rides `"h1s"` via ALPN and H3 rides `"quic"`,
-    /// so those tokens (and `"http"`) are rejected here. They ARE valid as
-    /// [`BackendConfig::protocol`] values, which is a different axis.
+    /// Protocol selector: `"tcp"`, `"tls"`, `"h1"`, `"h1s"`, or `"quic"`. There is NO `"h2"`/`"h3"`
+    /// listener — H2 rides `"h1s"` via ALPN, H3 rides `"quic"`; both ARE valid backend protocols.
     pub protocol: String,
-    /// TLS settings. Required when `protocol == "tls"`; must be absent
-    /// otherwise.
+    /// TLS settings. Required when `protocol == "tls"`; must be absent otherwise.
     #[serde(default)]
     pub tls: Option<TlsConfig>,
-    /// QUIC settings. Required when `protocol == "quic"`; must be absent
-    /// otherwise.
+    /// QUIC settings. Required when `protocol == "quic"`; must be absent otherwise.
     #[serde(default)]
     pub quic: Option<QuicListenerConfig>,
-    /// Optional `Alt-Svc` advertisement applied to every H1 response.
-    /// Only meaningful for `protocol = "h1"` or `"h1s"`.
+    /// Optional `Alt-Svc` advertisement applied to every H1 response (`"h1"` / `"h1s"` only).
     #[serde(default)]
     pub alt_svc: Option<AltSvcConfig>,
-    /// Optional H1/H2 server timeouts. Only meaningful for `protocol =
-    /// "h1"` or `"h1s"`.
+    /// Optional H1/H2 server timeouts (`"h1"` / `"h1s"` only).
     #[serde(default)]
     pub http: Option<HttpTimeoutsConfig>,
     /// HTTP/2 security thresholds; only meaningful on `"h1s"`, where H2 is reached via ALPN.
     #[serde(default)]
     pub h2_security: Option<H2SecurityConfig>,
-    /// WebSocket capability block. ABSENT means upgrades fall through to the plain HTTP path as
-    /// a GET with unknown headers, not an explicit rejection.
+    /// WebSocket capability block; ABSENT means upgrades fall through as a plain GET, not a reject.
     #[serde(default)]
     pub websocket: Option<WebsocketConfig>,
-    /// gRPC capability block; `"h1s"` only, since gRPC needs the ALPN-negotiated H2. ABSENT
-    /// sends gRPC down the H2→H1 forward path, which usually 502s a tonic client.
+    /// gRPC capability block (`"h1s"` only); ABSENT sends gRPC down the H2→H1 path, which 502s tonic.
     #[serde(default)]
     pub grpc: Option<GrpcListenerConfig>,
-    /// Per-listener drain budget override, inheriting `[runtime].drain_timeout_ms` when `None`.
-    /// Raise it HERE for long-poll / gRPC bidi / SSE / WebSocket listeners rather than raising the
-    /// gateway default, which would slow every short-request listener's restart. Range
-    /// `100..=300_000` ms.
+    /// Per-listener drain override (`100..=300_000` ms); `None` inherits `[runtime].drain_timeout_ms`.
+    /// Raise it HERE for long-poll/gRPC-bidi/SSE/WS listeners, not the gateway default.
     #[serde(default)]
     pub drain_timeout_ms: Option<u64>,
-    /// Per-listener jitter override; `None` inherits the derived gateway value, `Some(0)`
-    /// disables jitter. Must be `0..=` the EFFECTIVE per-listener `drain_timeout_ms`.
+    /// Per-listener jitter override; must be `0..=` the EFFECTIVE per-listener `drain_timeout_ms`.
     #[serde(default)]
     pub drain_jitter_ms: Option<u64>,
     /// Upstream backends to load-balance across.
@@ -398,7 +350,7 @@ pub struct ListenerConfig {
     pub backends: Vec<BackendConfig>,
 }
 
-/// gRPC capability config (Item 3, PROMPT.md §13).
+/// gRPC capability config.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct GrpcListenerConfig {
@@ -445,8 +397,7 @@ pub struct WebsocketConfig {
     /// Idle timeout (no frames in EITHER direction) before a `1001 Going Away` close.
     #[serde(default = "default_ws_idle_timeout")]
     pub idle_timeout_seconds: u64,
-    /// Upper bound on a single incoming WebSocket message (bytes).
-    /// Defaults to 16 MiB.
+    /// Upper bound on a single incoming WebSocket message (bytes); defaults to 16 MiB.
     #[serde(default = "default_ws_max_message_size")]
     pub max_message_size_bytes: usize,
     /// Client `Ping` frames per window before `Close 1008` and an upstream shutdown (WS-001).
@@ -455,18 +406,15 @@ pub struct WebsocketConfig {
     /// Rolling window for the client-Ping rate limit, in seconds.
     #[serde(default = "default_ws_ping_rate_limit_window_seconds")]
     pub ping_rate_limit_window_seconds: u64,
-    /// PER-DIRECTION read-frame watchdog bounding pinned-buffer dwell (WS-002). Distinct from
-    /// `idle_timeout_seconds`, which needs BOTH directions silent.
+    /// PER-DIRECTION read-frame watchdog (WS-002); `idle_timeout_seconds` needs BOTH sides silent.
     #[serde(default = "default_ws_read_frame_timeout_seconds")]
     pub read_frame_timeout_seconds: u64,
     /// RFC 8441 WebSocket-over-HTTP/2. OFF because the H2 upgraded-stream write path has no
-    /// end-to-end backpressure — a non-reading client forces unbounded gateway memory (CF-S27-2).
-    /// Trusted populations only. Does not affect WS over HTTP/1.1 or HTTP/3.
+    /// end-to-end backpressure: a non-reading client forces unbounded gateway memory (CF-S27-2).
     #[serde(default)]
     pub h2_extended_connect: bool,
     /// RFC 9220 WebSocket-over-HTTP/3, off by default. A SEPARATE gate from
-    /// [`Self::h2_extended_connect`] — different datapath, different backpressure story, so
-    /// enabling one must not enable the other.
+    /// [`Self::h2_extended_connect`]: different datapath, so enabling one must not enable the other.
     #[serde(default)]
     pub h3_extended_connect: bool,
 }
@@ -510,9 +458,8 @@ const fn default_ws_read_frame_timeout_seconds() -> u64 {
     30
 }
 
-/// HTTP/2 security thresholds. Deliberately mirrors
-/// `lb_l7::h2_security::H2SecurityThresholds` instead of importing it, so lb-config stays free of
-/// a hyper dependency — keep the two shapes in sync.
+/// HTTP/2 security thresholds. Mirrors `lb_l7::h2_security::H2SecurityThresholds` rather than
+/// importing it (keeps hyper out of lb-config) — keep the two shapes in sync.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct H2SecurityConfig {
@@ -560,7 +507,7 @@ const fn default_alt_svc_max_age() -> u32 {
     3_600
 }
 
-/// HTTP server timeouts (Pillar 3b.3b-1).
+/// HTTP server timeouts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HttpTimeoutsConfig {
@@ -573,8 +520,7 @@ pub struct HttpTimeoutsConfig {
     /// Hard upper bound on total request lifetime.
     #[serde(default = "default_total_timeout_ms")]
     pub total_timeout_ms: u64,
-    /// Fixed cap on the POST-UPLOAD head wait, separate from the Phase-A idle deadline derived
-    /// from `body_timeout_ms`.
+    /// Fixed cap on the POST-UPLOAD head wait, separate from the `body_timeout_ms` idle deadline.
     #[serde(default = "default_head_timeout_ms")]
     pub head_timeout_ms: u64,
 }
@@ -617,8 +563,8 @@ pub struct TlsConfig {
     /// Session-ticket key rotation interval, in seconds.
     #[serde(default = "default_ticket_interval")]
     pub ticket_rotation_interval_seconds: u64,
-    /// Grace period during which the previous ticket key still decrypts. Interval plus overlap is
-    /// the true ticket lifetime.
+    /// Grace period during which the previous ticket key still decrypts; interval + overlap is the
+    /// true ticket lifetime.
     #[serde(default = "default_ticket_overlap")]
     pub ticket_rotation_overlap_seconds: u64,
 }
@@ -648,9 +594,8 @@ pub struct QuicListenerConfig {
     /// Maximum accepted UDP payload. MUST be ≥1200 (RFC 9000 §14); 1350 fits a 1500-byte MTU.
     #[serde(default = "default_quic_recv_udp_payload")]
     pub max_recv_udp_payload_size: u64,
-    /// Mode B raw-QUIC proxy. PRESENCE of this block switches the listener from H3-termination to
-    /// terminate-and-re-originate: two distinct `quiche::Connection`s relaying raw streams and
-    /// datagrams, never a CID bridge. Absent keeps H3-terminate.
+    /// Mode B raw-QUIC proxy. PRESENCE switches the listener from H3-termination to terminate-and-
+    /// re-originate: two distinct `quiche::Connection`s relaying raw streams, never a CID bridge.
     #[serde(default)]
     pub raw_proxy: Option<RawQuicProxyConfig>,
 }
@@ -663,27 +608,23 @@ const fn default_quic_recv_udp_payload() -> u64 {
     1_350
 }
 
-/// Mode B raw-QUIC backend. Every cap here is PRE-AUTH — it applies before the client is
-/// authenticated — so the defaults are deliberately conservative.
+/// Mode B raw-QUIC backend. Every cap here is PRE-AUTH, so the defaults are conservative.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RawQuicProxyConfig {
-    /// Upstream QUIC backend. An unparseable value FAILS startup rather than silently disabling
-    /// Mode B.
+    /// Upstream QUIC backend; an unparseable value FAILS startup rather than disabling Mode B.
     pub backend_addr: String,
     /// SNI presented to the upstream on the re-originated TLS handshake.
     pub sni: String,
-    /// CA bundle for verifying the upstream cert. ABSENT DOES NOT DISABLE VERIFICATION —
-    /// `verify_peer(true)` is engaged either way, falling back to system trust roots. There is
-    /// deliberately no knob to turn verification off in Mode B.
+    /// CA bundle for the upstream cert. ABSENT DOES NOT DISABLE VERIFICATION — `verify_peer(true)`
+    /// is engaged either way, falling back to system roots; Mode B has no off-switch.
     #[serde(default)]
     pub backend_ca_path: Option<String>,
-    /// Per-direction DATAGRAM relay queue depth, also advertised to both peers. Over-cap is
-    /// drop-newest, which is what stops a flooding peer growing relay memory unbounded.
+    /// Per-direction DATAGRAM relay queue depth; over-cap is drop-newest, bounding a flooding peer.
     #[serde(default = "default_raw_proxy_dgram_queue_cap")]
     pub dgram_queue_cap: usize,
-    /// Relay stream-table ceiling. Sits above the negotiated stream grant on purpose, so
-    /// worst-case relay memory stays a hard constant even if `max_streams` is mis-set.
+    /// Relay stream-table ceiling; above the negotiated grant so relay memory is a hard constant
+    /// even if `max_streams` is mis-set.
     #[serde(default = "default_raw_proxy_max_relay_streams")]
     pub max_relay_streams: usize,
 }
@@ -698,9 +639,8 @@ const fn default_raw_proxy_max_relay_streams() -> usize {
     256
 }
 
-/// Mode A QUIC passthrough listener. Top-level rather than a `[[listeners]]` variant because it
-/// is a parallel datapath: it cannot share a UDP port with a terminating QUIC listener and has no
-/// cert/key or drain knobs.
+/// Mode A QUIC passthrough listener — a parallel datapath, not a `[[listeners]]` variant: it cannot
+/// share a UDP port with a terminating QUIC listener and has no cert/key or drain knobs.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PassthroughConfig {
@@ -713,15 +653,13 @@ pub struct PassthroughConfig {
     /// Concurrent QUIC flow cap; the routing table is bounded at `2 *` this.
     #[serde(default = "default_passthrough_max_quic_connections")]
     pub max_quic_connections: usize,
-    /// Minimum accepted client DCID length — the defence against CVE-2022-30592-style cross-flow
-    /// prefix collisions.
+    /// Minimum accepted client DCID length — the CVE-2022-30592 cross-flow prefix-collision defence.
     #[serde(default = "default_passthrough_min_client_dcid_len")]
     pub min_client_dcid_len: usize,
     /// Per-flow datagram backlog; drop-newest when full.
     #[serde(default = "default_passthrough_per_flow_backlog")]
     pub per_flow_backlog: usize,
-    /// Drop short-header packets whose 4-tuple has changed. Catches off-path spoofed-CID
-    /// injection but BREAKS NAT-rebind path migration, so it defaults off for mobile clients.
+    /// Drop short-header packets whose 4-tuple changed: blocks spoofed-CID injection, BREAKS NAT rebind.
     #[serde(default)]
     pub strict_source_binding: bool,
     /// Audit-log throttle window, in seconds.
@@ -731,17 +669,13 @@ pub struct PassthroughConfig {
     #[serde(default = "default_passthrough_max_dcid_len_routed")]
     pub max_dcid_len_routed: usize,
     /// Mint stateless Retry on no-token Initials (Initial-flood defence).
-    ///
-    /// KNOWN INTEROP BREAK (CF-S15-PASSTHROUGH-RETRY-ODCID): with this on, real-quiche backends
-    /// REJECT the post-Retry `original_destination_connection_id` transport param, because the
-    /// LB-chosen new_scid hides the client's ODCID. RFC 9000 §17.2.5's token-embedded-ODCID
-    /// "Retry Service" pattern is the fix and is not implemented. Setting `false` forwards
-    /// no-token Initials verbatim and delegates flood defence to the backend.
+    /// KNOWN INTEROP BREAK (CF-S15-PASSTHROUGH-RETRY-ODCID): real-quiche backends REJECT the
+    /// post-Retry `original_destination_connection_id` because the LB-chosen new_scid hides the
+    /// client ODCID; RFC 9000 §17.2.5's Retry-Service pattern is unimplemented. `false` opts out.
     #[serde(default = "default_passthrough_mint_retry")]
     pub mint_retry: bool,
     /// Idle-flow reaper threshold in ms (F-S20-2). Passthrough cannot see the encrypted
-    /// CONNECTION_CLOSE, so WITHOUT this sweep a closed connection's flow persists forever — the
-    /// S20 soak measured flows 0→56k, fds→28k, RSS→331 MB, evicted=0. `0` disables it (LRU-only).
+    /// CONNECTION_CLOSE, so without this sweep a closed flow persists forever. `0` disables (LRU-only).
     #[serde(default = "default_passthrough_flow_idle_timeout_ms")]
     pub flow_idle_timeout_ms: u64,
 }
@@ -787,23 +721,21 @@ const fn default_passthrough_flow_idle_timeout_ms() -> u64 {
 pub struct BackendConfig {
     /// Backend address (e.g. `"127.0.0.1:3000"`).
     pub address: String,
-    /// Upstream wire protocol: `"tcp"`, `"h1"`, `"h2"`, or `"h3"`. A different axis from
-    /// [`ListenerConfig::protocol`] — the tokens overlap but mean the upstream leg.
+    /// Upstream wire protocol: `"tcp"`, `"h1"`, `"h2"`, or `"h3"` — a different axis from
+    /// [`ListenerConfig::protocol`], whose tokens overlap but mean the listener leg.
     #[serde(default = "default_backend_protocol")]
     pub protocol: String,
     /// Weight for weighted load-balancing algorithms (default 1).
     #[serde(default = "default_weight")]
     pub weight: u32,
-    /// CA bundle verifying an H3 backend's cert. Required for `protocol = "h3"` unless
-    /// `tls_verify_peer = false`.
+    /// CA bundle verifying an H3 backend's cert; required for `"h3"` unless `tls_verify_peer = false`.
     #[serde(default)]
     pub tls_ca_path: Option<String>,
-    /// SNI override for backend verification, for when the cert name differs from the dial
-    /// address. H3 only; defaults to the host part of `address`.
+    /// SNI override for backend verification (H3 only); defaults to the host part of `address`.
     #[serde(default)]
     pub tls_verify_hostname: Option<String>,
-    /// Verify the H3 backend's certificate. `false` disables peer-cert verification ENTIRELY and
-    /// is only defensible when a separate mesh layer authenticates the underlay.
+    /// Verify the H3 backend cert. `false` disables peer-cert verification ENTIRELY, defensible only
+    /// when a separate mesh layer authenticates the underlay.
     #[serde(default = "default_verify_peer_true")]
     pub tls_verify_peer: bool,
 }
@@ -828,8 +760,7 @@ pub fn parse_config(input: &str) -> Result<LbConfig, ConfigError> {
 
 /// Validate a parsed configuration.
 pub fn validate_config(config: &LbConfig) -> Result<(), ConfigError> {
-    // Passthrough is an independent datapath, so `[passthrough]` with no `[[listeners]]` is a
-    // valid Mode-A-only deployment.
+    // `[passthrough]` with no `[[listeners]]` is a valid Mode-A-only deployment.
     if config.listeners.is_empty() && config.passthrough.is_none() {
         return Err(ConfigError::Validation(
             "at least one listener or [passthrough] is required".into(),
@@ -844,8 +775,8 @@ pub fn validate_config(config: &LbConfig) -> Result<(), ConfigError> {
     if let Some(rt) = config.runtime.as_ref() {
         validate_runtime(rt)?;
     }
-    // `validate_listener` cannot see the runtime block, so a listener jitter larger than an
-    // INHERITED smaller drain budget only surfaces here.
+    // `validate_listener` cannot see the runtime block, so jitter above an INHERITED drain budget
+    // only surfaces here.
     for (i, listener) in config.listeners.iter().enumerate() {
         let eff_timeout = listener.effective_drain_timeout_ms(config.runtime.as_ref());
         let eff_jitter = listener.effective_drain_jitter_ms(config.runtime.as_ref());
@@ -893,16 +824,14 @@ fn validate_runtime(rt: &RuntimeConfig) -> Result<(), ConfigError> {
             ));
         }
     }
-    // The floor stops `drain_timeout_ms = 1` collapsing the drain to a no-op; the ceiling keeps
-    // SIGTERM-to-exit under systemd's 90 s TimeoutStopSec.
+    // Floor stops a no-op drain; ceiling keeps SIGTERM-to-exit under systemd's 90 s TimeoutStopSec.
     if !(100..=300_000).contains(&rt.drain_timeout_ms) {
         return Err(ConfigError::Validation(format!(
             "runtime.drain_timeout_ms={} out of range 100..=300000",
             rt.drain_timeout_ms
         )));
     }
-    // Jitter cannot exceed the budget it subdivides. `None` derives /4 and is in range by
-    // construction.
+    // Jitter cannot exceed the budget it subdivides; `None` derives /4 and is in range by construction.
     if let Some(j) = rt.drain_jitter_ms {
         if j > rt.drain_timeout_ms {
             return Err(ConfigError::Validation(format!(
@@ -919,16 +848,14 @@ fn validate_runtime(rt: &RuntimeConfig) -> Result<(), ConfigError> {
             rt.readiness_settle_ms
         )));
     }
-    // The floor stops a near-zero budget starving every TLS connect; the ceiling bounds slowloris
-    // exposure.
+    // Floor stops a near-zero budget starving TLS connects; ceiling bounds slowloris exposure.
     if !(100..=60_000).contains(&rt.handshake_timeout_ms) {
         return Err(ConfigError::Validation(format!(
             "runtime.handshake_timeout_ms={} out of range 100..=60000",
             rt.handshake_timeout_ms
         )));
     }
-    // The floor stops the semaphore collapsing to a single-connection bottleneck; the ceiling
-    // bounds its per-permit and per-waiter memory.
+    // Floor stops a single-connection bottleneck; ceiling bounds per-permit and per-waiter memory.
     if !(100..=2_000_000).contains(&rt.max_inflight_connections) {
         return Err(ConfigError::Validation(format!(
             "runtime.max_inflight_connections={} out of range 100..=2000000",
@@ -949,8 +876,7 @@ fn validate_runtime(rt: &RuntimeConfig) -> Result<(), ConfigError> {
             rt.per_ip_connection_cap
         )));
     }
-    // The 10 MB/s rate-floor ceiling exists because higher values false-positive-evict slow
-    // mobile uplinks.
+    // Above a 10 MB/s rate floor, slow mobile uplinks are false-positive-evicted.
     if let Some(wd) = rt.watchdog.as_ref() {
         if !(100..=60_000).contains(&wd.header_deadline_ms) {
             return Err(ConfigError::Validation(format!(
@@ -971,9 +897,8 @@ fn validate_runtime(rt: &RuntimeConfig) -> Result<(), ConfigError> {
             )));
         }
     }
-    // Below 1k/s/CPU normal traffic stops being conntrack-inserted and falls to the kernel stack
-    // instead of XDP_TX; above 10M/s/CPU is past NIC line rate. Out-of-range is a hard error
-    // rather than a silent traffic blackhole.
+    // Below 1k/s/CPU normal traffic falls to the kernel stack instead of XDP_TX; above 10M/s/CPU is
+    // past NIC line rate. Out-of-range is a hard error rather than a silent traffic blackhole.
     let cap = rt.xdp_new_flow_cap_per_sec_per_cpu;
     if cap != 0 && !(1_000..=10_000_000).contains(&cap) {
         return Err(ConfigError::Validation(format!(
@@ -981,8 +906,7 @@ fn validate_runtime(rt: &RuntimeConfig) -> Result<(), ConfigError> {
              (0 to disable, else 1000..=10000000)",
         )));
     }
-    // `0` is the documented disable sentinel; the 10M ceiling rejects a fat-finger value that
-    // would otherwise be an effectively-unlimited cap the operator believes is a bound.
+    // `0` is the disable sentinel; the 10M ceiling rejects a fat-finger value that reads as a bound.
     if rt.max_keepalive_requests != 0 && rt.max_keepalive_requests > 10_000_000 {
         return Err(ConfigError::Validation(format!(
             "runtime.max_keepalive_requests={} out of range \
@@ -990,8 +914,7 @@ fn validate_runtime(rt: &RuntimeConfig) -> Result<(), ConfigError> {
             rt.max_keepalive_requests
         )));
     }
-    // Same shape as `max_keepalive_requests`. `0` disables the H3 recycle and re-opens the
-    // StreamMap::collected leak and single-connection DoS vector.
+    // `0` disables the H3 recycle and re-opens the StreamMap::collected leak / single-conn DoS.
     if rt.max_requests_per_h3_connection != 0 && rt.max_requests_per_h3_connection > 10_000_000 {
         return Err(ConfigError::Validation(format!(
             "runtime.max_requests_per_h3_connection={} out of range \
@@ -1045,9 +968,8 @@ fn validate_listener(i: usize, listener: &ListenerConfig) -> Result<(), ConfigEr
                 )));
             }
         }
-        // `http`, `h2` and `h3` are NEVER served as listener protocols — H2 rides `h1s` via ALPN
-        // and H3 rides `quic`. Rejecting at config time moves what used to be a boot-time "no
-        // runtime implementation" abort to where the operator can act on it.
+        // `http`/`h2`/`h3` are never SERVED — H2 rides `h1s` via ALPN, H3 rides `quic`. Rejecting
+        // here turns a boot-time "no runtime implementation" abort into an actionable config error.
         "http" | "h2" | "h3" => {
             return Err(ConfigError::Validation(format!(
                 "listener {i} has protocol {protocol:?} which is not a served \
@@ -1069,7 +991,6 @@ fn validate_listener(i: usize, listener: &ListenerConfig) -> Result<(), ConfigEr
     validate_grpc_block(i, protocol, listener)?;
     validate_http_timeouts(i, listener)?;
     validate_backend_list(i, listener)?;
-    // Same range as the gateway-level key.
     if let Some(t) = listener.drain_timeout_ms {
         if !(100..=300_000).contains(&t) {
             return Err(ConfigError::Validation(format!(
@@ -1077,8 +998,8 @@ fn validate_listener(i: usize, listener: &ListenerConfig) -> Result<(), ConfigEr
             )));
         }
     }
-    // Without a per-listener drain override the real bound depends on the [runtime] block, which
-    // is only visible in `validate_config`; here the absolute ceiling is the best available.
+    // Without a per-listener override the real bound lives in [runtime], visible only to
+    // `validate_config`; the absolute ceiling is the best available here.
     if let Some(j) = listener.drain_jitter_ms {
         let upper = listener.drain_timeout_ms.unwrap_or(300_000);
         if j > upper {
@@ -1117,8 +1038,7 @@ fn validate_websocket_block(
     protocol: &str,
     listener: &ListenerConfig,
 ) -> Result<(), ConfigError> {
-    // WS rides h1/h1s (RFC 6455, and RFC 8441 via ALPN) or `quic` (RFC 9220); anything else
-    // carrying a websocket block is a misconfig.
+    // WS rides h1/h1s (RFC 6455, RFC 8441 via ALPN) or `quic` (RFC 9220); anything else is misconfig.
     if listener.websocket.is_some() && !matches!(protocol, "h1" | "h1s" | "quic") {
         return Err(ConfigError::Validation(format!(
             "listener {i} has [listeners.websocket] but protocol is {protocol:?}; \
@@ -1313,8 +1233,7 @@ fn validate_quic_listener(i: usize, listener: &ListenerConfig) -> Result<(), Con
             "listener {i} has [listeners.tls] but protocol is \"quic\""
         )));
     }
-    // raw_proxy hands every accepted connection to the raw-proxy actor, so an H3-terminate
-    // backend list alongside it would be SILENTLY IGNORED.
+    // raw_proxy takes every accepted connection, so an H3-terminate backend list would be IGNORED.
     if quic.raw_proxy.is_some() && !listener.backends.is_empty() {
         return Err(ConfigError::Validation(format!(
             "listener {i} sets both [listeners.quic.raw_proxy] (Mode B raw-QUIC \
@@ -1322,8 +1241,7 @@ fn validate_quic_listener(i: usize, listener: &ListenerConfig) -> Result<(), Con
              are mutually exclusive — remove one"
         )));
     }
-    // Dispatch precedence is h2 > h3 > h1, so a mixed-family backend list would SILENTLY DROP
-    // the lower-precedence backends.
+    // Dispatch precedence h2 > h3 > h1, so a mixed-family list SILENTLY DROPS the lower ones.
     if quic.raw_proxy.is_none() && !listener.backends.is_empty() {
         let mut saw_h1 = false;
         let mut saw_h2 = false;
@@ -1349,8 +1267,7 @@ fn validate_quic_listener(i: usize, listener: &ListenerConfig) -> Result<(), Con
     Ok(())
 }
 
-/// Validate `[passthrough]`. The clamps exist so a typo like `min_client_dcid_len = 0` fails
-/// loudly instead of silently re-opening the cross-flow prefix-collision surface.
+/// Validate `[passthrough]`; the clamps make a typo like `min_client_dcid_len = 0` fail loudly.
 fn validate_passthrough(pt: &PassthroughConfig) -> Result<(), ConfigError> {
     if pt.backends.is_empty() {
         return Err(ConfigError::Validation(
@@ -1364,8 +1281,7 @@ fn validate_passthrough(pt: &PassthroughConfig) -> Result<(), ConfigError> {
             pt.max_quic_connections
         )));
     }
-    // Below 8 re-opens the CVE-2022-30592 prefix-collision surface; above 20 is impossible on
-    // the wire (RFC 9000 §17.3).
+    // Below 8 re-opens the CVE-2022-30592 prefix-collision surface; above 20 is impossible (§17.3).
     if !(8..=20).contains(&pt.min_client_dcid_len) {
         return Err(ConfigError::Validation(format!(
             "passthrough.min_client_dcid_len={} out of range 8..=20",
@@ -1420,10 +1336,8 @@ protocol = "tcp"
         assert!(result.is_err());
     }
 
-    // A minimal raw_proxy block must still get both caps from their serde defaults.
     #[test]
     fn raw_proxy_minimal_toml_defaults_caps() {
-        // Shaped exactly as TOML table-nesting resolves a minimal block into this struct.
         let input = r#"
 cert_path = "/c"
 key_path = "/k"
@@ -1499,7 +1413,6 @@ sni = "backend.test"
 
     #[test]
     fn validate_ok() {
-        // `tcp` is a SERVED protocol; `http` would now be rejected.
         let config = LbConfig {
             listeners: vec![ListenerConfig {
                 address: "0.0.0.0:80".into(),
@@ -1650,8 +1563,6 @@ address = "127.0.0.1:3000"
         assert!(validate_config(&config).is_err());
     }
 
-    // The served listener set is tcp/tls/h1/h1s/quic; http/h2/h3 must be rejected at config time.
-
     #[test]
     fn validate_unserved_listener_protocol_rejected() {
         for proto in ["http", "h2", "h3"] {
@@ -1665,7 +1576,6 @@ protocol = "{proto}"
 address = "127.0.0.1:3000"
 "#
             );
-            // Parses fine as a String; only validation rejects it.
             let cfg = parse_config(&input).expect("parse ok (protocol is a String)");
             let err = validate_config(&cfg).expect_err("unserved listener protocol must reject");
             assert!(
@@ -1678,7 +1588,6 @@ address = "127.0.0.1:3000"
 
     #[test]
     fn validate_served_listener_protocols_named_in_unserved_error() {
-        // The error must name the served set, or the operator cannot act on it.
         let input = r#"
 [[listeners]]
 address = "0.0.0.0:8080"
@@ -1711,7 +1620,6 @@ address = "127.0.0.1:3000"
 
     #[test]
     fn unknown_top_level_key_rejected() {
-        // A misspelled top-level table used to be silently dropped.
         let input = r#"
 [[listeners]]
 address = "0.0.0.0:8080"
@@ -1731,7 +1639,6 @@ bogus_top_level_key = true
 
     #[test]
     fn unknown_runtime_key_rejected() {
-        // The headline gap: a typo'd knob used to parse clean and be ignored.
         let input = r#"
 [[listeners]]
 address = "0.0.0.0:8080"
@@ -1791,7 +1698,6 @@ address = "127.0.0.1:3000"
 
     #[test]
     fn valid_config_still_parses_under_deny_unknown_fields() {
-        // Regression guard: a previously-valid config must still parse byte-identically.
         let input = r#"
 [[listeners]]
 address = "0.0.0.0:8080"
@@ -1969,8 +1875,6 @@ protocol = "h1"
         assert!(validate_config(&config).is_err());
     }
 
-    // The H3-terminate → H1 forwarding shape must validate; backends used to be allowed-but-
-    // ignored on the quic path.
     #[test]
     fn validate_quic_h3_terminate_with_h1_backend_ok() {
         let config = LbConfig {
@@ -2014,7 +1918,6 @@ protocol = "h1"
         );
     }
 
-    // Both raw_proxy and backends is a genuine conflict.
     #[test]
     fn validate_quic_raw_proxy_with_backends_rejected() {
         let config = LbConfig {
@@ -2065,7 +1968,6 @@ protocol = "h1"
         );
     }
 
-    // Mixed backend families are ambiguous against the single-address h2/h3 forwarding API.
     #[test]
     fn validate_quic_h3_terminate_mixed_backend_families_rejected() {
         let config = LbConfig {
@@ -2218,7 +2120,6 @@ address = "127.0.0.1:3000"
 
     #[test]
     fn validate_h1_with_tls_block_rejected() {
-        // A TLS block on plain "h1" almost certainly means the operator wanted "h1s".
         let config = LbConfig {
             listeners: vec![ListenerConfig {
                 address: "0.0.0.0:80".into(),
@@ -2485,7 +2386,6 @@ address = "127.0.0.1:3000"
         assert!(ws.enabled);
         assert_eq!(ws.idle_timeout_seconds, 30);
         assert_eq!(ws.max_message_size_bytes, 1_048_576);
-        // WS-over-H2 must stay OFF unless explicitly enabled (CF-S27-2).
         assert!(
             !ws.h2_extended_connect,
             "h2_extended_connect must default to false (CF-S27-2: WS-over-H2 opt-in)"
@@ -2541,7 +2441,6 @@ address = "127.0.0.1:3000"
         assert!(validate_config(&config).is_err());
     }
 
-    // A `quic` listener may carry a websocket block; h3_extended_connect still defaults OFF.
     #[test]
     fn validate_websocket_on_quic_listener_ok() {
         let input = r#"
@@ -2569,7 +2468,6 @@ retry_secret_path = "/r"
             .expect("a quic listener with a websocket block must validate (WS-over-H3)");
     }
 
-    // The H3 opt-in round-trips and validates.
     #[test]
     fn parse_websocket_h3_extended_connect_opt_in() {
         let input = r#"
@@ -2741,8 +2639,6 @@ address = "127.0.0.1:3000"
 
     #[test]
     fn ops02_listener_jitter_exceeding_inherited_budget_rejected() {
-        // Only the `validate_config` cross-check can catch a listener jitter above an INHERITED
-        // budget.
         let mut l = min_listener("0.0.0.0:80");
         l.drain_jitter_ms = Some(9_000);
         let rt = RuntimeConfig {
@@ -2781,7 +2677,6 @@ address = "127.0.0.1:3000"
 
     #[test]
     fn ops11_readiness_settle_default_is_kubelet_aligned() {
-        // Regression guard: the default must exceed one kubelet probe period.
         assert_eq!(default_readiness_settle_ms(), 11_000);
         assert!(default_readiness_settle_ms() <= 30_000); // still in range
     }
@@ -2833,8 +2728,6 @@ address = "127.0.0.1:3000"
 
     #[test]
     fn passthrough_only_config_is_valid() {
-        // A Mode-A-only deployment has no `[[listeners]]`, so it needs the listeners-empty
-        // exemption or it is rejected as "no listeners".
         let cfg = LbConfig {
             listeners: vec![],
             runtime: None,
@@ -2863,7 +2756,6 @@ address = "127.0.0.1:3000"
 
     #[test]
     fn passthrough_min_client_dcid_below_floor_rejected() {
-        // Below 8 re-opens the cross-flow prefix-collision surface; must fail loud.
         let mut pt = pt_min("0.0.0.0:4433", "127.0.0.1:5000");
         pt.min_client_dcid_len = 4;
         let cfg = LbConfig {
@@ -2910,7 +2802,6 @@ strict_source_binding = true
 
     #[test]
     fn h3_request_cap_defaults_to_1000_when_absent() {
-        // Omitting the knob must serde-default to the safe recycling value.
         let input = r#"
 [[listeners]]
 address = "0.0.0.0:80"
@@ -2953,7 +2844,6 @@ max_requests_per_h3_connection = 250
 
     #[test]
     fn h3_request_cap_zero_is_valid_disabled() {
-        // `0` is an accepted sentinel even though it re-opens the leak/DoS vector.
         let rt = RuntimeConfig {
             max_requests_per_h3_connection: 0,
             ..base_runtime()
@@ -2966,7 +2856,6 @@ max_requests_per_h3_connection = 250
 
     #[test]
     fn h3_request_cap_in_range_is_valid() {
-        // Values above `u32::MAX` are a TOML type error and never reach validation.
         for v in [1u32, 100, 1000, 1_000_000, 10_000_000] {
             let rt = RuntimeConfig {
                 max_requests_per_h3_connection: v,
@@ -2981,7 +2870,6 @@ max_requests_per_h3_connection = 250
 
     #[test]
     fn h3_request_cap_above_ceiling_rejected() {
-        // A fat-finger value must not read as a bound while being effectively unlimited.
         let rt = RuntimeConfig {
             max_requests_per_h3_connection: 10_000_001,
             ..base_runtime()
@@ -2996,7 +2884,6 @@ max_requests_per_h3_connection = 250
 
     #[test]
     fn keepalive_requests_range_validated() {
-        // `0` and `1..=10_000_000` accepted; above 10M rejected.
         for v in [0u32, 1, 100, 10_000_000] {
             let rt = RuntimeConfig {
                 max_keepalive_requests: v,
@@ -3019,9 +2906,6 @@ max_requests_per_h3_connection = 250
         );
     }
 
-    // Every shipped config MUST parse and validate — this is what catches a schema drift or a
-    // new validation rule breaking a documented example.
-
     fn repo_config_dir() -> std::path::PathBuf {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("..")
@@ -3029,8 +2913,8 @@ max_requests_per_h3_connection = 250
             .join("config")
     }
 
-    /// Parse + validate one shipped config. Uses `assert!` rather than `expect` because the
-    /// crate denies `clippy::panic` even in tests and `expect_fun_call` rejects a formatted arg.
+    /// Parse + validate one shipped config; `assert!` not `expect` because the crate denies
+    /// `clippy::panic` even in tests.
     fn assert_config_file_ok(path: &std::path::Path) {
         let label = path.display().to_string();
         let read = std::fs::read_to_string(path);
@@ -3065,7 +2949,6 @@ max_requests_per_h3_connection = 250
             seen += 1;
             assert_config_file_ok(&path);
         }
-        // An empty or missing examples dir would otherwise pass vacuously.
         assert!(
             seen >= 7,
             "expected at least 7 example configs, found {seen}"
