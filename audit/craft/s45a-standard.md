@@ -1,86 +1,85 @@
-# S45A — the SLOP vs LOAD-BEARING standard
+# S45A — the comment standard (OWNER-REVISED, supersedes the Phase-0 standard)
 
-The single line every scanner and sweeper applies. Written by lead after a calibration pass on
-the real tree (see "Calibration" below — the naive signatures produce mostly false positives here).
+**Owner directive:** *"I want 90% comment reduction — comment should only be present if reading the
+code doesn't make sense or there is a catch."*
 
-## The test
+This replaces the conservative Phase-0 standard. The bar is now aggressive by default.
 
-A comment is **SLOP** only if removing it loses **zero information**: a reader of the adjacent code
-at normal competence learns nothing from it that the code does not already say.
+## THE RULE
 
-A comment is **LOAD-BEARING** if removing it could let a future editor reintroduce a defect, violate
-a spec, break a gate, or re-litigate a settled decision.
+A comment survives ONLY if one of these is true:
 
-When the two readings compete, the comment is **AMBIGUOUS** and it is **KEPT**. A retained mediocre
-comment costs nothing. A deleted invariant note costs a future regression.
+1. **The code does not make sense without it.** A reader of normal competence cannot tell what is
+   going on from the code alone.
+2. **There is a catch.** A non-obvious hazard, invariant, ordering constraint, spec requirement,
+   safety condition, or "if you change this, X breaks".
 
-## SLOP (remove)
+Everything else goes. In particular, DELETE:
 
-- Restates the adjacent statement: `// increment the counter` above `count += 1;`.
-- Doc-comment that only re-spells the signature: `/// Returns the name.` on `fn name(&self) -> &str`.
-- Narrative/changelog/session commentary that is not attached to a technical reason:
-  `// Fixed in S37`, `// As requested, now handles X`, `// Updated per review`.
-- Sycophantic or explanatory filler aimed at a reader being taught to program.
-- Commented-out **code** (real statements, not wrapped prose).
-- Banner/section comments repeated verbatim across files that carry no local meaning.
-- Dead scaffolding: a script or file with no caller and no provenance value.
+- any comment restating what the adjacent code plainly does;
+- descriptive prose explaining a function that reads clearly;
+- narrative, changelog, session commentary, review chatter, status blocks;
+- historical rationale for how the code got here, when the current code is self-evident;
+- long worked examples, ASCII tables, and essays where one line does the job;
+- doc-comment bodies that elaborate on an obvious signature.
 
-## LOAD-BEARING (KEEP — removal is an R3 knowledge regression)
+**Default to deleting.** Under the previous standard ambiguity meant KEEP; now ambiguity means
+CUT unless it is a genuine catch.
 
-1. **WHY-notes that prevent a regression.** Canonical: the `get_mut` (not `entry().or_insert_with()`)
-   note on the H3 egress path — that comment is what stops F-S29-1 being reintroduced. Any comment
-   of the form "use X not Y because Y does Z" is sacred.
-2. **RFC / spec citations** justifying conformance behavior; the h3spec 12-waiver rationales.
-3. **`#[allow(...)]` justifications.** Never orphan an allow from its reason.
-4. **`unsafe` safety comments — MANDATORY.** Never removed, never shortened. Non-negotiable.
-5. **Panic-freedom / invariant / bound notes** (e.g. why an index cannot go out of range).
-6. **"deferred because X / see CF-…"** notes mapping to carry-forward items.
-7. **Negative-control test comments** encoding *why a test proves what it proves*. Delete it and a
-   later "simplification" turns the test vacuous. Includes "this must FAIL if …", "non-vacuous
-   because …", "proves PROPAGATION not just a drop".
-8. **Anything a CI gate or script reads**: `doc-lint.sh` FILES arrays, waiver lists, coverage
-   config, hot-path patterns in `coverage-check.sh`.
-9. **`audit/**` — entirely out of scope.** Do not touch, do not propose.
+## Compression, not just deletion — the main lever
 
-## Calibration — the naive signatures LIE in this repo (measured, lead, Phase 0)
+65% of all comment lines are doc comments (18,552 of 28,491), averaging 5.0 lines per block, and
+656 blocks run 8+ lines (up to 95). Most of that is prose elaboration.
 
-Do not trust grep. Every candidate is read in context before it is classified.
+**The dominant move is COMPRESS A BLOCK TO ONE LINE**, not delete it. A 30-line doc essay becomes a
+single-line summary. This is where the reduction comes from.
 
-| Naive signature | Hits | Reality |
-|---|---:|---|
-| `//.*\bS[0-9]+\b` "session marker" | 591 | Overwhelmingly **load-bearing**. These are finding-IDs (`F-S20-1`, `CF-S27-2`, `F-S29-1`) attached to regression rationale. A bare `(S34)` provenance tag on a *substantive* note is not slop — the note is the payload. |
-| `//\s*(let\|fn\|if\|for\|while\|return)` "commented-out code" | 51 | Mostly **wrapped prose** — second lines of a sentence that happen to begin with `for`/`while`/`return`. e.g. `// for the lifetime of the connection.` |
-| `just\|simply\|note that` "filler" | many | Ordinary English inside substantive technical notes. |
+## HARD CONSTRAINTS — these are gates, not taste. Violating them turns CI RED.
 
-Consequence: this codebase's comment density (26% of lines) is largely an evidence trail, not slop.
-The expected true-slop yield is **low**, and a large deletion count would itself be the alarm.
+1. **`#![deny(missing_docs)]` on all 18 crates.** Every `pub` item MUST retain **at least one**
+   doc line. Compress to one line — never delete to zero. (Private items have no such floor.)
+2. **Comments asserted on by tests.** These exact strings are read out of production source by
+   integration tests and must survive verbatim:
+   - `ROUND8-L7-10 — take-and-discard upstream stream pattern` (lb-l7/src/h1_proxy.rs)
+   - `ROUND8-L7-10 — API contract for future H1 upstream reuse` (lb-io/src/pool.rs)
+   - the `enable_connect_protocol()` / `if self.h2_extended_connect_enabled` pins (lb-l7/src/h2_proxy.rs)
+   - `round8_underscore_policy.rs` pins text in h1_proxy.rs and h2_proxy.rs
+   Before touching h1_proxy.rs, h2_proxy.rs, pool.rs: read the asserting test first.
+3. **`unsafe` SAFETY comments stay.** A safety condition is the definition of a catch.
+4. **`#[allow(...)]` justifications stay** (one line is fine). An unexplained allow is a catch lost.
+5. **Anything a CI script reads** (doc-lint FILES arrays, coverage hot-path patterns, waiver lists).
+6. **`audit/**` is out of scope entirely.**
 
-## The `deny(missing_docs)` rule — retires the biggest expected category
+## Catches that specifically survive (non-exhaustive)
 
-**All 18 crates carry `#![deny(missing_docs)]`**, and CI runs
-`clippy --all-targets --all-features -D warnings`.
+These are the paid-for lessons; they are exactly what clause 2 of the rule protects. Compress the
+prose hard, but the *fact* must remain:
 
-Therefore a `///` or `//!` doc-comment on a **public item is MANDATORY**. Removing one fails the
-lint and turns the gate RED. Doc-comments on `pub` items are **gate-load-bearing** (rule 8 above),
-even when they only restate the signature — `/// Whether the client is currently connected.` on
-`is_connected()` cannot be deleted.
-
-This retires the mission's anticipated "redundant doc-comments that duplicate the signature"
-category almost entirely. What remains removable:
-
-- ordinary `//` comments *inside function bodies* that restate the adjacent statement;
-- genuinely commented-out **code** (real statements, not wrapped prose);
-- pure narrative/changelog comments with no technical payload;
-- doc-comments on **private** items (`missing_docs` does not fire there) that add nothing.
-
-## Provenance tags
-
-A trailing `(S34)` / `(S44)` on an otherwise substantive comment is **provenance**, and provenance is
-cheap and occasionally useful. Do **not** strip tags as a mechanical sweep — that is churn, it
-touches every file, and it buys nothing. Only remove a session reference when the comment is
-*nothing but* the reference.
+- `lb-quic/src/conn_actor.rs:628` — `get_mut`, not `entry().or_insert_with()` (prevents F-S29-1
+  gRPC-over-H3 trailer drop). 14 lines → may become 2, but the "not or_insert_with, because it
+  replays the stale End and discards a buffered trailer" fact stays.
+- Reset-vs-FIN arm-swap notes; `StreamReset` vs `StreamStopped`.
+- Smuggling defenses (`check_te_strict`, TE-must-equal-trailers, pseudo-header leak rejects).
+- Zero-RTT LRU-not-FIFO; HMAC-not-multiply-shift.
+- `biased;` select ordering; pinning contracts; free-list invariants.
+- h3spec waiver rationales; RFC citations that justify a behavior a reader would otherwise
+  "fix" — keep the citation, drop the recitation.
+- Negative-control test intent ("this must FAIL pre-fix") — one line, not a paragraph.
 
 ## Behavior
 
-NO behavior changes. Comments, dead files, and dead scripts only. Any code edit must be provably
-behavior-neutral. Coverage must not move; if it does, something behavioral changed.
+NO behavior changes. Comments only, plus the already-approved dead-script removals. Coverage must
+not move. The invariant census (`s45a-invariant-census.sh`) checks that the catch CLASSES survive;
+its counts may legitimately fall as prose is compressed, so it is now a review aid, not a gate —
+the named canaries still bind.
+
+## Measured ceiling (why 90% needs one more decision)
+
+| scenario | result |
+|---|---|
+| compress every doc block to 1 line + delete EVERY plain comment | 28,491 → 3,741 = **86.9%** |
+| the same, but honoring clause 2 (catches survive) | ≈ **78%** |
+| 90%+ | requires dropping `#![deny(missing_docs)]` from all 18 crates |
+
+86.9% is the hard lint-safe ceiling. We drive to the maximum the rule allows and report the real
+number rather than hitting a target by deleting catches.
