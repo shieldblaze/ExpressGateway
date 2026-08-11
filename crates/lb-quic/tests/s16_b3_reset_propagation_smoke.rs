@@ -1,25 +1,13 @@
-//! Mode B — B3 builder smoke: a client RESET_STREAM is PROPAGATED to the
-//! backend as a real RESET_STREAM carrying the SAME app code (the F-MD-4
-//! analog's positive leg). The full R13 (a)+(b)+(c) bar is the verifier's.
+//! Mode B — B3 builder smoke: a client RESET_STREAM is PROPAGATED to the backend as a real
+//! RESET_STREAM carrying the SAME app code. The full R13 (a)+(b)+(c) bar is the verifier's.
 //!
-//! The client opens bidi stream 0, sends a PARTIAL body (no FIN), waits until
-//! the backend has actually received some bytes (so the mirror stream genuinely
-//! exists mid-transfer), then RESET_STREAMs with a specific app code. The
-//! backend records the code carried by its `Err(StreamReset)` and whether it
-//! EVER saw a genuine FIN, which must stay false.
+//! Why this proves PROPAGATION and not just a drop: a relay that merely dropped the half would
+//! leave the backend's stream hanging on `Done`, never `StreamReset`. Only
+//! `dst.stream_shutdown(Write, code)` makes the backend observe a stream-level RESET_STREAM.
 //!
-//! Why this proves PROPAGATION and not just a drop: a relay that merely dropped
-//! the half would leave the backend's stream hanging on `Done`, never
-//! `StreamReset`. Only `dst.stream_shutdown(Write, code)` makes the backend
-//! observe a stream-level RESET_STREAM with the code.
-//!
-//! NOTE: `stream_finished()` is deliberately NOT a witness — quiche returns
-//! `true` for an UNKNOWN stream, and a RESET stream is collected and becomes
-//! unknown, so it would FALSELY report a clean end on a correctly-reset stream.
-//! Only `stream_recv` returning `fin == true` distinguishes a smuggled clean
-//! FIN from a propagated reset.
-//!
-//! Driven with `--features test-gauges` so the test hook is reachable.
+//! `stream_finished()` is deliberately NOT a witness — quiche returns `true` for an UNKNOWN
+//! stream, and a RESET stream is collected and becomes unknown, so it would FALSELY report a
+//! clean end. Only `stream_recv` returning `fin == true` distinguishes a smuggled clean FIN.
 
 #![cfg(feature = "test-gauges")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -45,14 +33,11 @@ const TEST_SNI: &str = "expressgateway.test";
 const H3_ALPN: &[u8] = b"h3";
 const MAX_UDP: usize = 65_535;
 const HANDSHAKE_BUDGET: Duration = Duration::from_secs(5);
-/// The client bidi stream that is reset mid-transfer (identity-mapped both
-/// legs).
 const STREAM_ID: u64 = 0;
-/// The client's RESET_STREAM code, which B3 MUST propagate EXACTLY. A non-zero,
-/// non-trivial value so a stray default-`0` reset cannot pass by coincidence.
+/// A non-zero, non-trivial value that B3 MUST propagate EXACTLY, so a stray default-`0` reset
+/// cannot pass by coincidence.
 const RESET_CODE: u64 = 0xBEEF;
-/// Sentinel for "the backend has not observed any StreamReset code yet"
-/// (a real propagated code is `RESET_CODE`, well below this).
+/// Sentinel for "no StreamReset code observed yet" (a real code is `RESET_CODE`, far below).
 const NO_RESET: u64 = u64::MAX;
 /// Partial body the client sends BEFORE the reset (multi-packet, no FIN).
 const PARTIAL_LEN: usize = 24 * 1024;
@@ -112,13 +97,12 @@ fn random_scid() -> [u8; quiche::MAX_CONN_ID_LEN] {
     scid
 }
 
-/// A deterministic binary payload (not all-ASCII).
 fn make_payload(len: usize) -> Vec<u8> {
     (0..len).map(|i| ((i * 37 + 13) % 256) as u8).collect()
 }
 
-/// CLIENT-facing SERVER config (the LB-as-server leg). Generous windows so
-/// the partial body is admitted; the reset PROPAGATION is what's tested.
+/// CLIENT-facing SERVER config. Generous windows so the partial body is admitted; the reset
+/// PROPAGATION is what's tested.
 fn lb_server_config(certs: &TestCerts) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
     cfg.set_application_protos(&[H3_ALPN]).unwrap();
@@ -140,7 +124,6 @@ fn lb_server_config(certs: &TestCerts) -> quiche::Config {
     cfg
 }
 
-/// The real downstream CLIENT config — verifies the LB's cert.
 fn client_config(certs: &TestCerts) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
     cfg.set_application_protos(&[H3_ALPN]).unwrap();
@@ -161,8 +144,7 @@ fn client_config(certs: &TestCerts) -> quiche::Config {
     cfg
 }
 
-/// The pool's per-dial CLIENT config factory (LB → backend leg). Installs a
-/// deliberately-wrong ALPN so the actor must MIRROR the client's `h3`.
+/// Pool dial config factory: a deliberately-wrong ALPN, so the actor must MIRROR the client's `h3`.
 fn upstream_config_factory(
     ca: PathBuf,
 ) -> Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> {
@@ -187,16 +169,10 @@ fn upstream_config_factory(
     })
 }
 
-/// A throwaway BACKEND that accepts ONE connection and on stream 0 records
-/// bytes received, whether it ever observed a genuine clean end
-/// (`fin == true`), and the app error code of any `Err(StreamReset)` — the B3
-/// witness. Storing the CODE, not just a bool, distinguishes a real relayed
-/// RESET_STREAM from a coincidental default-`0` reset or a connection teardown
-/// (which would not surface as a stream-level reset).
-///
-/// `stream_finished()` is deliberately NOT used: it returns `true` for an
-/// UNKNOWN stream, and a RESET stream is collected and becomes unknown, so once
-/// B3 correctly propagates the reset it would FALSELY report a clean end.
+/// Accepts ONE connection and on stream 0 records bytes received, whether it ever observed a
+/// genuine clean end, and the app error code of any `Err(StreamReset)`. Storing the CODE, not
+/// just a bool, distinguishes a real relayed RESET_STREAM from a coincidental default-`0` reset
+/// or a connection teardown (which would not surface as a stream-level reset).
 fn spawn_recording_backend(
     certs: &TestCerts,
     recv_bytes: Arc<AtomicUsize>,
@@ -221,8 +197,6 @@ fn spawn_recording_backend(
                 return;
             }
             if let Some(c) = conn.as_mut() {
-                // Drain readable streams; record bytes, any CLEAN end, and
-                // any RESET on stream 0 (the B3 witness — capture its code).
                 let readable: Vec<u64> = c.readable().collect();
                 for sid in readable {
                     loop {
@@ -238,8 +212,8 @@ fn spawn_recording_backend(
                                     break;
                                 }
                             }
-                            // THE B3 WITNESS: a relayed RESET_STREAM surfaces
-                            // as a stream-level StreamReset carrying the code.
+                            // THE B3 WITNESS: a relayed RESET_STREAM surfaces as a stream-level
+                            // StreamReset carrying the code.
                             Err(quiche::Error::StreamReset(code)) => {
                                 if sid == STREAM_ID {
                                     let _ = observed_reset_code.compare_exchange(
@@ -255,9 +229,8 @@ fn spawn_recording_backend(
                             Err(_) => break,
                         }
                     }
-                    // No `stream_finished()` witness — see the fn-level note;
-                    // it false-positives on a correctly-reset stream. The
-                    // `fin == true` branch above is the genuine signal.
+                    // No `stream_finished()` witness — it false-positives on a correctly-reset
+                    // stream; the `fin == true` branch above is the genuine signal.
                 }
                 loop {
                     match c.send(&mut out_buf) {
@@ -330,8 +303,8 @@ async fn try_recv_one(
     }
 }
 
-/// THE B3 self-check: a client RESET_STREAM mid-transfer is PROPAGATED with the
-/// SAME app code, and the backend still never sees a clean FIN.
+/// THE B3 self-check: a client RESET_STREAM mid-transfer propagates with the SAME app code, and
+/// the backend still never sees a clean FIN.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn s16_b3_client_reset_propagates_with_code_to_backend() {
     let certs = generate_loopback_certs();
@@ -437,8 +410,8 @@ async fn s16_b3_client_reset_propagates_with_code_to_backend() {
         }
     });
 
-    // Keep pumping after the RESET so the frame actually leaves quiche — a
-    // shutdown without a subsequent flush never reaches the LB.
+    // Keep pumping after the RESET so the frame actually leaves quiche — a shutdown without a
+    // subsequent flush never reaches the LB.
     let do_reset = Arc::new(AtomicBool::new(false));
     let did_reset = Arc::new(AtomicBool::new(false));
     let client_cancel = cancel.clone();
@@ -476,8 +449,6 @@ async fn s16_b3_client_reset_propagates_with_code_to_backend() {
         pool,
         addr: backend_addr,
         sni: TEST_SNI.to_string(),
-        // B6 (R14/R12): caps now carried on RawBackend; the const
-        // defaults keep these tests byte-identical in behaviour.
         dgram_queue_cap: lb_quic::DGRAM_QUEUE_CAP,
         max_relay_streams: lb_quic::MAX_RELAY_STREAMS,
     };
@@ -501,8 +472,8 @@ async fn s16_b3_client_reset_propagates_with_code_to_backend() {
     };
     let actor = tokio::spawn(run_raw_proxy_actor_for_test(params));
 
-    // Wait until the backend has actually received SOME of the partial body
-    // (so the upstream mirror stream 0 exists), then trigger the reset.
+    // Trigger the reset only once the backend has received SOME of the partial body, so the
+    // upstream mirror stream 0 genuinely exists.
     let wait_recv = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
         if recv_bytes.load(Ordering::Relaxed) > 0 {
@@ -521,8 +492,7 @@ async fn s16_b3_client_reset_propagates_with_code_to_backend() {
 
     do_reset.store(true, Ordering::Relaxed);
 
-    // Wait for the backend to observe the PROPAGATED RESET_STREAM carrying the
-    // code, which only `dst.stream_shutdown(Write, code)` can produce.
+    // Only `dst.stream_shutdown(Write, code)` can produce the propagated RESET_STREAM below.
     let observe = tokio::time::Instant::now() + Duration::from_secs(5);
     while tokio::time::Instant::now() < observe {
         if observed_reset_code.load(Ordering::Relaxed) != NO_RESET {
@@ -545,8 +515,7 @@ async fn s16_b3_client_reset_propagates_with_code_to_backend() {
          {seen:#x}, not the client's {RESET_CODE:#x}. The propagated reset \
          must carry the SAME application error code."
     );
-    // Smuggling guard (B2, kept under B3): never a clean FIN on a truncated
-    // transfer.
+    // Smuggling guard (B2, kept under B3): never a clean FIN on a truncated transfer.
     assert!(
         !saw_clean_fin.load(Ordering::Relaxed),
         "F-MD-4 SMUGGLING: the backend observed a CLEAN FIN on stream 0 after \

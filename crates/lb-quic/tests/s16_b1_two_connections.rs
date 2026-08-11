@@ -1,19 +1,11 @@
-//! Mode B — the B1 TWO-CONNECTIONS proof over a real wire: client ⇄ Mode B
-//! actor ⇄ real quiche backend. Asserts on [`lb_quic::RawProxyOutcome`] that
-//! the LB operates TWO DISTINCT quiche connections, NOT a CID bridge.
+//! Mode B — the B1 TWO-CONNECTIONS proof over a real wire, asserting on
+//! [`lb_quic::RawProxyOutcome`] that the LB operates TWO DISTINCT quiche connections, NOT a CID
+//! bridge: `client_scid != upstream_scid`, `client_trace_id != upstream_trace_id` (quiche derives
+//! `trace_id` per object), and `negotiated_alpn` mirrored onto the upstream dial.
 //!
-//! By mechanism: `client_scid != upstream_scid` (an independent SCID was
-//! sampled for the re-origination); `client_trace_id != upstream_trace_id`
-//! (quiche derives `trace_id` per object, so these are two distinct objects);
-//! and `negotiated_alpn` is mirrored onto the upstream dial.
-//!
-//! LOAD-BEARING independence: the BACKEND independently records the SCID it saw
-//! on the inbound Initial. It must equal `upstream_scid` and must NOT be — or
-//! be derived from — `client_scid`. A bridge would make the backend see the
-//! CLIENT's SCID; a true re-origination makes it see a freshly random one, so
-//! this is the assertion that FAILS on a bridge and PASSES on Mode B.
-//!
-//! Driven with `--features test-gauges` so the test hook is reachable.
+//! LOAD-BEARING independence: the BACKEND independently records the SCID on the inbound Initial.
+//! A bridge would make it see the CLIENT's SCID; a true re-origination makes it see a freshly
+//! random one — the assertion that FAILS on a bridge and PASSES on Mode B.
 
 #![cfg(feature = "test-gauges")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -40,10 +32,6 @@ const TEST_SNI: &str = "expressgateway.test";
 const H3_ALPN: &[u8] = b"h3";
 const MAX_UDP: usize = 65_535;
 const HANDSHAKE_BUDGET: Duration = Duration::from_secs(5);
-
-// ─────────────────────────────────────────────────────────────────────
-// Cert plumbing (mirrors s16_raw_proxy_smoke.rs / h3_h3_stream_e2e.rs).
-// ─────────────────────────────────────────────────────────────────────
 
 static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -100,8 +88,6 @@ fn random_scid() -> [u8; quiche::MAX_CONN_ID_LEN] {
     scid
 }
 
-/// CLIENT-facing SERVER config (the LB-as-server leg). Serves the
-/// loopback cert; advertises `h3` so the client negotiates it.
 fn lb_server_config(certs: &TestCerts) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
     cfg.set_application_protos(&[H3_ALPN]).unwrap();
@@ -123,7 +109,6 @@ fn lb_server_config(certs: &TestCerts) -> quiche::Config {
     cfg
 }
 
-/// The real CLIENT (downstream) config — verifies the LB's cert.
 fn client_config(certs: &TestCerts) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
     cfg.set_application_protos(&[H3_ALPN]).unwrap();
@@ -144,9 +129,8 @@ fn client_config(certs: &TestCerts) -> quiche::Config {
     cfg
 }
 
-/// The pool's per-dial CLIENT config factory. Installs a DELIBERATELY-WRONG
-/// ALPN, so the test proves the actor MIRRORS the client's negotiated `h3` —
-/// without the override the h3-only backend would TLS-fail.
+/// Pool dial config factory with a DELIBERATELY-WRONG ALPN, so the test proves the actor MIRRORS
+/// the client's negotiated `h3` — without the override the h3-only backend would TLS-fail.
 fn upstream_config_factory(
     ca: PathBuf,
 ) -> Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> {
@@ -171,9 +155,8 @@ fn upstream_config_factory(
     })
 }
 
-/// A throwaway BACKEND that accepts ONE connection and RECORDS the SCID it
-/// observed on the inbound Initial — the load-bearing independence witness,
-/// since a bridge would make it see the CLIENT's SCID.
+/// Accepts ONE connection and RECORDS the SCID on the inbound Initial — the load-bearing
+/// independence witness, since a bridge would make it see the CLIENT's SCID.
 fn spawn_backend_recording_scid(certs: &TestCerts) -> (SocketAddr, Arc<Mutex<Option<Vec<u8>>>>) {
     let std_sock = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     std_sock.set_nonblocking(true).unwrap();
@@ -213,8 +196,8 @@ fn spawn_backend_recording_scid(certs: &TestCerts) -> (SocketAddr, Arc<Mutex<Opt
             match tokio::time::timeout(timeout, socket.recv_from(&mut in_buf)).await {
                 Ok(Ok((n, from))) => {
                     if conn.is_none() {
-                        // Record the SCID off the wire BEFORE accept,
-                        // independently of the actor's RawProxyOutcome.
+                        // Record the SCID off the wire BEFORE accept, independently of the
+                        // actor's RawProxyOutcome.
                         if let Ok(hdr) = quiche::Header::from_slice(
                             in_buf.get_mut(..n).unwrap_or(&mut []),
                             quiche::MAX_CONN_ID_LEN,
@@ -279,17 +262,15 @@ async fn try_recv_one(
     }
 }
 
-/// THE headline B1 verify: real client ⇄ Mode B actor ⇄ real backend,
-/// asserting two distinct quiche connections by mechanism.
+/// THE headline B1 verify: two distinct quiche connections, proven by mechanism.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn s16_b1_two_distinct_connections_not_a_bridge() {
     let certs = generate_loopback_certs();
 
     let (backend_addr, observed_upstream_scid) = spawn_backend_recording_scid(&certs);
 
-    // 2) The shared LB listener socket (the "server" leg). The actor
-    //    writes client-facing packets out of it; a forwarder task drains
-    //    inbound client packets into the actor's mpsc (router stand-in).
+    // 2) The shared LB listener socket: the actor writes client-facing packets out of it, and a
+    //    forwarder task drains inbound client packets into its mpsc (router stand-in).
     let lb_socket = Arc::new(
         UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
             .await
@@ -323,13 +304,11 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
     )
     .unwrap();
 
-    // The client's CHOSEN SCID — what a bridge would forward to the
-    // backend. Recorded here for the independence assertion.
+    // The client's CHOSEN SCID — what a bridge would forward to the backend.
     let client_chosen_scid = client_conn.source_id().as_ref().to_vec();
 
-    // 4) Inline-drive BOTH legs to established (the round8 pattern). After
-    //    this the actor's `drive_client_to_established` sees an already-
-    //    established conn and proceeds straight to the dedicated dial.
+    // 4) Inline-drive BOTH legs to established, so the actor's `drive_client_to_established`
+    //    sees an already-established conn and proceeds straight to the dedicated dial.
     let mut out = vec![0u8; MAX_UDP];
     let mut in_buf = vec![0u8; MAX_UDP];
     let deadline = tokio::time::Instant::now() + HANDSHAKE_BUDGET;
@@ -363,8 +342,7 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
         "fixture: client must negotiate h3 with the LB"
     );
 
-    // Forwarder: drain the shared LB socket into the actor's inbound mpsc (the
-    // router's job in production). The actor only reads its mpsc and writes via
+    // Forwarder (the router's job in production). The actor only reads its mpsc and writes via
     // `send_to`, so there is no recv_from contention.
     let (tx, rx) = mpsc::channel::<InboundPacket>(64);
     let cancel = CancellationToken::new();
@@ -391,8 +369,7 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
         }
     });
 
-    // 6) Client keep-alive driver: keep the client conn live (flush +
-    //    recv) while the actor dials upstream and runs the dual pump, so
+    // 6) Keep the client conn live while the actor dials upstream and runs the dual pump, so
     //    neither leg idles out during re-origination.
     let client_cancel = cancel.clone();
     let client_driver = tokio::spawn(async move {
@@ -422,8 +399,6 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
         pool,
         addr: backend_addr,
         sni: TEST_SNI.to_string(),
-        // B6 (R14/R12): caps now carried on RawBackend; the const
-        // defaults keep these tests byte-identical in behaviour.
         dgram_queue_cap: lb_quic::DGRAM_QUEUE_CAP,
         max_relay_streams: lb_quic::MAX_RELAY_STREAMS,
     };
@@ -448,9 +423,8 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
         h3_recycle_metrics: None,
     };
 
-    // 8) Cancel the actor shortly after it has established both legs so
-    //    the dual pump exits and `run_raw_proxy_actor_inner` returns the
-    //    RawProxyOutcome (graceful_close both, then Ok(outcome)).
+    // 8) Cancel shortly after both legs establish so the dual pump exits and
+    //    `run_raw_proxy_actor_inner` returns the RawProxyOutcome.
     let cancel_for_timer = cancel.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(600)).await;
@@ -485,14 +459,12 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
          (a bridge would reuse/derive one CID)"
     );
 
-    // (2) Distinct quiche::Connection objects — distinct trace_ids.
     assert_ne!(
         outcome.client_trace_id, outcome.upstream_trace_id,
         "two-connections proof: client and upstream MUST be distinct \
          quiche::Connection objects (distinct trace_ids)"
     );
 
-    // (3) ALPN mirrored upstream (and NOT the factory default).
     assert_eq!(
         outcome.negotiated_alpn,
         H3_ALPN,
@@ -513,8 +485,8 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
         "the SCID the backend observed on the inbound Initial MUST equal \
          the actor's reported upstream SCID (same upstream connection)"
     );
-    // A bridge would forward the CLIENT's connection — the backend would
-    // see the CLIENT's chosen SCID. Re-origination samples a fresh one.
+    // A bridge would forward the CLIENT's connection, so the backend would see the CLIENT's
+    // chosen SCID. Re-origination samples a fresh one.
     assert_ne!(
         backend_saw, client_chosen_scid,
         "two-connections proof (LOAD-BEARING): the backend MUST NOT see \
@@ -522,17 +494,15 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
          sampled SCID; equality here would mean the client's connection \
          was bridged to the backend"
     );
-    // And the upstream SCID must not be the LB-as-server SCID either
-    // (defence against an accidental SCID reuse across the two legs).
+    // The upstream SCID must not be the LB-as-server SCID either (accidental reuse across legs).
     assert_ne!(
         backend_saw, outcome.client_scid,
         "the upstream SCID must be independent of the LB's client-facing \
          (server) SCID"
     );
 
-    // Independence is not a length coincidence: the upstream SCID is a
-    // full-length random CID, not a truncation or derivation of the client's —
-    // a derive-from-client bridge would copy a prefix.
+    // Independence is not a length coincidence: the upstream SCID is a full-length random CID,
+    // not a truncation or derivation — a derive-from-client bridge would copy a prefix.
     let common_prefix = outcome
         .upstream_scid
         .iter()
