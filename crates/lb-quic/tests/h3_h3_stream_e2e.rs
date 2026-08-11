@@ -1,49 +1,15 @@
-//! SESSION 7 — H3 → H3 R8 streaming verification suite (real wire).
+//! H3 → H3 streaming verification suite, on the real wire: a real quiche H3
+//! client → production `QuicListener` → router → `conn_actor::poll_h3` →
+//! `h3_to_h3_stream_resp` → a genuine `quiche::accept` H3 upstream. Nothing
+//! below quiche is hand-rolled, no stub, no `#[ignore]`.
 //!
-//! Path under test: real quiche H3 client → production `QuicListener`
-//! → `router` → `conn_actor::poll_h3` (the LIVE J3 `h3_backend`
-//! branch) → `h3_to_h3_stream_resp` → a REAL quiche `accept` H3
-//! upstream (genuine QUIC endpoint over a real `UdpSocket` speaking
-//! the `lb_h3_testcodec` codec — NOT an in-process stub, NOTHING below quiche
-//! hand-rolled; the real-quiche-accept pump pattern is extended from
-//! `round8_h3_authority_enforced.rs` / `h3_graceful_close.rs`).
+//! `h3_to_h3_stream_resp` is never called directly — the suite drives ONLY the
+//! public `QuicListener` + `QuicUpstreamPool` surface, so every assertion is a
+//! real front-to-backend wire result.
 //!
-//! `h3_to_h3_stream_resp` is crate-internal (J3 lead ruling) and is
-//! NEVER called directly: the suite drives ONLY the public
-//! `QuicListener` + `QuicUpstreamPool` surface, so every assertion is
-//! a genuine front-listener → router → bridge → real-backend wire
-//! result.
-//!
-//! This is the H3→H1/H3→H2 BUILT bar applied to H3→H3:
-//!
-//! * **cond 1** — `h3h3_e2e_request_body_byte_identical_at_backend`:
-//!   a NON-EMPTY BINARY (non-UTF-8) request body of ≥1 MiB arrives
-//!   BYTE-IDENTICAL at the real H3 backend (proves J2's dropped-
-//!   request-body fix on the wire). The same case asserts request
-//!   TRAILERS are DROPPED on the H3→H3 leg (parity H3→H1 P1-C /
-//!   H3→H2 A3) — the backend sees the body fully FIN-framed WITHOUT
-//!   a post-DATA trailing-HEADERS frame: a lossless RFC-acceptable
-//!   downgrade, NOT silent loss.
-//! * **cond 2** — non-vacuous live-gauge memory proofs BOTH
-//!   directions under a stalled peer
-//!   (`h3h3_e2e_response_memory_bounded_through_stalled_client`,
-//!   `h3h3_e2e_request_memory_bounded_through_stalled_backend`) plus
-//!   a backpressure proof
-//!   (`h3h3_e2e_backpressure_stalled_client_pauses_upstream_read`).
-//! * **cond 3** — every gauge case references the feature-gated
-//!   `lb_quic::h3_bridge::MAX_RETAINED_{RESP,BODY}_BYTES` statics, so
-//!   the suite ONLY compiles those proofs under
-//!   `cargo test -p lb-quic --features test-gauges` (a run without
-//!   the flag fails to compile them — an invalid gate, by design,
-//!   exactly as for `h3_h2_stream_e2e.rs`).
-//!
-//! BINDING case 7 —
-//! `h3h3_e2e_client_reset_midrequest_rsts_upstream_no_truncated_request`:
-//! the H3 client RESETs MID request body; the real H3 backend NEVER
-//! observes a silently-truncated request presented as complete.
-//!
-//! No `#[ignore]` anywhere. The real H3 upstream is a genuine
-//! `quiche::accept` endpoint — no mock, no stub.
+//! The gauge cases reference the feature-gated
+//! `lb_quic::h3_bridge::MAX_RETAINED_{RESP,BODY}_BYTES`, so a run WITHOUT
+//! `--features test-gauges` fails to compile them — an invalid gate, by design.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::too_many_lines)]
 
@@ -64,9 +30,8 @@ use lb_h3_testcodec::{H3Frame, QpackEncoder, decode_frame, encode_frame};
 const TEST_SNI: &str = "expressgateway.test";
 const H3_ALPN: &[u8] = b"h3";
 
-/// SESSION 24 / INC-3: decode a RESPONSE QPACK field block emitted by
-/// the migrated egress (quiche::h3 encoder Huffman-encodes values); the
-/// hand-rolled `lb_h3_testcodec::QpackDecoder` is raw-only.
+/// Decode a RESPONSE QPACK field block: the migrated egress Huffman-encodes
+/// values, while the hand-rolled `lb_h3_testcodec::QpackDecoder` is raw-only.
 #[allow(dead_code)]
 fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, String> {
     use quiche::h3::NameValue;
@@ -86,13 +51,9 @@ fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, Strin
 const H3_ALPN_PROTOS: &[&[u8]] = &[b"h3", b"h3-29"];
 const MAX_UDP: usize = 65_535;
 
-// ─────────────────────────────────────────────────────────────────────
-// §1  Cert + listener + client harness (mirrors h3_h2_stream_e2e).
-// ─────────────────────────────────────────────────────────────────────
+// §1  Cert + listener + client harness.
 
-/// The §1.5 C5 sound ceiling, IDENTICAL formula to
-/// `h3_h2_stream_e2e::retained_ceiling` (`4 × depth×(chunk+hdr)`).
-/// `test ceiling == gauge bound`.
+/// The §1.5 C5 sound ceiling; the test ceiling must equal the gauge bound.
 fn retained_ceiling(depth: usize, chunk_max: usize, frame_hdr_max: usize) -> usize {
     4 * (depth * (chunk_max + frame_hdr_max))
 }
@@ -168,10 +129,9 @@ fn build_client_config(ca_path: &std::path::Path) -> quiche::Config {
     cfg
 }
 
-/// The SERVER config for the real quiche::accept H3 upstream. Serves
-/// the loopback cert. Generous conn-level + per-stream windows so the
-/// memory/backpressure proofs stall on the GATEWAY's bounded channel
-/// (the thing under test), NOT on the upstream's own QUIC window.
+/// SERVER config for the real `quiche::accept` H3 upstream. Generous windows so
+/// the memory/backpressure proofs stall on the GATEWAY's bounded channel (the
+/// thing under test), NOT on the upstream's own QUIC window.
 fn build_upstream_server_config(certs: &TestCerts) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
     cfg.set_application_protos(H3_ALPN_PROTOS).unwrap();
@@ -192,17 +152,15 @@ fn build_upstream_server_config(certs: &TestCerts) -> quiche::Config {
     cfg
 }
 
-/// The pool's per-dial CLIENT config factory (proxy → upstream leg).
-/// Generous windows so the request/response memory proofs are
-/// governed by the gateway's bounded in-flight channel, not this leg.
+/// The pool's per-dial CLIENT config (proxy → upstream leg). Generous windows
+/// for the same reason.
 fn upstream_pool_config_factory()
 -> Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> {
     Arc::new(|| {
         let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
         cfg.set_application_protos(H3_ALPN_PROTOS)?;
-        // The upstream presents the loopback cert; this leg is the
-        // proxy dialing its own backend — verify off (parity with the
-        // pool's production dummy_config_factory test usage).
+        // The upstream presents the loopback cert; this is the proxy dialing
+        // its own backend, so verify is off.
         cfg.verify_peer(false);
         cfg.set_max_idle_timeout(30_000);
         cfg.set_max_recv_udp_payload_size(1_350);
@@ -266,33 +224,20 @@ struct ClientOut {
     content_length: Option<usize>,
     fin: bool,
     reset: bool,
-    /// F-S7-8 cluster 2 — count of HEADERS frames the client decoded on
-    /// the response stream. `1` = response head only; `2` = the head
-    /// PLUS a forwarded post-DATA trailing-HEADERS frame (used by
-    /// CASE 9a to assert response trailers are FORWARDED). Additive,
-    /// `Default`-initialised; the existing 7 cases never read it (a
-    /// provable pure no-op — S78-G3).
+    /// HEADERS frames the client decoded on the response stream: `1` = head
+    /// only, `2` = head PLUS a forwarded post-DATA trailing-HEADERS frame.
     resp_headers_frames: usize,
-    /// F-S7-8 cluster 2 — the trailer field names the client decoded
-    /// from a second (post-DATA) HEADERS frame, if any. Lets CASE 9a
-    /// assert the specific trailer arrived and CASE 9b assert a
-    /// pseudo-header trailer was NEVER forwarded.
+    /// Trailer field names decoded from a second (post-DATA) HEADERS frame.
     resp_trailer_names: Vec<String>,
-    /// CF-H3H3-HEAD — every `(name, value)` the client decoded from the
-    /// FIRST (response-head) HEADERS frame, EXCLUDING `:status` (kept in
-    /// `status`). Lets the full-header round-trip test assert regular
-    /// headers (content-type / custom x-*) survive the H3→H3 response
-    /// leg. Additive, `Default`-initialised; the existing cases never
-    /// read it (a provable pure no-op — mirrors `resp_headers_frames` /
-    /// `resp_trailer_names`).
+    /// Every `(name, value)` from the response-head HEADERS frame except
+    /// `:status`, so the CF-H3H3-HEAD round-trip can assert regular headers
+    /// survived the H3→H3 response leg.
     resp_head_pairs: Vec<(String, String)>,
 }
 
-/// Drive ONE H3 request on stream 0 (verbatim shape from
-/// h3_h2_stream_e2e::drive_h3 — the front-client behaviour under test
-/// is identical; only the upstream differs). `req_trailers`, when
-/// non-empty, are sent as a post-DATA trailing-HEADERS frame so the
-/// trailers-dropped parity can be asserted at the backend.
+/// Drive ONE H3 request on stream 0. `req_trailers`, when non-empty, are sent
+/// as a post-DATA trailing-HEADERS frame so the trailers-dropped parity can be
+/// asserted at the backend.
 #[allow(clippy::struct_excessive_bools)]
 struct DriveCfg {
     method: &'static str,
@@ -302,21 +247,13 @@ struct DriveCfg {
     stall_after: Option<usize>,
     stall_for: Duration,
     reset_after_req_bytes: Option<usize>,
-    /// F-S7-8 cluster 4 — when set, omit the `:authority` pseudo-header
-    /// from the request HEADERS entirely. With an absent `:authority`
-    /// the gateway's `req.authority` is empty, so `h3_to_h3_stream_resp`
-    /// substitutes the configured SNI for the upstream `:authority`
-    /// (h3_bridge.rs :2876-2877 — the `if req.authority.is_empty()`
-    /// TRUE branch). The request still succeeds end-to-end.
+    /// Omit `:authority` entirely, so the gateway's `req.authority` is empty
+    /// and the configured SNI is substituted for the upstream authority.
     omit_authority: bool,
-    /// F-S7-8 cluster 4 — when `Some(k)`, after the client has read `k`
-    /// response body bytes it STOP_SENDINGs (`Shutdown::Read`) the
-    /// RESPONSE stream WITHOUT reading further. quiche surfaces this to
-    /// the gateway as `Err(StreamStopped)`; the actor's
-    /// `reap_client_cancelled_responses` drops the response receiver, so
-    /// the bridge's NEXT `send!`/`send_progress!` returns
-    /// `Err(RespAbort::ClientGone)` (h3_bridge.rs :2806 — the `send!`
-    /// macro's `ClientGone` map). Used by CASE 12.
+    /// After `k` response body bytes, STOP_SENDING the RESPONSE stream and
+    /// stop reading. quiche surfaces this to the gateway as
+    /// `Err(StreamStopped)`, so `reap_client_cancelled_responses` drops the
+    /// receiver and the bridge's next send returns `ClientGone`.
     stop_reading_resp_after: Option<usize>,
 }
 
@@ -348,9 +285,7 @@ async fn drive_h3(
     let mut out = ClientOut::default();
     let mut stalling_until: Option<tokio::time::Instant> = None;
     let mut stalled_once = false;
-    // F-S7-8 cluster 4 — once the client has READ this many response
-    // body bytes it STOP_SENDINGs the response stream (CASE 12). Latched
-    // so it fires exactly once.
+    // Latched so the STOP_SENDING fires exactly once.
     let mut resp_stop_sent = false;
 
     let deadline = tokio::time::Instant::now() + overall;
@@ -367,9 +302,6 @@ async fn drive_h3(
 
         if conn.is_established() && !head_sent {
             let encoder = QpackEncoder::new();
-            // F-S7-8 cluster 4 — `omit_authority` drops `:authority`
-            // entirely so the gateway substitutes the SNI for the
-            // upstream authority (h3_bridge.rs :2876-2877).
             let mut headers = vec![
                 (":method".to_string(), cfg.method.to_string()),
                 (":scheme".to_string(), "https".to_string()),
@@ -394,9 +326,8 @@ async fn drive_h3(
                     .unwrap(),
                 );
             }
-            // Optional post-DATA trailing-HEADERS frame (RFC 9114
-            // §4.1) so the test can prove the H3→H3 leg DROPS request
-            // trailers (parity H3→H1 P1-C / H3→H2 A3).
+            // Optional post-DATA trailing-HEADERS frame (RFC 9114 §4.1), so
+            // the test can prove the H3→H3 leg DROPS request trailers.
             if !cfg.req_trailers.is_empty() {
                 let tblock = QpackEncoder::new().encode(&cfg.req_trailers).unwrap();
                 tx_wire.extend_from_slice(
@@ -474,9 +405,8 @@ async fn drive_h3(
                     Ok((H3Frame::Headers { header_block }, c)) => {
                         rx_tail.drain(..c);
                         out.resp_headers_frames += 1;
-                        // The FIRST HEADERS frame is the response head;
-                        // any SUBSEQUENT (post-DATA) HEADERS frame is a
-                        // forwarded trailer section (F-S7-8 cluster 2).
+                        // The FIRST HEADERS frame is the head; any SUBSEQUENT
+                        // one is a forwarded trailer section.
                         let is_trailer = out.resp_headers_frames > 1;
                         // SESSION 24 / INC-3: quiche-encoded response head
                         // ⇒ Huffman-capable QPACK decode (see helper).
@@ -485,10 +415,6 @@ async fn drive_h3(
                                 if is_trailer {
                                     out.resp_trailer_names.push(n.clone());
                                 }
-                                // CF-H3H3-HEAD: capture every non-status
-                                // field of the response HEAD frame so the
-                                // full-header round-trip test can assert
-                                // regular headers survived.
                                 if !is_trailer && n != ":status" {
                                     out.resp_head_pairs.push((n.clone(), v.clone()));
                                 }
@@ -521,13 +447,7 @@ async fn drive_h3(
                     stalled_once = true;
                 }
             }
-            // F-S7-8 cluster 4 — CASE 12 client-gone: once the client
-            // has read `k` response body bytes, STOP_SENDING the
-            // response stream and stop reading it. quiche surfaces this
-            // to the gateway as a peer STOP_SENDING on the stream it is
-            // writing; the actor reaps the response receiver and the
-            // bridge's next `send!` returns `RespAbort::ClientGone`
-            // (h3_bridge.rs :2806).
+            // CASE 12: STOP_SENDING the response stream and stop reading.
             if let Some(k) = cfg.stop_reading_resp_after {
                 if !resp_stop_sent && !out.fin && out.body.len() >= k {
                     let _ = conn.stream_shutdown(sid, quiche::Shutdown::Read, 0x010c);
@@ -536,16 +456,10 @@ async fn drive_h3(
             }
         }
 
-        // CASE 12: after STOP_SENDING the response stream the client
-        // intentionally stops reading; keep the connection alive (so the
-        // STOP_SENDING is actually delivered and the gateway observes
-        // it) for a bounded settle window, then exit. Do NOT break on
-        // `out.fin`/`out.reset` here for that case — there is no clean
-        // FIN to wait for.
+        // CASE 12 intentionally stops reading, so there is no clean FIN to
+        // wait for: keep the connection alive for a bounded settle window so
+        // the STOP_SENDING is actually delivered and observed.
         if resp_stop_sent {
-            // Drive a few more I/O ticks so quiche flushes the
-            // STOP_SENDING frame to the gateway, then fall through to
-            // the normal park/recv below until the overall deadline.
         } else if out.fin || out.reset {
             break;
         }
@@ -576,10 +490,7 @@ async fn drive_h3(
     out
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// §2  Real quiche::accept H3 upstream (genuine endpoint, real socket,
-//     lb_h3_testcodec codec — extends the round8 / h3_graceful_close pattern).
-// ─────────────────────────────────────────────────────────────────────
+// §2  Real `quiche::accept` H3 upstream (genuine endpoint + socket).
 
 /// What the upstream observed about the request it received.
 #[derive(Clone, Default)]
@@ -589,9 +500,8 @@ struct BackendSeen {
     /// True iff the request stream ended with a clean FIN (a
     /// truncated/aborted request leaves this false — case 7).
     complete: Arc<AtomicBool>,
-    /// Count of request HEADERS frames seen on the request stream
-    /// (1 = no trailers forwarded; 2 = a post-DATA trailing-HEADERS
-    /// frame WAS forwarded — used to assert trailers are DROPPED).
+    /// Request HEADERS frames seen: 1 = no trailers forwarded, 2 = a post-DATA
+    /// trailing-HEADERS frame WAS forwarded.
     headers_frames: Arc<AtomicUsize>,
     requests: Arc<AtomicUsize>,
 }
@@ -607,73 +517,43 @@ enum UpstreamMode {
     /// Stall ~`delay` BEFORE reading the request body, then 200 +
     /// echo (request-direction stalled-backend memory proof).
     StallReadThenEcho(Duration),
-    /// 200 + declared content-length far larger than the bytes
-    /// actually written, then RESET the response stream mid-body
-    /// (response-splitting guard — the client must never get a clean
-    /// complete 200).
+    /// 200 + a content-length far larger than the bytes written, then RESET
+    /// mid-body — the client must never get a clean complete 200.
     ResetMidResponse,
-    /// F-S7-8 cluster 1 — after draining `after_bytes` of request DATA,
-    /// the upstream `stream_shutdown(req_sid, Shutdown::Read, ..)` ⇒ a
-    /// real STOP_SENDING on the wire. The gateway's next request-leg
-    /// `stream_send` then returns `Err(StreamStopped)`, driving the
-    /// HEADERS / request-DATA / request-FIN send-error arms
-    /// (h3_bridge.rs :2928-2933, :3062-3074, :3458-3461) depending on
-    /// WHEN the STOP_SENDING lands relative to the request leg.
+    /// After `after_bytes` of request DATA, `stream_shutdown(Read)` ⇒ a real
+    /// STOP_SENDING, so the gateway's next request-leg `stream_send` returns
+    /// `Err(StreamStopped)`. Which send-error arm fires depends on WHEN it
+    /// lands relative to the request leg.
     StopSendingMidRequest { after_bytes: usize },
-    /// F-S7-8 cluster 2 — 200 + a small DATA body, then a post-DATA
-    /// trailing-HEADERS frame (RFC 9114 §4.1) of the given kind, then
-    /// FIN. Drives the response-trailer path (h3_bridge.rs :3284-3312).
+    /// 200 + a small DATA body, then a post-DATA trailing-HEADERS frame of the
+    /// given kind, then FIN.
     RespWithTrailers(TrailerKind),
-    /// F-S7-8 cluster 3 — 200 + an UNKNOWN frame type (small declared
-    /// length) interleaved before the DATA body, then FIN. Drives the
-    /// `RecvState::InSkip` unknown-frame skip (h3_bridge.rs :3200-3209
-    /// entry + :3349-3360 drain) then transparent resume.
+    /// 200 + an UNKNOWN frame type interleaved before the DATA body, then FIN
+    /// — the gateway must skip it transparently and resume.
     UnknownFrameThenResp,
-    /// F-S7-8 cluster 3 — 200 then a hand-built frame header declaring
-    /// a length `> DEFAULT_MAX_PAYLOAD_SIZE` (1 MiB) for the given
-    /// frame type, with NO real payload. The gateway aborts on the
-    /// DECLARED length at the header (`check_block_len`): `frame_type`
-    /// `0x01` ⇒ the FRAME_HEADERS arm (h3_bridge.rs :3189-3193);
-    /// any other ⇒ the unknown-frame arm (:3204-3207). Both map to
-    /// `RespAbort::BadHead` — the client never gets a clean 200+FIN.
+    /// 200 then a frame header declaring a length over the 1 MiB payload cap
+    /// with NO real payload. The gateway must abort on the DECLARED length at
+    /// the header; `frame_type 0x01` drives the HEADERS arm, anything else the
+    /// unknown-frame arm. Both ⇒ `BadHead`, never a clean 200+FIN.
     OversizedBlock { frame_type: u64 },
-    /// F-S7-8 cluster 4 — 200, then a ZERO-LENGTH DATA frame (`0x00
-    /// 0x00`) emitted BEFORE the real body, then the body + FIN. Drives
-    /// the gateway's empty-DATA fast-path (h3_bridge.rs :3214-3217:
-    /// `RecvState::InData { remaining: 0 }` returns straight to
-    /// `AwaitingHeader`, no spurious chunk). The gateway must skip the
-    /// zero-length frame and still deliver the real body byte-identical
-    /// with a clean FIN.
+    /// 200, then a ZERO-LENGTH DATA frame before the real body, then the body
+    /// + FIN — the gateway must skip it and still deliver the body
+    /// byte-identical with a clean FIN.
     EmptyDataThenResp,
-    /// F-S7-8 cluster 4 — 200, then a DATA frame whose declared length
-    /// is LARGER than the payload actually written, then a clean QUIC
-    /// FIN. The gateway is mid-`InData` (remaining > 0) when the FIN
-    /// lands, so it is NOT between frames ⇒ a premature EOF
-    /// (h3_bridge.rs :3375-3383: `else { outcome = PrematureEof }`).
-    /// The client MUST NOT receive a clean complete 200+FIN.
-    ///
-    /// SESSION 25 / INC-4 (quiche::h3 migration): this NO-content-length
-    /// case is the documented quiche-0.28 §7.1 frame-completeness gap —
-    /// quiche delivers the truncated frame as a clean `Finished` with no
-    /// public API to detect the mid-frame finish, so the migrated E2
-    /// relays it as complete (see `..._no_cl_truncated_data_delivered_*`).
+    /// 200 (no content-length), a DATA frame whose declared length EXCEEDS the
+    /// payload written, then a clean FIN. This is the documented quiche §7.1
+    /// frame-completeness gap: quiche delivers a clean `Finished` with no API
+    /// to detect the mid-frame finish, so with no content-length to cross-check
+    /// the truncation is relayed as complete.
     HeadThenTruncatedData,
-    /// SESSION 25 / INC-4 (content-length truncation guard) — 200 WITH
-    /// `content-length: 4096` but only 16 body bytes written, then a clean
-    /// QUIC FIN. quiche-0.28 delivers this as a clean `Finished` (no §7.1
-    /// frame-completeness check), so the gateway's content-length
-    /// truncation guard MUST catch the under-run (`body_relayed <
-    /// content-length`) and RESET downstream — the client never gets a
-    /// clean complete 200+FIN. This is the defense-in-depth the owner ruled
-    /// MUST be verified to actually fire.
+    /// 200 WITH `content-length: 4096` but only 16 body bytes, then a clean
+    /// FIN. quiche delivers a clean `Finished`, so the gateway's content-length
+    /// truncation guard MUST catch the under-run and RESET downstream.
     HeadCLThenTruncatedData,
-    /// CF-H3H3-HEAD — 200 + a response HEAD carrying REGULAR headers
-    /// (content-type + a custom `x-eg-resp` header) ALONGSIDE
-    /// `content-length`, then a small DATA body + clean FIN. Drives the
-    /// full-header re-encode in the `Wire` sink's `on_head`
-    /// (h3_bridge.rs `encode_h3_headers_frame_full`). The gateway MUST
-    /// forward the full non-pseudo set to the H3 client — pre-fix it
-    /// dropped everything but `:status` + `content-length`.
+    /// 200 + a head carrying REGULAR headers (content-type + a custom
+    /// `x-eg-resp`) alongside `content-length`, then a small body + FIN. The
+    /// gateway MUST forward the full non-pseudo set; pre-fix it dropped
+    /// everything but `:status` + `content-length`.
     RespWithHeaders,
 }
 
@@ -681,24 +561,17 @@ enum UpstreamMode {
 /// upstream emits, selecting which response-trailer arm is driven.
 #[derive(Clone)]
 enum TrailerKind {
-    /// One ordinary `(name, value)` trailer ⇒ the forward path
-    /// (h3_bridge.rs :3284-3296 + :3297-3312): trailers are FORWARDED
-    /// on the H3→H3 response leg (confirmed against src; distinct from
-    /// J2 dropping REQUEST trailers — different direction).
+    /// One ordinary trailer ⇒ the FORWARD path. Response trailers ARE
+    /// forwarded, unlike REQUEST trailers, which are dropped.
     Valid,
-    /// A trailer field whose name begins with `:` (a pseudo-header) ⇒
-    /// the malformed-trailer reject arm (h3_bridge.rs :3290-3293):
-    /// `RespAbort::BadHead`, never forwarded (RFC 9114 §4.3).
+    /// A `:`-prefixed trailer name ⇒ the malformed-trailer reject arm
+    /// (`BadHead`), never forwarded (RFC 9114 §4.3).
     PseudoHeader,
 }
 
-/// Spawn a genuine quiche `accept` H3 upstream on a real `UdpSocket`.
-/// One accepted connection per pooled dial (the gateway pool dials a
-/// fresh conn per request and `set_reusable(false)`s it — S-2). Per
-/// request stream: decode the HEADERS + DATA frames via `lb_h3_testcodec`,
-/// capture the body + whether it FIN'd cleanly + the HEADERS-frame
-/// count, then emit the configured response. NOTHING below quiche is
-/// hand-rolled.
+/// Spawn a genuine quiche `accept` H3 upstream on a real `UdpSocket` — one
+/// accepted connection per pooled dial, since the gateway dials fresh per
+/// request and marks it non-reusable.
 async fn spawn_h3_upstream(
     certs: &TestCerts,
     mode: UpstreamMode,
@@ -758,10 +631,8 @@ async fn spawn_h3_upstream(
             // F-S7-8 cluster 1 — STOP_SENDING issued at most once.
             let mut req_stop_sent = false;
             let mut stall_until: Option<tokio::time::Instant> = None;
-            // The full response wire, built ONCE when the request is
-            // ready, then pushed with partial-accept retry (mirrors
-            // `drive_h3`'s tx_wire/tx_off discipline — a bare
-            // `stream_send` ignoring the returned count loses bytes).
+            // Pushed with partial-accept retry: a bare `stream_send` ignoring
+            // the returned count loses bytes.
             let mut resp_wire: Vec<u8> = Vec::new();
             let mut resp_off = 0usize;
             let mut resp_built = false;
@@ -787,17 +658,13 @@ async fn spawn_h3_upstream(
 
                 // Drain request stream bytes.
                 if conn.is_established() {
-                    // F-S7-4: for StallReadThenEcho (case-4), hold off
-                    // the stall window. `draining` is computed BEFORE
-                    // the stream_recv drain so the drain itself can be
-                    // gated on it — during the stall the upstream calls
-                    // NEITHER `readable()` NOR `stream_recv`, so quiche
-                    // stops extending the request stream's flow-control
-                    // window and the gateway's J2 `stream_capacity`
-                    // backpressure gate GENUINELY fires (a real
-                    // transport-layer stall, not merely deferred
-                    // decoding). All other modes take the `_ => true`
-                    // arm ⇒ byte-identical behaviour.
+                    // For StallReadThenEcho, `draining` is computed BEFORE the
+                    // drain so the drain itself is gated on it: during the
+                    // stall the upstream calls NEITHER `readable()` NOR
+                    // `stream_recv`, so quiche stops extending the request
+                    // stream's window and the gateway's `stream_capacity` gate
+                    // GENUINELY fires — a real transport stall, not merely
+                    // deferred decoding. Every other mode takes `_ => true`.
                     let draining = match &mode {
                         UpstreamMode::StallReadThenEcho(d) => {
                             if stall_until.is_none() {
@@ -850,16 +717,10 @@ async fn spawn_h3_upstream(
                     }
                 }
 
-                // F-S7-8 cluster 1 — once `after_bytes` of request DATA
-                // have been drained (counted on the decoded request
-                // body), the upstream issues a real STOP_SENDING on the
-                // request stream (`Shutdown::Read`). The gateway's next
-                // request-leg `stream_send` then returns
-                // `Err(StreamStopped)`. `after_bytes == 0` ⇒ the
-                // STOP_SENDING is armed as soon as the request stream is
-                // observed at all (the HEADERS / first request-DATA
-                // write races it). The connection is otherwise driven
-                // normally so quiche actually transmits the frame.
+                // Once `after_bytes` of request DATA have been drained, issue
+                // a real STOP_SENDING on the request stream. `after_bytes == 0`
+                // arms it the instant the stream is observed, so the HEADERS /
+                // first request-DATA write races it.
                 if let UpstreamMode::StopSendingMidRequest { after_bytes } = &mode {
                     if conn.is_established() && !req_stop_sent {
                         let seen_bytes = body.len();
@@ -890,15 +751,12 @@ async fn spawn_h3_upstream(
                                     .map(|u| tokio::time::Instant::now() >= u)
                                     .unwrap_or(false)
                         }
-                        // F-S7-8 cluster 1 — the gateway aborts the
-                        // exchange WITHOUT FIN once it sees the
-                        // STOP_SENDING; this upstream never produces a
-                        // response (it just idles until the conn closes).
+                        // The gateway aborts without FIN once it sees the
+                        // STOP_SENDING, so this upstream never responds.
                         UpstreamMode::StopSendingMidRequest { .. } => false,
-                        // F-S7-8 clusters 2/3 — respond on the clean
-                        // request FIN, exactly like `Echo` (the request
-                        // leg is conformant; the adversarial behaviour
-                        // is on the RESPONSE leg).
+                        // Respond on the clean request FIN: the request leg is
+                        // conformant; the adversarial behaviour is on the
+                        // RESPONSE leg.
                         UpstreamMode::RespWithTrailers(_)
                         | UpstreamMode::UnknownFrameThenResp
                         | UpstreamMode::OversizedBlock { .. }
@@ -936,26 +794,18 @@ async fn spawn_h3_upstream(
                                 resp_fin_on_drain = true;
                             }
                             UpstreamMode::ResetMidResponse => {
-                                // Declare a 1 MiB body, write only
-                                // ~64 KiB, then RESET the response
-                                // stream — the gateway must NEVER
-                                // deliver a clean complete 200.
+                                // Declare 1 MiB, write ~64 KiB, then RESET.
                                 resp_wire = response_head(200, Some(1_048_576));
                                 resp_wire.extend_from_slice(&data_frames(&vec![7u8; 64 * 1024]));
                                 resp_fin_on_drain = false;
                                 resp_reset_after_drain = true;
                             }
-                            // F-S7-8 cluster 1 — never reached: `ready`
-                            // is always false for this mode (the gateway
-                            // aborts the request leg), so the response
-                            // is never built. Arm present for
-                            // exhaustiveness; emits nothing.
+                            // Never reached: `ready` is always false for this
+                            // mode. Present for exhaustiveness.
                             UpstreamMode::StopSendingMidRequest { .. } => {}
-                            // F-S7-8 cluster 2 — 200 + small DATA body
-                            // + a post-DATA trailing-HEADERS frame, then
-                            // a clean FIN. The body is intentionally
-                            // tiny (S78-G4): the response-trailer arm is
-                            // size-independent.
+                            // 200 + a deliberately tiny DATA body + a
+                            // post-DATA trailing-HEADERS frame, then FIN — the
+                            // trailer arm is size-independent.
                             UpstreamMode::RespWithTrailers(kind) => {
                                 resp_wire = response_head(200, None);
                                 resp_wire.extend_from_slice(&data_frames(b"h3-trail-body"));
@@ -964,21 +814,14 @@ async fn spawn_h3_upstream(
                                         trailers_frame(&[("x-resp-trailer", "v1")])
                                     }
                                     TrailerKind::PseudoHeader => {
-                                        // A `:`-prefixed field in a
-                                        // trailer section is malformed
-                                        // (RFC 9114 §4.3) ⇒ the gateway
-                                        // MUST reject, never forward it.
+                                        // A `:`-prefixed trailer field is
+                                        // malformed (RFC 9114 §4.3).
                                         trailers_frame(&[(":illegal", "x")])
                                     }
                                 };
                                 resp_wire.extend_from_slice(&tf);
                                 resp_fin_on_drain = true;
                             }
-                            // F-S7-8 cluster 3 — 200, then an UNKNOWN
-                            // frame type (small payload) BEFORE the DATA
-                            // body, then FIN. The gateway must skip the
-                            // unknown frame (`InSkip`) and still deliver
-                            // the body byte-identical with a clean FIN.
                             UpstreamMode::UnknownFrameThenResp => {
                                 resp_wire = response_head(200, None);
                                 resp_wire.extend_from_slice(&unknown_frame(
@@ -988,12 +831,8 @@ async fn spawn_h3_upstream(
                                 resp_wire.extend_from_slice(&data_frames(b"h3-skip-body"));
                                 resp_fin_on_drain = true;
                             }
-                            // F-S7-8 cluster 3 — 200, then a frame header
-                            // declaring a length > 1 MiB with NO body.
-                            // The gateway aborts on the declared length
-                            // (`check_block_len`) — it never gets a
-                            // clean complete 200. We FIN after the
-                            // (tiny) bytes we wrote; the gateway has
+                            // The gateway aborts on the declared length, so we
+                            // FIN after the tiny prefix we wrote; it has
                             // already aborted by then.
                             UpstreamMode::OversizedBlock { frame_type } => {
                                 resp_wire = response_head(200, None);
@@ -1003,10 +842,7 @@ async fn spawn_h3_upstream(
                                 ));
                                 resp_fin_on_drain = true;
                             }
-                            // F-S7-8 cluster 4 — 200, then a ZERO-LENGTH
-                            // DATA frame (type 0x00, len 0) BEFORE the
-                            // real body, then the body + FIN. The empty
-                            // DATA frame is the `0x00 0x00` two-byte
+                            // The empty DATA frame is the two-byte `0x00 0x00`
                             // header with NO payload.
                             UpstreamMode::EmptyDataThenResp => {
                                 resp_wire = response_head(200, None);
@@ -1014,30 +850,18 @@ async fn spawn_h3_upstream(
                                 resp_wire.extend_from_slice(&data_frames(b"h3-empty-data-body"));
                                 resp_fin_on_drain = true;
                             }
-                            // F-S7-8 cluster 4 — 200, then a DATA frame
-                            // header declaring 4096 bytes but only 16
-                            // bytes of payload, then a clean FIN. The
-                            // gateway FINs while still mid-`InData`
-                            // (remaining > 0) ⇒ PrematureEof.
+                            // Declares 4096 but writes 16, then FINs, so the
+                            // gateway is still mid-frame ⇒ PrematureEof.
                             UpstreamMode::HeadThenTruncatedData => {
                                 resp_wire = response_head(200, None);
                                 resp_wire.extend_from_slice(&truncated_data_frame(4096, 16));
                                 resp_fin_on_drain = true;
                             }
-                            // SESSION 25 / INC-4 — content-length truncation
-                            // guard: declare content-length: 4096 but write only
-                            // 16 body bytes, then a clean FIN. The gateway's CL
-                            // guard MUST reset (under-run), never a clean 200+FIN.
                             UpstreamMode::HeadCLThenTruncatedData => {
                                 resp_wire = response_head(200, Some(4096));
                                 resp_wire.extend_from_slice(&truncated_data_frame(4096, 16));
                                 resp_fin_on_drain = true;
                             }
-                            // CF-H3H3-HEAD — 200 + a head carrying
-                            // content-type + a custom x-eg-resp header
-                            // ALONGSIDE content-length, then a small body
-                            // + FIN. The gateway must forward the FULL
-                            // non-pseudo set to the H3 client.
                             UpstreamMode::RespWithHeaders => {
                                 let payload = b"h3-full-head-body";
                                 resp_wire = response_head_with_headers(
@@ -1111,11 +935,9 @@ fn response_head(status: u16, content_length: Option<usize>) -> Vec<u8> {
     .to_vec()
 }
 
-/// CF-H3H3-HEAD — encode an H3 response HEADERS frame carrying
-/// `:status`, an optional `content-length`, and the given REGULAR
-/// (non-pseudo) headers. Lets a backend emit a full response head so
-/// the full-header round-trip test can assert the gateway forwards the
-/// whole set (not just `:status` + `content-length`).
+/// Encode a response HEADERS frame carrying `:status`, an optional
+/// `content-length`, and the given REGULAR headers, so a backend can emit a
+/// full response head.
 fn response_head_with_headers(
     status: u16,
     content_length: Option<usize>,
@@ -1136,10 +958,9 @@ fn response_head_with_headers(
     .to_vec()
 }
 
-/// F-S7-8 cluster 2 — encode a post-DATA trailing-HEADERS frame
-/// (a `FRAME_HEADERS` frame whose QPACK block carries trailer fields).
-/// Wire-identical to a normal HEADERS frame; the gateway distinguishes
-/// it as a TRAILER purely positionally (it arrives after `sent_head`).
+/// Encode a post-DATA trailing-HEADERS frame. Wire-identical to a normal
+/// HEADERS frame — the gateway distinguishes a trailer purely POSITIONALLY (it
+/// arrives after the head).
 fn trailers_frame(fields: &[(&str, &str)]) -> Vec<u8> {
     let owned: Vec<(String, String)> = fields
         .iter()
@@ -1153,9 +974,8 @@ fn trailers_frame(fields: &[(&str, &str)]) -> Vec<u8> {
     .to_vec()
 }
 
-/// F-S7-8 cluster 3 — an UNKNOWN H3 frame (RFC 9114 §7.2.8 reserved
-/// type) with a small `payload`. The gateway MUST skip it transparently
-/// (`RecvState::InSkip`) and resume parsing the following frames.
+/// An UNKNOWN H3 frame (RFC 9114 §7.2.8 reserved type) the gateway MUST skip
+/// transparently and resume parsing after.
 fn unknown_frame(frame_type: u64, payload: &[u8]) -> Vec<u8> {
     encode_frame(&H3Frame::Unknown {
         frame_type,
@@ -1165,13 +985,10 @@ fn unknown_frame(frame_type: u64, payload: &[u8]) -> Vec<u8> {
     .to_vec()
 }
 
-/// F-S7-8 cluster 3 — a hand-built frame header `varint(frame_type) ||
-/// varint(declared_len)` with NO payload bytes. `declared_len` is
-/// chosen `> DEFAULT_MAX_PAYLOAD_SIZE` (1 MiB) so the gateway's
-/// `check_block_len` rejects it on the DECLARED length the moment the
-/// header parses — it never waits for (and we never send) the body.
-/// `frame_type 0x01` exercises the FRAME_HEADERS over-cap arm; any
-/// other type exercises the unknown-frame over-cap arm.
+/// A hand-built `varint(type) || varint(len)` header with NO payload, where
+/// `len` exceeds the 1 MiB payload cap so the gateway rejects on the DECLARED
+/// length the moment the header parses. `frame_type 0x01` exercises the HEADERS
+/// over-cap arm; any other type the unknown-frame arm.
 fn oversized_block_header(frame_type: u64, declared_len: u64) -> Vec<u8> {
     use bytes::BytesMut;
     let mut buf = BytesMut::new();
@@ -1180,10 +997,8 @@ fn oversized_block_header(frame_type: u64, declared_len: u64) -> Vec<u8> {
     buf.to_vec()
 }
 
-/// F-S7-8 cluster 4 — a ZERO-LENGTH H3 DATA frame: the two-byte header
-/// `varint(FRAME_DATA=0x00) || varint(len=0)` with NO payload. The
-/// gateway must treat this as a no-op (`RecvState::InData { remaining:
-/// 0 }`) and emit no spurious body chunk.
+/// A ZERO-LENGTH DATA frame (the two-byte header, no payload). The gateway must
+/// treat it as a no-op and emit no spurious body chunk.
 fn empty_data_frame() -> Vec<u8> {
     use bytes::BytesMut;
     let mut buf = BytesMut::new();
@@ -1192,10 +1007,8 @@ fn empty_data_frame() -> Vec<u8> {
     buf.to_vec()
 }
 
-/// F-S7-8 cluster 4 — a DATA frame HEADER declaring `declared_len`
-/// bytes followed by only `actual_len` (< declared) real payload bytes.
-/// Used with a subsequent clean FIN so the gateway sees the stream end
-/// while still mid-`InData` (a premature EOF).
+/// A DATA frame HEADER declaring `declared_len` followed by only `actual_len`
+/// real bytes, so a subsequent clean FIN lands mid-frame (a premature EOF).
 fn truncated_data_frame(declared_len: u64, actual_len: usize) -> Vec<u8> {
     use bytes::BytesMut;
     let mut buf = BytesMut::new();
@@ -1223,13 +1036,9 @@ fn data_frames(payload: &[u8]) -> Vec<u8> {
     out
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// §3  Cases (mirror h3_h2_stream_e2e's 7, 1:1).
-// ─────────────────────────────────────────────────────────────────────
+// §3  Cases.
 
-/// Case 1 — liveness floor: bodyless GET, 200 + sentinel body,
-/// clean FIN (the no-regression anchor: the only case the deleted
-/// buffered round-trip ever did; round8 also proves it live post-J3).
+/// Case 1 — liveness floor: bodyless GET, 200 + sentinel body, clean FIN.
 #[tokio::test]
 async fn h3h3_e2e_get_response_byte_identical() {
     let certs = generate_loopback_certs();
@@ -1264,12 +1073,10 @@ async fn h3h3_e2e_get_response_byte_identical() {
     assert_eq!(out.body, b"h3-empty", "bodyless GET ⇒ backend sentinel");
 }
 
-/// Case 2 (BINDING cond 1) — a ≥1 MiB NON-UTF-8 BINARY request body
-/// arrives BYTE-IDENTICAL at the real H3 backend (proves J2's
-/// dropped-request-body fix on the wire), AND request trailers are
-/// DROPPED on the H3→H3 leg (parity H3→H1 P1-C / H3→H2 A3): the
-/// backend sees exactly ONE HEADERS frame (no post-DATA trailing-
-/// HEADERS), the body fully FIN-framed — lossless, NOT silent loss.
+/// Case 2 (BINDING cond 1) — a ≥1 MiB NON-UTF-8 BINARY request body arrives
+/// BYTE-IDENTICAL at the real H3 backend, AND request trailers are DROPPED on
+/// the H3→H3 leg: the backend sees exactly ONE HEADERS frame with the body
+/// fully FIN-framed — lossless, NOT silent loss.
 #[tokio::test]
 async fn h3h3_e2e_request_body_byte_identical_at_backend() {
     let certs = generate_loopback_certs();
@@ -1321,11 +1128,8 @@ async fn h3h3_e2e_request_body_byte_identical_at_backend() {
          (J2 dropped-request-body fix proven on the wire)"
     );
     assert_eq!(out.body, payload, "echoed response body must match");
-    // Trailers-dropped parity: the client sent HEADERS + DATA* +
-    // trailing-HEADERS; the H3→H3 leg DROPS request trailers, so the
-    // backend must observe EXACTLY ONE HEADERS frame (the head) — the
-    // body is fully framed by the FIN, a lossless RFC-acceptable
-    // downgrade, NOT silent loss.
+    // Trailers-dropped parity: the client sent a trailing-HEADERS frame, so
+    // the backend must observe EXACTLY ONE HEADERS frame.
     assert_eq!(
         hframes, 1,
         "request trailers MUST be dropped on the H3→H3 leg (backend \
@@ -1333,11 +1137,10 @@ async fn h3h3_e2e_request_body_byte_identical_at_backend() {
     );
 }
 
-/// Case 3 (BINDING cond 2, response direction) — a 4 MiB H3 response
-/// streams through a STALLED H3 client; the live
-/// `MAX_RETAINED_RESP_BYTES` gauge stays ≤ the C5 ceiling (≪ body),
-/// then the client resumes and the body arrives byte-identical with a
-/// clean FIN (non-vacuous: bound + liveness).
+/// Case 3 (BINDING cond 2, response direction) — a 4 MiB response through a
+/// STALLED H3 client keeps `MAX_RETAINED_RESP_BYTES` ≤ the C5 ceiling (≪ body),
+/// and after resume the body arrives byte-identical with a clean FIN (bound +
+/// liveness, so the assertion is non-vacuous).
 #[cfg(feature = "test-gauges")]
 #[tokio::test]
 async fn h3h3_e2e_response_memory_bounded_through_stalled_client() {
@@ -1401,10 +1204,9 @@ async fn h3h3_e2e_response_memory_bounded_through_stalled_client() {
     assert!(retained > 0, "gauge must be live (non-vacuous)");
 }
 
-/// Case 4 (BINDING cond 2, request direction) — a 4 MiB binary
-/// request body while the H3 backend STALLS reading it; the live
-/// `MAX_RETAINED_BODY_BYTES` gauge stays ≤ the C5 ceiling (≪ body),
-/// then the backend unblocks and the body is byte-identical.
+/// Case 4 (BINDING cond 2, request direction) — a 4 MiB binary request body
+/// while the backend STALLS keeps `MAX_RETAINED_BODY_BYTES` ≤ the ceiling, and
+/// the body is byte-identical after the backend unblocks.
 #[cfg(feature = "test-gauges")]
 #[tokio::test]
 async fn h3h3_e2e_request_memory_bounded_through_stalled_backend() {
@@ -1476,10 +1278,9 @@ async fn h3h3_e2e_request_memory_bounded_through_stalled_backend() {
     assert!(retained > 0, "gauge must be live (non-vacuous)");
 }
 
-/// Case 5 (BINDING cond 2, backpressure) — a stalled H3 client must
-/// pause the H3 upstream read: retained ≤ ceiling for a body ≫
-/// ceiling, AND the body still completes byte-identical after resume
-/// (the response-direction causal chain held without drop/corruption).
+/// Case 5 (BINDING cond 2, backpressure) — a stalled H3 client must pause the
+/// upstream read: retained ≤ ceiling for a body ≫ ceiling, AND the body still
+/// completes byte-identical after resume.
 #[cfg(feature = "test-gauges")]
 #[tokio::test]
 async fn h3h3_e2e_backpressure_stalled_client_pauses_upstream_read() {
@@ -1537,9 +1338,8 @@ async fn h3h3_e2e_backpressure_stalled_client_pauses_upstream_read() {
     );
 }
 
-/// Case 6 — the H3 backend RESETs mid response body ⇒ the H3 client
-/// must NEVER get a clean complete 200 (response-splitting guard:
-/// `RespAbort::UpstreamReset` → actor RESET_STREAMs, never FIN).
+/// Case 6 — the backend RESETs mid response body ⇒ the client must NEVER get a
+/// clean complete 200 (response-splitting guard).
 #[tokio::test]
 async fn h3h3_e2e_upstream_reset_midbody_resets_client_no_fin() {
     let certs = generate_loopback_certs();
@@ -1589,25 +1389,16 @@ async fn h3h3_e2e_upstream_reset_midbody_resets_client_no_fin() {
     }
 }
 
-/// SESSION 25 / INC-4 — R13 (b)+(c) for the F-MD-4 MIRROR (RESPONSE
-/// direction): a BACKEND reset mid/after-body MUST relay as a reset to the
-/// downstream client, NEVER a clean complete 200+FIN. The single-shot
-/// `_upstream_reset_midbody_resets_client_no_fin` above is R13 (a)
-/// (in-gate); this adds (b) a ≥50-iteration burst on a SINGLE-THREADED
-/// runtime — the scheduling configuration that exposes the timing-
-/// dependent quiche `Finished`-vs-`Reset` delivery for a stream RESET
-/// after its last DATA (the `Event::Finished` reset-probe path, mirror of
-/// `conn_actor.rs:1269`; memory `h3h3-fmd4-no-r13-bc`) — and (c) a
-/// LOAD-BEARING non-vacuity control: a CLEAN GET on a SEPARATE Echo backend
-/// MUST yield a clean complete 200+FIN, so the burst's "no clean complete"
-/// assertion is not vacuously true.
+/// R13 (b)+(c) for the F-MD-4 MIRROR (RESPONSE direction): a BACKEND reset
+/// mid/after-body MUST relay as a reset, NEVER a clean complete 200+FIN. The
+/// single-shot test above is R13 (a); this adds (b) a ≥50-iteration burst on a
+/// SINGLE-THREADED runtime — the configuration that exposes the timing-dependent
+/// quiche `Finished`-vs-`Reset` delivery for a stream RESET after its last DATA
+/// — and (c) a non-vacuity control: a CLEAN GET on a separate Echo backend MUST
+/// yield a clean complete 200+FIN.
 ///
-/// NOTE FOR THE VERIFIER (R13 (c) mutation): the migrated E2's F-MD-4
-/// mirror is the `Event::Finished` `was_reset` probe + the `Event::Reset`
-/// arm + the `recv_body`-error arm. Flip the `Finished` arm's `was_reset`
-/// to always-false (treat every Finished as a clean end) and confirm THIS
-/// burst then FAILS — a reset-after-last-DATA backend would deliver a clean
-/// complete 200+FIN. This test provides the burst the mutation acts on.
+/// NOTE FOR THE VERIFIER (R13 (c) mutation): flip the `Finished` arm's
+/// `was_reset` to always-false and confirm THIS burst then FAILS.
 #[tokio::test(flavor = "current_thread")]
 async fn h3h3_e2e_upstream_reset_midresponse_burst_current_thread() {
     const ITERS: usize = 60; // ≥50 per R13 (b)
@@ -1648,11 +1439,9 @@ async fn h3h3_e2e_upstream_reset_midresponse_burst_current_thread() {
         );
     }
 
-    // (b) BURST — ITERS GETs against a ResetMidResponse backend (declares a
-    // 1 MiB body, writes ~64 KiB, then RESETs the response stream). NONE may
-    // yield a clean 200+FIN. Bounded concurrency (`IN_FLIGHT`-wide) on the
-    // single-threaded runtime contends concurrent resets on ONE scheduler —
-    // a STRONGER mirror-race probe than back-to-back sequential requests.
+    // (b) BURST — ITERS GETs against a ResetMidResponse backend; NONE may
+    // yield a clean 200+FIN. Bounded concurrency on the single-threaded
+    // runtime contends concurrent resets on ONE scheduler.
     let seen = BackendSeen::default();
     let (backend, bh) = spawn_h3_upstream(&certs, UpstreamMode::ResetMidResponse, seen).await;
     let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
@@ -1715,11 +1504,9 @@ async fn h3h3_e2e_upstream_reset_midresponse_burst_current_thread() {
     eprintln!("H3H3_FMD4_MIRROR_BURST iters={ITERS} (all reset, none clean-complete)");
 }
 
-/// Case 7 (BINDING — request-side smuggling-parity) — the H3 client
-/// RESETs MID request body. J2's mid-body abort
-/// (`stream_shutdown(Write, H3_REQUEST_CANCELLED)` + no FIN +
-/// non-reusable) means the real H3 backend NEVER observes a silently-
-/// truncated request presented as a cleanly-ended (complete) one.
+/// Case 7 (BINDING — request-side smuggling parity) — the client RESETs MID
+/// request body; the mid-body abort (no FIN + `H3_REQUEST_CANCELLED` +
+/// non-reusable) means the backend NEVER observes it as cleanly ended.
 #[tokio::test]
 async fn h3h3_e2e_client_reset_midrequest_rsts_upstream_no_truncated_request() {
     let certs = generate_loopback_certs();
@@ -1768,33 +1555,19 @@ async fn h3h3_e2e_client_reset_midrequest_rsts_upstream_no_truncated_request() {
     );
 }
 
-/// Case 7 R13 (b)+(c) — isolation-burst + non-vacuity for the
-/// mid-request-RESET smuggling guard. The single-shot test above is
-/// R13 (a) (in-gate); this adds (b) a ≥50-iteration burst on a
-/// SINGLE-THREADED runtime — the scheduling configuration that exposes
-/// timing-dependent request-smuggling races (memory
-/// `parallel-gate-masks-smuggle`; `h3h3-fmd4-no-r13-bc` flagged this
-/// gap) — and (c) a LOAD-BEARING non-vacuity positive: a CLEAN POST
-/// (full body + FIN) must be counted by the backend as a cleanly-ended
-/// request, so the burst's "the count never moves" assertion is not
+/// Case 7 R13 (b)+(c) — isolation burst + non-vacuity for the mid-request-RESET
+/// smuggling guard. (b) a ≥50-iteration burst on a SINGLE-THREADED runtime, the
+/// configuration that exposes timing-dependent smuggling races; (c) a CLEAN
+/// POST must be counted by the backend, so "the count never moves" is not
 /// vacuously true.
 ///
-/// SIGNAL: `BackendSeen::requests` is incremented ONLY when the upstream
-/// observes a cleanly-ended (FIN) request (the `if ready { .. }` block,
-/// `ready = req_fin` for `Echo`). A mid-request RESET never reaches it.
-/// So a smuggled truncated request — one relayed to the backend as
-/// cleanly-ended — would increment `requests`. The clean control moves
-/// it 0→1 (non-vacuity); the burst of truncated requests must leave it
-/// at 1 (no smuggle). `complete` (latched by the clean control) is
-/// asserted too as a secondary check.
+/// SIGNAL: `BackendSeen::requests` increments ONLY on a cleanly-ended (FIN)
+/// request, so a smuggled truncated request would increment it. The clean
+/// control moves it 0→1; the burst must leave it at 1.
 ///
-/// NOTE FOR THE VERIFIER: the LOAD-BEARING MUTATION proof (R13 (c)
-/// proper) is yours — H3→H3 has no pre-fix bug to revert, so flip the
-/// connector's request-abort arm (the `stream_shutdown(Write,
-/// H3_REQUEST_CANCELLED)` + no-FIN + non-reusable in the request leg)
-/// to a clean FIN and confirm THIS burst then FAILS (a truncated
-/// request gets counted). This test provides the burst + non-vacuity
-/// the mutation acts on.
+/// NOTE FOR THE VERIFIER: the mutation proof is yours — H3→H3 has no pre-fix
+/// bug to revert, so flip the connector's request-abort arm to a clean FIN and
+/// confirm THIS burst then FAILS.
 #[tokio::test(flavor = "current_thread")]
 async fn h3h3_e2e_client_reset_midrequest_burst_current_thread() {
     const ITERS: usize = 60; // ≥50 per R13 (b)
@@ -1803,10 +1576,9 @@ async fn h3h3_e2e_client_reset_midrequest_burst_current_thread() {
     let (backend, bh) = spawn_h3_upstream(&certs, UpstreamMode::Echo, seen.clone()).await;
     let (listener, gw, sd) = start_h3_listener_h3(&certs, backend).await;
 
-    // Per-iteration body: much smaller than the single-shot 2 MiB so
-    // the ITERS-deep burst is tractable, but still a genuine mid-body
-    // abort (reset after 32 KiB of a 128 KiB upload — the smuggle race
-    // is about aborting before FIN, not body size).
+    // Smaller per-iteration body than the single-shot case so an ITERS-deep
+    // burst stays tractable; the smuggle race is about aborting before FIN,
+    // not body size.
     let payload = binary_body(128 * 1024);
     let chunks: Vec<Vec<u8>> = payload.chunks(16 * 1024).map(<[u8]>::to_vec).collect();
 
@@ -1843,16 +1615,10 @@ async fn h3h3_e2e_client_reset_midrequest_burst_current_thread() {
         seen.complete.load(Ordering::SeqCst)
     );
 
-    // (b) BURST — ITERS mid-request RESETs. NONE may reach the backend
-    // as a cleanly-ended request (the `requests` count must not move),
-    // and none may yield a clean 200+FIN to the client. Fired with
-    // BOUNDED CONCURRENCY (`IN_FLIGHT`-wide) on the single-threaded
-    // runtime: concurrent in-flight aborts contending on ONE scheduler
-    // is a STRONGER smuggling-race probe than back-to-back sequential
-    // requests (the `parallel-gate-masks-smuggle` configuration), and it
-    // amortises the per-request QUIC-handshake + abort-settle cost so an
-    // ITERS-deep burst stays tractable. The window is bounded so the
-    // shared gateway/backend is not swamped into spurious failures.
+    // (b) BURST — ITERS mid-request RESETs. None may reach the backend as
+    // cleanly ended, none may yield a clean 200+FIN. Bounded concurrency on the
+    // single-threaded runtime is a STRONGER smuggling-race probe than
+    // back-to-back sequential requests.
     const IN_FLIGHT: usize = 8;
     let ca = certs.ca.clone();
     let local = tokio::task::LocalSet::new();
@@ -1918,22 +1684,13 @@ async fn h3h3_e2e_client_reset_midrequest_burst_current_thread() {
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// §4  F-S7-8 — adversarial coverage-remediation cases (test asset
-//     only; same real wire: front quiche H3 client → QuicListener →
-//     router → conn_actor poll_h3 LIVE h3_backend → h3_to_h3_stream_resp
-//     → genuine quiche::accept upstream). Each case drives a specific
-//     verifier-identified uncovered ERROR/EDGE arm of
-//     `h3_to_h3_stream_resp` over the real wire — no stub, no #[ignore].
-// ─────────────────────────────────────────────────────────────────────
+// §4  Adversarial coverage-remediation cases: each drives a specific
+//     ERROR/EDGE arm of `h3_to_h3_stream_resp` over the same real wire.
 
-/// Cluster 1 / CASE 8 — the upstream STOP_SENDINGs the REQUEST stream
-/// AFTER ~64 KiB of request DATA has been forwarded. The gateway's next
-/// request-DATA `stream_send` returns `Err(StreamStopped)`, driving the
-/// request-DATA send-error arm (h3_bridge.rs :3062-3074:
-/// `stream_shutdown(Write, H3_REQUEST_CANCELLED)` → `UpstreamReset` →
-/// break). The client MUST NOT get a clean 200+FIN, and the backend
-/// MUST NOT have seen a cleanly-ended request.
+/// CASE 8 — the upstream STOP_SENDINGs the REQUEST stream after ~64 KiB of
+/// request DATA, so the gateway's next request-DATA send returns
+/// `Err(StreamStopped)`. The client MUST NOT get a clean 200+FIN and the
+/// backend MUST NOT have seen a cleanly-ended request.
 #[tokio::test]
 async fn h3h3_e2e_upstream_stop_sending_mid_request_data_aborts_no_fin() {
     let certs = generate_loopback_certs();
@@ -1991,13 +1748,9 @@ async fn h3h3_e2e_upstream_stop_sending_mid_request_data_aborts_no_fin() {
     );
 }
 
-/// Cluster 1 / CASE 8b — the upstream STOP_SENDINGs the REQUEST stream
-/// as early as possible (`after_bytes = 0`, armed the instant the
-/// request stream is observed). The fault lands on the HEADERS / first
-/// request-DATA write, driving the HEADERS send-error arm
-/// (h3_bridge.rs :2928-2933: `set_reusable(false)` → `RespEvent::Reset`
-/// → `return Err(UpstreamReset)`) and/or the early request-DATA
-/// send-error arm. Either way the client never gets a clean 200+FIN.
+/// CASE 8b — the STOP_SENDING is armed as early as possible, so the fault
+/// lands on the HEADERS / first request-DATA write instead. Either way the
+/// client never gets a clean 200+FIN.
 #[tokio::test]
 async fn h3h3_e2e_upstream_stop_sending_immediately_aborts_no_fin() {
     let certs = generate_loopback_certs();
@@ -2053,16 +1806,10 @@ async fn h3h3_e2e_upstream_stop_sending_immediately_aborts_no_fin() {
     );
 }
 
-/// Cluster 1 / CASE 8c — the upstream STOP_SENDINGs the REQUEST stream
-/// AFTER it has drained the FULL request body. The fault then lands on
-/// the gateway's terminal request-stream FIN write, driving the
-/// request-FIN send-error arm (h3_bridge.rs :3458-3461:
-/// `UpstreamReset` → break). Contingency (S78-G5): if the FIN-race
-/// proves timing-flaky over the real wire this still deterministically
-/// drives a request-leg send-error (the body fully buffered upstream
-/// but the request never cleanly FIN-completed at the gateway); the
-/// binding assertion (no clean 200+FIN, request never seen complete)
-/// holds for EITHER landing point — reported as such.
+/// CASE 8c — the STOP_SENDING lands AFTER the full request body is drained, so
+/// the fault hits the terminal request-FIN write. If the FIN race proves timing
+/// -flaky over the real wire this still deterministically drives a request-leg
+/// send error, and the binding assertion holds for EITHER landing point.
 #[tokio::test]
 async fn h3h3_e2e_upstream_stop_sending_at_request_fin_aborts_no_fin() {
     let certs = generate_loopback_certs();
@@ -2119,18 +1866,11 @@ async fn h3h3_e2e_upstream_stop_sending_at_request_fin_aborts_no_fin() {
     );
 }
 
-/// CF-H3H3-HEAD — the upstream sends 200 with content-type +
-/// content-length + a custom `x-eg-resp` header, then a small DATA body
-/// + clean FIN. The H3→H3 streaming response leg MUST forward the FULL
-/// non-pseudo response header set to the H3 client — pre-fix it dropped
-/// everything but `:status` + `content-length`
-/// (`encode_h3_headers_frame(status, declared_len)`); post-fix the
-/// `Wire` sink re-encodes the whole set via
-/// `encode_h3_headers_frame_full`. LOAD-BEARING: this asserts
-/// content-type AND x-eg-resp arrive at the client — it FAILS on the
-/// old lossy projection (neither would be present) and PASSES with the
-/// full-header re-encode. Body byte-identity + 200 + clean FIN confirm
-/// the head change does not perturb the body/FIN framing.
+/// CF-H3H3-HEAD — the upstream sends 200 with content-type + content-length +
+/// a custom `x-eg-resp`, then a small body + clean FIN. The response leg MUST
+/// forward the FULL non-pseudo header set. LOAD-BEARING: this FAILS on the old
+/// lossy `:status`-plus-content-length projection. Body byte-identity + clean
+/// FIN confirm the head change does not perturb body framing.
 #[tokio::test]
 async fn h3h3_e2e_full_response_headers_round_trip() {
     let certs = generate_loopback_certs();
@@ -2166,9 +1906,7 @@ async fn h3h3_e2e_full_response_headers_round_trip() {
         out.body, b"h3-full-head-body",
         "response body must be byte-identical alongside the full header set"
     );
-    // The two REGULAR headers the backend emitted must both round-trip
-    // to the H3 client — the load-bearing assertions (pre-fix the
-    // gateway dropped both; only :status + content-length survived).
+    // Both REGULAR headers must round-trip — pre-fix the gateway dropped them.
     let has = |name: &str, val: &str| {
         out.resp_head_pairs
             .iter()
@@ -2193,13 +1931,9 @@ async fn h3h3_e2e_full_response_headers_round_trip() {
     );
 }
 
-/// Cluster 2 / CASE 9a — the upstream sends 200 + a small DATA body +
-/// a VALID post-DATA trailing-HEADERS frame, then a clean FIN. Drives
-/// the response-trailer FORWARD path (h3_bridge.rs :3284-3296 +
-/// :3297-3312; src-confirmed to forward response trailers — distinct
-/// from J2 dropping REQUEST trailers). The client MUST get 200, the
-/// body byte-identical, a clean FIN, AND a SECOND (trailing) HEADERS
-/// frame carrying the forwarded trailer.
+/// CASE 9a — 200 + a small body + a VALID post-DATA trailing-HEADERS frame,
+/// then a clean FIN. Response trailers ARE forwarded (unlike REQUEST trailers),
+/// so the client must see a SECOND HEADERS frame carrying the trailer.
 #[tokio::test]
 async fn h3h3_e2e_response_trailers_forwarded() {
     let certs = generate_loopback_certs();
@@ -2254,12 +1988,9 @@ async fn h3h3_e2e_response_trailers_forwarded() {
     );
 }
 
-/// Cluster 2 / CASE 9b — the upstream sends 200 + DATA + a MALFORMED
-/// trailing-HEADERS frame containing a `:`-prefixed pseudo-header.
-/// Drives the trailer pseudo-header reject arm (h3_bridge.rs
-/// :3290-3293: `RespAbort::BadHead` → `RespEvent::Reset`). The pseudo
-/// trailer MUST NEVER be forwarded and the client MUST NOT get a clean
-/// complete 200+FIN.
+/// CASE 9b — a MALFORMED trailing-HEADERS frame carrying a `:`-prefixed
+/// pseudo-header. It MUST NEVER be forwarded and the client MUST NOT get a
+/// clean complete 200+FIN.
 #[tokio::test]
 async fn h3h3_e2e_response_pseudo_header_trailer_rejected() {
     let certs = generate_loopback_certs();
@@ -2311,13 +2042,9 @@ async fn h3h3_e2e_response_pseudo_header_trailer_rejected() {
     );
 }
 
-/// Cluster 3 / CASE 10a — the upstream sends 200, then an UNKNOWN H3
-/// frame type (RFC 9114 §7.2.8 reserved) BEFORE the DATA body, then a
-/// clean FIN. Drives the unknown-frame skip path (h3_bridge.rs
-/// :3200-3209 `InSkip` entry + :3349-3360 incremental drain). The
-/// gateway MUST transparently skip the unknown frame and still deliver
-/// the body byte-identical with a clean FIN (non-vacuous: the skip
-/// resumed correctly).
+/// CASE 10a — an UNKNOWN H3 frame type before the DATA body, then a clean FIN.
+/// The gateway MUST skip it transparently and still deliver the body
+/// byte-identical with a clean FIN — non-vacuous: the skip resumed correctly.
 #[tokio::test]
 async fn h3h3_e2e_unknown_response_frame_skipped_transparently() {
     let certs = generate_loopback_certs();
@@ -2359,11 +2086,8 @@ async fn h3h3_e2e_unknown_response_frame_skipped_transparently() {
     );
 }
 
-/// Cluster 3 / CASE 10b — the upstream sends 200, then a HEADERS-typed
-/// (`0x01`) frame header declaring a length `> DEFAULT_MAX_PAYLOAD_SIZE`
-/// (1 MiB) with NO payload. Drives the FRAME_HEADERS over-cap arm
-/// (h3_bridge.rs :3189-3193: `check_block_len` → `RespAbort::BadHead`
-/// → break). The client MUST NOT get a clean complete 200+FIN.
+/// CASE 10b — a HEADERS-typed frame header declaring over the 1 MiB payload cap
+/// with NO payload ⇒ the HEADERS over-cap arm. No clean complete 200+FIN.
 #[tokio::test]
 async fn h3h3_e2e_oversized_headers_block_rejected() {
     let certs = generate_loopback_certs();
@@ -2407,12 +2131,8 @@ async fn h3h3_e2e_oversized_headers_block_rejected() {
     );
 }
 
-/// Cluster 3 / CASE 10c — as 10b but the oversized declared length is
-/// on an UNKNOWN frame type (`0x21`), driving the OTHER `check_block_len`
-/// call-site: the unknown-frame over-cap arm (h3_bridge.rs :3204-3207:
-/// `check_block_len` → `RespAbort::BadHead` → break) — a distinct line
-/// region from 10b's FRAME_HEADERS arm. The client MUST NOT get a clean
-/// complete 200+FIN.
+/// CASE 10c — as 10b but on an UNKNOWN frame type, driving the OTHER over-cap
+/// call site (a distinct line region). No clean complete 200+FIN.
 #[tokio::test]
 async fn h3h3_e2e_oversized_unknown_frame_rejected() {
     let certs = generate_loopback_certs();
@@ -2457,29 +2177,19 @@ async fn h3h3_e2e_oversized_unknown_frame_rejected() {
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// §5  F-S7-8 cluster 4 — further targeted real-wire coverage of the
-//     session error/edge arms (test asset only; same real wire).
-// ─────────────────────────────────────────────────────────────────────
+// §5  Further targeted real-wire coverage of the error/edge arms.
 
-/// Cluster 4 / CASE 11 — the H3 backend address has NO live quiche
-/// upstream listening, so the pool's fresh dial cannot complete the
-/// handshake and `pool.acquire(addr, sni)` returns `Err` after the
-/// dial deadline. Drives the pool-acquire-failure 502 path
-/// (h3_bridge.rs :2856-2862: the `acquire` `Err(e)` arm → `inline(502)`
-/// → return `Ok(())`) AND the `inline` helper SUCCESS path
-/// (:2785-2788: `encode_h3_response` Ok → `Bytes` + `End`). The client
-/// MUST receive a 502 with a clean FIN (a genuine inline error
-/// response, NOT a dropped/hung stream).
+/// CASE 11 — nothing is listening at the H3 backend address, so
+/// `pool.acquire` fails at the dial deadline. The client MUST receive a 502
+/// with a clean FIN — a genuine inline error response, NOT a dropped or hung
+/// stream.
 #[tokio::test]
 async fn h3h3_e2e_pool_acquire_failure_returns_502() {
     let certs = generate_loopback_certs();
-    // A loopback UDP address with NOTHING bound: bind to grab a free
-    // ephemeral port, capture it, then drop the socket so the port is
-    // free again. The gateway's pooled dial sends Initials there and
-    // never gets a handshake response ⇒ `acquire` fails at the dial
-    // deadline. Deterministic; no long idle (the dial deadline bounds
-    // it — see quic_pool::dial_new).
+    // A loopback address with NOTHING bound: bind to grab a free port, capture
+    // it, then drop the socket. The pooled dial never gets a handshake
+    // response, so `acquire` fails at the dial deadline — deterministic, and
+    // the dial deadline bounds the wait.
     let dead_backend = {
         let s =
             std::net::UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
@@ -2529,15 +2239,10 @@ async fn h3h3_e2e_pool_acquire_failure_returns_502() {
     );
 }
 
-/// Cluster 4 / CASE 12 — the H3 client reads the response head + a few
-/// body bytes, then STOP_SENDINGs the RESPONSE stream and stops reading.
-/// quiche surfaces this to the gateway as a peer STOP_SENDING on the
-/// stream it is writing; the actor's `reap_client_cancelled_responses`
-/// drops the response receiver, so the bridge's next
-/// `send!`/`send_progress!` returns `Err(RespAbort::ClientGone)`
-/// (h3_bridge.rs :2806 — the `send!` macro's `ClientGone` map). The
-/// client MUST NOT receive a clean complete 200+FIN carrying the whole
-/// body (the relay was cancelled mid-stream).
+/// CASE 12 — the client reads the head + a few body bytes, then STOP_SENDINGs
+/// the RESPONSE stream and stops reading, so the actor reaps the receiver and
+/// the bridge's next send returns `ClientGone`. The client MUST NOT receive a
+/// clean complete 200+FIN carrying the whole body.
 #[tokio::test]
 async fn h3h3_e2e_client_stop_sending_response_maps_client_gone() {
     let certs = generate_loopback_certs();
@@ -2567,9 +2272,8 @@ async fn h3h3_e2e_client_stop_sending_response_maps_client_gone() {
             omit_authority: false,
             stop_reading_resp_after: Some(64 * 1024),
         },
-        // Bounded settle window: long enough for the STOP_SENDING to
-        // land and the gateway to attempt another relay send (→
-        // ClientGone), short enough to keep the test snappy.
+        // Bounded settle window: long enough for the STOP_SENDING to land and
+        // the gateway to attempt another relay send.
         Duration::from_secs(10),
     )
     .await;
@@ -2590,19 +2294,13 @@ async fn h3h3_e2e_client_stop_sending_response_maps_client_gone() {
     );
 }
 
-/// Cluster 4 / CASE 13 — the H3 client omits the `:authority`
-/// pseudo-header entirely (and sends no `Host`). For the `https` scheme,
-/// RFC 9114 §4.3.1 makes `:authority`-or-`Host` MANDATORY, so this is a
-/// malformed request: the gateway MUST reset the request stream with
-/// `H3_MESSAGE_ERROR` and forward NOTHING upstream.
+/// CASE 13 — the client omits `:authority` and sends no `Host`. For `https`,
+/// RFC 9114 §4.3.1 makes one of them MANDATORY, so this is malformed: the
+/// gateway MUST reset with `H3_MESSAGE_ERROR` and forward NOTHING upstream.
 ///
-/// SESSION 22 (h3spec #13): this was previously a "succeeds via SNI
-/// substitution" case — coverage-only lenience (S7), not a deployment
-/// feature. The owner ruled it STRICT; this test now LOCKS the conformant
-/// rejection. (The upstream SNI fallback in `h3_to_h3_stream_resp` remains
-/// for the H1→H3 / H2→H3 paths, which build the upstream request from a
-/// different ingress and are NOT subject to this H3-client validation.)
-/// See `audit/h3spec/s22-findings.md`.
+/// This was previously a "succeeds via SNI substitution" case — coverage-only
+/// lenience, ruled STRICT. The upstream SNI fallback remains for H1→H3 / H2→H3,
+/// which build the upstream request from a different ingress.
 #[tokio::test]
 async fn h3h3_e2e_absent_authority_rejected_message_error() {
     let certs = generate_loopback_certs();
@@ -2636,11 +2334,8 @@ async fn h3h3_e2e_absent_authority_rejected_message_error() {
     let got = seen.body.lock().unwrap().clone();
     bh.abort();
 
-    // SESSION 22 #13 (RFC 9114 §4.3.1, owner-ruled strict): the malformed
-    // (no :authority, no Host) https request is rejected at the H3 ingress —
-    // the gateway resets the request stream (H3_MESSAGE_ERROR) and never
-    // dials the upstream, so the client sees NO :status and the backend
-    // receives NOTHING.
+    // The malformed request is rejected at the H3 ingress: the client sees NO
+    // :status and the backend receives NOTHING.
     assert_ne!(
         out.status,
         Some(200),
@@ -2664,13 +2359,10 @@ async fn h3h3_e2e_absent_authority_rejected_message_error() {
     );
 }
 
-/// SESSION 22 — drive a RAW (hand-crafted) request stream through the real
-/// H3 listener and return the gateway-initiated connection-close as
-/// `(error_code, is_app)` from `conn.peer_error()`, or `None` if it never
-/// closed. Reuses this file's quiche-client plumbing. When `open_control`
-/// is set the client ALSO opens a unidirectional control stream (type
-/// `0x00` + a SETTINGS frame) so the gateway's uni-stream drain gate in
-/// `poll_h3` is exercised (the request decoder must NOT trip on it).
+/// Drive a RAW hand-crafted request stream through the real listener and return
+/// the gateway-initiated close as `(error_code, is_app)`. With `open_control`
+/// the client ALSO opens a uni control stream, so the gateway's uni-stream
+/// drain gate is exercised — the request decoder must NOT trip on it.
 async fn drive_raw_request_close(
     gateway: SocketAddr,
     ca: &std::path::Path,
@@ -2729,10 +2421,9 @@ async fn drive_raw_request_close(
     conn.peer_error().map(|e| (e.error_code, e.is_app))
 }
 
-/// SESSION 22 (h3spec #11) — a DATA frame before HEADERS on a request
-/// stream is a CONNECTION error H3_FRAME_UNEXPECTED (0x0105), an APPLICATION
-/// close (RFC 9114 §4.1/§8.1). Also opens a client control stream so the
-/// uni-stream drain gate is exercised (it must NOT be mis-read as a request).
+/// h3spec #11 — DATA before HEADERS on a request stream is a CONNECTION error
+/// `H3_FRAME_UNEXPECTED`, an APPLICATION close. Also opens a client control
+/// stream, which must NOT be mis-read as a request.
 #[tokio::test]
 async fn h3h3_e2e_data_before_headers_closes_h3_frame_unexpected() {
     let certs = generate_loopback_certs();
@@ -2757,9 +2448,8 @@ async fn h3h3_e2e_data_before_headers_closes_h3_frame_unexpected() {
     );
 }
 
-/// SESSION 22 (h3spec #22) — a HEADERS field section that QPACK-decodes to
-/// an invalid static-table index is a CONNECTION error
-/// QPACK_DECOMPRESSION_FAILED (0x0200), an APPLICATION close (RFC 9204 §2.2).
+/// h3spec #22 — a field section decoding to an invalid static-table index is a
+/// CONNECTION error `QPACK_DECOMPRESSION_FAILED`, an APPLICATION close.
 #[tokio::test]
 async fn h3h3_e2e_invalid_qpack_static_index_closes_decompression_failed() {
     let certs = generate_loopback_certs();
@@ -2785,14 +2475,9 @@ async fn h3h3_e2e_invalid_qpack_static_index_closes_decompression_failed() {
     );
 }
 
-/// Cluster 4 / CASE 14 — the upstream emits a ZERO-LENGTH DATA frame
-/// (`0x00 0x00`) BEFORE the real body, then the body + a clean FIN.
-/// Drives the gateway's empty-DATA fast-path (h3_bridge.rs :3214-3217:
-/// `RecvState::InData { remaining: 0 }` returns straight to
-/// `AwaitingHeader` with no spurious chunk). The gateway MUST skip the
-/// zero-length frame and still deliver the real body byte-identical
-/// with a clean FIN (non-vacuous: the empty frame was handled, not
-/// mis-parsed, and the body resumed correctly).
+/// CASE 14 — a ZERO-LENGTH DATA frame before the real body, then the body + a
+/// clean FIN. The gateway MUST skip it and still deliver the body
+/// byte-identical — non-vacuous: the empty frame was handled, not mis-parsed.
 #[tokio::test]
 async fn h3h3_e2e_empty_data_frame_skipped_then_body() {
     let certs = generate_loopback_certs();
@@ -2838,34 +2523,22 @@ async fn h3h3_e2e_empty_data_frame_skipped_then_body() {
     );
 }
 
-/// Cluster 4 / CASE 15 — RE-SCOPED in SESSION 25 / INC-4 (quiche::h3
-/// migration; owner-ruled documented behaviour change, NOT a silent
+/// CASE 15 — the documented quiche §7.1 gap, RE-SCOPED at the `quiche::h3`
+/// migration (an owner-ruled documented behaviour change, NOT a silent
 /// weakening).
 ///
-/// The upstream sends 200 (NO content-length), then a DATA frame header
-/// declaring 4096 bytes but only 16 bytes of payload, then a clean QUIC
-/// FIN. The PRE-MIGRATION hand-rolled E2 tracked DATA-frame boundaries
-/// and detected the mid-frame FIN as a premature EOF (reset, never a
-/// clean complete). The MIGRATED E2 delegates HTTP/3 framing to
-/// `quiche::h3`, and **quiche-0.28 does NOT enforce DATA-frame
-/// completeness at FIN (RFC 9114 §7.1)**: it delivers a clean
-/// `Event::Finished` and exposes NO public API to observe that the
-/// stream finished mid-frame (`recv_body` discards the `fin` flag;
-/// `process_finished_stream` collapses the incomplete `State::Data`).
-/// So with NO content-length to cross-check, the gateway relays the
-/// truncated response to the client as a complete 200+FIN.
+/// The upstream sends 200 with NO content-length, a DATA header declaring 4096
+/// but only 16 payload bytes, then a clean FIN. quiche does NOT enforce
+/// DATA-frame completeness at FIN and exposes no API to observe the mid-frame
+/// finish, so with no content-length to cross-check the gateway relays the
+/// truncation as complete.
 ///
-/// THREAT MODEL (why this is LOW severity, owner-assessed): the gap
-/// requires a malformed/buggy BACKEND (a trusted upstream, not an
-/// untrusted client); HTTP/3 streams are independent, so a truncated
-/// response CANNOT desync the connection or smuggle across streams (the
-/// HTTP/1-style danger does not exist here); RESET-based truncation is
-/// still caught (the F-MD-4 mirror, all three →H3 cells); and a
-/// content-length-bearing truncation IS caught by the compensating
-/// guard below — see `h3h3_e2e_content_length_truncation_resets_*`.
-/// CARRY-FORWARD CF-QUICHE-FRAME-COMPLETENESS (tied to CF-QUICHE-UPGRADE):
-/// a quiche version that enforces §7.1 restores the strict frame-level
-/// guard; RE-TIGHTEN this assertion to `!(200 && fin)` then.
+/// LOW severity (owner-assessed): it needs a malformed BACKEND, not an
+/// untrusted client; H3 streams are independent so there is no cross-stream
+/// desync or smuggling; RESET-based truncation is still caught by the F-MD-4
+/// mirror; and a content-length-bearing truncation IS caught by the guard
+/// below. CF-QUICHE-FRAME-COMPLETENESS: RE-TIGHTEN this assertion to
+/// `!(200 && fin)` once quiche enforces §7.1.
 #[tokio::test]
 async fn h3h3_e2e_no_cl_truncated_data_delivered_quiche_028_frame_completeness_gap() {
     let certs = generate_loopback_certs();
@@ -2895,11 +2568,9 @@ async fn h3h3_e2e_no_cl_truncated_data_delivered_quiche_028_frame_completeness_g
     sd.cancel();
     bh.abort();
 
-    // DOCUMENTED quiche-0.28 §7.1 gap: with NO content-length the gateway
-    // relays the (16-byte) truncated body + the upstream's clean FIN. This
-    // asserts the migrated, compensated behaviour — the client receives the
-    // head + whatever DATA arrived + FIN; H3 stream isolation means no
-    // desync. (RE-TIGHTEN to `!(200 && fin)` once quiche enforces §7.1.)
+    // The documented gap: with NO content-length the gateway relays the
+    // 16-byte truncated body + the upstream's clean FIN. RE-TIGHTEN to
+    // `!(200 && fin)` once quiche enforces §7.1.
     assert_eq!(
         out.status,
         Some(200),
@@ -2918,17 +2589,12 @@ async fn h3h3_e2e_no_cl_truncated_data_delivered_quiche_028_frame_completeness_g
     );
 }
 
-/// SESSION 25 / INC-4 — the content-length TRUNCATION GUARD (defense-in-
-/// depth, owner-ruled it MUST be verified to actually fire). The upstream
-/// sends 200 WITH `content-length: 4096` but only 16 body bytes, then a
-/// clean QUIC FIN. quiche-0.28 delivers this as a clean `Finished` (no
-/// §7.1 frame-completeness check), but the migrated E2 cross-checks the
-/// relayed body against the declared content-length: `body_relayed (16) <
-/// content-length (4096)` ⇒ a truncated upstream response ⇒ RESET
-/// downstream. The client MUST NOT receive a clean complete 200+FIN. This
-/// is the COMMON real-world truncation case (content-length is near-
-/// universal on real responses) and the compensation for the no-content-
-/// length residual gap documented above.
+/// The content-length TRUNCATION GUARD, which the owner ruled MUST be verified
+/// to actually fire: 200 WITH `content-length: 4096` but only 16 body bytes,
+/// then a clean FIN. quiche delivers a clean `Finished`, but the gateway
+/// cross-checks `body_relayed < content-length` and RESETs downstream. This is
+/// the COMMON real-world truncation case and the compensation for the
+/// no-content-length gap above.
 #[tokio::test]
 async fn h3h3_e2e_content_length_truncation_resets_no_clean_complete() {
     let certs = generate_loopback_certs();
@@ -2959,10 +2625,8 @@ async fn h3h3_e2e_content_length_truncation_resets_no_clean_complete() {
     sd.cancel();
     bh.abort();
 
-    // The content-length guard MUST fire: a declared-4096 / sent-16 + clean
-    // FIN response is a truncation ⇒ the client never gets a clean complete
-    // 200+FIN. (Load-bearing: if the guard is removed, quiche's clean
-    // `Finished` would deliver `200 + 16 bytes + FIN` and this fails.)
+    // Load-bearing: remove the guard and quiche's clean `Finished` delivers
+    // `200 + 16 bytes + FIN`, failing this assertion.
     assert!(
         !(out.status == Some(200) && out.fin),
         "content-length under-run (declared 4096, sent 16, clean FIN) MUST NOT \
