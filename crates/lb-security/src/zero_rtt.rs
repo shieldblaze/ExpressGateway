@@ -1,10 +1,8 @@
-//! TLS 1.3 0-RTT replay protection.
-//!
-//! Two attack-driven choices, both of which look like arbitrary taste from the code alone:
-//! * **LRU, not FIFO** (SEC-2-05): a FIFO lets a sustained unique-token spray push the in-flight
-//!   replayee out of the window before its replay arrives, so the window must be use-bounded.
-//! * **HMAC-SHA256, not multiply-shift** (auditor finding 2026-04-23): the old source-visible
-//!   seeds let an attacker precompute digest collisions and walk straight through the dedup.
+//! TLS 1.3 0-RTT replay protection. Two attack-driven choices that look arbitrary from the code:
+//! * **LRU, not FIFO** (SEC-2-05): a FIFO lets a unique-token spray push the in-flight replayee out
+//!   of the window before its replay arrives, so the window must be use-bounded.
+//! * **HMAC-SHA256, not multiply-shift**: source-visible seeds let an attacker precompute digest
+//!   collisions and walk straight through the dedup.
 
 use std::collections::HashMap;
 
@@ -16,14 +14,11 @@ use crate::SecurityError;
 /// Default capacity of the 0-RTT replay window (`[security].zero_rtt_replay_window_size`); ~3 MB.
 pub const DEFAULT_ZERO_RTT_REPLAY_WINDOW_SIZE: usize = 65_536;
 
-/// Keyed digest. The per-instance key is what denies collision precomputation and cross-instance
-/// correlation — never swap this for an unkeyed hash.
+/// Keyed digest; the per-instance key denies collision precomputation — never make this unkeyed.
 fn hash_token(key: &hmac::Key, token: &[u8]) -> [u8; 32] {
     let tag = hmac::sign(key, token);
     let mut out = [0u8; 32];
-    // SAFETY: HMAC-SHA256 output is always 32 bytes. The indexing-slicing
-    // lint is satisfied because the source slice length is a compile-time
-    // invariant of the HMAC_SHA256 algorithm.
+    // SAFETY: HMAC-SHA256 output is always 32 bytes, a compile-time invariant of the algorithm.
     let src = tag.as_ref();
     for (dst, byte) in out.iter_mut().zip(src.iter()) {
         *dst = *byte;
@@ -31,8 +26,7 @@ fn hash_token(key: &hmac::Key, token: &[u8]) -> [u8; 32] {
     out
 }
 
-/// Fresh 32-byte secret from the OS RNG. The time-mixed fallback is a deliberate degradation for
-/// the kernel-RNG-failed case: guessable, but still better than a hardcoded public seed.
+/// Fresh 32-byte secret from the OS RNG; the time-mixed fallback is guessable but beats a fixed seed.
 fn fresh_secret() -> [u8; 32] {
     let rng = SystemRandom::new();
     let mut secret = [0u8; 32];
@@ -50,8 +44,7 @@ fn fresh_secret() -> [u8; 32] {
     secret
 }
 
-/// Arena node. `prev` points toward LRU (`front`), `next` toward MRU (`back`); [`NIL`] means no
-/// neighbour.
+/// Arena node; `prev` points toward LRU (`front`), `next` toward MRU (`back`), [`NIL`] = none.
 struct Node {
     digest: [u8; 32],
     prev: usize,
@@ -63,8 +56,7 @@ const NIL: usize = usize::MAX;
 /// Fixed-capacity LRU replay guard for TLS 1.3 0-RTT early-data tokens.
 pub struct ZeroRttReplayGuard {
     max_tokens: usize,
-    /// Node slab. Vacant slots live on the `free_head` list embedded in `Node::next`, where
-    /// `prev` = NIL.
+    /// Node slab; vacant slots live on the `free_head` list in `Node::next`, with `prev` = NIL.
     arena: Vec<Node>,
     /// Head of the free-list inside `arena`.
     free_head: usize,
@@ -91,8 +83,7 @@ impl ZeroRttReplayGuard {
         Self::new(DEFAULT_ZERO_RTT_REPLAY_WINDOW_SIZE)
     }
 
-    /// Guard with a caller-supplied secret — TESTS ONLY, for cross-instance digest equality.
-    /// Production must use [`Self::new`] so each instance keys independently.
+    /// Guard with a caller-supplied secret — TESTS ONLY; production must use [`Self::new`].
     #[must_use]
     pub fn new_with_secret(max_tokens: usize, secret: &[u8]) -> Self {
         let max_tokens = if max_tokens == 0 { 1 } else { max_tokens };
@@ -126,8 +117,7 @@ impl ZeroRttReplayGuard {
         self.max_tokens
     }
 
-    /// Record a 0-RTT token, evicting the LRU entry if the window is full. A token already in
-    /// the window is a replay and errors with [`SecurityError::ZeroRttReplay`].
+    /// Record a 0-RTT token, evicting the LRU entry when full; a token already present is a replay.
     pub fn check_and_record(&mut self, token: &[u8]) -> Result<(), SecurityError> {
         let digest = hash_token(&self.key, token);
 
@@ -160,8 +150,7 @@ impl ZeroRttReplayGuard {
             idx
         } else {
             let idx = self.free_head;
-            // The None arm is unreachable while the free-list invariant holds; it exists so a
-            // violated invariant orphans a slot instead of panicking on a security path.
+            // Unreachable while the free-list invariant holds; orphans a slot rather than panicking.
             match self.arena.get_mut(idx) {
                 Some(node) => {
                     self.free_head = node.next;

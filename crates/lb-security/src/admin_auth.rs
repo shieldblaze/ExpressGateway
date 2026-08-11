@@ -1,8 +1,6 @@
-//! Admin HTTP authentication + bind-loopback enforcement (SEC-2-06).
-//!
-//! The gate holds only a SHA-256 of the bearer token (`[admin].api_token_hash`, 64 hex chars) —
-//! the plaintext never enters the struct — and compares with `subtle::ConstantTimeEq` so a
-//! wrong-prefix token cannot be recovered from response timing.
+//! Admin HTTP authentication + bind-loopback enforcement (SEC-2-06). The gate holds only a SHA-256
+//! of the bearer token — the plaintext never enters the struct — and compares with
+//! `subtle::ConstantTimeEq` so a wrong-prefix token cannot be recovered from response timing.
 
 use std::net::SocketAddr;
 
@@ -12,8 +10,7 @@ use subtle::ConstantTimeEq;
 /// Errors from the [`AdminAuthGate::validate_bind`] start-up check.
 #[derive(Debug, thiserror::Error)]
 pub enum AdminBindError {
-    /// Non-loopback bind without `allow_non_loopback`. A hard startup exit, so the admin surface
-    /// cannot be exposed silently.
+    /// Non-loopback bind without `allow_non_loopback`; a hard startup exit, never a silent expose.
     #[error(
         "refusing to bind admin HTTP listener to non-loopback address {addr}: set \
          [admin].allow_non_loopback = true to override"
@@ -23,8 +20,7 @@ pub enum AdminBindError {
         addr: SocketAddr,
     },
 
-    /// `allow_non_loopback` without a token hash — public bind plus no auth is an open admin
-    /// surface.
+    /// `allow_non_loopback` without a token hash — public bind plus no auth is an open admin surface.
     #[error(
         "refusing to bind admin HTTP listener to non-loopback address {addr} without \
          [admin].api_token_hash set"
@@ -67,11 +63,7 @@ impl AdminTokenHash {
         Self(out)
     }
 
-    /// Decode a 64-char hex digest.
-    ///
-    /// # Errors
-    ///
-    /// `Err(())` unless the input is exactly 64 hex chars; the caller renders the config message.
+    /// Decode a 64-char hex digest; `Err(())` unless the input is exactly 64 hex chars.
     #[allow(clippy::result_unit_err)]
     pub fn from_hex(hex: &str) -> Result<Self, ()> {
         if hex.len() != 64 {
@@ -96,8 +88,7 @@ impl AdminTokenHash {
 
 impl std::fmt::Debug for AdminTokenHash {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Never render the digest: it is still a verification credential, and routine logging
-        // invites grep-then-reuse. Enforced by `debug_does_not_print_digest_bytes`.
+        // Never render the digest — it is a verification credential and logging invites grep-then-reuse.
         f.debug_struct("AdminTokenHash").finish_non_exhaustive()
     }
 }
@@ -117,8 +108,7 @@ pub struct AdminAuthGate {
 }
 
 impl AdminAuthGate {
-    /// Build a gate. `None` disables token enforcement, leaving the loopback bind guard as the
-    /// only defense — which is why [`Self::validate_bind`] refuses non-loopback without a token.
+    /// Build a gate; `None` disables token enforcement, leaving only the loopback bind guard.
     #[must_use]
     pub const fn new(expected: Option<AdminTokenHash>) -> Self {
         Self { expected }
@@ -130,12 +120,8 @@ impl AdminAuthGate {
         self.expected.is_some()
     }
 
-    /// Authorize on the verbatim `Authorization` header value, or `None` when absent.
-    ///
-    /// # Errors
-    ///
-    /// [`AdminAuthError`]. With no token configured EVERY request is allowed, so the bind must be
-    /// loopback-only — see [`Self::validate_bind`].
+    /// Authorize on the verbatim `Authorization` header value, or `None` when absent. With no token
+    /// configured EVERY request is allowed, so the bind must be loopback-only.
     pub fn authorize(&self, header: Option<&str>) -> Result<(), AdminAuthError> {
         let Some(expected) = self.expected.as_ref() else {
             return Ok(());
@@ -158,8 +144,7 @@ impl AdminAuthGate {
         }
     }
 
-    /// Refuse to start an admin listener that would be exposed without authentication. Call once
-    /// before binding. Inputs are flat to keep this crate independent of lb-config.
+    /// Refuse to start an admin listener exposed without authentication; call once before binding.
     pub fn validate_bind(
         bind: SocketAddr,
         allow_non_loopback: bool,

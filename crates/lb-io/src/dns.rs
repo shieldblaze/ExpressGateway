@@ -1,11 +1,8 @@
 //! DNS re-resolver with positive + negative caching and Pingora-style singleflight.
-//!
-//! KNOWN LIMITATION: `std::net::ToSocketAddrs` does not expose TTLs, so the positive cache is
-//! bounded by a flat `positive_ttl_cap` rather than the record's actual TTL. Honouring real TTLs
-//! means swapping the backend (e.g. `hickory-resolver`) behind this same API.
-//!
-//! A FAILED background refresh deliberately leaves the existing value in place until its natural
-//! expiry — otherwise a flaky resolver flips a healthy pool into a negative-cache storm.
+//! KNOWN LIMITATION: `ToSocketAddrs` exposes no TTLs, so the positive cache is bounded by a flat
+//! `positive_ttl_cap`; honouring real TTLs means swapping the backend behind this same API.
+//! A FAILED background refresh leaves the existing value until natural expiry — otherwise a flaky
+//! resolver flips a healthy pool into a negative-cache storm.
 
 use std::hash::{Hash, Hasher};
 use std::io;
@@ -205,8 +202,7 @@ impl DnsResolver {
 
         // An already-initialized-but-expired cell cannot be refilled, so it must be REPLACED.
         if entry.value.initialized() && entry.is_expired(now) {
-            // Two tasks can both see the stale entry and both refresh; the writes are idempotent
-            // and yield the same answer, so the duplicate lookup is the only cost.
+            // Two tasks may both refresh; the writes are idempotent, so a duplicate lookup is the cost.
             let fresh = Arc::new(CacheEntry::new());
             self.inner.cache.insert(key.clone(), fresh.clone());
             return self.fill_and_return(&fresh, hostname, port).await;
@@ -269,8 +265,7 @@ impl DnsResolver {
         }
     }
 
-    /// Spawn the periodic re-resolve task; abort the handle on shutdown. A second call returns a
-    /// sentinel handle that exits immediately — only one refresher runs per resolver.
+    /// Spawn the periodic re-resolve task; a second call returns a handle that exits immediately.
     #[must_use]
     pub fn spawn_background_refresh(&self, every: Duration) -> JoinHandle<()> {
         let started = self.inner.refresh_running.compare_exchange(
@@ -307,8 +302,7 @@ impl DnsResolver {
 }
 
 fn io_err_to_dns(hostname: &str, err: &io::Error) -> DnsError {
-    // `getaddrinfo` reports NXDOMAIN as ErrorKind::Other with a "failed to lookup" message, so
-    // the text is the only discriminator available.
+    // `getaddrinfo` reports NXDOMAIN as ErrorKind::Other, so the message text is the only discriminator.
     let msg = err.to_string();
     let looks_like_nxdomain = msg.contains("failed to lookup address information")
         || msg.contains("Name or service not known")

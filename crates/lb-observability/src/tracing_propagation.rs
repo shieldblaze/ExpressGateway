@@ -1,11 +1,6 @@
-//! W3C trace-context propagation (<https://www.w3.org/TR/trace-context/>).
-//!
-//! Version-00 wire format: `00-<trace-id 32 hex>-<parent-id 16 hex>-<flags 2 hex>`.
-//!
-//! Propagation stays compiled in even when the `otlp` exporter feature is off, so headers are
-//! still extracted and re-injected on a build that exports nothing.
-//!
-//! Span names are built via [`span_name`] so emitters across crates cannot drift.
+//! W3C trace-context propagation (<https://www.w3.org/TR/trace-context/>), version-00 wire format
+//! `00-<trace-id 32 hex>-<parent-id 16 hex>-<flags 2 hex>`. Propagation stays compiled in even when
+//! the `otlp` feature is off, so headers are extracted and re-injected on a build exporting nothing.
 
 /// W3C `traceparent` header name (lower-case canonical form).
 pub const TRACEPARENT_HEADER: &str = "traceparent";
@@ -60,7 +55,6 @@ impl TraceContext {
         let mut s = String::with_capacity(55);
         s.push_str("00-");
         for b in self.trace_id {
-            // hex with no_alloc — two chars per byte.
             s.push(hex_nibble(b >> 4));
             s.push(hex_nibble(b & 0x0f));
         }
@@ -97,8 +91,8 @@ const fn hex_nibble(n: u8) -> char {
     }
 }
 
-/// Parse a `traceparent`; `None` on ANY deviation from version-`00`. W3C §3.2 requires the
-/// caller to forward the original bytes unchanged even when this returns `None`.
+/// Parse a `traceparent`; `None` on ANY deviation from version-`00`. W3C §3.2 still requires the
+/// caller to forward the original bytes unchanged.
 #[must_use]
 pub fn parse_traceparent(value: &str) -> Option<TraceContext> {
     // Format: 2-32-16-2 = 52 hex chars + 3 dashes = 55.
@@ -170,8 +164,7 @@ pub trait HeaderBag {
     fn remove(&mut self, name: &str);
 }
 
-/// Extract the inbound context, returning the raw bytes alongside it so an unparseable header can
-/// still be forwarded verbatim.
+/// Extract the inbound context, returning the raw bytes so an unparseable header still forwards.
 #[must_use]
 pub fn extract_parent<H: HeaderBag + ?Sized>(headers: &H) -> ExtractedContext<'_> {
     let traceparent_raw = headers.get_first(TRACEPARENT_HEADER);
@@ -252,7 +245,6 @@ mod tests {
         let ctx = parse_traceparent(raw).expect("valid traceparent");
         assert!(ctx.sampled());
         assert_eq!(ctx.flags, 0x01);
-        // Trace-id last 4 bytes
         assert_eq!(&ctx.trace_id[12..], &[0x1c, 0x80, 0x31, 0x9c]);
     }
 
@@ -260,19 +252,15 @@ mod tests {
     fn rejects_invalid_traceparent_shapes() {
         assert!(parse_traceparent("").is_none());
         assert!(parse_traceparent("garbage").is_none());
-        // Wrong delimiter positions.
         assert!(
             parse_traceparent("00x0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01").is_none()
         );
-        // Version 0xff forbidden.
         assert!(
             parse_traceparent("ff-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01").is_none()
         );
-        // All-zero trace id.
         assert!(
             parse_traceparent("00-00000000000000000000000000000000-b7ad6b7169203331-01").is_none()
         );
-        // All-zero parent id.
         assert!(
             parse_traceparent("00-0af7651916cd43dd8448eb211c80319c-0000000000000000-01").is_none()
         );
@@ -323,7 +311,6 @@ mod tests {
         let ex = extract_parent(&headers);
         // Downstream OTel collectors cap tracestate at 512 bytes; drop rather than truncate.
         assert!(ex.tracestate_raw.is_none());
-        // traceparent still parses.
         assert!(ex.parsed.is_some());
     }
 
