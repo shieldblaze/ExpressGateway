@@ -1,26 +1,9 @@
-//! SESSION 16 / Mode B — B2 MINIMAL smoke test (author's self-check).
+//! Mode B — B2 minimal smoke: the bidirectional raw-STREAM relay carries ONE
+//! bidi stream's small binary payload byte-identically through the full wire
+//! path (client → LB → echo backend → LB → client). Deliberately narrow: the
+//! multi-stream, bounded-window and cancellation proofs are the verifier's.
 //!
-//! Scope is deliberately narrow (author ≠ verifier): this proves that
-//! the B2 bidirectional raw-STREAM relay carries ONE bidi stream's small
-//! binary payload byte-identically through the full wire path —
-//!
-//!   real quiche CLIENT  ⇄  Mode B actor (`run_raw_proxy_actor_for_test`)
-//!                          ⇄  real quiche ECHO backend
-//!
-//! — i.e. client→LB→backend→LB→client. It does NOT author the full
-//! multi-stream proof, the bounded-window/backpressure proof, or the
-//! cancellation (reset/stop) proof — those are the VERIFIER's (plan §5 /
-//! increments B2, B3, B5).
-//!
-//! The mechanism under test: the client opens bidi stream 0, sends a
-//! 4 KiB pseudo-random payload + FIN. The actor's `relay_streams` copies
-//! it client→upstream (identity stream-ID 0). The backend echoes every
-//! received byte back on the SAME stream 0 + FIN. The actor relays it
-//! upstream→client. The client reads stream 0 to FIN and the bytes MUST
-//! equal what it sent.
-//!
-//! Driven with `--features test-gauges` so the `run_raw_proxy_actor_for_test`
-//! hook (gated `#[cfg(any(test, feature = "test-gauges"))]`) is reachable.
+//! Driven with `--features test-gauges` so the test hook is reachable.
 
 #![cfg(feature = "test-gauges")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -51,9 +34,7 @@ const RELAY_BUDGET: Duration = Duration::from_secs(8);
 /// client-initiated bidi stream; identity-mapped both legs).
 const STREAM_ID: u64 = 0;
 
-// ─────────────────────────────────────────────────────────────────────
-// Cert plumbing (mirrors s16_b1_two_connections.rs).
-// ─────────────────────────────────────────────────────────────────────
+// Cert plumbing.
 
 static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -186,10 +167,8 @@ fn upstream_config_factory(
     })
 }
 
-/// A throwaway BACKEND quiche server that accepts ONE connection and
-/// ECHOes any received STREAM bytes back on the SAME stream id. When it
-/// sees FIN on a stream it has fully echoed, it sends FIN back. This is
-/// the far end of the relay: client→LB→**backend (echo)**→LB→client.
+/// A throwaway BACKEND that accepts ONE connection and ECHOes received STREAM
+/// bytes back on the SAME stream id, FINing once it has fully echoed a FIN.
 fn spawn_echo_backend(certs: &TestCerts) -> SocketAddr {
     let std_sock = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     std_sock.set_nonblocking(true).unwrap();
@@ -407,10 +386,9 @@ async fn s16_b2_one_bidi_stream_round_trips_byte_identical() {
     }
     assert_eq!(client_conn.application_proto(), H3_ALPN);
 
-    // 5) The client opens bidi stream 0 and sends the payload + FIN
-    //    BEFORE handing off — so the bytes are buffered in quiche and the
-    //    relay forwards them once the upstream leg is up. (A short send is
-    //    fine: the client-driver below keeps flushing.)
+    // The client sends payload + FIN BEFORE handing off, so the bytes are
+    // buffered in quiche and the relay forwards them once the upstream leg is
+    // up. A short send is fine — the client driver keeps flushing.
     let payload = make_payload(4096);
     let sent = client_conn
         .stream_send(STREAM_ID, &payload, true)
@@ -449,9 +427,8 @@ async fn s16_b2_one_bidi_stream_round_trips_byte_identical() {
         }
     });
 
-    // 7) Client driver: keep the client live (flush + recv) and collect
-    //    the echoed bytes off stream 0 until FIN. Returns the received
-    //    payload via a oneshot.
+    // Client driver: keep the client live and collect the echoed bytes until
+    // FIN, reporting via a oneshot.
     let (done_tx, done_rx) = tokio::sync::oneshot::channel::<Vec<u8>>();
     let client_cancel = cancel.clone();
     let client_driver = tokio::spawn(async move {
@@ -560,30 +537,22 @@ async fn s16_b2_one_bidi_stream_round_trips_byte_identical() {
     let _ = tokio::time::timeout(Duration::from_secs(5), actor).await;
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // S21 — N concurrent bidi streams through the Mode B relay.
 //
-// F-S20-1 (S21): the S20 soak reported a "Mode B 4-concurrent-stream relay
-// stall" (the 4th stream, sid12, wedged at 1212/4096). Measure-first (S21)
-// PROVED that was a LOAD-CLIENT artifact, NOT a gateway defect: quiche
-// `stream_send` is bounded by the connection's send capacity (cwnd-aware) and
-// returns a PARTIAL write; the soak client called `stream_send` once per
-// stream and ignored the partial return, so once the initial congestion
-// window (~10 packets ≈ 13.5 KB) was spent on the first streams, the last
-// stream's tail + FIN were never sent — the client waited forever for an echo
-// of bytes it never sent. The relay was always correct.
+// F-S20-1: the S20 soak reported a "4-concurrent-stream relay stall", which
+// measurement PROVED to be a LOAD-CLIENT artifact, NOT a gateway defect.
+// `stream_send` is bounded by the connection's send capacity and returns a
+// PARTIAL write; the soak client called it once per stream and ignored the
+// partial return, so once the initial congestion window was spent the last
+// stream's tail + FIN were never sent and it waited forever for an echo of
+// bytes it never sent. The relay was always correct.
 //
-// These tests are the durable GUARD that the relay handles N truly-concurrent
-// fully-sent streams. `full_send=true` is the correct client contract (re-send
-// the remainder + FIN as cwnd frees); `full_send=false` reproduces the S20
-// single-shot bug as a LOAD-BEARING NEGATIVE CONTROL (it must leave a stream
-// incomplete — proving the positive tests genuinely exercise concurrency and
-// that the fix is in the CLIENT, not the relay).
-// ─────────────────────────────────────────────────────────────────────
+// These tests are the durable guard. `full_send=true` is the correct client
+// contract; `full_send=false` reproduces the S20 bug as a LOAD-BEARING NEGATIVE
+// CONTROL that must leave a stream incomplete.
 
-/// Drive `n_streams` concurrent client bidi streams (ids 0,4,8,…) through the
-/// Mode B relay and return how many completed a byte-identical echo + FIN
-/// within `RELAY_BUDGET`. Asserts byte-identity for every COMPLETED stream.
+/// Drive `n_streams` concurrent client bidi streams through the relay and
+/// return how many completed a byte-identical echo + FIN within budget.
 async fn run_concurrent_relay(n_streams: u64, payload_len: usize, full_send: bool) -> usize {
     let certs = generate_loopback_certs();
     let backend_addr = spawn_echo_backend(&certs);
@@ -793,11 +762,11 @@ async fn run_concurrent_relay(n_streams: u64, payload_len: usize, full_send: boo
     done.len()
 }
 
-/// F-S20-1 regression: FOUR concurrent bidi streams (the exact count the S20
-/// soak flagged) all relay byte-identically with a correct full-send client.
-/// 4 × 4096 = 16 KB > the ~13.5 KB initial congestion window, so the 4th
-/// stream's first `stream_send` IS a partial write — the precise condition
-/// the broken single-shot client mishandled.
+/// F-S20-1 regression: FOUR concurrent bidi streams — the exact count the soak
+/// flagged — all relay byte-identically with a correct full-send client. The
+/// total exceeds the initial congestion window, so the 4th stream's first
+/// `stream_send` IS a partial write: the precise condition the broken
+/// single-shot client mishandled.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn s21_four_concurrent_bidi_streams_all_echo() {
     let completed = run_concurrent_relay(4, 4096, true).await;
@@ -819,12 +788,11 @@ async fn s21_eight_concurrent_bidi_streams_all_echo() {
     );
 }
 
-/// LOAD-BEARING NEGATIVE CONTROL: the S20 single-shot send (no re-push of the
-/// partial-write remainder) with 4 streams leaves at LEAST one stream
-/// incomplete — reproducing the F-S20-1 symptom and proving (a) the positive
-/// tests above genuinely exercise the multi-stream/partial-write condition,
-/// and (b) the defect was the CLIENT's send loop, not the relay. If this ever
-/// completed all 4, the positive tests would be vacuous.
+/// LOAD-BEARING NEGATIVE CONTROL: the single-shot send with no re-push of the
+/// partial-write remainder must leave at LEAST one stream incomplete,
+/// reproducing the F-S20-1 symptom and proving the defect was the CLIENT's send
+/// loop, not the relay. If this ever completed all 4, the positive tests would
+/// be vacuous.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn s21_singleshot_send_wedges_a_stream_negative_control() {
     let completed = run_concurrent_relay(4, 4096, false).await;

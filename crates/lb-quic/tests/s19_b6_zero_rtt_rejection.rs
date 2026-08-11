@@ -1,55 +1,25 @@
-//! SESSION 19 / Mode B — B6 0-RTT REJECTION security proof
-//! (author ≠ verifier; this is the verifier's independent proof).
+//! Mode B — the 0-RTT REJECTION security proof, by construction AND on the wire.
 //!
-//! Owner ruling: Mode B rejects client 0-RTT / early data in v1. This file
-//! PROVES that — by construction AND on the wire — rather than asserting it.
+//! BY CONSTRUCTION: `enable_early_data()` is NEVER called on any client-facing
+//! server config (verified absent from all non-test source). A quiche SERVER
+//! that never calls it leaves `max_early_data_size = 0`, so it issues tickets
+//! WITHOUT the early-data marker and cannot accept 0-RTT — early data is
+//! impossible. (`ZeroRttReplayGuard` remains defence-in-depth against
+//! retry-token replay and is NOT removed.)
 //!
-//! ## BY CONSTRUCTION (cited; not re-checked at runtime)
+//! ON THE WIRE: connection #1 completes a full 1-RTT handshake against an
+//! LB-server built exactly like production w.r.t. that property and captures
+//! the resumption ticket; connection #2 sets the session with
+//! `enable_early_data()` ON and attempts to `stream_send` before establishment.
+//! Asserted: the resuming client NEVER reports `is_in_early_data()` (BoringSSL
+//! never opens the 0-RTT epoch, since the ticket carries no early-data
+//! capability); the connection completes via FULL 1-RTT with `is_resumed()`
+//! confirming the ticket WAS used, so this is not a vacuous "no ticket" pass;
+//! and the early bytes reach the peer ONLY after the handshake.
 //!
-//! `enable_early_data()` is NEVER called on any client-facing server config:
-//! * `crates/lb-quic/src/listener.rs:426` `build_server_config` (the
-//!   production client-facing config) builds a `quiche::Config` and never
-//!   calls `enable_early_data` (verified absent from all non-test source).
-//!
-//! A quiche SERVER that never calls `enable_early_data()` leaves
-//! `max_early_data_size = 0`, so it issues session tickets WITHOUT the
-//! early-data marker and cannot accept 0-RTT — early data is impossible by
-//! construction. (`ZeroRttReplayGuard`, `router.rs:227`, remains
-//! defence-in-depth against retry-token replay; it is NOT removed.)
-//!
-//! ## ON THE WIRE (this test — quiche 0.28 mechanism)
-//!
-//! The LB-as-server here is built by `lb_server_config`, which — exactly
-//! like production `build_server_config` — does NOT call
-//! `enable_early_data`. A real client that DOES enable early data attempts
-//! 0-RTT against it:
-//!
-//! 1. Connection #1 completes a FULL 1-RTT handshake against the LB server
-//!    and captures `client.session()` (the resumption ticket the LB issued).
-//! 2. Connection #2 (fresh client, `enable_early_data()` ON) calls
-//!    `set_session(captured)` BEFORE any packet, then — before
-//!    `is_established()` — attempts to `stream_send` early data.
-//! 3. ASSERTED ON THE WIRE:
-//!    * the resuming client NEVER reports `is_in_early_data() == true`
-//!      (the LB's ticket carries no early-data capability, so BoringSSL never
-//!      opens the 0-RTT epoch on the client) — i.e. NO 0-RTT is offered/acted
-//!      on before handshake completion;
-//!    * the connection completes via FULL 1-RTT (`is_established()`), and
-//!      `is_resumed()` confirms the ticket WAS used for resumption (so the
-//!      ticket path is genuinely exercised — this is not a vacuous "no
-//!      ticket" pass);
-//!    * the early bytes the client queued are delivered to the peer ONLY
-//!      after the handshake completes — never as 0-RTT.
-//!
-//! Honest scope note: the wire assertion is made against an LB-server config
-//! that is constructed identically to production `build_server_config`
-//! w.r.t. the early-data property (no `enable_early_data`). The by-
-//! construction citation is what binds the production path; this test
-//! demonstrates the resulting wire behaviour end-to-end with a willing 0-RTT
-//! client.
-//!
-//! Driven with `--features test-gauges` for parity with the other B6 proofs
-//! (this particular test does not need the actor hook, but stays in-family).
+//! Honest scope: the by-construction citation is what binds the production
+//! path; this test demonstrates the resulting wire behaviour with a willing
+//! 0-RTT client.
 
 #![cfg(feature = "test-gauges")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -67,18 +37,14 @@ const MAX_UDP: usize = 65_535;
 const HANDSHAKE_BUDGET: Duration = Duration::from_secs(6);
 /// The client bidi stream the resuming client tries to send "early" on.
 const EARLY_STREAM_ID: u64 = 0;
-/// A FIXED session-ticket key shared by both LB-server configs so a ticket
-/// issued on connection #1 is decryptable on connection #2 — i.e. resumption
-/// genuinely happens. (quiche auto-rotates a per-`Config` key otherwise, so a
-/// fresh `Config` cannot decrypt a prior connection's ticket; the same is
-/// true of production's per-accept config factory. Pinning the key here lets
-/// the proof EXERCISE the resumption path so "no early data" is non-vacuous.
-/// BoringSSL ticket key is 48 bytes.)
+/// A FIXED session-ticket key shared by both LB-server configs, so a ticket
+/// issued on connection #1 is decryptable on #2 and resumption GENUINELY
+/// happens. quiche auto-rotates a per-`Config` key otherwise, so a fresh
+/// `Config` could not decrypt a prior ticket — pinning it makes the "no early
+/// data" result non-vacuous. (BoringSSL ticket keys are 48 bytes.)
 const SESSION_TICKET_KEY: [u8; 48] = [0xa5; 48];
 
-// ─────────────────────────────────────────────────────────────────────
 // Cert plumbing.
-// ─────────────────────────────────────────────────────────────────────
 
 static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -135,11 +101,9 @@ fn random_scid() -> [u8; quiche::MAX_CONN_ID_LEN] {
     scid
 }
 
-/// CLIENT-facing SERVER config — constructed IDENTICALLY to production
-/// `build_server_config` (`crates/lb-quic/src/listener.rs:426`) w.r.t. the
-/// early-data property: it loads the cert/key + ALPN + transport params and
-/// — crucially — NEVER calls `enable_early_data()`. This is the LB-as-server
-/// the 0-RTT attempt is made against.
+/// CLIENT-facing SERVER config, constructed IDENTICALLY to production w.r.t.
+/// the early-data property: cert/key + ALPN + transport params, and crucially
+/// NEVER `enable_early_data()`.
 fn lb_server_config(certs: &TestCerts) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
     cfg.set_application_protos(&[H3_ALPN]).unwrap();
@@ -160,16 +124,14 @@ fn lb_server_config(certs: &TestCerts) -> quiche::Config {
     // Pin the session-ticket key so connection #2 can decrypt connection #1's
     // ticket and resumption genuinely occurs (see SESSION_TICKET_KEY docs).
     cfg.set_ticket_key(&SESSION_TICKET_KEY).unwrap();
-    // NOTE: deliberately NO `cfg.enable_early_data()` — mirrors production
-    // `build_server_config` (listener.rs). With early data disabled the
-    // server issues 1-RTT-resumption tickets only (max_early_data_size = 0).
+    // Deliberately NO `enable_early_data()`, mirroring production. With it
+    // disabled the server issues 1-RTT-resumption tickets only.
     cfg
 }
 
-/// The real CLIENT config. Verifies the LB cert AND — to make the 0-RTT
-/// attempt a genuine one — ENABLES early data on the client. A willing 0-RTT
-/// client is the adversary here: the proof is that even with the client
-/// asking, the LB-as-server (no early data) gives it no 0-RTT.
+/// The real CLIENT config: verifies the LB cert AND ENABLES early data, so the
+/// 0-RTT attempt is genuine. A willing 0-RTT client is the adversary — the
+/// proof is that even so, the LB gives it no 0-RTT.
 fn client_config_early_data(certs: &TestCerts) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
     cfg.set_application_protos(&[H3_ALPN]).unwrap();
@@ -218,10 +180,8 @@ async fn try_recv_one(
     }
 }
 
-/// Drive a client⇄server pair to BOTH established, watching the client for any
-/// `is_in_early_data() == true` (records it if seen). Returns `true` once both
-/// are established. `early_seen` is set if the client ever entered the 0-RTT
-/// epoch (which would mean the server accepted/enabled early data).
+/// Drive a client⇄server pair to established, recording whether the client ever
+/// entered the 0-RTT epoch (which would mean the server enabled early data).
 #[allow(clippy::too_many_arguments)]
 async fn drive_to_established(
     client_conn: &mut quiche::Connection,
@@ -395,18 +355,15 @@ async fn s19_b6_lb_server_rejects_client_zero_rtt_early_data() {
         .set_session(&session)
         .expect("set_session must accept the LB-issued ticket");
 
-    // ATTEMPT to send early (0-RTT) data BEFORE the handshake completes. If
-    // the LB had enabled early data, `is_in_early_data()` would open and this
-    // payload would ride a 0-RTT packet. Against a no-early-data LB it can
-    // only be sent after 1-RTT establishment.
+    // ATTEMPT to send early (0-RTT) data BEFORE the handshake completes. Had
+    // the LB enabled early data this payload would ride a 0-RTT packet.
     let early_payload = b"ZERO-RTT-EARLY-DATA-ATTEMPT".to_vec();
     assert!(
         !client2.is_established(),
         "fixture: must attempt the early send BEFORE establishment"
     );
-    // The stream_send may be buffered by quiche regardless of epoch; the
-    // load-bearing question is WHICH epoch carries it (0-RTT vs 1-RTT), which
-    // we observe via is_in_early_data() during the handshake drive.
+    // quiche may buffer the send regardless of epoch; the load-bearing question
+    // is WHICH epoch carries it, observed via `is_in_early_data()`.
     let _ = client2.stream_send(EARLY_STREAM_ID, &early_payload, true);
 
     // Drive #2 to established, watching for ANY early-data epoch on either end.
@@ -433,9 +390,7 @@ async fn s19_b6_lb_server_rejects_client_zero_rtt_early_data() {
         server_early_2,
     );
 
-    // (1) The resuming client NEVER entered the 0-RTT epoch — the LB issued a
-    //     ticket WITHOUT early-data capability, so BoringSSL never opened
-    //     0-RTT. No early data was offered/acted on before the handshake.
+    // (1) The resuming client NEVER entered the 0-RTT epoch.
     assert!(
         !early_seen_2,
         "0-RTT REJECTION: the resuming client MUST NOT enter is_in_early_data() \
@@ -455,9 +410,8 @@ async fn s19_b6_lb_server_rejects_client_zero_rtt_early_data() {
          before its handshake completes (it never acted on early data)"
     );
 
-    // (3) The connection still completed via FULL 1-RTT, AND it genuinely used
-    //     the ticket (is_resumed) — so this is not a vacuous "no ticket" pass:
-    //     a real resumption happened, and it was 1-RTT, not 0-RTT.
+    // (3) It completed via FULL 1-RTT AND genuinely used the ticket, so this
+    //     is a real resumption that was 1-RTT, not a vacuous no-ticket pass.
     assert!(
         client2.is_established() && server2.is_established(),
         "the connection must complete via full 1-RTT"
@@ -468,9 +422,7 @@ async fn s19_b6_lb_server_rejects_client_zero_rtt_early_data() {
          0-RTT-capable path was genuinely exercised and still refused early data"
     );
 
-    // (4) Only AFTER establishment can the early bytes reach the peer — never
-    //     as 0-RTT. Drain the server post-establishment and confirm it now
-    //     receives the bytes the client queued "early".
+    // (4) Only AFTER establishment do the early bytes reach the peer.
     let mut rd = vec![0u8; MAX_UDP];
     let mut server_got: Vec<u8> = Vec::new();
     let drain_deadline = tokio::time::Instant::now() + Duration::from_secs(3);

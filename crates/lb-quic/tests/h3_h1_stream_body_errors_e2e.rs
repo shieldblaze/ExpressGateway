@@ -1,35 +1,18 @@
-//! SESSION 2 / P1-B — H3→H1 request-body ERROR PATHS e2e.
+//! H3→H1 request-body ERROR PATHS e2e, on the P1-A real-listener harness. Each
+//! case asserts the REAL outcome, never deadline-as-pass:
 //!
-//! Builds on the P1-A real-QUIC-listener harness
-//! (`h3_h1_stream_body_e2e.rs`). Covers the three approved P1-B error
-//! paths, each asserting the *real* outcome (no deadline-as-pass):
+//!   * T1 — CLIENT CANCELS MID-BODY: HEADERS + one partial DATA chunk (no
+//!     fin), then a QUIC RESET_STREAM. The upstream must NOT observe a
+//!     completed request (no chunked terminator, no full Content-Length body),
+//!     and a SECOND request through the SAME live listener must still complete
+//!     — proving no state corruption or map leak.
+//!   * T2 — UPSTREAM RESETS MID-BODY → the client must DECODE `:status 502`.
+//!   * T3 — OVERSIZED AFTER PARTIAL CHUNKED SEND: with egress already begun,
+//!     breaching the cap must give the client 413 AND abort the upstream — the
+//!     backend sees the early chunk bytes but NEVER the chunked terminator, so
+//!     the partial request is not completable (smuggling guard).
 //!
-//!   * P1B-T1 — CLIENT CANCELS MID-BODY. A real quiche H3 client sends
-//!     HEADERS + one partial DATA chunk (NO fin), then issues a QUIC
-//!     RESET_STREAM (`stream_shutdown(Write,..)`) before fin. The mock
-//!     upstream must NOT observe a completed request (no chunked
-//!     `0\r\n\r\n` terminator, not a full Content-Length body). The
-//!     actor must not panic and must not leak per-stream state: a
-//!     SECOND independent request driven through the SAME live listener
-//!     afterwards completes normally (proves no state corruption / no
-//!     map leak / actor still healthy).
-//!
-//!   * P1B-T2 — UPSTREAM RESETS MID-BODY → 502. The mock backend reads
-//!     part of the streamed body then abruptly RSTs/closes the TCP
-//!     socket before responding. The H3 client must decode `:status
-//!     502` and the call must complete well within the deadline (the
-//!     assertion is a real 502 decode, not a timeout).
-//!
-//!   * P1B-T3 — OVERSIZED AFTER PARTIAL CHUNKED SEND. With chunked
-//!     egress already begun (≥2 DATA chunks written to the upstream
-//!     socket), the cap is breached → poll_h3 emits `ReqBodyEvent::
-//!     Reset`. The client must get H3 `413` AND the upstream must be
-//!     aborted: the backend sees the early chunk bytes but NEVER the
-//!     `0\r\n\r\n` chunked terminator, so the partial request is not
-//!     completable (smuggling / cache-poisoning guard).
-//!
-//! Every request body embeds the non-UTF-8 bytes 0xFF 0x00 0x80 so a
-//! lossy/string conversion anywhere would corrupt it.
+//! Every body embeds the non-UTF-8 bytes 0xFF 0x00 0x80.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -54,9 +37,8 @@ const TEST_SNI: &str = "expressgateway.test";
 const MAX_UDP: usize = 65_535;
 const REQUEST_AUTHORITY: &str = "h3-stream-err.test:4433";
 
-/// SESSION 24 / INC-3: decode a RESPONSE QPACK field block emitted by
-/// the migrated wire egress (quiche::h3 encoder Huffman-encodes values);
-/// the hand-rolled `lb_h3_testcodec::QpackDecoder` is raw-only.
+/// Decode a RESPONSE QPACK field block with a Huffman-capable decoder; the
+/// hand-rolled `lb_h3_testcodec::QpackDecoder` is raw-only.
 #[allow(dead_code)]
 fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, String> {
     use quiche::h3::NameValue;
@@ -225,9 +207,8 @@ fn build_data_frame(payload: &[u8]) -> Vec<u8> {
     .to_vec()
 }
 
-/// Owns the client-side UDP buffers + decoded-response state so the
-/// pump is a single-receiver method (keeps the arg count sane and the
-/// call sites trivial).
+/// Owns the client-side UDP buffers + decoded-response state so the pump is a
+/// single-receiver method.
 struct ClientPump {
     in_buf: Vec<u8>,
     out_buf: Vec<u8>,
@@ -249,9 +230,8 @@ impl ClientPump {
         }
     }
 
-    /// Flush queued egress, recv one UDP datagram (bounded wait), decode
-    /// any H3 response frames into `self.status`/`self.body`. Returns
-    /// true once a final response status is fully known.
+    /// Flush egress, recv one datagram (bounded wait), decode any response
+    /// frames. Returns true once a final status is known.
     async fn pump_once(
         &mut self,
         conn: &mut quiche::Connection,
@@ -287,18 +267,13 @@ impl ClientPump {
             let readable: Vec<u64> = conn.readable().collect();
             for sid in readable {
                 let mut c = [0u8; 8192];
-                // SESSION 24 / INC-2: the migrated gateway terminates H3 via
-                // `quiche::h3::Connection`, which (per RFC 9114) opens
-                // server-initiated control + QPACK encoder/decoder
-                // UNIDIRECTIONAL streams. This hand-rolled lb_h3_testcodec client only
-                // understands response frames on the request BIDI stream
-                // (id 0); it drains-and-discards every other stream (as the
-                // `drive_h3_get`/`drive_h3_body_request` clients in the
-                // sibling suites and INC-1 Exp 3's interop client already
-                // do). Feeding a uni-stream's stream-type/QPACK bytes into
+                // The migrated gateway terminates H3 via `quiche::h3`, which
+                // opens server-initiated control + QPACK UNIDIRECTIONAL streams
+                // (RFC 9114). This hand-rolled client only understands response
+                // frames on the request BIDI stream, so it drains-and-discards
+                // every other stream: feeding uni-stream bytes into
                 // `decode_frame` would mis-read them as a malformed HEADERS
-                // frame ("qpack decode: incomplete input" — the pre-fix
-                // failure on these two tests).
+                // frame.
                 if sid != 0 {
                     while conn.stream_recv(sid, &mut c).is_ok() {}
                     continue;
@@ -317,10 +292,8 @@ impl ClientPump {
                 match decode_frame(&self.rx_tail, 1 << 20) {
                     Ok((H3Frame::Headers { header_block }, c)) => {
                         self.rx_tail.drain(..c);
-                        // SESSION 24 / INC-3: Huffman-capable QPACK
-                        // decode of the quiche-encoded wire response head
-                        // (the buffered `h3_to_h1_stream` 413 check below
-                        // still uses the raw lb_h3_testcodec decoder).
+                        // Huffman-capable decode of the quiche-encoded head;
+                        // the 413 check below still uses the raw decoder.
                         let hdrs = decode_resp_qpack(&header_block)?;
                         for (n, v) in hdrs {
                             if n == ":status" {
@@ -438,28 +411,19 @@ async fn drive_full_request(
     }
 }
 
-// ---------------------------------------------------------------------
-// P1B-T1 — CLIENT CANCELS MID-BODY.
-//
-// Intent: the H3 client sends HEADERS + ONE partial DATA chunk WITHOUT
-// fin, then resets the request stream (QUIC RESET_STREAM via
-// `stream_shutdown(Write, code)`). The proxy's `drain_body_stream`
-// surfaces `Err(StreamReset)` from `stream_recv`, sends
-// `ReqBodyEvent::Reset` into the body channel, and tears down all
-// per-stream maps. `h3_to_h1_stream` aborts the upstream: it marks the
-// pooled conn non-reusable and returns BEFORE writing the `0\r\n\r\n`
-// chunked terminator. The mock backend therefore NEVER sees a
-// completable request (no terminator). Proof of no state leak / no
-// corruption: a SECOND independent request through the SAME live
-// listener completes normally afterwards.
-// ---------------------------------------------------------------------
+// T1 — CLIENT CANCELS MID-BODY. The client sends HEADERS + ONE partial DATA
+// chunk without fin, then RESET_STREAMs. The proxy surfaces `StreamReset`,
+// emits a body-channel Reset, tears down the per-stream maps, and aborts the
+// upstream BEFORE writing the chunked terminator — so the backend NEVER sees a
+// completable request. Proof of no state leak: a SECOND independent request
+// through the SAME live listener completes normally afterwards.
 #[tokio::test]
 async fn p1b_t1_client_cancels_mid_body_upstream_not_completed_and_no_leak() {
     let certs = generate_loopback_certs();
 
-    // Backend that records, for the FIRST connection, whether it ever
-    // saw a completed request (chunked `0\r\n\r\n` terminator) and
-    // whether it saw the cancelled chunk's distinctive marker bytes.
+    // Backend that records, for the FIRST connection, whether it ever saw a
+    // completed request (the chunked terminator) and the cancelled chunk's
+    // distinctive marker bytes.
     let saw_terminator = Arc::new(AtomicUsize::new(0));
     let saw_first_conn = Arc::new(AtomicUsize::new(0));
     let st = saw_terminator.clone();
@@ -539,9 +503,8 @@ async fn p1b_t1_client_cancels_mid_body_upstream_not_completed_and_no_leak() {
         send_all_no_fin(&mut conn, &sock, stream_id, &wire, deadline)
             .await
             .expect("send HEADERS + partial DATA");
-        // Give the proxy a few ticks to forward the head + first chunk
-        // to the backend (so the abort is genuinely MID-body, after
-        // egress began), then RESET_STREAM before fin.
+        // Let the proxy forward the head + first chunk so the abort is
+        // genuinely MID-body, then RESET_STREAM before fin.
         let mut pump = ClientPump::new();
         let spin_until = tokio::time::Instant::now() + Duration::from_millis(400);
         while tokio::time::Instant::now() < spin_until {
@@ -597,16 +560,10 @@ async fn p1b_t1_client_cancels_mid_body_upstream_not_completed_and_no_leak() {
     );
 }
 
-// ---------------------------------------------------------------------
-// P1B-T2 — UPSTREAM RESETS MID-BODY → 502.
-//
-// Intent: the mock backend accepts, reads part of the streamed chunked
-// body, then abruptly RSTs/closes the TCP socket before responding.
-// `h3_to_h1_stream`'s `write_all` to the upstream errors → the
-// `fail502!` path marks the pooled conn non-reusable and returns an H3
-// 502. The H3 client must DECODE `:status 502` (real outcome, asserted
-// well within the deadline — not deadline-as-pass).
-// ---------------------------------------------------------------------
+// T2 — UPSTREAM RESETS MID-BODY → 502. The backend reads part of the streamed
+// body then abruptly RSTs before responding, so the proxy's upstream write
+// errors into the 502 path. The client must DECODE `:status 502` well within
+// the deadline — a real outcome, not deadline-as-pass.
 #[tokio::test]
 async fn p1b_t2_upstream_resets_mid_body_yields_502() {
     let certs = generate_loopback_certs();
@@ -616,12 +573,10 @@ async fn p1b_t2_upstream_resets_mid_body_yields_502() {
     let (ready_tx, ready_rx) = oneshot::channel::<()>();
     let backend_h = tokio::spawn(async move {
         let (mut s, _) = listener_b.accept().await.unwrap();
-        // Read just the head + maybe one chunk, then ABRUPTLY abort the
-        // connection: shut down BOTH directions and drop the socket. The
-        // proxy is mid-stream writing a large (>256 KiB) chunked body —
-        // once the peer is gone, its `write_all` to the upstream (or the
-        // subsequent response read) fails with a broken pipe / reset →
-        // the `fail502!` path fires.
+        // Read just the head + maybe one chunk, then ABRUPTLY abort: shut down
+        // both directions and drop the socket. The proxy is mid-stream writing
+        // a large chunked body, so its next write or the response read fails
+        // with a broken pipe.
         let mut t = [0u8; 1024];
         let _ = tokio::time::timeout(Duration::from_millis(400), s.read(&mut t)).await;
         let _ = ready_tx.send(());
@@ -638,13 +593,11 @@ async fn p1b_t2_upstream_resets_mid_body_yields_502() {
         .expect("handshake");
     let stream_id = 0u64;
 
-    // Chunked egress (no content-length). HEADERS + several DATA frames
-    // + fin so the proxy opens the upstream, writes head + chunk(s),
-    // then hits the RST on a subsequent write or the response read.
+    // Chunked egress (no content-length) so the proxy opens the upstream and
+    // writes head + chunks before hitting the RST.
     let mut wire = build_headers_frame(&[]);
-    // Many sizeable DATA frames (~512 KiB total) so the proxy is still
-    // actively streaming to the upstream when the backend RSTs — its
-    // write_all then fails (kernel send buffer + dead peer) → 502.
+    // Many sizeable DATA frames so the proxy is still actively streaming when
+    // the backend RSTs.
     for f in 0..64u8 {
         let mut chunk = vec![f; 8192];
         chunk[..3].copy_from_slice(NON_UTF8);
