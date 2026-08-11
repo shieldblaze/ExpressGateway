@@ -1,26 +1,13 @@
-//! PROTO-2-11 proof — the per-connection actor's graceful-shutdown
-//! helper (`graceful_h3_shutdown`) must emit an application-layer
-//! `CONNECTION_CLOSE` frame carrying `H3_NO_ERROR = 0x0100` when the
-//! listener's cancellation token fires.
+//! PROTO-2-11 proof — `graceful_h3_shutdown` must emit an application-layer
+//! `CONNECTION_CLOSE` carrying `H3_NO_ERROR = 0x0100` when the listener's
+//! cancellation token fires.
 //!
-//! Coverage strategy:
-//!
-//! 1. Build a server + client `quiche::Connection` with a self-signed
-//!    cert (rcgen), the production HTTP/3 ALPN tokens, and the
-//!    in-tree `lb-quic`'s `LB_QUIC_TEST_SNI` so the handshake reaches
-//!    `is_established()` end-to-end.
-//! 2. Pump packets between two `127.0.0.1` UDP sockets until
-//!    establishment.
-//! 3. Call the exported [`lb_quic::graceful_h3_shutdown`] on the
-//!    server-side `quiche::Connection`.
-//! 4. Drive the client until its `peer_error()` becomes `Some`.
-//! 5. Assert `is_app == true` and `error_code == 0x0100` —
-//!    the bytes that left the server's UDP socket parsed back into a
-//!    proper application-layer CLOSE on the peer.
-//!
-//! The drive logic is intentionally minimal: no streams are opened,
-//! no H3 messages exchanged. PROTO-2-11 only cares that the CLOSE
-//! emission and pump-until-closed semantics are wired up correctly.
+//! Build a real server + client `quiche::Connection` over loopback UDP, pump to
+//! establishment, call the exported helper on the server side, then drive the
+//! client until `peer_error()` is `Some` and assert `is_app == true` with
+//! `error_code == 0x0100` — i.e. the bytes that left the socket parsed back
+//! into a proper application-layer CLOSE on the peer. No streams are opened:
+//! only the CLOSE emission and pump-until-closed semantics are under test.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -73,16 +60,12 @@ fn write_test_cert() -> (CertTempFile, CertTempFile) {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
-    // F-COR-8 (foundation audit, auditor-4 LATENT note): the prior
-    // nonce was `pid * K + subsec_nanos`. `std::process::id()` is
-    // constant across every `#[test]` in this binary, so the instant
-    // a second `#[test]` is added two tests running in parallel could
-    // land on the same `subsec_nanos()` (or collide through the
-    // wrapping mul/add) and therefore the SAME cert path — one test's
-    // `CertTempFile::drop` then `remove_file`s the cert another test
-    // is still loading (the round8 parallel-flake class). A
-    // process-global monotonic counter makes every cert path unique
-    // by construction. Mirrors round8_h3_authority_enforced.rs:75-81.
+    // F-COR-8: the prior nonce was `pid * K + subsec_nanos`, and
+    // `std::process::id()` is constant across every `#[test]` in this binary —
+    // so two parallel tests could land on the same cert path and one's
+    // `CertTempFile::drop` would `remove_file` a cert another was still
+    // loading. A process-global monotonic counter makes every path unique by
+    // construction.
     use std::sync::atomic::{AtomicU64, Ordering};
     static CERT_SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = CERT_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -117,10 +100,8 @@ fn build_config(server: bool, cert_path: &str, key_path: &str) -> quiche::Config
     } else {
         cfg.load_verify_locations_from_file(cert_path)
             .expect("trust cert");
-        // The server cert is self-signed and used directly as the trust
-        // anchor; turn peer verification on so BoringSSL still
-        // exercises the verify path, mirroring the production loopback
-        // rig.
+        // The self-signed cert is used directly as the trust anchor; peer
+        // verification stays ON so BoringSSL still exercises the verify path.
         cfg.verify_peer(true);
     }
     cfg
@@ -259,14 +240,9 @@ async fn test_h3_connection_close_emitted_on_cancel() {
     assert!(server_conn.is_established(), "server should be established");
     assert!(client_conn.is_established(), "client should be established");
 
-    // ----- THE SUBJECT UNDER TEST -----
-    //
-    // graceful_h3_shutdown must:
-    //   1. call conn.close(true, 0x0100, b"shutdown") on the server, and
-    //   2. pump conn.send / on_timeout until quiche reports closed.
-    //
-    // The server-side socket carries the resulting outbound
-    // CONNECTION_CLOSE frame into the loopback path.
+    // THE SUBJECT UNDER TEST: `graceful_h3_shutdown` must call
+    // `conn.close(true, 0x0100, ..)` and then pump send/on_timeout until quiche
+    // reports closed, carrying the CONNECTION_CLOSE onto the loopback path.
     graceful_h3_shutdown(&mut server_conn, &server_socket, &mut out).await;
     assert!(
         server_conn.is_closed() || server_conn.is_draining(),

@@ -1,20 +1,11 @@
 //! SHARED-1 differential property test — `parse_public_header` vs
-//! `quiche::Header::from_slice`.
+//! `quiche::Header::from_slice`: every quiche-produced long-header packet must
+//! match bit-for-bit on `(ty, version, dcid, scid, token)`. `length` is
+//! cross-checked by round-trip against the quiche-side encoded size rather than
+//! compared directly.
 //!
-//! Per `audit/quic/s15-design.md` §A1 verify-gate 2 + team-lead
-//! plan-approval addendum 3: every quiche-produced long-header
-//! packet's `Header::from_slice` output matches our
-//! `parse_public_header` output bit-for-bit on `(ty, version, dcid,
-//! scid, token)`. `length` is handled with the round-trip technique
-//! (lead's option b): for cases where the quiche-side body size is
-//! recoverable, we cross-check our parser's `length` against the
-//! quiche-side state; otherwise we omit `length` from the
-//! differential and note it in the test.
-//!
-//! The proptest budget is 1000 cases by default (design §A1
-//! verify-gate 2). CI may scale further via `PROPTEST_CASES`. Each
-//! case spins one `quiche::connect` and drains its initial flight,
-//! yielding a real Initial packet.
+//! Each case spins one `quiche::connect` and drains its initial flight, so the
+//! input is a real Initial packet. CI may scale the budget via `PROPTEST_CASES`.
 
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![allow(clippy::indexing_slicing)] // test-only fixtures
@@ -141,23 +132,19 @@ proptest! {
         }
     }
 
-    /// Round-trip length check (addendum 3 option b): quiche-emitted
-    /// Initials carry a `length` varint that covers PN + payload. The
-    /// minted packet's total size is `n` bytes, and our parse exposes
-    /// `length`. We assert `length` is within the same ballpark as the
-    /// emitted payload-bytes-after-header. This is differential in the
-    /// sense that the "known" side comes from quiche's encoder (the
-    /// minted packet size), not our decoder.
+    /// Round-trip length check: a quiche-emitted Initial carries a `length`
+    /// varint covering PN + payload, and the minted packet's total size is
+    /// known — so the "known" side comes from quiche's ENCODER rather than our
+    /// decoder, which is what makes this differential.
     #[test]
     fn initial_length_within_packet_bounds(scid_len in 0usize..=20) {
         let pkt = mint_initial(scid_len).map_err(|e| TestCaseError::reject(e.as_str().to_string()))?;
         let ours = parse_public_header(&pkt, 0)
             .map_err(|e| TestCaseError::fail(format!("parse: {e}")))?;
         if let PublicHeader::Long { ty: LongType::Initial, length: Some(len), .. } = ours {
-            // The declared `length` must fit within the packet. The
-            // quiche-emitted Initial has length covering PN + AEAD-
-            // protected payload — strictly less than the whole packet
-            // (minus the public-header prefix) and strictly positive.
+            // The declared `length` covers PN + AEAD-protected payload, so it
+            // must be strictly positive and strictly less than the packet minus
+            // the public-header prefix.
             prop_assert!(len > 0, "length must be positive");
             prop_assert!(len <= pkt.len() as u64, "length {} > pkt.len() {}", len, pkt.len());
         } else {
@@ -165,11 +152,9 @@ proptest! {
         }
     }
 
-    /// No-panic regression-net per design §A1: random bytes of any
-    /// length × any short_dcid_len must always return `Result`, never
-    /// panic. Shares the 1000-case budget set above. Primary no-panic
-    /// coverage comes from `tests/proptest_header.rs` (which targets
-    /// quiche's parser; this targets ours).
+    /// No-panic net: random bytes of any length × any `short_dcid_len` must
+    /// always return `Result`, never panic. `tests/proptest_header.rs` targets
+    /// quiche's parser; this targets ours.
     #[test]
     fn ours_never_panics(buf in proptest::collection::vec(any::<u8>(), 0..200),
                         short_dcid_len in 0usize..=21) {

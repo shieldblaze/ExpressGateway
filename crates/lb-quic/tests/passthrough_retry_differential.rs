@@ -1,26 +1,13 @@
-//! S15 A2 verify gate (A2-2): byte-equality differential of the hand-
-//! rolled passthrough Retry writer (`build_retry_packet`) vs
-//! `quiche::retry`. 1000-case proptest per design §A2 + owner ruling
-//! §9.2 + RFC 9001 §5.8.
+//! Byte-equality differential of the hand-rolled passthrough Retry writer
+//! (`build_retry_packet`) against `quiche::retry`, per RFC 9001 §5.8.
 //!
-//! quiche's `retry()` signature (lib.rs:1878) is
+//! quiche's argument names are counterintuitive: its `scid` argument becomes the
+//! ON-WIRE DCID, its `dcid` argument is the ODCID used only in the Retry
+//! Pseudo-Packet for the integrity tag, and `new_scid` is the on-wire SCID. Our
+//! `build_retry_packet(odcid, client_scid, new_scid, …)` therefore maps
+//! `odcid → dcid`, `client_scid → scid`, `new_scid → new_scid`.
 //!
-//!   `fn retry(scid: &CID, dcid: &CID, new_scid: &CID, token: &[u8],
-//!             version: u32, out: &mut [u8]) -> Result<usize>`
-//!
-//! where (per packet.rs:756):
-//!   - `scid` argument → on-wire DCID (`Header.dcid = scid`)
-//!   - `dcid` argument → ODCID (used in the Retry Pseudo-Packet for the
-//!     integrity tag, NOT on wire)
-//!   - `new_scid` → on-wire SCID
-//!
-//! Our `build_retry_packet(odcid, client_scid, new_scid, …)` maps:
-//!   - `odcid` → quiche's `dcid` arg
-//!   - `client_scid` → quiche's `scid` arg (== on-wire DCID)
-//!   - `new_scid` → quiche's `new_scid` arg
-//!
-//! quiche only accepts `PROTOCOL_VERSION_V1` (0x0000_0001); the
-//! proptest constrains `version` to that.
+//! quiche only accepts QUIC v1, so the proptest constrains `version` to it.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -79,16 +66,11 @@ proptest! {
         .. ProptestConfig::default()
     })]
 
-    /// Differential against `quiche::retry`: every valid input shape
-    /// must produce byte-identical wire packets.
-    ///
-    /// Constraints:
-    /// * `client_scid` (on-wire DCID) length 0..=20 (RFC 9000 §17.2).
-    /// * `odcid` length 0..=20 (RFC 9000 §17.2.5).
-    /// * `new_scid` exactly 16 bytes (LB-chosen).
-    /// * token length 0..=512 (RFC 9000 §17.2.5 implementation-defined,
-    ///   we use the realistic RetryTokenSigner range).
-    /// * version pinned to QUIC v1 (quiche::retry rejects others).
+    /// Differential against `quiche::retry`: every valid input shape must
+    /// produce byte-identical wire packets. `client_scid` (the on-wire DCID) and
+    /// `odcid` are 0..=20 bytes (RFC 9000 §17.2 / §17.2.5), `new_scid` is
+    /// exactly the 16 bytes the LB chooses, the token spans the realistic
+    /// signer range, and the version is pinned to v1.
     #[test]
     fn quiche_retry_byte_equality(
         odcid in pvec(any::<u8>(), 0..=20),

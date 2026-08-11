@@ -1,33 +1,17 @@
-//! SESSION 2 / P1-C — H3→H1 request-trailer no-regression + large
-//! binary RESPONSE-body correctness, both driven through the REAL
-//! [`lb_quic::QuicListener`] (UDP bind → router per-CID dispatch →
-//! `conn_actor::poll_h3` → `h3_bridge::h3_to_h1_stream`) with a real
-//! quiche H3 client. Harness idioms mirror `h3_h1_stream_body_e2e.rs`
-//! (P1-A) and `h3_h1_stream_body_errors_e2e.rs` (P1-B); no existing
-//! test is touched, relaxed, or `#[ignore]`d.
+//! H3→H1 request-trailer no-regression + large binary RESPONSE-body
+//! correctness, through the REAL [`lb_quic::QuicListener`] with a real quiche
+//! H3 client.
 //!
-//! Coverage:
-//!   * PC1 — REQUEST TRAILERS NO-REGRESSION. The H3 client sends
-//!     HEADERS (no fin) → DATA frames → a POST-DATA HEADERS frame
-//!     (the RFC 9114 §4.1 trailing field section) → fin. The body
-//!     embeds 0xFF/0x00/0x80 at head, middle and tail. Asserts:
-//!     - the request body arrives BYTE-IDENTICAL at the H1
-//!       backend (the body-phase `BodyItem::Trailers` parser
-//!       path does not crash or corrupt the DATA stream);
-//!     - the H1 request is well-formed + COMPLETE (chunked
-//!       terminator present and de-chunks to exactly the body);
-//!     - the request trailer fields are *intentionally NOT*
-//!       smuggled into the H1 request head/body (documented
-//!       RFC-acceptable downgrade — see the `ReqBodyEvent::End`
-//!       arm doc-comment in `h3_bridge.rs`);
-//!     - the H3 client receives the backend's real `:status`.
-//!   * PC2 — LARGE BINARY RESPONSE body. The H1 backend returns a
-//!     \>= 256 KiB binary body (> one comfortable DATA frame) with
-//!     a correct `Content-Length`, embedding 0xFF/0x00/0x80 at
-//!     head, middle and tail. The real H3 client must reassemble
-//!     the response body BYTE-IDENTICAL and observe the backend
-//!     `:status`. Locks in the upstream→H3-client response DATA
-//!     path for big binary bodies.
+//! PC1 — REQUEST TRAILERS: the client sends HEADERS → DATA → a POST-DATA
+//! HEADERS frame (the RFC 9114 §4.1 trailing section) → fin, with the body
+//! embedding 0xFF/0x00/0x80. Asserts the body arrives BYTE-IDENTICAL at the H1
+//! backend (the trailer parse path neither crashes nor corrupts the DATA
+//! stream); the H1 request is well-formed and COMPLETE; the trailer fields are
+//! intentionally NOT smuggled into the H1 head or body (a documented
+//! RFC-acceptable downgrade); and the client sees the backend's real `:status`.
+//!
+//! PC2 — LARGE BINARY RESPONSE: a ≥256 KiB binary body with a correct
+//! `Content-Length` must reassemble BYTE-IDENTICAL at the client.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -285,10 +269,9 @@ async fn spawn_backend(
     (addr, rx, handle)
 }
 
-/// Drive a quiche H3 client: handshake, send HEADERS (no fin) +
-/// `data_frames` DATA frames + an OPTIONAL post-DATA HEADERS
-/// (trailers) frame + fin, then collect the response `:status` and the
-/// fully-reassembled response body.
+/// Drive a quiche H3 client: handshake, send HEADERS (no fin) + DATA frames +
+/// an OPTIONAL post-DATA HEADERS (trailers) frame + fin, then collect the
+/// response `:status` and the fully-reassembled body.
 #[allow(clippy::too_many_lines)]
 async fn drive_h3(
     mut conn: quiche::Connection,

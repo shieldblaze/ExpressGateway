@@ -1,21 +1,13 @@
-//! SESSION 16 / Mode B — B1 MINIMAL smoke test (author's self-check).
+//! Mode B — B1 minimal smoke (the author's self-check), deliberately narrow:
+//! the full two-connections wire proof and the H3-regression suite are the
+//! verifier's.
 //!
-//! Scope is deliberately narrow (author ≠ verifier): this proves the
-//! NEW dedicated-dial path + the new public seam types, NOT the full
-//! two-connections client⇄LB⇄backend wire proof or the H3-regression
-//! suite (both are the VERIFIER's job, plan §5 / increment B1).
-//!
-//! What this asserts on the wire:
-//!
-//! 1. [`lb_io::quic_pool::QuicUpstreamPool::dial_dedicated`] reaches
-//!    `is_established()` against a throwaway REAL quiche server, mirrors
-//!    the requested ALPN onto the per-dial config, and returns a
-//!    [`lb_io::quic_pool::DedicatedQuic`] whose socket is a fresh
-//!    dedicated UDP socket (distinct local port). This exercises the
-//!    R12-extracted `connect_and_drive` handshake loop that `dial_new`
-//!    also uses.
-//! 2. The new [`lb_quic::RawBackend`] seam type is constructible (the
-//!    field threaded into `RouterParams` / `ActorParams`).
+//! Asserts that [`lb_io::quic_pool::QuicUpstreamPool::dial_dedicated`] reaches
+//! `is_established()` against a throwaway REAL quiche server, mirrors the
+//! requested ALPN onto the per-dial config, and returns a `DedicatedQuic` whose
+//! socket is a FRESH dedicated UDP socket (distinct local port) — exercising the
+//! shared `connect_and_drive` handshake loop — and that the [`lb_quic::RawBackend`]
+//! seam type is constructible.
 
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
@@ -125,10 +117,9 @@ fn server_config(certs: &TestCerts) -> quiche::Config {
     cfg
 }
 
-/// A throwaway server that accepts ONE connection and drives it to
-/// established, then idles (keeps responding to keep-alives) until the
-/// task is dropped. Returns the bound server address. No RETRY (this is
-/// a plain backend the LB dials, not the LB's own listener).
+/// A throwaway server that accepts ONE connection, drives it to established,
+/// then idles until dropped. No RETRY — this is a plain backend the LB dials,
+/// not the LB's own listener.
 async fn spawn_throwaway_server(certs: &TestCerts) -> SocketAddr {
     let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let addr = socket.local_addr().unwrap();

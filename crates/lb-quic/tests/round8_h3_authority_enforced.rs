@@ -1,26 +1,17 @@
-//! ROUND8-L7-16 proof — the protocol-neutral authority validator is
-//! ON THE H3/QUIC REQUEST PATH, not just H1/H2.
+//! ROUND8-L7-16 proof — the protocol-neutral authority validator is ON THE
+//! H3/QUIC REQUEST PATH, not just H1/H2. (Reference: the HAProxy
+//! comma-in-authority bugs.) L7-09 closed H1/H2 with a single
+//! `lb_l7::authority::validate_request` choke point, but the H3 datapath lives
+//! in `lb-quic` and never reaches it, so `lb_core::authority::validate` — the
+//! EXACT same predicate — is wired into the H3 ingress BEFORE any upstream
+//! branch.
 //!
-//! Reference: HAProxy `BUG/MAJOR: http: forbid comma character in
-//! authority value` + `BUG/MEDIUM: h1: Enforce the authority
-//! validation during H1 request parsing`. L7-09 closed H1/H2 with a
-//! single `lb_l7::authority::validate_request` choke point; the H3
-//! datapath lives in the separate `lb-quic` crate
-//! (`conn_actor::poll_h3`) which never reaches that choke point.
-//! ROUND8-L7-16 wires `lb_core::authority::validate` (the EXACT same
-//! predicate the H1/H2 path uses) into the H3 ingress dispatch BEFORE
-//! any of the three upstream branches.
-//!
-//! This test drives a REAL loopback QUIC handshake, runs the REAL
-//! [`lb_quic::run_actor`] with a REAL accept-counting TCP probe
-//! backend, and sends a REAL lb-h3-testcodec HEADERS frame on a client bidi
-//! stream, asserting:
-//!   * comma-in-`:authority` → H3 `:status 400` AND the probe backend
-//!     records ZERO connections (the validator tripped BEFORE
-//!     upstream selection — the exact HAProxy lesson, H3 leg);
-//!   * a well-formed `:authority` is NOT rejected — it reaches the
-//!     probe backend (non-zero connection count), proving the gate is
-//!     value-sanitisation only and does not over-reject.
+//! Drives a REAL loopback QUIC handshake through the REAL
+//! [`lb_quic::run_actor`] against a REAL accept-counting probe backend, and
+//! asserts: a comma in `:authority` ⇒ H3 400 AND ZERO backend connections (the
+//! validator tripped BEFORE upstream selection — the HAProxy lesson); and a
+//! well-formed `:authority` is NOT rejected, so the gate is value-sanitisation
+//! only and does not over-reject.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -63,15 +54,11 @@ fn write_test_cert() -> (CertTempFile, CertTempFile) {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
-    // ROUND8 Phase-E test-harness micro-fix (verify, task#79): the prior
-    // nonce was `pid * K + subsec_nanos`. `std::process::id()` is constant
-    // across every `#[test]` in this binary, so two tests running in
-    // parallel could land on the same `subsec_nanos()` (or collide through
-    // the wrapping mul/add) and therefore the SAME cert path — one test's
-    // `CertTempFile::drop` then `remove_file`s the cert another test is
-    // still loading, yielding the intermittent "load cert" parallel flake.
-    // A process-global monotonic counter makes every cert path unique by
-    // construction (no parallel collision possible, no serial-only crutch).
+    // The prior nonce was `pid * K + subsec_nanos`, and `std::process::id()` is
+    // constant across every `#[test]` in this binary — so two parallel tests
+    // could land on the same cert path and one's `CertTempFile::drop` would
+    // `remove_file` a cert another was still loading. A process-global
+    // monotonic counter makes every path unique by construction.
     static CERT_SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = CERT_SEQ.fetch_add(1, Ordering::Relaxed);
     let nonce = std::process::id()
@@ -208,9 +195,8 @@ async fn try_recv_one(
     }
 }
 
-/// Drive one full case: handshake the client against a server actor,
-/// send an H3 HEADERS frame with `authority`, and return the decoded
-/// H3 `:status` (if any response arrives) plus the probe-backend
+/// Drive one case: handshake against a server actor, send an H3 HEADERS frame
+/// with `authority`, and return the decoded `:status` plus the probe-backend
 /// connection count.
 async fn run_case(authority: &str) -> (Option<u16>, u32) {
     let (cert_file, key_file) = write_test_cert();
@@ -422,24 +408,19 @@ async fn h3_valid_authority_passes_validator() {
     // reaches the probe backend (proving the gate is value-
     // sanitisation only and does not over-reject the H3 path).
     let (status, hits) = run_case("example.test:8080").await;
-    // The load-bearing proof: a well-formed `:authority` is NOT
-    // rejected by the gate — the actor's picker dials the probe
-    // backend (hits >= 1). This is the H3 mirror of the L7-09 H1/H2
+    // The load-bearing proof: a well-formed `:authority` is NOT rejected — the
+    // actor's picker dials the probe backend. The H3 mirror of the H1/H2
     // "valid authority reaches upstream" assertion.
     assert!(
         hits >= 1,
         "H3: a valid :authority must pass the validator and reach the \
          probe backend; got hits={hits} status={status:?}"
     );
-    // The upstream status is a secondary signal. Reaching the
-    // (real) probe backend yields 200 when the minimal H3→H1
-    // harness completes the read, or 502 when the minimal
-    // single-shot harness's read races the backend's
-    // Connection: close — EITHER value proves the request got PAST
-    // the authority validator (a reject would be a 400, like the
-    // comma/whitespace cases above). This is the exact same
-    // "502 proves it passed the validator" inference the L7-09
-    // H1/H2 proof (`lb-l7/tests/round8_authority_enforced.rs`) uses.
+    // The upstream status is secondary: reaching the real probe backend yields
+    // 200, or 502 when the minimal single-shot harness's read races the
+    // backend's `Connection: close`. EITHER proves the request got PAST the
+    // validator, since a reject would be a 400 — the same inference the H1/H2
+    // proof uses.
     assert!(
         matches!(status, Some(200) | Some(502)),
         "H3: a valid :authority must NOT be rejected — expected the \

@@ -1,32 +1,13 @@
-//! SESSION 1 / S1-B.2 — crate-local H3→H1 bridge end-to-end proof.
-//!
-//! `s1-inventory.md` capability #1 records the H3→H1 path as BUILT but
-//! proven only by `round8_h3_authority_enforced.rs`, which asserts a
-//! backend **probe-hit count** (and bypasses `QuicListener`, driving
-//! `run_actor` directly). It never asserts the response status/body
+//! Crate-local H3→H1 bridge end-to-end proof. The H3→H1 path was proven only by
+//! `round8_h3_authority_enforced.rs`, which asserts a backend probe-hit COUNT
+//! and bypasses `QuicListener`; it never asserts the response status/body
 //! verbatim, nor that `:authority` reached the H1 upstream as `Host`.
 //!
-//! This test closes that regression-gate gap *inside* the crate's own
-//! suite (so `cargo test -p lb-quic` catches H3→H1 bridge regressions,
-//! not only the repo-root integration suite). It drives the **REAL**
-//! [`lb_quic::QuicListener`] (UDP bind → router per-CID dispatch →
-//! `conn_actor::poll_h3` → `h3_bridge::h3_to_h1_roundtrip`) — the exact
-//! same harness shape as repo-root `tests/quic_listener_e2e.rs`'s
-//! `quic_listener_e2e_http3_get_through_proxy_to_h1_backend`, chosen
-//! over driving `run_actor` directly because the real listener path is
-//! reachable crate-locally (it is `pub` from `lb_quic`) and yields a
-//! true front-to-back e2e.
-//!
-//! Assertions that go strictly beyond round8:
-//!   * response `:status` is the upstream's **exact** code (201, a
-//!     non-default value the bridge must echo, not a hardcoded 200);
-//!   * response body is the upstream's **exact** bytes, verbatim;
-//!   * the H1 upstream received `Host: <:authority>` — proving the
-//!     `h3_bridge::build_h1_request` `:authority`→`Host` translation
-//!     actually lands on the wire at the backend.
-//!
-//! This test does NOT touch any existing test and does not relax any
-//! round8 assertion.
+//! This drives the REAL [`lb_quic::QuicListener`] front-to-back and asserts,
+//! strictly beyond round8: the response `:status` is the upstream's EXACT code
+//! (a non-default value the bridge must echo, not a hardcoded 200); the body is
+//! the upstream's EXACT bytes; and the H1 upstream received
+//! `Host: <:authority>`, proving the translation lands on the wire.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -212,13 +193,10 @@ async fn spawn_capturing_h1_backend() -> (
     (addr, rx, handle)
 }
 
-/// Drive a client quiche::Connection through handshake, send a single
-/// H3 GET on bidi stream 0, and collect the response status + body.
-/// SESSION 24 / INC-3: decode a RESPONSE QPACK field block emitted by
-/// the migrated egress (the actor's `quiche::h3` encoder, which
-/// Huffman-encodes values). Uses quiche's Huffman-capable QPACK decoder
-/// — the hand-rolled `lb_h3_testcodec::QpackDecoder` is raw-only. Returns the
-/// `(name, value)` pairs as UTF-8 strings.
+/// Drive a client connection through handshake, send a single H3 GET on bidi
+/// stream 0, and collect the response status + body. The response field section
+/// is decoded with quiche's Huffman-capable QPACK decoder, since the migrated
+/// egress Huffman-encodes values and the hand-rolled decoder is raw-only.
 fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, String> {
     use quiche::h3::NameValue;
     let hdrs = quiche::h3::qpack::Decoder::new()
@@ -314,13 +292,9 @@ async fn drive_h3_get(
                 match decode_frame(&rx_tail, 1 << 20) {
                     Ok((H3Frame::Headers { header_block }, consumed)) => {
                         rx_tail.drain(..consumed);
-                        // SESSION 24 / INC-3: the server (actor) now
-                        // encodes the response field section with
-                        // quiche::h3's QPACK, which Huffman-encodes
-                        // values. The hand-rolled `lb_h3_testcodec::QpackDecoder`
-                        // has no Huffman support, so this client decodes
-                        // the RESPONSE head with quiche's decoder (same
-                        // adaptation as INC-2's ingress client swap).
+                        // The actor encodes the response field section with
+                        // quiche's QPACK, which Huffman-encodes values, so this
+                        // client must use quiche's decoder.
                         let hdrs = decode_resp_qpack(&header_block)?;
                         for (n, v) in hdrs {
                             if n == ":status" {
@@ -387,10 +361,9 @@ async fn drive_h3_get(
     }
 }
 
-/// REAL front-to-back e2e: a quiche H3 client dials the production
-/// `QuicListener`; the listener proxies through the H3→H1 bridge to a
-/// real tokio TCP HTTP/1.1 upstream; the response flows back. Asserts
-/// status + body verbatim AND that `:authority` arrived as `Host`.
+/// REAL front-to-back e2e: a quiche H3 client dials the production listener,
+/// which proxies through the H3→H1 bridge to a real TCP HTTP/1.1 upstream.
+/// Asserts status + body verbatim AND that `:authority` arrived as `Host`.
 #[tokio::test]
 async fn h3_h1_bridge_status_body_and_host_verbatim_through_quic_listener() {
     let certs = generate_loopback_certs();

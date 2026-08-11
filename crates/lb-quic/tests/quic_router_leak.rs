@@ -1,23 +1,13 @@
-//! CODE-2-08 proof — per-CID DashMap leak on actor panic.
+//! CODE-2-08 proof — the per-CID DashMap leak on actor panic. The router
+//! registers TWO entries per accepted connection; pre-fix, cleanup was two
+//! explicit removes AFTER `run_actor().await`, so an unwinding actor left both
+//! entries pinned for the router's lifetime. The fix is a [`CidEntryGuard`]
+//! that always removes them on Drop.
 //!
-//! The router's spawn site at `crates/lb-quic/src/router.rs` registers
-//! two DashMap entries per accepted QUIC connection
-//! (router_key + header_dcid_key). Pre-CODE-2-08 the cleanup was two
-//! explicit `connections.remove(...)` calls AFTER `run_actor().await`
-//! — if the actor unwound the `remove` lines never ran and the entries
-//! were pinned for the router's lifetime. The fix is a
-//! [`CidEntryGuard`] (RAII) that always removes both keys on Drop.
-//!
-//! ## Profile note
-//!
-//! The workspace `[profile.release]` is `panic = "abort"` (CODE-2-02),
-//! so a release-mode panic kills the process and the guard would never
-//! run. `[profile.test]` keeps the rustc default `unwind` precisely so
-//! tests like this can exercise the unwind path. The round-4 brief
-//! calls this out explicitly: "Under `panic = "abort"` this test must
-//! run with `unwind` — use `[profile.test]` to enable unwind, the plan
-//! noted this." No special profile flags are needed; the default test
-//! build keeps unwind.
+//! The workspace release profile is `panic = "abort"`, so a release panic would
+//! kill the process before any guard runs; `[profile.test]` keeps the rustc
+//! default `unwind` precisely so this test can exercise that path. No special
+//! flags are needed.
 
 use std::sync::Arc;
 
@@ -33,10 +23,9 @@ fn test_panicking_actor_removes_entry() {
     let router_key = b"router-cid-bytes".to_vec();
     let header_dcid_key = b"header-dcid-bytes".to_vec();
 
-    // Simulate the router's spawn site: pre-register both entries, then
-    // spawn (here: a real OS thread to avoid the tokio runtime; the
-    // guard's drop semantics are agnostic to the executor) a worker
-    // that panics with the guard owned in its local scope.
+    // Simulate the router's spawn site: pre-register both entries, then spawn a
+    // real OS thread (avoiding the tokio runtime — the guard's drop semantics
+    // are executor-agnostic) that panics with the guard in its local scope.
     map.insert(router_key.clone(), ());
     map.insert(header_dcid_key.clone(), ());
     assert_eq!(map.len(), 2, "fixture: both entries should be live");
@@ -102,11 +91,10 @@ fn clean_exit_also_removes_entries() {
     assert_eq!(map.len(), 0);
 }
 
-/// Sanity for the async-cancel path: dropping the guard inside a
-/// future that itself is dropped (cancelled mid-await) must remove
-/// the entries. This is the third Drop trigger after clean-exit and
-/// panic-unwind; covering it shuts the door on "the guard works for
-/// panics but not for cancellation" regressions.
+/// The async-cancel path: dropping the guard inside a future that is itself
+/// dropped mid-await must remove the entries. This is the third Drop trigger
+/// after clean-exit and panic-unwind, shutting the door on a "works for panics
+/// but not cancellation" regression.
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn cancel_drops_entries() {
     let map: Arc<DashMap<Vec<u8>, ()>> = Arc::new(DashMap::new());

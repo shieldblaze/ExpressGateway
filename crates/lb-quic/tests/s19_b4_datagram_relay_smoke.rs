@@ -1,29 +1,13 @@
-//! SESSION 19 / Mode B — B4 MINIMAL datagram-relay smoke test
-//! (builder-1's self-check).
+//! Mode B — B4 minimal datagram-relay smoke: the bidirectional raw-DATAGRAM
+//! (RFC 9221) relay carries a handful of binary payloads byte-identically
+//! through the full wire path, BOTH directions (client → LB → dgram-echo
+//! backend → LB → client). Deliberately narrow: the flood / drop-newest /
+//! bounded-queue proofs are the verifier's.
 //!
-//! Scope is deliberately narrow (author ≠ verifier): this proves that
-//! the B4 bidirectional raw-DATAGRAM (RFC 9221) relay carries a handful
-//! of binary datagram payloads byte-identically through the full wire
-//! path, BOTH directions —
+//! The client sends varied shapes — zero-length, all-zero, non-UTF8 high-bit,
+//! and a near-UDP-payload-max one — and must receive a byte-identical multiset.
 //!
-//!   real quiche CLIENT  ⇄  Mode B actor (`run_raw_proxy_actor_for_test`)
-//!                          ⇄  real quiche DATAGRAM-ECHO backend
-//!
-//! — i.e. client→LB→backend→LB→client. It does NOT author the
-//! flood / drop-newest / bounded-queue / R13 proofs — those are the
-//! VERIFIER's (plan §"Verification"). It mirrors the S16-B2 stream-relay
-//! rig (`s16_b2_stream_relay_smoke.rs`) but exercises datagrams instead
-//! of streams.
-//!
-//! The mechanism under test: the client sends several datagrams of
-//! varied shapes (zero-length, all-zero bytes, non-UTF8 high-bit bytes,
-//! a near-UDP-payload-max one). The actor's `relay_datagrams` forwards
-//! each verbatim client→upstream. The backend echoes every received
-//! datagram straight back. The actor relays them upstream→client. The
-//! client MUST receive a byte-identical multiset of what it sent.
-//!
-//! Driven with `--features test-gauges` so the `run_raw_proxy_actor_for_test`
-//! hook (gated `#[cfg(any(test, feature = "test-gauges"))]`) is reachable.
+//! Driven with `--features test-gauges` so the test hook is reachable.
 
 #![cfg(feature = "test-gauges")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -180,10 +164,8 @@ fn upstream_config_factory(
     })
 }
 
-/// A throwaway BACKEND quiche server that accepts ONE connection and
-/// ECHOes any received DATAGRAM straight back (recv dgram → send the
-/// same bytes back as a datagram). This is the far end of the relay:
-/// client→LB→**backend (dgram-echo)**→LB→client.
+/// A throwaway BACKEND that accepts ONE connection and ECHOes any received
+/// DATAGRAM straight back — the far end of the relay.
 fn spawn_dgram_echo_backend(certs: &TestCerts) -> SocketAddr {
     let std_sock = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     std_sock.set_nonblocking(true).unwrap();
@@ -300,11 +282,9 @@ async fn try_recv_one(
     }
 }
 
-/// The datagrams the client sends. Varied shapes to prove verbatim,
-/// binary-safe, zero-length-preserving relay. Each is sized to fit the
-/// negotiated datagram-frame writable len (the 1350 UDP-payload configs
-/// give ~1300 writable bytes), so the "large" one is ~1200 bytes — large
-/// but never refused with BufferTooShort.
+/// The datagrams the client sends: varied shapes proving verbatim, binary-safe,
+/// zero-length-preserving relay. Each is sized to fit the negotiated writable
+/// length, so even the large one is never refused with `BufferTooShort`.
 fn datagram_set() -> Vec<Vec<u8>> {
     vec![
         Vec::new(),                                           // zero-length
