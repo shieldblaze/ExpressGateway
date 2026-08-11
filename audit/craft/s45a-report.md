@@ -166,3 +166,25 @@ accounts for sub-1% movement in both directions.
 
 Stated plainly: coverage is **not bit-identical**, the gate passes with margin, and the code under
 those modules is provably unchanged. Claiming "unmoved" would have been wrong.
+
+## New evidence for CF-S44-GRPC-H3-TE-HANG — it reaches the Coverage job too
+
+The post-merge run on `main @ 5c9f0752` hit the carried hang. Same code, two outcomes:
+
+| run | job | duration |
+|---|---|---|
+| PR `0c734b1a` | Coverage | **11 min** (12:57:39 → 13:08:57Z) |
+| main `5c9f0752` | Coverage | **hung >76 min** in the `--all-features` suite step, cancelled |
+
+The merge commit's tree differs from the PR head by **exactly one markdown file**
+(`audit/craft/s45a-report.md`) — zero code difference — so this is not attributable to the merge.
+Two things worth carrying:
+
+* The hang is **not confined to the `test` job**; the Coverage job runs the same suite under
+  `llvm-cov nextest` and hangs there too, while `test` passed on the very same commit.
+* **The `coverage` job has no `timeout-minutes`**, so a hang burns to GitHub's 6-hour job ceiling
+  silently. `test` has the same exposure. Adding a `timeout-minutes` to both would convert a 6-hour
+  silent stall into a fast, legible failure — cheap, and it does not weaken any gate.
+
+Re-running the cancelled job (`gh run rerun --failed`, preserving the 15 green jobs) is the workaround
+until the diagnosis session lands.
