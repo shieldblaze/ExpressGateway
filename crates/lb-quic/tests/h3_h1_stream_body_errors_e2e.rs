@@ -1,18 +1,9 @@
-//! H3→H1 request-body ERROR PATHS e2e, on the P1-A real-listener harness. Each
-//! case asserts the REAL outcome, never deadline-as-pass:
-//!
-//!   * T1 — CLIENT CANCELS MID-BODY: HEADERS + one partial DATA chunk (no
-//!     fin), then a QUIC RESET_STREAM. The upstream must NOT observe a
-//!     completed request (no chunked terminator, no full Content-Length body),
-//!     and a SECOND request through the SAME live listener must still complete
-//!     — proving no state corruption or map leak.
-//!   * T2 — UPSTREAM RESETS MID-BODY → the client must DECODE `:status 502`.
-//!   * T3 — OVERSIZED AFTER PARTIAL CHUNKED SEND: with egress already begun,
-//!     breaching the cap must give the client 413 AND abort the upstream — the
-//!     backend sees the early chunk bytes but NEVER the chunked terminator, so
-//!     the partial request is not completable (smuggling guard).
-//!
-//! Every body embeds the non-UTF-8 bytes 0xFF 0x00 0x80.
+//! H3→H1 request-body ERROR PATHS e2e on the P1-A real-listener harness. Each case asserts the
+//! REAL outcome, never deadline-as-pass: T1 a client cancel mid-body (the upstream must NOT
+//! observe a completable request, and a SECOND request through the SAME listener must still
+//! complete — no state corruption or map leak); T2 an upstream reset mid-body ⇒ a decoded 502;
+//! T3 an over-cap breach after egress has begun ⇒ 413 to the client AND an aborted upstream that
+//! never receives the chunked terminator (smuggling guard).
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -37,8 +28,7 @@ const TEST_SNI: &str = "expressgateway.test";
 const MAX_UDP: usize = 65_535;
 const REQUEST_AUTHORITY: &str = "h3-stream-err.test:4433";
 
-/// Decode a RESPONSE QPACK field block with a Huffman-capable decoder; the
-/// hand-rolled `lb_h3_testcodec::QpackDecoder` is raw-only.
+/// Huffman-capable decode; the hand-rolled `lb_h3_testcodec::QpackDecoder` is raw-only.
 #[allow(dead_code)]
 fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, String> {
     use quiche::h3::NameValue;
@@ -207,8 +197,6 @@ fn build_data_frame(payload: &[u8]) -> Vec<u8> {
     .to_vec()
 }
 
-/// Owns the client-side UDP buffers + decoded-response state so the pump is a
-/// single-receiver method.
 struct ClientPump {
     in_buf: Vec<u8>,
     out_buf: Vec<u8>,
@@ -230,8 +218,8 @@ impl ClientPump {
         }
     }
 
-    /// Flush egress, recv one datagram (bounded wait), decode any response
-    /// frames. Returns true once a final status is known.
+    /// Flush egress, recv one datagram (bounded wait), decode response frames. True once a
+    /// final status is known.
     async fn pump_once(
         &mut self,
         conn: &mut quiche::Connection,
@@ -267,13 +255,10 @@ impl ClientPump {
             let readable: Vec<u64> = conn.readable().collect();
             for sid in readable {
                 let mut c = [0u8; 8192];
-                // The migrated gateway terminates H3 via `quiche::h3`, which
-                // opens server-initiated control + QPACK UNIDIRECTIONAL streams
-                // (RFC 9114). This hand-rolled client only understands response
-                // frames on the request BIDI stream, so it drains-and-discards
-                // every other stream: feeding uni-stream bytes into
-                // `decode_frame` would mis-read them as a malformed HEADERS
-                // frame.
+                // `quiche::h3` opens server-initiated control + QPACK UNIDIRECTIONAL streams
+                // (RFC 9114). This hand-rolled client only understands response frames on the
+                // request BIDI stream, so it drains-and-discards every other stream: feeding
+                // uni-stream bytes into `decode_frame` would mis-read them as a malformed HEADERS.
                 if sid != 0 {
                     while conn.stream_recv(sid, &mut c).is_ok() {}
                     continue;
@@ -292,8 +277,8 @@ impl ClientPump {
                 match decode_frame(&self.rx_tail, 1 << 20) {
                     Ok((H3Frame::Headers { header_block }, c)) => {
                         self.rx_tail.drain(..c);
-                        // Huffman-capable decode of the quiche-encoded head;
-                        // the 413 check below still uses the raw decoder.
+                        // Huffman-capable decode of the quiche-encoded head; the 413 check below
+                        // still uses the raw decoder.
                         let hdrs = decode_resp_qpack(&header_block)?;
                         for (n, v) in hdrs {
                             if n == ":status" {
@@ -328,7 +313,6 @@ impl ClientPump {
     }
 }
 
-/// Drive handshake until the connection is established (bounded).
 async fn handshake(
     conn: &mut quiche::Connection,
     socket: &UdpSocket,
@@ -344,8 +328,7 @@ async fn handshake(
     Ok(())
 }
 
-/// Send all of `wire` on `stream_id` (no fin), pumping the connection
-/// so flow control opens. Returns once every byte is buffered.
+/// Send all of `wire` on `stream_id` (no fin), pumping the connection so flow control opens.
 async fn send_all_no_fin(
     conn: &mut quiche::Connection,
     socket: &UdpSocket,
@@ -369,8 +352,7 @@ async fn send_all_no_fin(
     Ok(())
 }
 
-/// Full normal request driver (HEADERS + DATA + fin), used for the
-/// "second request still works" liveness check.
+/// Full normal request driver, used for the "second request still works" liveness check.
 async fn drive_full_request(
     mut conn: quiche::Connection,
     socket: &UdpSocket,
@@ -411,19 +393,16 @@ async fn drive_full_request(
     }
 }
 
-// T1 — CLIENT CANCELS MID-BODY. The client sends HEADERS + ONE partial DATA
-// chunk without fin, then RESET_STREAMs. The proxy surfaces `StreamReset`,
-// emits a body-channel Reset, tears down the per-stream maps, and aborts the
-// upstream BEFORE writing the chunked terminator — so the backend NEVER sees a
-// completable request. Proof of no state leak: a SECOND independent request
-// through the SAME live listener completes normally afterwards.
+// T1 — CLIENT CANCELS MID-BODY. The proxy surfaces `StreamReset`, emits a body-channel Reset,
+// tears down the per-stream maps, and aborts the upstream BEFORE writing the chunked terminator,
+// so the backend NEVER sees a completable request. Proof of no state leak: a SECOND independent
+// request through the SAME live listener completes normally afterwards.
 #[tokio::test]
 async fn p1b_t1_client_cancels_mid_body_upstream_not_completed_and_no_leak() {
     let certs = generate_loopback_certs();
 
-    // Backend that records, for the FIRST connection, whether it ever saw a
-    // completed request (the chunked terminator) and the cancelled chunk's
-    // distinctive marker bytes.
+    // Records, for the FIRST connection, whether a completed request (the chunked terminator)
+    // and the cancelled chunk's marker bytes were ever seen.
     let saw_terminator = Arc::new(AtomicUsize::new(0));
     let saw_first_conn = Arc::new(AtomicUsize::new(0));
     let st = saw_terminator.clone();
@@ -456,11 +435,9 @@ async fn p1b_t1_client_cancels_mid_body_upstream_not_completed_and_no_leak() {
                     if buf.windows(5).any(|w| w == b"0\r\n\r\n") {
                         st.store(1, Ordering::SeqCst);
                     }
-                    // The cancelled connection gets no response (the
-                    // proxy aborted it); just drop.
+                    // The cancelled connection gets no response (the proxy aborted it).
                 } else {
-                    // Second (liveness) request: read full chunked body
-                    // then reply 201 so the client request completes.
+                    // Second (liveness) request: read the full chunked body then reply 201.
                     loop {
                         if buf.windows(5).any(|w| w == b"0\r\n\r\n") {
                             break;
@@ -493,8 +470,8 @@ async fn p1b_t1_client_cancels_mid_body_upstream_not_completed_and_no_leak() {
             .await
             .expect("handshake");
         let stream_id = 0u64;
-        // HEADERS (no content-length ⇒ chunked egress) + ONE partial
-        // DATA chunk, carrying the non-UTF-8 marker. No fin.
+        // HEADERS (no content-length ⇒ chunked egress) + ONE partial DATA chunk carrying the
+        // non-UTF-8 marker. No fin.
         let mut chunk = vec![0u8; 4096];
         chunk[..3].copy_from_slice(NON_UTF8);
         let mut wire = build_headers_frame(&[]);
@@ -502,8 +479,7 @@ async fn p1b_t1_client_cancels_mid_body_upstream_not_completed_and_no_leak() {
         send_all_no_fin(&mut conn, &sock, stream_id, &wire, deadline)
             .await
             .expect("send HEADERS + partial DATA");
-        // Let the proxy forward the head + first chunk so the abort is
-        // genuinely MID-body, then RESET_STREAM before fin.
+        // Let the proxy forward the head + first chunk so the abort is genuinely MID-body.
         let mut pump = ClientPump::new();
         let spin_until = tokio::time::Instant::now() + Duration::from_millis(400);
         while tokio::time::Instant::now() < spin_until {
@@ -511,8 +487,7 @@ async fn p1b_t1_client_cancels_mid_body_upstream_not_completed_and_no_leak() {
                 .await
                 .expect("pump pre-reset");
         }
-        // QUIC RESET_STREAM on our send side (the request stream) +
-        // STOP_SENDING on the read side — peer-initiated cancel.
+        // RESET_STREAM on our send side + STOP_SENDING on the read side — a peer-initiated cancel.
         conn.stream_shutdown(stream_id, quiche::Shutdown::Write, 0x10)
             .expect("stream_shutdown write");
         let _ = conn.stream_shutdown(stream_id, quiche::Shutdown::Read, 0x10);
@@ -556,10 +531,9 @@ async fn p1b_t1_client_cancels_mid_body_upstream_not_completed_and_no_leak() {
     );
 }
 
-// T2 — UPSTREAM RESETS MID-BODY → 502. The backend reads part of the streamed
-// body then abruptly RSTs before responding, so the proxy's upstream write
-// errors into the 502 path. The client must DECODE `:status 502` well within
-// the deadline — a real outcome, not deadline-as-pass.
+// T2 — UPSTREAM RESETS MID-BODY → 502. The backend reads part of the streamed body then RSTs
+// before responding, so the proxy's upstream write errors into the 502 path. The client must
+// DECODE `:status 502` — a real outcome, not deadline-as-pass.
 #[tokio::test]
 async fn p1b_t2_upstream_resets_mid_body_yields_502() {
     let certs = generate_loopback_certs();
@@ -569,10 +543,8 @@ async fn p1b_t2_upstream_resets_mid_body_yields_502() {
     let (ready_tx, ready_rx) = oneshot::channel::<()>();
     let backend_h = tokio::spawn(async move {
         let (mut s, _) = listener_b.accept().await.unwrap();
-        // Read just the head + maybe one chunk, then ABRUPTLY abort: shut down
-        // both directions and drop the socket. The proxy is mid-stream writing
-        // a large chunked body, so its next write or the response read fails
-        // with a broken pipe.
+        // Read just the head + maybe one chunk, then ABRUPTLY abort: the proxy is mid-stream
+        // writing a large chunked body, so its next write or the response read breaks.
         let mut t = [0u8; 1024];
         let _ = tokio::time::timeout(Duration::from_millis(400), s.read(&mut t)).await;
         let _ = ready_tx.send(());
@@ -589,11 +561,9 @@ async fn p1b_t2_upstream_resets_mid_body_yields_502() {
         .expect("handshake");
     let stream_id = 0u64;
 
-    // Chunked egress (no content-length) so the proxy opens the upstream and
-    // writes head + chunks before hitting the RST.
+    // Chunked egress (no content-length) so the proxy opens the upstream and writes before the RST.
     let mut wire = build_headers_frame(&[]);
-    // Many sizeable DATA frames so the proxy is still actively streaming when
-    // the backend RSTs.
+    // Many sizeable DATA frames so the proxy is still actively streaming when the backend RSTs.
     for f in 0..64u8 {
         let mut chunk = vec![f; 8192];
         chunk[..3].copy_from_slice(NON_UTF8);
@@ -626,8 +596,7 @@ async fn p1b_t2_upstream_resets_mid_body_yields_502() {
             break;
         }
         if pump.status == Some(502) {
-            // Status decoded (502 has a small body / content-length);
-            // accept as soon as it is known — a real decoded outcome.
+            // Accept as soon as the status is decoded — a real decoded outcome.
             break;
         }
     }

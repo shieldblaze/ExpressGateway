@@ -1,21 +1,10 @@
 //! Mode B — B5 authoritative bounded-state proof, independent of the builder's
-//! `s19_b5_stream_flood.rs`: the same R8 bound (the per-connection relay STREAM
-//! table stays bounded under flood) from a fresh rig with different parameters.
+//! `s19_b5_stream_flood.rs`. A connection carries a TOTAL stream count far above both the
+//! negotiated concurrent grant and `MAX_RELAY_STREAMS`, with a tiny in-flight window, and every
+//! stream must round-trip BYTE-IDENTICAL — only possible because completed streams are reclaimed.
 //!
-//! It proves per-stream EVICTION-UNDER-LOAD is load-bearing: a connection
-//! carries a TOTAL stream count far above both the negotiated concurrent grant
-//! and `MAX_RELAY_STREAMS`, with a tiny in-flight window, and every stream must
-//! round-trip BYTE-IDENTICAL. That is only possible because completed streams
-//! are reclaimed — without `relay_streams`'s `retain` the table grows with the
-//! TOTAL count, crosses the cap, and `admit_or_refuse` then REFUSES later
-//! streams, hanging the client until the budget trips.
-//!
-//! The cap REFUSE branch and the router DROP branch act on crate-private state
-//! an integration test cannot observe, so they are verified by the in-module
-//! unit tests, mechanism analysis, and reverted scratch mutations cited in the
-//! verifier report.
-//!
-//! Driven with `--features test-gauges` so the test hook is reachable.
+//! The cap REFUSE branch and the router DROP branch act on crate-private state an integration
+//! test cannot observe; they are verified by the in-module unit tests and cited scratch mutations.
 
 #![cfg(feature = "test-gauges")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -42,22 +31,18 @@ const TEST_SNI: &str = "expressgateway.test";
 const H3_ALPN: &[u8] = b"h3";
 const MAX_UDP: usize = 65_535;
 const HANDSHAKE_BUDGET: Duration = Duration::from_secs(5);
-/// Generous: many sequential small streams, each a full
-/// client→LB→backend→LB→client echo round trip at the 2 ms relay tick.
 const RELAY_BUDGET: Duration = Duration::from_secs(90);
 
-/// TOTAL bidi streams opened over the connection's life — deliberately far
-/// above BOTH the negotiated concurrent grant and the relay-table ceiling, and
-/// larger than the builder's, so reclamation must survive a longer lifetime.
+/// Deliberately far above BOTH the negotiated concurrent grant and the relay-table ceiling, so
+/// reclamation must survive a long connection lifetime.
 const TOTAL_STREAMS: u64 = 600;
 
-/// In-flight stream count. Small (≪ grant ≪ cap) so the CONCURRENT live set —
-/// hence the steady-state table — stays tiny while the TOTAL is large. That gap
-/// is the whole point of the eviction proof.
+/// Small (≪ grant ≪ cap) so the CONCURRENT live set stays tiny while the TOTAL is large — that
+/// gap is the whole point of the eviction proof.
 const CONCURRENCY: u64 = 6;
 
-/// Per-stream payload length. Small but multi-byte and DISTINCT per stream so
-/// a cross-stream buffer mix-up (wrong bytes, right length) is caught.
+/// Small but multi-byte and DISTINCT per stream, so a cross-stream buffer mix-up (wrong bytes,
+/// right length) is caught.
 const PAYLOAD_LEN: usize = 96;
 
 static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -115,8 +100,7 @@ fn random_scid() -> [u8; quiche::MAX_CONN_ID_LEN] {
     scid
 }
 
-/// Deterministic per-stream-DISTINCT pseudo-random payload: a different seed
-/// per stream means two same-length streams still carry different bytes, which
+/// A different seed per stream means two same-length streams still carry different bytes, which
 /// catches a cross-stream buffer mix-up.
 fn make_payload(seed: u64, len: usize) -> Vec<u8> {
     let mut state = seed
@@ -132,9 +116,8 @@ fn make_payload(seed: u64, len: usize) -> Vec<u8> {
     out
 }
 
-/// CLIENT-facing SERVER config. The bidi grant MIRRORS production
-/// `build_server_config`, so the concurrent ceiling the streams squeeze through
-/// is the real one. Flow control is generous — this exercises stream COUNT and
+/// CLIENT-facing SERVER config. The bidi grant MIRRORS production `build_server_config`, so the
+/// concurrent ceiling is the real one. Flow control is generous: this exercises stream COUNT and
 /// table lifetime, not volume.
 fn lb_server_config(certs: &TestCerts) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
@@ -156,7 +139,6 @@ fn lb_server_config(certs: &TestCerts) -> quiche::Config {
     cfg
 }
 
-/// The real downstream CLIENT config — verifies the LB's cert.
 fn client_config(certs: &TestCerts) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
     cfg.set_application_protos(&[H3_ALPN]).unwrap();
@@ -176,10 +158,9 @@ fn client_config(certs: &TestCerts) -> quiche::Config {
     cfg
 }
 
-/// The pool's per-dial CLIENT config factory. The SAME small bidi ceiling, so
-/// the relay must re-open/finish backend streams sequentially and the backend
-/// leg's table is also reclamation-bounded. A deliberately-wrong default ALPN
-/// forces the actor to MIRROR the client's `h3`.
+/// The SAME small bidi ceiling, so the relay must re-open/finish backend streams sequentially and
+/// the backend leg's table is also reclamation-bounded. A deliberately-wrong default ALPN forces
+/// the actor to MIRROR the client's `h3`.
 fn upstream_config_factory(
     ca: PathBuf,
 ) -> Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> {
@@ -203,9 +184,8 @@ fn upstream_config_factory(
     })
 }
 
-/// A throwaway BACKEND that accepts ONE connection and ECHOes STREAM bytes back
-/// on the SAME stream id, FINing each once it has echoed the peer FIN, and
-/// reclaiming its own finished-stream state so it too stays bounded.
+/// Accepts ONE connection, ECHOes STREAM bytes back on the SAME stream id, FINs each once it has
+/// echoed the peer FIN, and reclaims its own finished-stream state so it too stays bounded.
 fn spawn_echo_backend(certs: &TestCerts) -> SocketAddr {
     let std_sock = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     std_sock.set_nonblocking(true).unwrap();
@@ -273,8 +253,7 @@ fn spawn_echo_backend(certs: &TestCerts) -> SocketAddr {
                         }
                     }
                 }
-                // Reclaim fully-echoed streams so the backend's own state is
-                // bounded across TOTAL_STREAMS too.
+                // Reclaim fully-echoed streams so the backend's own state is bounded too.
                 echo_pending.retain(|_, e| !(e.1 && e.0.is_empty() && e.2));
                 loop {
                     match c.send(&mut out_buf) {
@@ -346,19 +325,14 @@ async fn try_recv_one(
     }
 }
 
-/// THE B5 eviction-under-load proof: `TOTAL_STREAMS` bidi streams — far above
-/// both the concurrent grant and the `MAX_RELAY_STREAMS` ceiling — opened
-/// through a tiny bounded concurrency window, all round-tripping
-/// BYTE-IDENTICAL through the real Mode B path.
+/// THE B5 eviction-under-load proof: `TOTAL_STREAMS` bidi streams — far above both the concurrent
+/// grant and the `MAX_RELAY_STREAMS` ceiling — through a tiny bounded concurrency window, all
+/// round-tripping BYTE-IDENTICAL through the real Mode B path.
 ///
-/// The relay table is kept bounded ONLY by `relay_streams`'s
-/// `streams.retain(|_, st| !st.is_complete())`. With it, the table tracks the
-/// CONCURRENT count and never approaches the cap. WITHOUT it (the reverted
-/// scratch negative control), every finished state lingers, the table grows
-/// with the TOTAL count, `admit_or_refuse` REFUSES every further NEW sid once
-/// it hits the cap, those streams are never relayed, and the budget timeout
-/// trips this test. The bounded build completes every stream — the table stayed
-/// small by reclamation, not by luck.
+/// The relay table is kept bounded ONLY by `relay_streams`'s `streams.retain(|_, st|
+/// !st.is_complete())`. WITHOUT it (the reverted scratch negative control) every finished state
+/// lingers, the table grows with the TOTAL count, `admit_or_refuse` REFUSES every further NEW sid
+/// once it hits the cap, and the budget timeout trips this test.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn s19_b5_verify_eviction_bounds_table_across_total_streams() {
     let certs = generate_loopback_certs();
@@ -451,10 +425,9 @@ async fn s19_b5_verify_eviction_bounds_table_across_total_streams() {
         }
     });
 
-    // Client driver: open TOTAL_STREAMS with a bounded concurrency window, a
-    // stream counting as in-flight until its echo has fully FIN'd. Tracks the
-    // PEAK concurrent count as an independent witness that the live set stays
-    // ≪ the cap, so the table is bounded by reclamation rather than by the cap.
+    // A stream counts as in-flight until its echo has fully FIN'd. The PEAK concurrent count is
+    // an independent witness that the live set stays ≪ the cap — bounded by reclamation, not by
+    // the cap itself.
     let (done_tx, done_rx) = tokio::sync::oneshot::channel::<(u64, u64, u64)>();
     let client_cancel = cancel.clone();
     let client_driver = tokio::spawn(async move {
@@ -482,8 +455,8 @@ async fn s19_b5_verify_eviction_bounds_table_across_total_streams() {
                         inflight.insert(sid, (payload, Vec::new()));
                         next_index += 1;
                     }
-                    // Concurrent stream-grant exhausted for the moment: stop
-                    // opening, let some complete and free credit, retry later.
+                    // Concurrent stream-grant exhausted for the moment: stop opening, let some
+                    // complete and free credit, retry later.
                     Err(quiche::Error::StreamLimit) | Err(quiche::Error::Done) => break,
                     Err(e) => panic!("client stream_send(open sid): {e:?}"),
                 }
@@ -549,8 +522,6 @@ async fn s19_b5_verify_eviction_bounds_table_across_total_streams() {
         pool,
         addr: backend_addr,
         sni: TEST_SNI.to_string(),
-        // B6 (R14/R12): caps now carried on RawBackend; the const
-        // defaults keep these tests byte-identical in behaviour.
         dgram_queue_cap: lb_quic::DGRAM_QUEUE_CAP,
         max_relay_streams: lb_quic::MAX_RELAY_STREAMS,
     };
@@ -596,10 +567,8 @@ async fn s19_b5_verify_eviction_bounds_table_across_total_streams() {
          count means a stream was dropped, mismatched, or the table grew unbounded / \
          hit the cap and refused later streams"
     );
-    // The independent witness that the table stayed SMALL by reclamation rather
-    // than merely under the cap by accident: the concurrent live set never
-    // approached the cap, staying at the negotiated grant with headroom for
-    // transient open/close overlap.
+    // The independent witness that the table stayed SMALL by reclamation rather than merely under
+    // the cap by accident: the live set never approached it, staying at the negotiated grant.
     assert!(
         peak_inflight <= 32,
         "the CONCURRENT in-flight set must stay tiny (≪ the 256 cap) — proving the \
