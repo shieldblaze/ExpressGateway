@@ -1,6 +1,6 @@
 //! Error types for HTTP/1.1 codec.
 
-/// Errors that can occur during HTTP/1.1 parsing and encoding.
+/// HTTP/1.1 parsing and encoding errors.
 #[derive(Debug, thiserror::Error)]
 pub enum H1Error {
     /// The input buffer does not contain a complete message element.

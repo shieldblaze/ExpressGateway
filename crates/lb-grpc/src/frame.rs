@@ -1,12 +1,6 @@
-//! gRPC length-prefixed framing.
-//!
-//! gRPC messages are transmitted over HTTP/2 as length-prefixed frames:
-//!
-//! ```text
-//! [1 byte compressed flag] [4 bytes big-endian length] [N bytes payload]
-//! ```
-//!
-//! See <https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-HTTP2.md>.
+//! gRPC length-prefixed framing:
+//! `[1 byte compressed flag][4 bytes BE length][N bytes payload]`
+//! (<https://github.com/grpc/grpc/blob/master/doc/PROTOCOL-HTTP2.md>).
 
 use bytes::{BufMut, Bytes, BytesMut};
 
@@ -20,27 +14,18 @@ const GRPC_HEADER_SIZE: usize = 5;
 pub struct GrpcFrame {
     /// Whether the payload is compressed.
     pub compressed: bool,
-    /// The raw message bytes (before or after decompression, depending on context).
+    /// The raw message bytes.
     pub data: Bytes,
 }
 
-/// Default maximum gRPC message size (4 MB), matching the default in
-/// grpc-go and grpc-java.
+/// Default max gRPC message size, matching grpc-go and grpc-java.
 pub const DEFAULT_MAX_MESSAGE_SIZE: u32 = 4 * 1024 * 1024;
 
-/// Decode a single gRPC frame from the front of `buf`.
-///
-/// `max_message_size` caps the decoded message length. Messages whose
-/// 4-byte length field exceeds this limit produce `GrpcError::MessageTooLarge`.
-///
-/// Returns the decoded frame and the total number of bytes consumed from `buf`
-/// (header + payload).
+/// Decode one gRPC frame, returning it plus the bytes consumed.
 ///
 /// # Errors
-///
-/// - [`GrpcError::Incomplete`] if `buf` does not contain a complete frame.
-/// - [`GrpcError::InvalidFrame`] if the compressed flag is not 0 or 1.
-/// - [`GrpcError::MessageTooLarge`] if the message length exceeds `max_message_size`.
+/// [`GrpcError::Incomplete`], [`GrpcError::InvalidFrame`] (compressed flag not
+/// 0 or 1), or [`GrpcError::MessageTooLarge`].
 pub fn decode_grpc_frame(
     buf: &[u8],
     max_message_size: u32,
@@ -49,7 +34,6 @@ pub fn decode_grpc_frame(
         return Err(GrpcError::Incomplete);
     }
 
-    // SAFETY of .get(): we checked len >= GRPC_HEADER_SIZE above.
     let compressed_byte = buf.first().copied().ok_or(GrpcError::Incomplete)?;
     let compressed = match compressed_byte {
         0 => false,
@@ -61,7 +45,6 @@ pub fn decode_grpc_frame(
         }
     };
 
-    // Read big-endian u32 length from bytes 1..5.
     let len_bytes: [u8; 4] = [
         buf.get(1).copied().ok_or(GrpcError::Incomplete)?,
         buf.get(2).copied().ok_or(GrpcError::Incomplete)?,
@@ -91,11 +74,10 @@ pub fn decode_grpc_frame(
     Ok((GrpcFrame { compressed, data }, total_len))
 }
 
-/// Encode a gRPC frame into a length-prefixed byte buffer.
+/// Encode a gRPC frame into a length-prefixed buffer.
 ///
 /// # Errors
-///
-/// Returns [`GrpcError::InvalidFrame`] if the payload exceeds `u32::MAX` bytes.
+/// [`GrpcError::InvalidFrame`] if the payload exceeds `u32::MAX` bytes.
 pub fn encode_grpc_frame(frame: &GrpcFrame) -> Result<Bytes, GrpcError> {
     let len = u32::try_from(frame.data.len()).map_err(|_| {
         GrpcError::InvalidFrame(format!("payload too large: {} bytes", frame.data.len()))

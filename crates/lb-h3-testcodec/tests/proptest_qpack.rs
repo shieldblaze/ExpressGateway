@@ -1,22 +1,9 @@
-//! CODE-2-11 — QPACK static-table round-trip + decode_frame no-panic
-//! + QUIC varint round-trip / no-overlong harness.
+//! CODE-2-11 — QPACK encode→decode identity, `decode_frame` never panics, and
+//! QUIC varint round-trip / overlong rejection (RFC 9000 §16).
 //!
-//! Three invariants:
-//!
-//! 1. QPACK encode→decode is the identity on lowercase ASCII headers
-//!    (the in-tree QpackEncoder is static-table only — that's exactly
-//!    the configuration the production listener uses today).
-//! 2. `decode_frame` never panics — Result for any input.
-//! 3. QUIC varint encode→decode round-trips and `decode_varint`
-//!    rejects overlong encodings (RFC 9000 §16) without panicking.
-//!
-//! Sanity budget; CI bumps via PROPTEST_CASES env.
-//!
-//! F-COR-5: the `#![cfg(feature = "proptest")]` gate was REMOVED so this
-//! sanity net actually runs under the default `cargo test` instead of
-//! reporting `running 0 tests` (silent dead coverage). `proptest` is an
-//! unconditional dev-dependency and the marker feature gates no code, so no
-//! flag is needed; `PROPTEST_CASES` still scales the budget at runtime.
+//! F-COR-5: do NOT re-add a `#![cfg(feature = "proptest")]` gate — it made this
+//! report `running 0 tests` under the default `cargo test` (silent dead
+//! coverage). `PROPTEST_CASES` scales the budget at runtime instead.
 
 use bytes::BytesMut;
 use proptest::collection::vec;
@@ -43,7 +30,6 @@ proptest! {
         .. ProptestConfig::default()
     })]
 
-    /// QPACK round-trip identity.
     #[test]
     fn qpack_round_trip(headers in arb_headers()) {
         let enc = QpackEncoder::new();
@@ -53,14 +39,12 @@ proptest! {
         prop_assert_eq!(decoded, headers);
     }
 
-    /// decode_frame catch-unwind safety net.
     #[test]
     fn decode_frame_no_panic(buf in vec(any::<u8>(), 0..2048)) {
         let res = std::panic::catch_unwind(|| decode_frame(&buf, 65_536));
         prop_assert!(res.is_ok(), "decode_frame panicked on random input");
     }
 
-    /// QUIC varint encode→decode round-trip across the legal range.
     #[test]
     fn varint_round_trip(value in 0u64..=MAX_VARINT) {
         let mut buf = BytesMut::new();
@@ -70,7 +54,6 @@ proptest! {
         prop_assert_eq!(n_dec, n_enc);
     }
 
-    /// Random varint bytes never panic the decoder.
     #[test]
     fn varint_decode_no_panic(buf in vec(any::<u8>(), 0..16)) {
         let res = std::panic::catch_unwind(|| decode_varint(&buf));

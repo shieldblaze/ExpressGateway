@@ -1,12 +1,8 @@
-//! HTTP/3 security mitigation detectors.
-//!
-//! - **QPACK Bomb**: detects decompression-ratio amplification attacks
-//!   analogous to HPACK bombs in HTTP/2.
+//! HTTP/3 security mitigation detectors: the QPACK decompression bomb.
 
 use crate::H3Error;
 
-/// Detects QPACK decompression bombs by tracking the ratio of decoded header
-/// size to encoded wire size.
+/// Tracks the decoded/encoded header-size ratio for QPACK bombs.
 #[derive(Debug)]
 pub struct QpackBombDetector {
     max_ratio: u64,
@@ -14,10 +10,7 @@ pub struct QpackBombDetector {
 }
 
 impl QpackBombDetector {
-    /// Create a detector.
-    ///
-    /// * `max_ratio` — maximum allowed decoded/encoded byte ratio.
-    /// * `max_decoded_size` — absolute cap on decoded header bytes.
+    /// Create a detector with a ratio limit and an absolute decoded-size cap.
     #[must_use]
     pub const fn new(max_ratio: u64, max_decoded_size: u64) -> Self {
         Self {
@@ -26,12 +19,10 @@ impl QpackBombDetector {
         }
     }
 
-    /// Check whether the given encoded and decoded sizes are within limits.
+    /// Check encoded/decoded sizes against the limits.
     ///
     /// # Errors
-    ///
-    /// Returns `H3Error::QpackBomb` if either the ratio or absolute size
-    /// exceeds the configured limits.
+    /// `H3Error::QpackBomb` if either the ratio or the absolute size trips.
     pub const fn check(&self, encoded_size: u64, decoded_size: u64) -> Result<(), H3Error> {
         if decoded_size > self.max_decoded_size {
             let ratio = match decoded_size.checked_div(encoded_size) {

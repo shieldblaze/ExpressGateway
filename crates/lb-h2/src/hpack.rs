@@ -1,8 +1,7 @@
-//! HPACK header compression codec (RFC 7541): prefix-bit integer coding, the
-//! static and dynamic tables, and the four header field representations.
+//! HPACK header compression codec (RFC 7541).
 //!
-//! Huffman encoding is deliberately not used — the H bit is always 0 and raw
-//! strings are transmitted. Fully compliant; Huffman is optional.
+//! Huffman encoding is deliberately NOT used — the H bit is always 0. Fully
+//! compliant; Huffman is optional.
 
 use std::collections::VecDeque;
 
@@ -12,7 +11,6 @@ use crate::H2Error;
 
 /// RFC 7541 Appendix A static table (61 entries, 1-indexed).
 static STATIC_TABLE: &[(&str, &str)] = &[
-    // Index 0 is unused (1-indexed per RFC).
     ("", ""),
     (":authority", ""),
     (":method", "GET"),
@@ -77,10 +75,8 @@ static STATIC_TABLE: &[(&str, &str)] = &[
     ("www-authenticate", ""),
 ];
 
-/// HPACK dynamic table.
-///
-/// Uses `VecDeque` so that `push_front` (newest entry at index 0) is O(1)
-/// instead of the O(n) `Vec::insert(0, ...)` it replaced.
+/// HPACK dynamic table. `VecDeque` so `push_front` is O(1), not the O(n)
+/// `Vec::insert(0, ...)` it replaced.
 #[derive(Debug)]
 struct DynamicTable {
     entries: VecDeque<(String, String)>,
@@ -156,8 +152,7 @@ fn table_get(index: usize, dynamic: &DynamicTable) -> Result<(&str, &str), H2Err
     }
 }
 
-/// Find a matching entry in static + dynamic tables.
-/// Returns `(index, name_match_only)`.
+/// Find an entry in static + dynamic tables; `(index, name_match_only)`.
 fn find_in_tables(name: &str, value: &str, dynamic: &DynamicTable) -> Option<(usize, bool)> {
     let static_len = STATIC_TABLE.len() - 1;
 
@@ -192,8 +187,6 @@ fn find_in_tables(name: &str, value: &str, dynamic: &DynamicTable) -> Option<(us
     name_match.map(|idx| (idx, true))
 }
 
-// ─── Integer coding (RFC 7541 §5.1) ───
-
 /// Encode an integer with the given prefix bit width.
 fn encode_integer(buf: &mut BytesMut, mut value: usize, prefix_bits: u8, first_byte_mask: u8) {
     let max_prefix = (1usize << prefix_bits) - 1;
@@ -214,8 +207,7 @@ fn encode_integer(buf: &mut BytesMut, mut value: usize, prefix_bits: u8, first_b
     }
 }
 
-/// Decode an integer with the given prefix bit width.
-/// Returns `(value, bytes_consumed)`.
+/// Decode a prefix-bit integer; `(value, bytes_consumed)`.
 fn decode_integer(buf: &[u8], prefix_bits: u8) -> Result<(usize, usize), H2Error> {
     let first = *buf.first().ok_or(H2Error::Incomplete)?;
     let max_prefix = (1usize << prefix_bits) - 1;
@@ -248,7 +240,7 @@ fn encode_string(buf: &mut BytesMut, s: &str) {
     buf.put_slice(s.as_bytes());
 }
 
-/// Decode a string literal (H=0 raw; H=1 is treated as raw best-effort).
+/// Decode a string literal; H=1 is treated as raw, best-effort.
 fn decode_string(buf: &[u8]) -> Result<(String, usize), H2Error> {
     let (len, int_bytes) = decode_integer(buf, 7)?;
     let start = int_bytes;
@@ -260,9 +252,7 @@ fn decode_string(buf: &[u8]) -> Result<(String, usize), H2Error> {
     Ok((s.to_string(), end))
 }
 
-/// HPACK encoder.
-///
-/// Maintains a dynamic table that is updated on each `encode` call.
+/// HPACK encoder; its dynamic table updates on each `encode`.
 #[derive(Debug)]
 pub struct HpackEncoder {
     dynamic: DynamicTable,
@@ -277,31 +267,24 @@ impl HpackEncoder {
         }
     }
 
-    /// Encode a list of header name-value pairs.
-    ///
-    /// Uses indexed representation when a full match exists in the tables,
-    /// literal with incremental indexing for name-only matches and new entries.
+    /// Encode header name-value pairs.
     ///
     /// # Errors
-    ///
-    /// Returns `H2Error::HpackError` on encoding failures.
+    /// `H2Error::HpackError` on encoding failure.
     pub fn encode(&mut self, headers: &[(String, String)]) -> Result<Bytes, H2Error> {
         let mut buf = BytesMut::new();
 
         for (name, value) in headers {
             match find_in_tables(name, value, &self.dynamic) {
                 Some((index, false)) => {
-                    // Full match — indexed header field (§6.1).
                     encode_integer(&mut buf, index, 7, 0x80);
                 }
                 Some((name_index, true)) => {
-                    // Name match — literal with incremental indexing (§6.2.1).
                     encode_integer(&mut buf, name_index, 6, 0x40);
                     encode_string(&mut buf, value);
                     self.dynamic.insert(name.clone(), value.clone());
                 }
                 None => {
-                    // No match — literal with incremental indexing, new name (§6.2.1).
                     buf.put_u8(0x40);
                     encode_string(&mut buf, name);
                     encode_string(&mut buf, value);
@@ -319,9 +302,7 @@ impl HpackEncoder {
     }
 }
 
-/// HPACK decoder.
-///
-/// Maintains a dynamic table that is updated during decoding.
+/// HPACK decoder; its dynamic table updates during decoding.
 #[derive(Debug)]
 pub struct HpackDecoder {
     dynamic: DynamicTable,
@@ -339,8 +320,7 @@ impl HpackDecoder {
     /// Decode an HPACK-encoded header block.
     ///
     /// # Errors
-    ///
-    /// Returns `H2Error::HpackError` on malformed input or table index errors.
+    /// `H2Error::HpackError` on malformed input or a bad table index.
     pub fn decode(&mut self, buf: &[u8]) -> Result<Vec<(String, String)>, H2Error> {
         let mut headers = Vec::new();
         let mut pos = 0;
@@ -349,14 +329,12 @@ impl HpackDecoder {
             let first = *buf.get(pos).ok_or(H2Error::Incomplete)?;
 
             if first & 0x80 != 0 {
-                // §6.1 Indexed header field.
                 let (index, consumed) =
                     decode_integer(buf.get(pos..).ok_or(H2Error::Incomplete)?, 7)?;
                 let (name, value) = table_get(index, &self.dynamic)?;
                 headers.push((name.to_string(), value.to_string()));
                 pos += consumed;
             } else if first & 0xC0 == 0x40 {
-                // §6.2.1 Literal with incremental indexing.
                 let (index, consumed) =
                     decode_integer(buf.get(pos..).ok_or(H2Error::Incomplete)?, 6)?;
                 pos += consumed;
@@ -378,8 +356,7 @@ impl HpackDecoder {
                 self.dynamic.insert(name.clone(), value.clone());
                 headers.push((name, value));
             } else if first & 0xF0 == 0x00 || first & 0xF0 == 0x10 {
-                // §6.2.2 Literal without indexing (0000xxxx)
-                // §6.2.3 Literal never indexed (0001xxxx)
+                // §6.2.2 literal without indexing / §6.2.3 never indexed.
                 let (index, consumed) =
                     decode_integer(buf.get(pos..).ok_or(H2Error::Incomplete)?, 4)?;
                 pos += consumed;
@@ -400,7 +377,6 @@ impl HpackDecoder {
 
                 headers.push((name, value));
             } else if first & 0xE0 == 0x20 {
-                // §6.3 Dynamic table size update.
                 let (new_size, consumed) =
                     decode_integer(buf.get(pos..).ok_or(H2Error::Incomplete)?, 5)?;
                 pos += consumed;
@@ -501,7 +477,6 @@ mod tests {
         let mut enc = HpackEncoder::new(4096);
         let wire = enc.encode(&headers).unwrap();
 
-        // All three are fully indexed in the static table.
         assert_eq!(wire.len(), 3);
 
         let mut dec = HpackDecoder::new(4096);

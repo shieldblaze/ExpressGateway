@@ -1,18 +1,14 @@
-//! ROUND8-L7-11 — DATA / HEADERS PADDED flag handling (RFC 9113 §6.1, §6.2).
+//! ROUND8-L7-11 — PADDED handling (RFC 9113 §6.1/§6.2). HAProxy
+//! `BUG/MEDIUM: mux-h2: Properly consume padding for DATA frames`: unconsumed
+//! padding parses the NEXT frame out of phase — a smuggling primitive.
 //!
-//! HAProxy `BUG/MEDIUM: mux-h2: Properly consume padding for DATA frames`:
-//! without consuming the trailing padding the decoder parses the NEXT frame
-//! out of phase — a smuggling primitive.
-//!
-//! Caveat: `lb-h2::frame::decode_frame` is test-only today (the hot path uses
-//! hyper), so this is a lesson fixed BEFORE live wire-in.
+//! `decode_frame` is test-only today (the hot path uses hyper).
 
 use lb_h2::{DEFAULT_MAX_FRAME_SIZE, H2Frame, decode_frame};
 
 fn make_frame(frame_type: u8, flags: u8, stream_id: u32, payload: &[u8]) -> Vec<u8> {
     let mut buf = Vec::with_capacity(9 + payload.len());
     let len = payload.len();
-    // 24-bit length.
     buf.push(((len >> 16) & 0xFF) as u8);
     buf.push(((len >> 8) & 0xFF) as u8);
     buf.push((len & 0xFF) as u8);
@@ -34,8 +30,7 @@ const FLAG_END_HEADERS: u8 = 0x4;
 
 #[test]
 fn data_with_padded_strips_padding() {
-    // pad_len=1, body="hi!", 1 byte padding.
-    // payload layout: [pad_len, b'h', b'i', b'!', 0]
+    // payload layout: [pad_len=1, b'h', b'i', b'!', pad]
     let payload = [1u8, b'h', b'i', b'!', 0];
     let buf = make_frame(FRAME_DATA, FLAG_PADDED, 1, &payload);
     let (frame, consumed) = decode_frame(&buf, DEFAULT_MAX_FRAME_SIZE).unwrap();
@@ -53,7 +48,6 @@ fn data_with_padded_strips_padding() {
 
 #[test]
 fn data_pad_length_exceeds_payload_errors() {
-    // pad_len=10, payload has only 3 bytes after pad_len byte.
     let payload = [10u8, b'a', b'b', b'c'];
     let buf = make_frame(FRAME_DATA, FLAG_PADDED, 1, &payload);
     let r = decode_frame(&buf, DEFAULT_MAX_FRAME_SIZE);
@@ -70,7 +64,6 @@ fn data_padded_empty_payload_errors() {
 #[test]
 fn headers_with_padded_and_priority_decoded_correctly() {
     // payload: pad_len(1) | E+Dep+Weight(5) | block(3) | padding(2)
-    // Total: 1 + 5 + 3 + 2 = 11. pad_len = 2.
     let mut payload = Vec::new();
     payload.push(2u8); // pad len
     payload.extend_from_slice(&[0, 0, 0, 0, 0]); // priority block

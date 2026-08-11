@@ -1,30 +1,18 @@
-//! HTTP/2 security mitigation detectors.
-//!
-//! - **Rapid Reset** (CVE-2023-44487): detects excessive `RST_STREAM` frames.
-//! - **CONTINUATION Flood** (CVE-2024-24549): detects long runs of
-//!   CONTINUATION frames without `END_HEADERS`.
-//! - **HPACK Bomb**: detects decompression-ratio amplification attacks.
-//! - **SETTINGS flood** / **PING flood**: rolling-window rate limits on
-//!   control frames that would otherwise force the peer to allocate ACKs.
-//! - **Zero-window stall**: per-stream watchdog that fires when the peer
-//!   holds a stream open without granting any receive-window credit.
+//! HTTP/2 security mitigation detectors: Rapid Reset (CVE-2023-44487),
+//! CONTINUATION flood (CVE-2024-24549), HPACK bomb, SETTINGS/PING flood, and
+//! the zero-window stall watchdog.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use crate::H2Error;
 
-/// Detects rapid-reset attacks by counting `RST_STREAM` frames over a
-/// two-bucket sliding-window approximation (the nginx rate-limiting
+/// Detects rapid-reset attacks over a two-bucket sliding window (the nginx
 /// technique), O(1) memory and integer-only.
 ///
-/// THE CATCH: a single fixed-window counter is bypassable by concentrating
+/// THE CATCH: a single FIXED-window counter is bypassable by concentrating
 /// events at a window boundary — ~2x the threshold across two adjacent
 /// windows. Keeping the previous-window count, weighted by overlap, closes it.
-///
-/// The window is in caller-defined "ticks": a monotonic counter in production,
-/// synthetic values in tests.
-/// For testing, pass synthetic tick values.
 #[derive(Debug)]
 pub struct RapidResetDetector {
     threshold: u64,
@@ -35,10 +23,7 @@ pub struct RapidResetDetector {
 }
 
 impl RapidResetDetector {
-    /// Create a detector.
-    ///
-    /// * `threshold` — maximum allowed `RST_STREAM` frames per window.
-    /// * `window_ticks` — window duration in caller-defined tick units.
+    /// Create a detector; `window_ticks` is in caller-defined tick units.
     #[must_use]
     pub const fn new(threshold: u64, window_ticks: u64) -> Self {
         Self {
@@ -53,15 +38,13 @@ impl RapidResetDetector {
     /// Record a `RST_STREAM` event at the given tick.
     ///
     /// # Errors
-    ///
-    /// Returns `H2Error::RapidReset` if the sliding-window estimated count
-    /// exceeds the threshold.
+    /// `H2Error::RapidReset` once the sliding-window estimate exceeds the
+    /// threshold.
     pub fn record(&mut self, tick: u64) -> Result<(), H2Error> {
         let elapsed = tick.saturating_sub(self.window_start);
 
         if elapsed > self.window_ticks {
-            // Outside the window — rotate. A jump of more than two windows
-            // leaves prev_count zero: nothing attributable remains.
+            // A jump of more than two windows leaves prev_count zero.
             if elapsed > self.window_ticks.saturating_mul(2) {
                 self.prev_count = 0;
             } else {
@@ -73,12 +56,9 @@ impl RapidResetDetector {
             self.count_in_window += 1;
         }
 
-        // Sliding-window estimate, integer math scaled by 1000. The standard
-        // two-bucket formula (nginx, Cloudflare):
+        // Two-bucket estimate, integer math scaled by 1000:
         //   estimated = prev_count * (1 - elapsed_fraction) + count_in_window
-        // `count_in_window` is FULL weight — those events definitely occurred
-        // in the current interval — while `prev_count` decays with how far we
-        // are into the window.
+        // `count_in_window` is FULL weight; `prev_count` decays.
         let elapsed_in_current = tick.saturating_sub(self.window_start);
         let elapsed_fraction_x1000 = elapsed_in_current
             .saturating_mul(1000)
@@ -108,8 +88,7 @@ impl RapidResetDetector {
     }
 }
 
-/// Detects CONTINUATION flood attacks by counting CONTINUATION frames
-/// received without an `END_HEADERS` flag.
+/// Counts CONTINUATION frames received without an `END_HEADERS` flag.
 #[derive(Debug)]
 pub struct ContinuationFloodDetector {
     max_continuations: u64,
@@ -117,8 +96,7 @@ pub struct ContinuationFloodDetector {
 }
 
 impl ContinuationFloodDetector {
-    /// Create a detector with the given maximum allowed CONTINUATION frames
-    /// per header block.
+    /// Create a detector capped at `max` CONTINUATION frames per header block.
     #[must_use]
     pub const fn new(max_continuations: u64) -> Self {
         Self {
@@ -127,13 +105,10 @@ impl ContinuationFloodDetector {
         }
     }
 
-    /// Record a CONTINUATION frame.
-    ///
-    /// * `end_headers` — if `true`, the counter resets (header block complete).
+    /// Record a CONTINUATION frame; `end_headers` resets the counter.
     ///
     /// # Errors
-    ///
-    /// Returns `H2Error::ContinuationFlood` if the limit is exceeded.
+    /// `H2Error::ContinuationFlood` once the limit is exceeded.
     pub fn record(&mut self, end_headers: bool) -> Result<(), H2Error> {
         if end_headers {
             self.count = 0;
@@ -154,8 +129,7 @@ impl ContinuationFloodDetector {
     }
 }
 
-/// Detects HPACK decompression bombs by tracking the ratio of decoded header
-/// size to encoded wire size.
+/// Tracks the decoded/encoded header-size ratio for HPACK bombs.
 #[derive(Debug)]
 pub struct HpackBombDetector {
     max_ratio: u64,
@@ -163,10 +137,7 @@ pub struct HpackBombDetector {
 }
 
 impl HpackBombDetector {
-    /// Create a detector.
-    ///
-    /// * `max_ratio` — maximum allowed decoded/encoded byte ratio.
-    /// * `max_decoded_size` — absolute cap on decoded header bytes.
+    /// Create a detector with a ratio limit and an absolute decoded-size cap.
     #[must_use]
     pub const fn new(max_ratio: u64, max_decoded_size: u64) -> Self {
         Self {
@@ -175,12 +146,10 @@ impl HpackBombDetector {
         }
     }
 
-    /// Check whether the given encoded and decoded sizes are within limits.
+    /// Check encoded/decoded sizes against the limits.
     ///
     /// # Errors
-    ///
-    /// Returns `H2Error::HpackBomb` if either the ratio or absolute size
-    /// exceeds the configured limits.
+    /// `H2Error::HpackBomb` if either the ratio or the absolute size trips.
     pub const fn check(&self, encoded_size: u64, decoded_size: u64) -> Result<(), H2Error> {
         if decoded_size > self.max_decoded_size {
             let ratio = match decoded_size.checked_div(encoded_size) {
@@ -220,13 +189,9 @@ pub const DEFAULT_CONTROL_FRAME_WINDOW: Duration = Duration::from_secs(10);
 /// Default stall timeout for `ZeroWindowStallDetector`.
 pub const DEFAULT_ZERO_WINDOW_STALL_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Detects `SETTINGS` frame flooding over a fixed rolling window.
-///
-/// Pingora and nginx both rate-limit control frames because each `SETTINGS`
-/// obliges the peer to allocate and transmit an ACK, amplifying the attacker's
-/// send cost into far more CPU and bandwidth on the defender. Outside the
-/// window the counter rotates: `count_in_window` resets to 1 and
-/// `window_start` advances.
+/// Detects `SETTINGS` flooding over a rolling window: each `SETTINGS` obliges
+/// the peer to allocate and transmit an ACK, so the attacker's send cost
+/// amplifies into defender CPU and bandwidth (as Pingora and nginx both note).
 #[derive(Debug)]
 pub struct SettingsFloodDetector {
     max_per_window: u32,
@@ -247,7 +212,7 @@ impl SettingsFloodDetector {
         }
     }
 
-    /// Create a detector with the project-default thresholds (100 / 10s).
+    /// Create a detector with the project-default thresholds.
     #[must_use]
     pub const fn with_defaults() -> Self {
         Self::new(
@@ -259,9 +224,7 @@ impl SettingsFloodDetector {
     /// Record a `SETTINGS` frame observation at `now`.
     ///
     /// # Errors
-    ///
-    /// Returns `H2Error::SettingsFlood` when the rolling-window count
-    /// exceeds `max_per_window`.
+    /// `H2Error::SettingsFlood` past `max_per_window`.
     pub fn on_settings(&mut self, now: Instant) -> Result<(), H2Error> {
         let rotate = match self.window_start {
             None => true,
@@ -289,9 +252,8 @@ impl SettingsFloodDetector {
     }
 }
 
-/// Detects `PING` frame flooding with the same rolling-window strategy as
-/// [`SettingsFloodDetector`]. Every `PING` obliges an ACK, so a flood forces
-/// the peer to both read and write at attacker-controlled rates.
+/// `PING` flood detector; same rolling window as [`SettingsFloodDetector`].
+/// Every `PING` obliges an ACK, forcing reads AND writes at attacker rates.
 #[derive(Debug)]
 pub struct PingFloodDetector {
     max_per_window: u32,
@@ -312,7 +274,7 @@ impl PingFloodDetector {
         }
     }
 
-    /// Create a detector with the project-default thresholds (50 / 10s).
+    /// Create a detector with the project-default thresholds.
     #[must_use]
     pub const fn with_defaults() -> Self {
         Self::new(DEFAULT_PING_MAX_PER_WINDOW, DEFAULT_CONTROL_FRAME_WINDOW)
@@ -321,9 +283,7 @@ impl PingFloodDetector {
     /// Record a `PING` frame observation at `now`.
     ///
     /// # Errors
-    ///
-    /// Returns `H2Error::PingFlood` when the rolling-window count
-    /// exceeds `max_per_window`.
+    /// `H2Error::PingFlood` past `max_per_window`.
     pub fn on_ping(&mut self, now: Instant) -> Result<(), H2Error> {
         let rotate = match self.window_start {
             None => true,
@@ -351,11 +311,9 @@ impl PingFloodDetector {
     }
 }
 
-/// Detects streams that cannot progress because the peer never grants more
-/// receive-window credit. THE CATCH: every `WINDOW_UPDATE` refreshes the
-/// entry's presence, but only a NON-ZERO `increment` counts as real progress
-/// and advances `last_progress`; `check_stalled` fires once that timestamp is
-/// older than `stall_timeout`.
+/// Detects streams starved of receive-window credit. THE CATCH: every
+/// `WINDOW_UPDATE` refreshes the entry, but only a NON-ZERO `increment` counts
+/// as progress and advances `last_progress`.
 #[derive(Debug)]
 pub struct ZeroWindowStallDetector {
     stall_timeout: Duration,
@@ -378,9 +336,8 @@ impl ZeroWindowStallDetector {
         Self::new(DEFAULT_ZERO_WINDOW_STALL_TIMEOUT)
     }
 
-    /// Record a `WINDOW_UPDATE` for a stream, creating the entry on first
-    /// contact. Only a NON-ZERO `increment` counts as progress and restarts
-    /// the stall watchdog.
+    /// Record a `WINDOW_UPDATE`; only a NON-ZERO `increment` counts as
+    /// progress and restarts the stall watchdog.
     pub fn on_window_update(&mut self, stream_id: u32, increment: u32, now: Instant) {
         let entry = self.last_progress.entry(stream_id).or_insert(now);
         if increment > 0 {
@@ -388,8 +345,7 @@ impl ZeroWindowStallDetector {
         }
     }
 
-    /// Check whether the given stream has been stalled for longer than
-    /// `stall_timeout`.
+    /// Has this stream been stalled longer than `stall_timeout`?
     #[must_use]
     pub fn check_stalled(&self, stream_id: u32, now: Instant) -> bool {
         self.last_progress
@@ -397,7 +353,7 @@ impl ZeroWindowStallDetector {
             .is_some_and(|last| now.saturating_duration_since(*last) > self.stall_timeout)
     }
 
-    /// Forget a stream. Intended for teardown after close.
+    /// Forget a stream, after close.
     pub fn remove_stream(&mut self, stream_id: u32) {
         self.last_progress.remove(&stream_id);
     }
@@ -415,8 +371,8 @@ mod tests {
     #[test]
     fn rapid_reset_under_threshold() {
         let mut det = RapidResetDetector::new(5, 100);
-        // Ticks must be spread across the window: the estimate weights
-        // `prev_count` by how far into the current window we are.
+        // Ticks must be SPREAD: the estimate weights `prev_count` by how far
+        // into the current window we are.
         for i in 1..=5 {
             assert!(det.record(i * 20).is_ok());
         }
@@ -425,11 +381,9 @@ mod tests {
     #[test]
     fn rapid_reset_over_threshold() {
         let mut det = RapidResetDetector::new(5, 100);
-        // Spread events across the window so the sliding estimate reflects them.
         for i in 1..=5 {
             assert!(det.record(i * 18).is_ok());
         }
-        // 6th event at tick 99 — still within the window, estimate should exceed 5.
         assert!(det.record(99).is_err());
     }
 
@@ -439,23 +393,17 @@ mod tests {
         for i in 0..5 {
             assert!(det.record(i).is_ok());
         }
-        // Jump two full windows ahead — prev_count is zeroed.
         assert!(det.record(300).is_ok());
     }
 
     #[test]
     fn rapid_reset_boundary_attack_detected() {
-        // Boundary attack: against a FIXED-window counter an attacker sends
-        // `threshold` events at the end of one window and another burst at the
-        // start of the next, achieving 2x the allowed rate. The sliding window
-        // carries prev_count over, so the first event after rotation already
-        // pushes the weighted estimate above threshold.
+        // Boundary attack: a FIXED-window counter lets an attacker straddle two
+        // windows for 2x the rate. Carrying prev_count over closes it.
         let threshold = 10u64;
         let window = 100u64;
         let mut det = RapidResetDetector::new(threshold, window);
 
-        // In the first window prev_count = 0, so the estimate equals
-        // count_in_window and reaches exactly threshold without exceeding it.
         for i in 1..=threshold {
             assert!(
                 det.record(i * 10).is_ok(),
@@ -464,9 +412,7 @@ mod tests {
             );
         }
 
-        // Rotation at tick 101 makes prev_count = 10, so the estimate is
-        // 10*1000 + 1*1000 = 11000 > 10*1000 — the very first event after
-        // rotation is detected because the previous window was at capacity.
+        // prev_count = 10 after rotation, so the FIRST event past it detects.
         assert!(
             det.record(101).is_err(),
             "first event after a full window should be detected by the \
@@ -476,25 +422,19 @@ mod tests {
 
     #[test]
     fn rapid_reset_sliding_window_decays() {
-        // The previous window's influence must DECAY across the current one:
-        // strong early, fading later to allow more headroom.
+        // The previous window's influence must DECAY across the current one.
         let threshold = 10u64;
         let window = 100u64;
         let mut det = RapidResetDetector::new(threshold, window);
 
-        // Fill the first window with 5 events.
         for i in 1..=5 {
             det.record(i * 20).ok();
         }
 
-        // Rotate into the second window: prev_count = 5, estimate 6000. OK.
         assert!(det.record(101).is_ok());
 
-        // 79 ticks in, prev weight has decayed to 210: estimate 3050. OK.
         assert!(det.record(180).is_ok());
 
-        // Burst from tick 181: the decayed prev weight lets 8 events through
-        // before tick 188 crosses the threshold.
         for tick in 181..=187 {
             assert!(det.record(tick).is_ok(), "tick {tick} should be allowed");
         }
@@ -503,8 +443,7 @@ mod tests {
             "at tick 188 the estimate exceeds threshold",
         );
 
-        // Early in the window only 5 events fit before detection; late in it, 8
-        // — the decay is what created the extra headroom.
+        // 5 events fit early in the window, 8 late — that gap IS the decay.
     }
 
     #[test]
@@ -572,9 +511,7 @@ mod tests {
         for i in 0..5 {
             assert!(det.on_settings(t0 + Duration::from_millis(i * 100)).is_ok());
         }
-        // Jump past the window — the counter rotates and the next frame is ok.
         assert!(det.on_settings(t0 + Duration::from_secs(11)).is_ok());
-        // And we can fit another full batch of `max_per_window` frames.
         for i in 1..5 {
             assert!(
                 det.on_settings(t0 + Duration::from_secs(11) + Duration::from_millis(i * 100))
@@ -607,8 +544,7 @@ mod tests {
     fn zero_window_stall_fires_after_timeout() {
         let mut det = ZeroWindowStallDetector::new(Duration::from_secs(5));
         let t0 = Instant::now();
-        // First observation with a zero increment seeds the entry but does
-        // not advance the progress timestamp.
+        // A ZERO increment seeds the entry but is not progress.
         det.on_window_update(1, 0, t0);
         assert!(!det.check_stalled(1, t0 + Duration::from_secs(4)));
         assert!(det.check_stalled(1, t0 + Duration::from_secs(6)));
@@ -619,13 +555,10 @@ mod tests {
         let mut det = ZeroWindowStallDetector::new(Duration::from_secs(5));
         let t0 = Instant::now();
         det.on_window_update(7, 0, t0);
-        // A positive increment at t0+4s advances last_progress, so at t0+6s
-        // (which is only 2s after progress) the stream is not stalled.
+        // A positive increment advances last_progress.
         det.on_window_update(7, 1024, t0 + Duration::from_secs(4));
         assert!(!det.check_stalled(7, t0 + Duration::from_secs(6)));
-        // But far enough past the refreshed timestamp it does stall.
         assert!(det.check_stalled(7, t0 + Duration::from_secs(12)));
-        // remove_stream clears the entry.
         det.remove_stream(7);
         assert!(!det.check_stalled(7, t0 + Duration::from_secs(99)));
     }

@@ -5,7 +5,6 @@ use bytes::{BufMut, Bytes, BytesMut};
 use crate::error::H3Error;
 use crate::varint::{decode_varint, encode_varint};
 
-// Frame type constants (RFC 9114 §7.2).
 const FRAME_DATA: u64 = 0x00;
 const FRAME_HEADERS: u64 = 0x01;
 const FRAME_CANCEL_PUSH: u64 = 0x03;
@@ -63,24 +62,14 @@ pub enum H3Frame {
     },
 }
 
-/// Default maximum payload size for H3 frames (1 MB).
+/// Default maximum H3 frame payload size.
 pub const DEFAULT_MAX_PAYLOAD_SIZE: usize = 1_048_576;
 
-/// Decode a single HTTP/3 frame from the front of `buf`.
-///
-/// `max_payload_size` caps the decoded payload length. Frames whose varint
-/// payload length exceeds this limit produce `H3Error::FrameTooLarge`.
-///
-/// Unknown frame types are returned as `H3Frame::Unknown` per RFC 9114
-/// Section 7.2.8 (implementations MUST ignore unknown frame types).
-///
-/// Returns `(frame, bytes_consumed)` on success.
+/// Decode one HTTP/3 frame, returning `(frame, bytes_consumed)`. Unknown types
+/// become `H3Frame::Unknown` — RFC 9114 §7.2.8 requires ignoring them.
 ///
 /// # Errors
-///
-/// Returns `H3Error::Incomplete` if the buffer does not contain a complete frame.
-/// Returns `H3Error::FrameTooLarge` if the payload exceeds `max_payload_size`.
-/// Returns `H3Error::InvalidFrame` on malformed payloads.
+/// `Incomplete`, `FrameTooLarge` past `max_payload_size`, or `InvalidFrame`.
 pub fn decode_frame(buf: &[u8], max_payload_size: usize) -> Result<(H3Frame, usize), H3Error> {
     let (frame_type, type_len) = decode_varint(buf)?;
     let remaining = buf.get(type_len..).ok_or(H3Error::Incomplete)?;
@@ -140,7 +129,7 @@ pub fn decode_frame(buf: &[u8], max_payload_size: usize) -> Result<(H3Frame, usi
             let (push_id, _) = decode_varint(payload_buf)?;
             H3Frame::MaxPushId { push_id }
         }
-        // RFC 9114 §7.2.8: Implementations MUST ignore unknown frame types.
+        // RFC 9114 §7.2.8: unknown frame types MUST be ignored, not rejected.
         _ => H3Frame::Unknown {
             frame_type,
             payload: Bytes::copy_from_slice(payload_buf),
@@ -153,8 +142,7 @@ pub fn decode_frame(buf: &[u8], max_payload_size: usize) -> Result<(H3Frame, usi
 /// Encode an HTTP/3 frame into bytes.
 ///
 /// # Errors
-///
-/// Returns `H3Error::InvalidFrame` if the frame cannot be encoded.
+/// `H3Error::InvalidFrame` if the frame cannot be encoded.
 #[allow(clippy::cast_possible_truncation)]
 pub fn encode_frame(frame: &H3Frame) -> Result<Bytes, H3Error> {
     let mut buf = BytesMut::new();
@@ -285,8 +273,6 @@ mod tests {
 
     #[test]
     fn frame_too_large_rejected() {
-        // Construct a frame with type=DATA (0x00) and a varint payload length of 2000.
-        // Use max_payload_size=100 to trigger rejection.
         let mut buf = BytesMut::new();
         encode_varint(&mut buf, FRAME_DATA).unwrap();
         encode_varint(&mut buf, 2000).unwrap();
@@ -301,15 +287,14 @@ mod tests {
             })
         ));
 
-        // Same frame succeeds with a larger limit.
+        // Negative control: the same frame succeeds with a larger limit.
         let result = decode_frame(&buf, 4096);
         assert!(result.is_ok());
     }
 
     #[test]
     fn unknown_frame_type_ignored() {
-        // RFC 9114 §7.2.8: unknown frame types MUST be ignored.
-        // Use frame type 0xFF (not assigned).
+        // Frame type 0xFF is unassigned.
         let mut buf = BytesMut::new();
         encode_varint(&mut buf, 0xFF).unwrap();
         let payload = b"some unknown data";
