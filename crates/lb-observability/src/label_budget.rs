@@ -1,50 +1,23 @@
-//! REL-2-08: per-listener / per-backend RED metrics label budget.
+//! RED metrics label budget. The `prometheus` crate registers unbounded label sets happily, and
+//! one stray `{path = <request URI>}` saturates a scrape endpoint with millions of series.
 //!
-//! The `prometheus` crate happily registers unbounded label sets,
-//! and one stray `{path = <request URI>}` is enough to saturate a
-//! scrape endpoint with millions of series. This module gives the
-//! binary a startup-time gate:
-//!
-//! ```ignore
-//! let budget = LabelBudget::from_config_shape(
-//!     cfg.listeners.len(),
-//!     cfg.max_backends_per_listener,
-//!     cfg.observability.max_label_cardinality.unwrap_or(10_000),
-//! );
-//! budget.check()?;  // refuses to boot if the worst-case product overflows
-//! ```
-//!
-//! The canonical label keys are documented in `METRICS.md` and
-//! re-exported here as the [`CANONICAL_LABELS`] table so accidental
-//! drift breaks the compile (the table is consumed by tests in this
-//! crate that diff the live registry against it).
+//! Two gates, because they cover different label kinds: [`LabelBudget::check`] is a startup-only
+//! worst-case product check, adequate for CLOSED-set labels; [`EnforcedLabelBudget`] is the
+//! per-emission guard for OPEN-set labels whose cardinality is driven by request data.
 
 use std::collections::HashSet;
 use std::fmt;
 use std::sync::{Mutex, PoisonError};
 
-/// Default ceiling on the worst-case Cartesian product of label
-/// values per metric family. `prometheus`'s text exposition starts
-/// to feel the pain around a few hundred thousand series; 10 000 is
-/// conservative for a single LB instance.
+/// Per-family worst-case series ceiling; text exposition degrades around a few hundred thousand.
 pub const DEFAULT_MAX_LABEL_CARDINALITY: usize = 10_000;
 
-/// ROUND8-OPS-05: worst-case routes-per-listener used by both the
-/// startup [`LabelBudget::check`] math and the per-emission
-/// [`EnforcedLabelBudget`] open-set guard.
-///
-/// The previous default `routes_per_listener = 1` understated the
-/// runtime fan-out by however many routes the future route-extractor
-/// would publish; this constant pins the worst-case both gates use,
-/// so the startup product matches the runtime ceiling.
+/// Worst-case routes per listener. BOTH gates must use this same value, or the startup product
+/// no longer matches the runtime ceiling and the startup check under-counts.
 pub const MAX_ROUTES_BUDGET: usize = 64;
 
-/// Canonical label-key vocabulary the rel-owned RED metric families
-/// use. Anything else is a regression — the integration tests in
-/// `crates/lb-observability/tests/red_label_budget.rs` re-validate
-/// the live registry against this table.
-///
-/// Format: `(family_name, &[label_keys])`.
+/// Canonical `(family, label_keys)` vocabulary. `tests/red_label_budget.rs` diffs the live
+/// registry against this table, so anything not listed here is a regression.
 pub const CANONICAL_LABELS: &[(&str, &[&str])] = &[
     (
         "http_requests_total",
@@ -60,10 +33,6 @@ pub const CANONICAL_LABELS: &[(&str, &[&str])] = &[
     ),
     ("backend_request_duration_seconds", &["listener", "backend"]),
     ("connections_inflight", &["listener"]),
-    // REL-2-09 follow-on: accept-site saturation gauge, emitted by
-    // `lb_observability::MetricsRegistry::accept_inflight_{inc,dec}`
-    // from `crates/lb/src/main.rs`. Cardinality matches
-    // `connections_inflight`.
     ("accept_inflight", &["listener"]),
     ("xdp_conntrack_full_total", &["family"]),
     ("xdp_conntrack_entries_current", &["family"]),
@@ -74,8 +43,7 @@ pub const CANONICAL_LABELS: &[(&str, &[&str])] = &[
     ("xdp_sampler_errors_total", &["kind"]),
 ];
 
-/// Error returned by [`LabelBudget::check`] when the worst-case
-/// label product would overflow the configured ceiling.
+/// Raised by [`LabelBudget::check`] when a family would overflow its ceiling.
 #[derive(Debug)]
 pub struct LabelBudgetError {
     /// Name of the offending family.
@@ -101,29 +69,22 @@ impl fmt::Display for LabelBudgetError {
 
 impl std::error::Error for LabelBudgetError {}
 
-/// Worst-case series counts derived from the static config shape.
-///
-/// The numbers below intentionally do NOT multiply every label
-/// across every family — the canonical RED layout deliberately
-/// pulls `backend` off request-level metrics and `status_class`
-/// off duration histograms. See the table in `METRICS.md`.
+/// Worst-case series counts from the static config shape. Deliberately NOT a full cross-product:
+/// the RED layout keeps `backend` off request metrics and `status_class` off duration histograms.
 #[derive(Copy, Clone, Debug)]
 pub struct LabelBudget {
     /// `cfg.listeners.len()` from the live config.
     pub listeners: usize,
-    /// Worst-case backend pool size *per listener*. The plan
-    /// recommends bounding this at 256 in the config validator.
+    /// Worst-case backends per listener.
     pub backends_per_listener: usize,
-    /// Worst-case route count per listener. Bounded at 64 by the
-    /// config validator.
+    /// Worst-case routes per listener.
     pub routes_per_listener: usize,
     /// Per-family ceiling beyond which `check` refuses to boot.
     pub max_label_cardinality: usize,
 }
 
 impl LabelBudget {
-    /// Build a budget from the live config shape. `routes_per_listener`
-    /// defaults to 1 if the config does not yet expose explicit routes.
+    /// Build a budget from the live config shape.
     #[must_use]
     pub const fn from_config_shape(
         listeners: usize,
@@ -142,7 +103,6 @@ impl LabelBudget {
     /// Worst-case series count for each family.
     #[must_use]
     pub const fn worst_case(&self) -> WorstCase {
-        // Closed-set enumerations.
         const STATUS_CLASSES: usize = 5; // 1xx..5xx
         const HTTP_VERSIONS: usize = 4; // h1.0/h1.1/h2/h3
         WorstCase {
@@ -156,18 +116,15 @@ impl LabelBudget {
             backend_requests_total: self.listeners * self.backends_per_listener * STATUS_CLASSES,
             backend_request_duration_seconds: self.listeners * self.backends_per_listener,
             connections_inflight: self.listeners,
-            // REL-2-09 follow-on: `accept_inflight{listener}` shares
-            // cardinality with `connections_inflight{listener}`.
             accept_inflight: self.listeners,
         }
     }
 
-    /// Refuse to boot if any family would exceed
-    /// `max_label_cardinality`.
+    /// Refuse to boot if any family exceeds its ceiling.
     ///
     /// # Errors
     ///
-    /// Returns the first offending family on overflow.
+    /// The first offending family.
     pub fn check(&self) -> Result<(), LabelBudgetError> {
         let w = self.worst_case();
         let ceiling = self.max_label_cardinality;
@@ -199,31 +156,14 @@ impl LabelBudget {
     }
 }
 
-/// ROUND8-OPS-05: per-emission, open-set cardinality guard.
+/// Per-emission open-set cardinality guard for `route` / `backend` / `listener`, whose runtime
+/// cardinality comes from request data — a misconfigured route extractor can register millions of
+/// tuples between scrapes.
 ///
-/// `LabelBudget::check` is a *startup-only* worst-case Cartesian
-/// product check. For closed-set labels (`version`, `status_class`,
-/// `family`, `action`, …) that is enough. For open-set labels
-/// (`route`, `backend`, `listener`) the runtime cardinality is
-/// driven by per-request data, and a misconfigured route extractor
-/// can register millions of tuples before the scrape interval
-/// notices.
+/// A refused tuple is DROPPED, not folded into an `"other"` bucket, because a placeholder masks
+/// the bug class. Callers bump `metrics_cardinality_refused_total{family}` instead.
 ///
-/// `EnforcedLabelBudget` is the wrapper a hot-path emit site holds.
-/// At each emission the site calls [`Self::admit`] with the
-/// tuple-of-label-values it would register. The wrapper:
-/// 1. Hashes the tuple cheaply (joins with `\x1f` then std hash);
-/// 2. Looks the hash up in a `HashSet`;
-/// 3. If absent and `seen.len() >= ceiling`, refuses (returns
-///    [`CardinalityErr::Refused`]) and the caller is expected to
-///    increment `metrics_cardinality_refused_total{family=…}` and
-///    drop the metric — same tradeoff as the Envoy reference (we do
-///    not fall back to an `"other"` placeholder, because that masks
-///    the bug class).
-/// 4. Otherwise inserts and returns `Ok`.
-///
-/// The structure is `Send + Sync` (Mutex-protected) but the hot path
-/// hashes outside the critical section to keep the lock window tiny.
+/// Hashing happens outside the lock to keep the critical section tiny.
 pub struct EnforcedLabelBudget {
     family: &'static str,
     ceiling: usize,
@@ -243,8 +183,7 @@ impl fmt::Debug for EnforcedLabelBudget {
     }
 }
 
-/// Error returned by [`EnforcedLabelBudget::admit`] when an emit
-/// site would breach the per-family ceiling.
+/// Raised when an emit site would breach its per-family ceiling.
 #[derive(Debug)]
 pub enum CardinalityErr {
     /// The tuple was novel and the per-family budget is exhausted.
@@ -300,14 +239,11 @@ impl EnforcedLabelBudget {
         h.finish()
     }
 
-    /// Admit a label tuple. Returns `Ok` if the tuple was already
-    /// seen or if inserting it keeps the seen-set within the
-    /// ceiling; returns `Err(CardinalityErr::Refused)` otherwise.
+    /// Admit a label tuple.
     ///
     /// # Errors
     ///
-    /// Returns `CardinalityErr::Refused` when the tuple is novel and
-    /// `seen.len() >= ceiling`.
+    /// `CardinalityErr::Refused` when the tuple is novel and the ceiling is exhausted.
     pub fn admit(&self, values: &[&str]) -> Result<(), CardinalityErr> {
         let h = Self::hash_tuple(values);
         let mut guard = self.seen.lock().unwrap_or_else(PoisonError::into_inner);
@@ -325,8 +261,7 @@ impl EnforcedLabelBudget {
         Ok(())
     }
 
-    /// Current size of the seen-set. Cheap; intended for the
-    /// 1Hz sampler to expose `metrics_series_observed_total{family}`.
+    /// Current seen-set size, for `metrics_series_observed_total{family}`.
     #[must_use]
     pub fn observed(&self) -> usize {
         self.seen.lock().map(|g| g.len()).unwrap_or(0)
@@ -358,8 +293,7 @@ pub struct WorstCase {
     pub backend_request_duration_seconds: usize,
     /// `connections_inflight{listener}`
     pub connections_inflight: usize,
-    /// `accept_inflight{listener}` — REL-2-09 follow-on saturation
-    /// gauge bumped at the accept-site semaphore.
+    /// `accept_inflight{listener}` — the accept-site saturation gauge.
     pub accept_inflight: usize,
 }
 
@@ -384,8 +318,7 @@ mod tests {
 
     #[test]
     fn oversize_config_refuses_to_start() {
-        // 200 listeners × 500 backends × 5 status classes = 500_000
-        // — well over the 10_000 ceiling.
+        // 200 × 500 × 5 = 500_000, far over the ceiling.
         let b = LabelBudget::from_config_shape(200, 500, 1, DEFAULT_MAX_LABEL_CARDINALITY);
         let err = b.check().expect_err("budget should refuse oversize config");
         assert_eq!(err.family, "backend_requests_total");
@@ -394,9 +327,8 @@ mod tests {
 
     #[test]
     fn canonical_label_table_covers_red_families() {
-        // The integration test in tests/red_label_budget.rs depends
-        // on these entries existing — re-assert here so a rebase
-        // accident is caught at unit-test time too.
+        // Re-asserted here so a rebase that drops these fails at unit-test time, not only in the
+        // integration test.
         let names: Vec<&str> = CANONICAL_LABELS.iter().map(|(n, _)| *n).collect();
         for required in [
             "http_requests_total",
@@ -460,9 +392,7 @@ mod tests {
 
     #[test]
     fn xdp_label_keys_locked_to_action_family_direction_mode() {
-        // REL-2-13 + EBPF-2-08 cross-review §2: the action/family/
-        // direction/mode keys are wire-stable. This test fails if
-        // anyone renames them in CANONICAL_LABELS.
+        // These label keys are WIRE-STABLE — renaming one breaks every existing dashboard.
         let entry = CANONICAL_LABELS
             .iter()
             .find(|(n, _)| *n == "xdp_packets_total")

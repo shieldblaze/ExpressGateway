@@ -1,18 +1,9 @@
-//! Admin HTTP listener.
+//! Admin HTTP listener: `GET` on `/metrics`, `/healthz`, `/livez`, `/readyz`, `/startupz`.
 //!
-//! Endpoints (all `GET`-only, loopback-bind expected):
-//!
-//! | Path        | Body type                | Semantics                                                     |
-//! |-------------|--------------------------|---------------------------------------------------------------|
-//! | `/metrics`  | Prometheus text 0.0.4    | Registry exposition for the local scraper                     |
-//! | `/healthz`  | `text/plain`             | Back-compat alias for `/livez` (REL-2-04)                     |
-//! | `/livez`    | `application/json`       | 200 while the runtime is alive; never 503 (REL-2-04)          |
-//! | `/readyz`   | `application/json`       | 200 only while `ProbeState::Ready`; 503 otherwise (REL-2-04)  |
-//! | `/startupz` | `application/json`       | 200 once `!ProbeState::Starting`; 503 during boot (REL-2-04)  |
-//!
-//! Intended for loopback scrapes. No TLS, no auth — the operator is
-//! expected to bind it to 127.0.0.1 behind a reverse proxy or over a
-//! management VPN. mTLS is deliberately out of scope for this pillar.
+//! NO TLS and NO mTLS. Bearer-token auth is OPTIONAL — [`serve_with_auth`] enforces it on
+//! information-bearing endpoints, while [`serve_with_probes`] serves everything anonymously. Even
+//! with a token the transport is plaintext, so the expected posture is a loopback bind behind a
+//! reverse proxy or a management VPN.
 
 use std::future::Future;
 use std::io;
@@ -40,12 +31,8 @@ use crate::prometheus_exposition::{CONTENT_TYPE, render_text};
 struct AdminService {
     registry: Arc<MetricsRegistry>,
     probes: Arc<ProbeRegistry>,
-    /// SEC-2-06 (Wave 2c-2): when present every request must carry
-    /// `Authorization: Bearer <token>` whose SHA-256 matches the gate.
-    /// Liveness probes (`/livez`, `/healthz`) are exempt so k8s
-    /// kubelet can still verify the process is alive even without
-    /// the admin token — the gateway's livez/readyz semantics are
-    /// not secret.
+    /// When present, requests need a matching bearer token. Probe endpoints stay EXEMPT so the
+    /// kubelet can verify liveness without the admin token.
     auth: Option<Arc<AdminAuthGate>>,
 }
 
@@ -62,9 +49,7 @@ impl Service<hyper::Request<Incoming>> for AdminService {
     }
 }
 
-/// SEC-2-06: gate the request on the bearer-token check. Liveness +
-/// startup probes are exempt — k8s probes them anonymously over
-/// loopback and they reveal no secrets.
+/// Bearer-token check. Probes are exempt: k8s hits them anonymously and they reveal no secrets.
 fn is_probe_path(path: &str) -> bool {
     matches!(path, "/livez" | "/healthz" | "/startupz" | "/readyz")
 }
@@ -78,9 +63,6 @@ fn route(
     if request.method() != http::Method::GET {
         return plain(StatusCode::METHOD_NOT_ALLOWED, "method not allowed\n");
     }
-    // SEC-2-06 Wave 2c-2: enforce bearer-token auth on
-    // information-bearing endpoints (`/metrics`). Probe endpoints
-    // are exempt — k8s probes them anonymously over loopback.
     if let Some(gate) = auth {
         if gate.enforced() && !is_probe_path(request.uri().path()) {
             let header = request
@@ -108,8 +90,7 @@ fn route(
     }
 }
 
-/// REL-2-04: `/livez` — 200 while the runtime is alive. Stays 200
-/// even during drain so K8s does not kill the pod mid-shutdown.
+/// `/livez` — 200 while alive, INCLUDING during drain, or k8s kills the pod mid-shutdown.
 fn livez_response(probes: &ProbeRegistry) -> Response<Full<Bytes>> {
     let status = if probes.is_live() {
         StatusCode::OK
@@ -119,8 +100,7 @@ fn livez_response(probes: &ProbeRegistry) -> Response<Full<Bytes>> {
     json_status(status, probes.state())
 }
 
-/// REL-2-04: `/readyz` — 200 iff [`ProbeState::Ready`]. 503 during
-/// boot and during drain.
+/// `/readyz` — 200 only when [`ProbeState::Ready`]; 503 during boot and drain.
 fn readyz_response(probes: &ProbeRegistry) -> Response<Full<Bytes>> {
     let state = probes.state();
     let status = if matches!(state, ProbeState::Ready) {
@@ -131,8 +111,7 @@ fn readyz_response(probes: &ProbeRegistry) -> Response<Full<Bytes>> {
     json_status(status, state)
 }
 
-/// REL-2-04: `/startupz` — 200 once the startup sequence has
-/// completed at least once (i.e. NOT `Starting`).
+/// `/startupz` — 200 once the process is no longer `Starting`.
 fn startupz_response(probes: &ProbeRegistry) -> Response<Full<Bytes>> {
     let state = probes.state();
     let status = if probes.is_started() {
@@ -144,10 +123,8 @@ fn startupz_response(probes: &ProbeRegistry) -> Response<Full<Bytes>> {
 }
 
 fn json_status(status: StatusCode, state: ProbeState) -> Response<Full<Bytes>> {
-    // Hand-formatted JSON to avoid pulling serde_json into
-    // lb-observability for a one-key object. The token vocabulary is
-    // a closed set defined in `ProbeState::body_token`, so escaping
-    // is unnecessary.
+    // Hand-formatted to avoid a serde_json dep for one key. Escaping is unnecessary ONLY because
+    // `ProbeState::body_token` is a closed vocabulary.
     let body = format!("{{\"status\":\"{}\"}}\n", state.body_token());
     Response::builder()
         .status(status)
@@ -168,10 +145,8 @@ fn plain(status: StatusCode, body: &'static str) -> Response<Full<Bytes>> {
 }
 
 fn fallback_500() -> Response<Full<Bytes>> {
-    // Response::builder only fails on invalid header values; the inputs
-    // above are static strings, so this branch is unreachable at
-    // runtime. We still return a Response rather than panic so
-    // `#![deny(clippy::unwrap_used)]` passes.
+    // Unreachable — the inputs are static strings — but returned rather than unwrapped because
+    // the crate denies `unwrap_used`.
     let mut r = Response::new(Full::new(Bytes::from_static(
         b"internal error building response\n",
     )));
@@ -179,22 +154,13 @@ fn fallback_500() -> Response<Full<Bytes>> {
     r
 }
 
-/// Bind `addr` and serve admin HTTP requests until `shutdown` fires.
-///
-/// `probes` is the [`ProbeRegistry`] consulted by the
-/// `/livez`/`/readyz`/`/startupz` handlers. The caller (Wave 2c
-/// `main.rs`) keeps a clone so it can flip the state on bind / drain.
-///
-/// The listener runs as a standalone loop; `serve` only returns when
-/// the cancellation token is tripped or the bind fails. Per-connection
-/// tasks are best-effort; a single bad client never takes the listener
+/// Serve the admin endpoints until `shutdown` fires. The caller keeps a `probes` clone to flip
+/// state on bind/drain. Per-connection failures are logged at debug and never take the listener
 /// down.
 ///
 /// # Errors
 ///
-/// Returns an [`io::Error`] if the TCP bind fails. Successful accepts
-/// whose handshake or request handling subsequently errors are logged
-/// at `debug` and do not propagate.
+/// [`io::Error`] on bind failure only.
 pub async fn serve_with_probes(
     registry: Arc<MetricsRegistry>,
     probes: Arc<ProbeRegistry>,
@@ -204,22 +170,13 @@ pub async fn serve_with_probes(
     serve_with_auth(registry, probes, None, addr, shutdown).await
 }
 
-/// SEC-2-06 (Wave 2c-2): admin HTTP listener with bearer-token
-/// enforcement. `auth = None` matches [`serve_with_probes`] semantics
-/// (no auth required); `auth = Some(gate)` enforces
-/// `Authorization: Bearer <token>` on every information-bearing
-/// endpoint. Liveness / readiness / startup probes remain
-/// anonymously accessible so k8s kubelet can verify the process
-/// without the admin token.
-///
-/// The caller is expected to have validated the bind address
-/// against [`AdminAuthGate::validate_bind`] before invoking this
-/// function — the bind guard is a startup-time concern owned by
-/// `lb/src/main.rs`.
+/// [`serve_with_probes`] with optional bearer-token enforcement on information-bearing endpoints;
+/// probes stay anonymous. This function does NOT check the bind address — the caller must have
+/// run [`AdminAuthGate::validate_bind`] first.
 ///
 /// # Errors
 ///
-/// Same conditions as [`serve_with_probes`].
+/// As [`serve_with_probes`].
 pub async fn serve_with_auth(
     registry: Arc<MetricsRegistry>,
     probes: Arc<ProbeRegistry>,
@@ -275,28 +232,19 @@ pub async fn serve_with_auth(
     Ok(local)
 }
 
-/// Back-compat wrapper used by call sites that have not yet been
-/// updated to thread the [`ProbeRegistry`] through (notably
-/// `crates/lb/src/main.rs` until Wave 2c).
-///
-/// Internally synthesises a stand-alone [`ProbeRegistry`] in the
-/// `Starting` state. Callers that need to actually flip readiness
-/// must use [`serve_with_probes`] and keep their own clone of the
-/// registry.
+/// Back-compat wrapper that synthesises its own [`ProbeRegistry`]. Readiness can never be flipped
+/// through this entry point — use [`serve_with_probes`] and hold the registry.
 ///
 /// # Errors
 ///
-/// Same conditions as [`serve_with_probes`].
+/// As [`serve_with_probes`].
 pub async fn serve(
     registry: Arc<MetricsRegistry>,
     addr: SocketAddr,
     shutdown: CancellationToken,
 ) -> io::Result<SocketAddr> {
     let probes = ProbeRegistry::shared();
-    // Until the caller wires the real probe registry, mark Ready so
-    // that legacy `/healthz` consumers continue to see 200. The
-    // Wave-2c switch (REL-2-02) replaces this with a real registry
-    // owned by `main.rs`.
+    // Forced Ready so legacy `/healthz` consumers keep seeing 200.
     probes.set_ready();
     serve_with_probes(registry, probes, addr, shutdown).await
 }

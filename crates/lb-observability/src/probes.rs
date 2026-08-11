@@ -1,38 +1,20 @@
-//! REL-2-04: process-wide liveness / readiness / startup probe state.
-//!
-//! [`ProbeRegistry`] is shared across the binary via [`Arc`]. The admin
-//! HTTP listener reads it in the `/livez`, `/readyz`, and `/startupz`
-//! handlers; the binary's `async_main` flips the bits as the process
-//! transitions through bind / serve / drain.
-//!
-//! The state is encoded in a single [`AtomicU8`] so reads are
-//! lock-free on the hot path (each scrape touches one cache line).
-//! Wave 2c will wire the SIGTERM drain into
-//! [`ProbeRegistry::set_draining`]; for Wave 2a we ship the data
-//! structure + the HTTP endpoints, and the integration tests below
-//! exercise every transition through the public API.
+//! Process-wide liveness / readiness / startup probe state, in one [`AtomicU8`] so scrapes stay
+//! lock-free.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
-/// Process lifecycle phase as seen by the K8s-style probes.
-///
-/// Transitions are strictly forward — once the process leaves
-/// [`ProbeState::Starting`] it never returns. `Draining` is reached
-/// from `Ready` (REL-2-02 SIGTERM path, Wave 2c).
+/// Lifecycle phase behind the probes. Transitions are STRICTLY FORWARD — nothing returns to
+/// `Starting`, and nothing leaves `Draining`.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ProbeState {
-    /// Runtime is up but listeners have not yet completed bind. All
-    /// three probes return 503 except `/livez` which returns 200 to
-    /// confirm the process itself is alive.
+    /// Up but not bound; only `/livez` returns 200.
     Starting = 0,
-    /// All configured listeners are bound and accepting. Both
-    /// `/livez` and `/readyz` return 200.
+    /// Bound and accepting; `/livez` and `/readyz` both 200.
     Ready = 1,
-    /// Graceful shutdown in progress (REL-2-02). `/readyz` returns
-    /// 503 so the load balancer in front stops sending new traffic;
-    /// `/livez` stays 200 so K8s does NOT kill the pod mid-drain.
+    /// Draining: `/readyz` 503 to stop new traffic, but `/livez` stays 200 or K8s kills the pod
+    /// mid-drain.
     Draining = 2,
 }
 
@@ -60,12 +42,7 @@ impl ProbeState {
     }
 }
 
-/// Shared registry that other crates clone an [`Arc`] of.
-///
-/// The expected ownership topology is:
-///   - One [`Arc<ProbeRegistry>`] held by the admin HTTP service.
-///   - One [`Arc<ProbeRegistry>`] held by `async_main` so it can
-///     flip `Ready` after bind completes and `Draining` on SIGTERM.
+/// Shared probe state: one `Arc` in the admin service, one in `async_main` to flip the phase.
 #[derive(Debug)]
 pub struct ProbeRegistry {
     state: AtomicU8,
@@ -86,8 +63,7 @@ impl ProbeRegistry {
         }
     }
 
-    /// Convenience constructor that already wraps the registry in an
-    /// [`Arc`] for share-across-tasks ergonomics.
+    /// [`Self::new`] pre-wrapped in an [`Arc`].
     #[must_use]
     pub fn shared() -> Arc<Self> {
         Arc::new(Self::new())
@@ -99,12 +75,9 @@ impl ProbeRegistry {
         ProbeState::from_byte(self.state.load(Ordering::Acquire))
     }
 
-    /// Flip to [`ProbeState::Ready`]. Idempotent. No-op if the
-    /// registry is already [`ProbeState::Draining`] — a draining
-    /// process must never silently flip back to ready.
+    /// Flip to `Ready`. NO-OP while `Draining` — a draining process must never read ready again.
     pub fn set_ready(&self) {
-        // CAS Starting → Ready. If we are already in Ready (idempotent
-        // success) or Draining (terminal), leave the byte alone.
+        // CAS only from Starting; Ready is idempotent and Draining is terminal.
         let _ = self.state.compare_exchange(
             ProbeState::Starting.as_byte(),
             ProbeState::Ready.as_byte(),
@@ -113,8 +86,7 @@ impl ProbeRegistry {
         );
     }
 
-    /// Flip to [`ProbeState::Draining`]. Idempotent. Wave 2c will
-    /// call this from the SIGTERM handler in `main.rs`.
+    /// Flip to `Draining`; idempotent.
     pub fn set_draining(&self) {
         self.state
             .store(ProbeState::Draining.as_byte(), Ordering::Release);
@@ -126,19 +98,14 @@ impl ProbeRegistry {
         matches!(self.state(), ProbeState::Ready)
     }
 
-    /// `true` if the runtime is alive — i.e. the process is up. Stays
-    /// true through `Draining` so K8s does not yank the pod mid-drain.
+    /// True whenever the process is up, INCLUDING while draining.
     #[must_use]
     pub fn is_live(&self) -> bool {
-        // Process is always live once this registry exists; only an
-        // abort/exit changes that — at which point the listener no
-        // longer answers anyway.
+        // If the process were not live, the listener would not be answering.
         true
     }
 
-    /// `true` once the startup sequence has finished — same condition
-    /// as `is_ready()` because we treat "all listeners bound + DNS
-    /// resolved" as the single startup gate.
+    /// True once startup finished; the same gate as `is_ready()`.
     #[must_use]
     pub fn is_started(&self) -> bool {
         !matches!(self.state(), ProbeState::Starting)

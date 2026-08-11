@@ -1,13 +1,8 @@
-//! REL-2-06 proof test: emit a `tracing::info!` event through the
-//! JSON formatter into an in-memory buffer, then parse the captured
-//! bytes as JSON and assert the canonical fields are present.
+//! JSON log-schema proof.
 //!
-//! We can't simply call [`init_tracing`] here — `tracing-subscriber`
-//! installs a *process-global* default and a second test would race
-//! against the first. Instead the test mirrors the formatter
-//! construction in `lb_observability::log` and uses
-//! `tracing::subscriber::with_default` to make it apply for the
-//! scope of a single closure.
+//! `init_tracing` CANNOT be used here — it installs a process-global default and a second test
+//! would race it — so the formatter construction is mirrored under `with_default` instead. Keep
+//! the mirror in sync with `lb_observability::log`.
 
 use std::io;
 use std::sync::{Arc, Mutex};
@@ -17,8 +12,7 @@ use tracing::subscriber::with_default;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt;
 
-/// Mutex-wrapped `Vec<u8>` that satisfies `io::Write`. Each `make_writer()`
-/// hand returns a guarded handle so concurrent writes serialise.
+/// `io::Write` buffer whose guard serialises concurrent writes.
 #[derive(Clone, Default)]
 struct CaptureWriter {
     buf: Arc<Mutex<Vec<u8>>>,
@@ -47,10 +41,8 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CaptureWriter {
     }
 }
 
-/// Find every balanced `{...}` substring in `s` and return them. Naïve
-/// brace counter — adequate because the formatter emits one JSON
-/// object per event and the only braces inside a line are escaped
-/// (inside string literals, which our test inputs avoid).
+/// Naïve balanced-brace split; adequate only because the test inputs contain no braces in
+/// string literals.
 fn json_objects(s: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let bytes = s.as_bytes();
@@ -78,10 +70,7 @@ fn json_objects(s: &str) -> Vec<&str> {
     out
 }
 
-/// Minimal JSON-like field extractor: pulls `"key":"value"` or
-/// `"key":<bare-token>`. We deliberately avoid pulling in serde_json
-/// to keep dev-deps tight; the formatter's output is well-defined and
-/// the test is happy with a regex-grade check.
+/// Regex-grade field extractor, avoiding a serde_json dev-dep.
 fn json_get<'a>(blob: &'a str, key: &str) -> Option<&'a str> {
     let needle = format!("\"{key}\":");
     let after = blob.find(&needle).map(|i| i + needle.len())?;
@@ -124,8 +113,7 @@ fn test_json_log_emits_json() {
     );
     let obj = objects[0];
 
-    // Required schema fields — these are the keys operator log
-    // shippers grep for, lock them in.
+    // Log shippers grep for these keys.
     assert!(
         obj.contains("\"timestamp\":"),
         "JSON object missing timestamp: {obj}",
@@ -139,24 +127,19 @@ fn test_json_log_emits_json() {
         "JSON object missing target: {obj}",
     );
 
-    // Level is INFO.
     let level = json_get(obj, "level").unwrap_or("");
     assert_eq!(level, "INFO", "unexpected level in {obj}");
 
-    // Flattened user-supplied `version` field made it through.
     let version = json_get(obj, "version").unwrap_or("");
     assert_eq!(version, "0.1.0", "version field missing/wrong in {obj}");
 
-    // The message field is present (key name is `message` under flatten_event).
     let msg = json_get(obj, "message").unwrap_or("");
     assert!(msg.contains("ExpressGateway"), "message field: {msg}");
 }
 
 #[test]
 fn test_log_format_env_token_round_trips() {
-    // Sanity-check the parser used by init_tracing's LB_LOG_FORMAT
-    // resolution. Acts as an in-tree assertion that the operator
-    // vocabulary documented in the RUNBOOK stays valid.
+    // Keeps the documented `LB_LOG_FORMAT` vocabulary valid.
     assert_eq!(LogFormat::parse("json"), Some(LogFormat::Json));
     assert_eq!(LogFormat::parse("text"), Some(LogFormat::Text));
     assert_eq!(LogFormat::parse(""), None);

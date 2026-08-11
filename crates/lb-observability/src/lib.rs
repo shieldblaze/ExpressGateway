@@ -1,14 +1,8 @@
-//! Metrics, tracing, and logging for the load balancer.
+//! Metrics, tracing, and logging.
 //!
-//! The [`MetricsRegistry`] wraps a [`prometheus::Registry`] with a handle
-//! cache so `counter("foo", "...")`, `histogram(...)`, and friends are
-//! idempotent — repeat calls return the same registered handle. The
-//! legacy `increment` / `get` pair is kept for back-compat; it now routes
-//! to an `IntCounter` internally so old call sites continue to work.
-//!
-//! Exposition is handled by [`prometheus_exposition::render_text`]; the
-//! admin HTTP listener that serves the text format lives in
-//! [`admin_http`].
+//! [`MetricsRegistry`] adds a handle cache over [`prometheus::Registry`] so `counter(...)` and
+//! friends are IDEMPOTENT — repeat calls return the same handle instead of splitting increments
+//! across two registrations.
 #![deny(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -31,15 +25,9 @@ use prometheus::{
     HistogramOpts, HistogramVec, IntCounterVec, IntGaugeVec, Opts, Registry, proto::MetricFamily,
 };
 
-/// Re-export of [`prometheus::IntCounter`] so downstream crates that
-/// already depend on `lb-observability` (e.g. `lb-l7` for the
-/// ROUND8-L7-07 glitches counter) can name a registered counter
-/// handle without taking a direct `prometheus` dependency edge.
+/// Re-export so downstream crates can name a counter handle without a direct `prometheus` edge.
 pub use prometheus::IntCounter;
-/// Re-export of [`prometheus::IntGauge`] so downstream crates that depend
-/// on `lb-observability` (e.g. `lb-quic` for the `quic_passthrough_flows`
-/// gauge) can name a registered gauge handle without a direct
-/// `prometheus` dependency edge.
+/// Re-export so downstream crates can name a gauge handle without a direct `prometheus` edge.
 pub use prometheus::IntGauge;
 
 pub mod admin_http;
@@ -64,14 +52,10 @@ pub use quic_h3_recycle_metrics::QuicH3RecycleMetrics;
 pub use quic_modeb_metrics::QuicModeBMetrics;
 pub use xdp_metrics::{ConntrackFamily, SamplerBaseline, XdpMetrics, stat_slot_labels};
 
-/// Soft cap on the number of series a single registry will hold before a
-/// tracing warning is emitted. Purely advisory — registration still
-/// succeeds past the threshold.
+/// Advisory series cap; past it a warning is emitted but registration still SUCCEEDS.
 const CARDINALITY_WARN_THRESHOLD: usize = 10_000;
 
-/// Internal handle-cache entries. Each variant keeps the fully-typed
-/// handle that was registered under a given name so repeat
-/// `counter("foo", "...")` calls return the same instance.
+/// Handle-cache entries, keeping the typed handle registered under each name.
 #[derive(Clone)]
 enum Handle {
     Counter(IntCounter),
@@ -82,13 +66,10 @@ enum Handle {
     GaugeVec(IntGaugeVec),
 }
 
-/// Errors raised when a metric name is already registered with a
-/// different underlying type.
+/// Raised when a metric name is already registered under a different type.
 #[derive(Debug, thiserror::Error)]
 pub enum MetricsError {
-    /// The name is already registered under a different metric type
-    /// (for example, the caller asked for `counter("foo", ...)` after
-    /// `histogram("foo", ...)` was already installed).
+    /// Name already registered under a different metric type.
     #[error("metric {name:?} already registered as a different type")]
     TypeMismatch {
         /// Offending metric name.
@@ -99,11 +80,7 @@ pub enum MetricsError {
     Prometheus(#[from] prometheus::Error),
 }
 
-/// A thread-safe metrics registry, backed by [`prometheus::Registry`].
-///
-/// Repeat calls to `counter(name, help)` return the same handle so
-/// instrumentation sites can fetch their metric cheaply on every hit
-/// without external caching.
+/// Thread-safe metrics registry; repeat `counter(name, help)` calls return the same handle.
 #[derive(Debug)]
 pub struct MetricsRegistry {
     inner: Registry,
@@ -139,18 +116,11 @@ impl MetricsRegistry {
         }
     }
 
-    /// Get-or-create an [`IntCounter`] registered under `name`.
-    ///
-    /// If the name was previously registered as a counter the existing
-    /// handle is returned unchanged — `help` is ignored on the hot path.
+    /// Get-or-create an [`IntCounter`]; on a cache hit `help` is IGNORED.
     ///
     /// # Errors
     ///
-    /// Returns [`MetricsError::TypeMismatch`] if `name` is already
-    /// registered under a different metric type, or
-    /// [`MetricsError::Prometheus`] if the underlying `prometheus`
-    /// registry rejects the registration (for example, invalid label
-    /// name).
+    /// [`MetricsError`].
     pub fn counter(&self, name: &str, help: &str) -> Result<IntCounter, MetricsError> {
         // Fast path: a previous registration is visible — return its handle.
         if let Some(entry) = self.handles.get(name) {
@@ -161,11 +131,8 @@ impl MetricsRegistry {
                 name: name.to_owned(),
             });
         }
-        // Slow path: take the shard write lock for this key so only one
-        // thread runs prometheus registration; the others wait, observe
-        // the inserted handle, and clone it. This eliminates the
-        // get-or-create race that could split increments across two
-        // separately-registered handles or drop them via AlreadyReg.
+        // The write lock must cover registration, not just insertion: otherwise two threads
+        // register separately and increments split across two handles or vanish via AlreadyReg.
         match self.handles.entry(name.to_owned()) {
             Entry::Occupied(occ) => match occ.get() {
                 Handle::Counter(c) => Ok(c.clone()),
@@ -183,9 +150,7 @@ impl MetricsRegistry {
         }
     }
 
-    /// Get-or-create a labeled [`IntCounterVec`]. Labels are fixed at
-    /// registration time; a second call with the same name must use
-    /// the same label set.
+    /// Get-or-create a labeled [`IntCounterVec`]. The label set is FIXED at first registration.
     ///
     /// # Errors
     ///
@@ -299,9 +264,7 @@ impl MetricsRegistry {
         }
     }
 
-    /// Get-or-create a labeled [`IntGaugeVec`]. Labels are fixed at
-    /// registration time; a second call with the same name must use
-    /// the same label set.
+    /// Get-or-create a labeled [`IntGaugeVec`]. The label set is FIXED at first registration.
     ///
     /// # Errors
     ///
@@ -368,15 +331,11 @@ impl MetricsRegistry {
         }
     }
 
-    /// REL-2-09 follow-on: get-or-create the canonical
-    /// `accept_inflight{listener}` gauge family. Bumped at accept-site
-    /// when a per-listener inflight permit is acquired, decremented on
-    /// permit release. Pair with [`Self::accept_inflight_inc`] /
-    /// [`Self::accept_inflight_dec`] for ergonomic call-site wiring.
+    /// Get-or-create the `accept_inflight{listener}` gauge family.
     ///
     /// # Errors
     ///
-    /// Bubbles up the underlying `prometheus` registration error.
+    /// The underlying `prometheus` registration error.
     pub fn accept_inflight_gauge(&self) -> Result<IntGaugeVec, MetricsError> {
         self.gauge_vec(
             "accept_inflight",
@@ -385,10 +344,8 @@ impl MetricsRegistry {
         )
     }
 
-    /// REL-2-09 follow-on: increment the `accept_inflight{listener=…}`
-    /// gauge. Best-effort — registration failures are logged at warn
-    /// and the metric is dropped on this call so the hot path is never
-    /// torn down by a metrics error.
+    /// Increment `accept_inflight{listener}`. BEST-EFFORT: a registration failure warns and drops
+    /// the sample rather than failing the hot path.
     pub fn accept_inflight_inc(&self, listener: &str) {
         match self.accept_inflight_gauge() {
             Ok(g) => g.with_label_values(&[listener]).inc(),
@@ -398,8 +355,7 @@ impl MetricsRegistry {
         }
     }
 
-    /// REL-2-09 follow-on: decrement the `accept_inflight{listener=…}`
-    /// gauge. Mirror of [`Self::accept_inflight_inc`].
+    /// Decrement `accept_inflight{listener}`; mirror of [`Self::accept_inflight_inc`].
     pub fn accept_inflight_dec(&self, listener: &str) {
         match self.accept_inflight_gauge() {
             Ok(g) => g.with_label_values(&[listener]).dec(),
@@ -409,21 +365,11 @@ impl MetricsRegistry {
         }
     }
 
-    /// REL-2-15 / CODE-2-02 wiring: get-or-create the canonical
-    /// `panic_total` counter.
-    ///
-    /// The Wave-2c `init_panic_hook` calls this once at startup,
-    /// clones the resulting handle into a `&'static`-bound box, and
-    /// bumps it from inside the panic hook (the AtomicU64 in
-    /// `crates/lb/src/main.rs::PANIC_TOTAL` becomes redundant once
-    /// the rewrite lands). Calling `panic_total_counter()` repeatedly
-    /// is cheap — the underlying handle is `Arc`-backed inside
-    /// `prometheus` and the registration cache makes the second call
-    /// a hashmap lookup.
+    /// Get-or-create the `panic_total` counter; the panic hook holds a clone of this handle.
     ///
     /// # Errors
     ///
-    /// Bubbles up the underlying `prometheus` registration error.
+    /// The underlying `prometheus` registration error.
     pub fn panic_total_counter(&self) -> Result<IntCounter, MetricsError> {
         self.counter(
             "panic_total",
@@ -431,25 +377,20 @@ impl MetricsRegistry {
         )
     }
 
-    /// Snapshot the registered metric families. Used by the text
-    /// exposition path.
+    /// Snapshot the registered metric families.
     #[must_use]
     pub fn gather(&self) -> Vec<MetricFamily> {
         self.inner.gather()
     }
 
-    /// Direct access to the inner [`prometheus::Registry`] for callers
-    /// that want to register collectors the helpers above don't cover
-    /// (for example a process collector).
+    /// The inner registry, for collectors the helpers do not cover.
     #[must_use]
     pub const fn inner(&self) -> &Registry {
         &self.inner
     }
 
-    /// Back-compat helper: increment a counter by `value`, creating it
-    /// on first touch. The `help` string is the metric name itself —
-    /// callers that want a proper help text should use [`Self::counter`]
-    /// directly.
+    /// Increment a counter, creating it on first touch. The help string is the NAME — use
+    /// [`Self::counter`] for real help text.
     pub fn increment(&self, name: &str, value: u64) {
         match self.counter(name, name) {
             Ok(c) => c.inc_by(value),
@@ -459,10 +400,7 @@ impl MetricsRegistry {
         }
     }
 
-    /// Back-compat helper: read the current value of a counter
-    /// previously touched via [`Self::increment`] or [`Self::counter`].
-    /// Returns `None` if the name is unknown or bound to a non-counter
-    /// handle.
+    /// Read a counter's value; `None` if unknown or not a counter.
     #[must_use]
     pub fn get(&self, name: &str) -> Option<u64> {
         let handle = self.handles.get(name)?.value().clone();
@@ -472,8 +410,7 @@ impl MetricsRegistry {
         None
     }
 
-    /// Number of distinct metric names registered (families, not
-    /// individual series).
+    /// Distinct metric FAMILIES registered, not series.
     #[must_use]
     pub fn len(&self) -> usize {
         self.handles.len()
@@ -502,9 +439,7 @@ impl MetricsRegistry {
     }
 }
 
-/// Convenience bucket set for HTTP request latency in seconds, spanning
-/// 100 µs to ~10 s on a (roughly) geometric progression. Mirrors the
-/// Prometheus exposition guide's default HTTP latency buckets.
+/// HTTP latency buckets, 100 µs to ~10 s, matching the Prometheus guide's defaults.
 #[must_use]
 pub fn http_latency_buckets() -> Vec<f64> {
     vec![
@@ -515,9 +450,7 @@ pub fn http_latency_buckets() -> Vec<f64> {
 /// Share a registry across tasks cheaply.
 pub type SharedRegistry = Arc<MetricsRegistry>;
 
-// Keep prometheus::core::Collector in scope so trait bounds in the
-// Collector-returning helpers resolve on call sites that only import
-// this crate.
+// Sole consumer of the `core::Collector` import; removing it orphans that `use`.
 #[allow(dead_code)]
 fn _force_collector_linkage(_: &dyn Collector) {}
 

@@ -1,31 +1,19 @@
 //! Prometheus text-format exposition (version 0.0.4).
-//!
-//! The admin HTTP listener uses [`render_text`] to serialize the
-//! registry on each `GET /metrics`. Callers that want to format a
-//! single metric family without going through the HTTP endpoint (for
-//! example, in tests) can do the same thing directly.
 
 use prometheus::{Encoder, TextEncoder};
 
 use crate::MetricsRegistry;
 
-/// Content-type header value for the 0.0.4 text format. Matches
-/// [`prometheus::TEXT_FORMAT`] but pulls it into this module so callers
-/// don't have to import the upstream crate.
+/// Content-type for the 0.0.4 text format, re-exported so callers skip the `prometheus` import.
 pub const CONTENT_TYPE: &str = "text/plain; version=0.0.4; charset=utf-8";
 
-/// Render the registry as Prometheus text-format output.
-///
-/// The result always terminates with a trailing newline so HTTP
-/// responses pass the Prometheus scraper's conformance check.
+/// Render the registry. Always ends with a newline — the scraper's conformance check requires it.
 #[must_use]
 pub fn render_text(registry: &MetricsRegistry) -> String {
     let mfs = registry.gather();
     let encoder = TextEncoder::new();
     let mut buf = Vec::with_capacity(1024);
-    // TextEncoder::encode only fails if the writer fails; a Vec<u8>
-    // writer never returns Err, but we still degrade gracefully
-    // rather than bubbling a panic.
+    // A `Vec<u8>` writer cannot fail; degrade rather than panic anyway.
     if let Err(e) = encoder.encode(&mfs, &mut buf) {
         tracing::error!(error = %e, "prometheus text encode failed");
         return String::new();
