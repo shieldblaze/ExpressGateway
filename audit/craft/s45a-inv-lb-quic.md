@@ -2,7 +2,10 @@
 
 ## Summary
 
-files_scanned=46  slop=1  ambiguous=37  load_bearing_notable=30
+files_scanned=46  slop=1  ambiguous=39  load_bearing_notable=30
+
+(ambiguous breakdown: A deleted-symbol refs=13, B drifted line-refs=16, C stale status claims=6,
+D stale version pins=1, E internal contradictions=3)
 
 Read-only pass. No file in `crates/lb-quic/**` was edited.
 
