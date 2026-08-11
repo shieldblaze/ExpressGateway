@@ -1140,7 +1140,7 @@ mod tests {
     }
 
     fn build_elf_with_license_section(payload: &[u8]) -> Vec<u8> {
-        // Layout: [0..64] ELF header · [64..] section data (shstrtab payload "\\0.shstrtab\\0license\\0", then the license payload) · then the section header table (3 entries × 64 bytes).
+        // Layout: [0..64] ELF header · [64..] section data (shstrtab payload "\0.shstrtab\0license\0", then the license payload) · then the section header table (3 entries × 64 bytes).
         const EHDR_SIZE: usize = 64;
         const SHDR_SIZE: usize = 64;
 

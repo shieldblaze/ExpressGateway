@@ -1,7 +1,4 @@
-//! Launch + supervise the real `expressgateway` binary as a child.
-//!
-//! Readiness is gated on `/metrics` answering (works for UDP-only datapaths too), and the
-//! Drop guard SIGTERMs + REAPS so a soak never leaks its own gateway-under-test.
+//! Launch + supervise the real `expressgateway` binary as a child. Readiness is gated on `/metrics` answering (works for UDP-only datapaths too), and the Drop guard SIGTERMs + REAPS so a soak never leaks its own gateway-under-test.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -32,8 +29,7 @@ pub fn find_binary() -> anyhow::Result<PathBuf> {
     )
 }
 
-/// Reserve an ephemeral loopback TCP port by bind-then-drop. A race window exists before
-/// the gateway rebinds; callers retry.
+/// Reserve an ephemeral loopback TCP port by bind-then-drop. A race window exists before the gateway rebinds; callers retry.
 pub fn ephemeral_port() -> anyhow::Result<u16> {
     let l = std::net::TcpListener::bind(("127.0.0.1", 0))?;
     let port = l.local_addr()?.port();
@@ -41,8 +37,7 @@ pub fn ephemeral_port() -> anyhow::Result<u16> {
     Ok(port)
 }
 
-/// Reserve an ephemeral loopback UDP port by bind-then-drop — a TCP reserve would not
-/// prove the UDP port is free.
+/// Reserve an ephemeral loopback UDP port by bind-then-drop — a TCP reserve would not prove the UDP port is free.
 pub fn ephemeral_udp_port() -> anyhow::Result<u16> {
     let l = std::net::UdpSocket::bind(("127.0.0.1", 0))?;
     let port = l.local_addr()?.port();

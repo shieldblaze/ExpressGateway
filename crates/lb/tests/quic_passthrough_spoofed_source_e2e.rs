@@ -1,12 +1,7 @@
 //! S15 A3 verify gate 1 — spoofed-source-IP end-to-end (author != verifier).
 //!
-//! Installs a flow from peer A, then sends a spoofed short-header packet from peer B on the SAME
-//! DCID with `strict_source_binding=true`, and asserts TWO layers: the spoofed packet is DROPPED
-//! (backend datagram count unchanged) AND exactly one `audit/source_binding_violation` event is
-//! emitted with the recorded+observed peers.
-//!
-//! A negative control (`strict=false`, packet FORWARDED, NO audit line) proves the audit line is
-//! not vacuously emitted on every NAT-rebind.
+//! Installs a flow from peer A, then sends a spoofed short-header packet from peer B on the SAME DCID with `strict_source_binding=true`, and asserts TWO layers: the spoofed packet is DROPPED
+//! (backend datagram count unchanged) AND exactly one `audit/source_binding_violation` event is emitted with the recorded+observed peers. A negative control (`strict=false`, packet FORWARDED, NO audit line) proves the audit line is not vacuously emitted on every NAT-rebind.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -26,17 +21,13 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::registry::Registry;
 
-/// Requires the `audit/source_binding_violation` event to fire, in addition to the behavioural
-/// half (backend not reached). Landed at integration tip `b8499ea2`: passthrough.rs emits the
-/// event gated by `audit_allow`, so the audit-line half is binding.
+/// Requires the `audit/source_binding_violation` event to fire, not just the behavioural half (backend not reached).
 const AUDIT_LINE_REQUIRED: bool = true;
 
-/// The audit event the design §A3 names.
 const AUDIT_TOKEN: &str = "source_binding_violation";
 
 const RETRY_SECRET: [u8; RETRY_SECRET_LEN] = [0x7eu8; RETRY_SECRET_LEN];
 
-/// Counts tracing events whose target or message contains `AUDIT_TOKEN`.
 #[derive(Clone, Default)]
 struct AuditCounter {
     hits: Arc<AtomicUsize>,
@@ -48,7 +39,6 @@ impl AuditCounter {
     }
 }
 
-/// Visitor that scans event fields for `AUDIT_TOKEN` (covers the case where the audit marker is in the `message` field rather than the event target/name).
 struct TokenVisitor {
     found: bool,
 }
@@ -85,7 +75,6 @@ where
     }
 }
 
-/// Install a thread-local tracing subscriber for the duration of the returned guard, returning the shared audit counter.
 fn install_audit_capture() -> (AuditCounter, DefaultGuard) {
     let counter = AuditCounter::default();
     let subscriber = Registry::default().with(counter.clone());
@@ -190,7 +179,6 @@ async fn spawn_listener(
     (listener, lb_addr, backend_count, cancel)
 }
 
-/// Install one flow into the LB via a synthetic Retry-validated Initial from `client_a`.
 async fn install_flow(
     lb: SocketAddr,
     client_a: &UdpSocket,
