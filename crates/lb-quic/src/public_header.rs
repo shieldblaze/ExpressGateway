@@ -330,7 +330,8 @@ mod tests {
 
     // RFC 9001 §A.2 "Client Initial" cleartext header: byte0 0xc3, version 1, dcid_len 8 / dcid
     // 0x8394c8f03e515708, scid_len 0, token_len varint 0, length varint 0x449e (1182). The prefix
-    // is hand-built verbatim and the remainder padded, since the parser only checks `remaining >= declared`.
+    // is hand-built verbatim and the remainder padded, since the parser only checks `remaining >=
+    // declared`.
     fn rfc9001_a2_initial() -> Vec<u8> {
         let mut pkt = Vec::with_capacity(1200);
         pkt.push(0xc3);

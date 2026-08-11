@@ -310,7 +310,8 @@ async fn zero_rtt_replay_guard_rejects_second_use_on_shared_instance() {
     // The exact guard instance the router uses (Arc::clone in listener.rs RouterParams).
     let guard = listener.replay_guard();
 
-    // A representative router replay key shape: SCID bytes || token prefix (router::build_replay_key).
+    // A representative router replay key shape: SCID bytes || token prefix
+    // (router::build_replay_key).
     let key: &[u8] = b"\x01\x02\x03\x04\x05\x06\x07\x08token-prefix-bytes-0123456789";
 
     assert!(

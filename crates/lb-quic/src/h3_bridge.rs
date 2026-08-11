@@ -30,7 +30,8 @@ pub const MAX_RESPONSE_BODY_BYTES: usize = 64 * 1024 * 1024;
 pub const H3_BODY_CHUNK_MAX: usize = 8 * 1024;
 
 /// RFC 9114 §8.1 `H3_REQUEST_CANCELLED` — put on the **request** leg when the H3→H3 connector
-/// aborts without FIN. Deliberately NOT the response leg's [`crate::conn_actor::H3_INTERNAL_ERROR`]:
+/// aborts without FIN. Deliberately NOT the response leg's
+/// [`crate::conn_actor::H3_INTERNAL_ERROR`]:
 /// here the proxy is the *client*, so a client cancel really cancels; there it is the *server*,
 /// where this code would misattribute a gateway failure. Not a consistency bug — do not "fix".
 const H3_REQUEST_CANCELLED: u64 = 0x010c;
@@ -228,8 +229,7 @@ impl H3Request {
                 ":method" => method = Some(value),
                 ":path" => path = Some(value),
                 ":authority" => authority = Some(value),
-                ":scheme" => {
-                }
+                ":scheme" => {}
                 _ => extra.push((name, value)),
             }
         }
@@ -250,7 +250,8 @@ impl H3Request {
 /// upstream is dialled. A missing `:authority`/`Host` on http/https is STRICT (owner ruling).
 /// `ws_enabled` gates `:protocol`: when ON the request is an RFC 8441/9220 Extended CONNECT and
 /// MUST carry `:scheme` + `:path` + `:authority` — the OPPOSITE of a classic CONNECT; when OFF it
-/// is rejected as unregistered (#14). quiche does not validate these, so this is the sole authority.
+/// is rejected as unregistered (#14). quiche does not validate these, so this is the sole
+/// authority.
 ///
 /// # Errors
 /// Returns a static reason string naming the RFC clause violated; the caller resets the stream
@@ -317,7 +318,8 @@ pub fn validate_request_pseudo_headers(
         }
     }
 
-    // #13 — classic CONNECT omits :scheme/:path (§4.4); Extended CONNECT INVERTS that (RFC 8441 §4).
+    // #13 — classic CONNECT omits :scheme/:path (§4.4); Extended CONNECT INVERTS that (RFC 8441
+    // §4).
     match method {
         None => Err("h3 missing mandatory :method pseudo-header (RFC 9114 §4.3.1)"),
         Some("CONNECT") if seen_protocol => {
@@ -1011,7 +1013,8 @@ enum ReqWriteOutcome {
 /// never sees a completable request.
 ///
 /// **C2:** this only borrows `stream` and NEVER calls `set_reusable` — the CALLER marks the
-/// `PooledTcp` non-reusable on `Err(())`, on [`ReqWriteOutcome::Aborted`], and on any [`RespAbort`].
+/// `PooledTcp` non-reusable on `Err(())`, on [`ReqWriteOutcome::Aborted`], and on any
+/// [`RespAbort`].
 ///
 /// # Errors
 /// `Err(())` on any upstream write/flush I/O failure — the caller's 502 path.
@@ -1231,7 +1234,8 @@ impl hyper::body::Body for H3ReqStreamBody {
             }
             Poll::Ready(Some(ReqBodyEvent::Reset)) | Poll::Ready(None) => {
                 // Mid-body RESET / producer dropped before End: error so hyper RST_STREAMs — a
-                // truncated request is NEVER presented as complete. H2 ⇒ a per-stream RST is not poison.
+                // truncated request is NEVER presented as complete. H2 ⇒ a per-stream RST is not
+                // poison.
                 this.done = true;
                 Poll::Ready(Some(Err(Box::new(H3ReqAbort))))
             }
@@ -1512,7 +1516,8 @@ impl H3RespOut {
 }
 
 /// The H3→H3 cell's streaming response producer: a thin front for
-/// [`stream_request_to_h3_upstream`] with an [`H3RespOut::Wire`] sink and `forward_req_trailers = false`.
+/// [`stream_request_to_h3_upstream`] with an [`H3RespOut::Wire`] sink and `forward_req_trailers =
+/// false`.
 #[allow(clippy::large_futures)]
 pub async fn h3_to_h3_stream_resp(
     req: &H3Request,

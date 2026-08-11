@@ -72,7 +72,8 @@ pub struct PassthroughParams {
     /// CF-S15-PASSTHROUGH-RETRY-ODCID: with `true`, the second Initial's wire DCID is the
     /// LB-chosen new_scid, so the backend cannot recover the client's original DCID without a side
     /// channel — RFC 9000 §17.2.5 anticipates this via the "Retry Service" pattern. With `false`,
-    /// Initial-flood defence becomes the BACKEND's responsibility: a documented test/trusted-network
+    /// Initial-flood defence becomes the BACKEND's responsibility: a documented
+    /// test/trusted-network
     /// escape, not a production setting.
     pub mint_retry: bool,
     /// F-S20-2: idle-flow reaper threshold. Passthrough cannot observe the encrypted
@@ -127,7 +128,8 @@ pub(crate) struct FlowEntry {
     /// Bounded queue feeding the per-flow forward task; full ⇒ drop-newest.
     pub(crate) backlog_tx: mpsc::Sender<Vec<u8>>,
     /// F-S20-2: per-flow shutdown signal. Cancelling it is what breaks the reverse pump out of
-    /// its blocking `recv()` — the load-bearing step, since an alive-but-silent backend never errors.
+    /// its blocking `recv()` — the load-bearing step, since an alive-but-silent backend never
+    /// errors.
     pub(crate) closed: CancellationToken,
     /// LRU-eviction observed-flag (test gauge), set by [`Drop`] so a test can prove the entry was
     /// actually reclaimed rather than merely unlinked.
@@ -672,7 +674,8 @@ async fn handle_initial(
 
     let _ = backlog_tx.try_send(pkt);
 
-    // Per-flow forward pump (client→backend); exits when the backlog sender drops or `closed` fires.
+    // Per-flow forward pump (client→backend); exits when the backlog sender drops or `closed`
+    // fires.
     let backend_sock_fwd = Arc::clone(&backend_sock);
     let ctx_fwd = Arc::clone(&ctx);
     let closed_fwd = flow.closed.clone();
@@ -753,7 +756,8 @@ async fn forward_long_existing(ctx: &RouterCtx, pkt: &[u8], dcid: &[u8]) {
     }
 }
 
-/// Short-header inbound: try the single-length fast path, then walk the known per-flow DCID lengths.
+/// Short-header inbound: try the single-length fast path, then walk the known per-flow DCID
+/// lengths.
 async fn forward_short(ctx: &RouterCtx, pkt: &[u8], default_dcid: &[u8], from: SocketAddr) {
     if let Some(entry) = ctx.table.get(default_dcid) {
         let flow = Arc::clone(entry.value());
@@ -809,7 +813,8 @@ fn forward_short_via(ctx: &RouterCtx, flow: &FlowEntry, _pkt: &[u8], from: Socke
             observed = %from,
             "strict_source_binding drop"
         );
-        // Throttled audit record: one `warn!` per window, so an injection flood cannot drown the log.
+        // Throttled audit record: one `warn!` per window, so an injection flood cannot drown the
+        // log.
         let now_ms = elapsed_ms(Instant::now(), ctx.epoch);
         if audit_allow(
             &ctx.audit_last_source_binding_ms,
@@ -1229,7 +1234,6 @@ mod tests {
             .expect("rt")
     }
 
-
     #[test]
     fn min_client_dcid_len_floor_table() {
         // (dcid_len, floor, expect_inserted)
@@ -1269,7 +1273,6 @@ mod tests {
         });
     }
 
-
     #[test]
     fn mint_retry_true_mints_and_does_not_insert() {
         rt().block_on(async {
@@ -1303,7 +1306,6 @@ mod tests {
         });
     }
 
-
     #[test]
     fn mint_retry_false_forwards_and_inserts() {
         rt().block_on(async {
@@ -1328,7 +1330,6 @@ mod tests {
             assert_eq!(m.flows.get(), 1, "flows gauge tracks the new flow");
         });
     }
-
 
     #[test]
     fn token_verify_reject_then_accept() {
@@ -1375,7 +1376,6 @@ mod tests {
             );
         });
     }
-
 
     #[test]
     fn evict_oldest_at_cap_and_negative_control() {
@@ -1433,7 +1433,6 @@ mod tests {
             assert_eq!(ctx2.table.len(), 3, "all three flows resident");
         });
     }
-
 
     #[test]
     fn idle_sweep_reclaims_idle_flows_and_frees_them() {
@@ -1503,7 +1502,6 @@ mod tests {
         });
     }
 
-
     #[test]
     fn idle_sweeper_task_reaps_periodically_and_stops_on_shutdown() {
         rt().block_on(async {
@@ -1559,7 +1557,6 @@ mod tests {
                 .expect("reaper task joined cleanly");
         });
     }
-
 
     #[test]
     fn forward_short_via_strict_source_table() {
@@ -1634,7 +1631,6 @@ mod tests {
         });
     }
 
-
     #[test]
     fn retry_secret_loader_edges() {
         let dir = std::env::temp_dir().join(format!(
@@ -1662,7 +1658,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-
     #[test]
     fn pick_backend_is_deterministic() {
         rt().block_on(async {
@@ -1680,7 +1675,6 @@ mod tests {
             "deterministic"
         );
     }
-
 
     #[test]
     fn audit_allow_one_per_window() {

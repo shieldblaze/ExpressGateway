@@ -106,7 +106,8 @@ pub const H3_ALPN_PROTOS: &[&[u8]] = &[b"h3", b"h3-29"];
 pub(crate) const LB_QUIC_TEST_ALPN: &[u8] = b"lb-quic";
 
 /// SNI the loopback client presents. `BoringSSL`'s hostname verifier rejects an iPAddress-type SAN
-/// even with a `serverAuth` EKU, so the loopback cert uses a DNS SAN while still targeting 127.0.0.1.
+/// even with a `serverAuth` EKU, so the loopback cert uses a DNS SAN while still targeting
+/// 127.0.0.1.
 #[cfg(feature = "quic-terminate")]
 pub const LB_QUIC_TEST_SNI: &str = "expressgateway.test";
 

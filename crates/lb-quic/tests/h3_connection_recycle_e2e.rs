@@ -669,7 +669,8 @@ async fn cap_zero_is_byte_identical() {
 // SECOND actor — exercising the binary wiring (`with_h3_request_cap` → RouterParams →
 // ActorParams) the unit tests bypass.
 
-/// Drive ONE client connection against an already-bound server addr → (clean-200 count, saw_goaway).
+/// Drive ONE client connection against an already-bound server addr → (clean-200 count,
+/// saw_goaway).
 async fn drive_one_client_against(
     server_addr: SocketAddr,
     cert_path: &str,

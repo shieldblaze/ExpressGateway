@@ -30,7 +30,6 @@ const MAX_UDP: usize = 65_535;
 const HANDSHAKE_BUDGET: Duration = Duration::from_secs(5);
 const RELAY_BUDGET: Duration = Duration::from_secs(10);
 
-
 static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 
 struct TestCerts {
@@ -164,7 +163,8 @@ fn spawn_dgram_echo_backend(certs: &TestCerts) -> SocketAddr {
         let mut in_buf = vec![0u8; MAX_UDP];
         let mut out_buf = vec![0u8; MAX_UDP];
         let mut rd = vec![0u8; MAX_UDP];
-        // Datagrams received and still owed back (echoed FIFO; a full send queue retries next turn).
+        // Datagrams received and still owed back (echoed FIFO; a full send queue retries next
+        // turn).
         let mut echo_q: std::collections::VecDeque<Vec<u8>> = std::collections::VecDeque::new();
         let mut conn: Option<quiche::Connection> = None;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);

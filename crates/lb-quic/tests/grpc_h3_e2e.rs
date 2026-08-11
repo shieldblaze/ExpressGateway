@@ -503,7 +503,9 @@ async fn drive_grpc_h3_core(
 #[derive(Clone)]
 enum GrpcBackendMode {
     Echo,
-    ServerStream { per_request: usize },
+    ServerStream {
+        per_request: usize,
+    },
     /// Concatenate all inbound messages into one response message.
     ClientStream,
     /// Like `Echo` but many small (≤32 KiB) hyper body frames instead of one giant frame — the
@@ -511,7 +513,10 @@ enum GrpcBackendMode {
     EchoSmallFrames,
     /// "Trailers-Only": one HEADERS frame with `grpc-status` and END_STREAM, no DATA and no
     /// separate trailing HEADERS (the gRPC immediate-error shape).
-    TrailersOnly { status: u32, message: &'static str },
+    TrailersOnly {
+        status: u32,
+        message: &'static str,
+    },
 }
 
 #[derive(Default)]
@@ -1231,7 +1236,8 @@ async fn grpc_h3_grpc_timeout_forwarded_unclamped() {
 }
 
 /// D2 — a Health/Check over H3 is FORWARDED to the backend rather than synthesized locally as
-/// the gRPC-aware H2 proxy does. A deliberate H2-vs-H3 divergence; the backend being hit is the proof.
+/// the gRPC-aware H2 proxy does. A deliberate H2-vs-H3 divergence; the backend being hit is the
+/// proof.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn grpc_h3_health_check_forwarded_not_synthesized() {
     serial_guard!();

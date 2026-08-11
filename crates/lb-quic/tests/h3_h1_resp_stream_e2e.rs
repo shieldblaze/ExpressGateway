@@ -154,7 +154,8 @@ fn build_tcp_pool() -> TcpPool {
 enum RespBody {
     ContentLength(Vec<u8>),
     /// CF-H3-HEAD — a CL-framed body whose head also carries regular headers PLUS a
-    /// hop-by-hop `Connection: close`. Load-bearing both ways: forward the former, strip the latter.
+    /// hop-by-hop `Connection: close`. Load-bearing both ways: forward the former, strip the
+    /// latter.
     ContentLengthWithHeaders {
         body: Vec<u8>,
         extra: Vec<(&'static str, &'static str)>,
@@ -186,7 +187,9 @@ enum RespBody {
     },
     /// `Content-Length` declared LARGER than the proxy's cap ⇒ `OverCap` ⇒ RESET_STREAM 0x0102,
     /// never a body presented as complete.
-    OverCap { declared_len: usize },
+    OverCap {
+        declared_len: usize,
+    },
     /// Endless body (huge `Content-Length`), writing until the proxy stops reading.
     /// `read_done` fires once the backend's read returns 0/err (the proxy dropped the pooled
     /// upstream); `bytes_written` records how much was pushed before that.
@@ -1445,7 +1448,8 @@ async fn c2_every_abort_variant_drops_pooled_upstream_and_resets() {
 /// C2 sixth variant — ClientGone: the regression lock for the defect where a client cancel did
 /// not stop the upstream read. It asserts the REAL teardown (the endless backend's read half
 /// closes ⇒ the pooled upstream was dropped), NOT merely `idle == 0`, which the defect would
-/// spuriously satisfy because a never-finishing producer simply never parks the conn. Do NOT weaken.
+/// spuriously satisfy because a never-finishing producer simply never parks the conn. Do NOT
+/// weaken.
 #[tokio::test]
 async fn c2_clientgone_drops_pooled_upstream() {
     let certs = generate_loopback_certs();

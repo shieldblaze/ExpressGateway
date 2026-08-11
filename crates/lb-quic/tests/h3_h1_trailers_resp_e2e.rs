@@ -484,7 +484,8 @@ async fn pc1_request_with_trailing_field_section_completes_and_drops_trailers() 
     expected_body.extend_from_slice(&f0);
     expected_body.extend_from_slice(&f1);
 
-    // A distinctive trailer value that MUST NOT appear anywhere in the H1 request (intentional drop).
+    // A distinctive trailer value that MUST NOT appear anywhere in the H1 request (intentional
+    // drop).
     let trailer_sentinel = "x-p1c-trailer-sentinel-VALUE-09F1";
     let trailers = vec![
         ("x-checksum".to_string(), trailer_sentinel.to_string()),

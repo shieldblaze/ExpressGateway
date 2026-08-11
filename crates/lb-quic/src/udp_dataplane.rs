@@ -17,7 +17,8 @@ use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio_util::sync::CancellationToken;
 
-/// Maximum UDP datagram the passthrough router accepts (RFC 9000 caps a QUIC packet at one payload).
+/// Maximum UDP datagram the passthrough router accepts (RFC 9000 caps a QUIC packet at one
+/// payload).
 pub const MAX_UDP_DATAGRAM_SIZE: usize = 65_535;
 
 /// One inbound UDP datagram delivered by the dataplane to the router.
@@ -49,7 +50,8 @@ pub enum DataplaneError {
     Unavailable(String),
 }
 
-/// Callback shape for [`UdpDataplane::recv_loop`]; `Arc` so impls can clone it into per-task closures.
+/// Callback shape for [`UdpDataplane::recv_loop`]; `Arc` so impls can clone it into per-task
+/// closures.
 pub type PacketHandler<'a> = Arc<
     dyn for<'p> Fn(Packet<'p>) -> Pin<Box<dyn Future<Output = ()> + Send + 'p>> + Send + Sync + 'a,
 >;

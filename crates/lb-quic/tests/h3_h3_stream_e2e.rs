@@ -472,12 +472,16 @@ enum UpstreamMode {
     ResetMidResponse,
     /// After `after_bytes` of request DATA, a real STOP_SENDING. `after_bytes == 0` arms it
     /// the instant the stream is observed, so the HEADERS / first DATA write races it.
-    StopSendingMidRequest { after_bytes: usize },
+    StopSendingMidRequest {
+        after_bytes: usize,
+    },
     RespWithTrailers(TrailerKind),
     UnknownFrameThenResp,
     /// 200 then a frame header declaring over the 1 MiB cap with NO payload: the gateway must
     /// abort on the DECLARED length. `frame_type 0x01` drives the HEADERS arm, else unknown.
-    OversizedBlock { frame_type: u64 },
+    OversizedBlock {
+        frame_type: u64,
+    },
     EmptyDataThenResp,
     /// 200 (no content-length), a DATA header declaring more than it writes, then a clean
     /// FIN — the documented quiche §7.1 frame-completeness gap (see CASE 15).
@@ -579,7 +583,8 @@ async fn spawn_h3_upstream(
                 if conn.is_established() {
                     // Computed BEFORE the drain so the drain is gated on it: during the stall
                     // the upstream calls neither `readable()` nor `stream_recv`, so quiche stops
-                    // extending the window and the gateway's `stream_capacity` gate genuinely fires.
+                    // extending the window and the gateway's `stream_capacity` gate genuinely
+                    // fires.
                     let draining = match &mode {
                         UpstreamMode::StallReadThenEcho(d) => {
                             if stall_until.is_none() {

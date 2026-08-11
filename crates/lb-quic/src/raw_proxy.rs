@@ -24,7 +24,8 @@ use lb_io::quic_pool::{DedicatedQuic, QuicUpstreamPool};
 use crate::conn_actor::{ActorParams, drain_conn_send};
 
 /// Application `CONNECTION_CLOSE` code on graceful shutdown of either raw leg. Mode B proxies raw
-/// QUIC with no H3 layer, so unlike [`crate::conn_actor::H3_NO_ERROR`] it is a bare application `0`.
+/// QUIC with no H3 layer, so unlike [`crate::conn_actor::H3_NO_ERROR`] it is a bare application
+/// `0`.
 pub const RAW_NO_ERROR: u64 = 0x0000;
 
 /// Budget for the client handshake (Phase 1), matched to the [`lb_io::quic_pool`] dial budget so
@@ -412,7 +413,8 @@ const STREAM_RELAY_WINDOW: usize = 256 * 1024;
 /// finish. It exists so the ceiling is INDEPENDENT of the quiche config — were `max_streams` ever
 /// mis-set huge, the grant would no longer bound the table and this constant still would.
 ///
-/// The canonical DEFAULT; the runtime value is single-sourced from [`RawBackend::max_relay_streams`].
+/// The canonical DEFAULT; the runtime value is single-sourced from
+/// [`RawBackend::max_relay_streams`].
 pub const MAX_RELAY_STREAMS: usize = 256;
 
 /// Short poll interval while ANY stream is mid-transfer, so a partial or backpressured copy
@@ -961,7 +963,8 @@ fn pump_dir(
 const MAX_RELAY_READ: usize = 16 * 1024;
 
 /// Emit an application `CONNECTION_CLOSE` ([`RAW_NO_ERROR`]) and pump until quiche reports closed
-/// or [`GRACEFUL_CLOSE_BUDGET`] elapses. Idempotent: `close()` on a closed connection returns `Done`.
+/// or [`GRACEFUL_CLOSE_BUDGET`] elapses. Idempotent: `close()` on a closed connection returns
+/// `Done`.
 async fn graceful_close(conn: &mut quiche::Connection, socket: &UdpSocket, out_buf: &mut [u8]) {
     match conn.close(true, RAW_NO_ERROR, b"shutdown") {
         Ok(()) | Err(quiche::Error::Done) => {}
@@ -1490,7 +1493,8 @@ mod tests {
             "the half must still be live after turn 1 (a tail remains to drain)"
         );
 
-        // Complete stream 0 on `src` so quiche COLLECTS it — the pre-fix InvalidStreamState precondition.
+        // Complete stream 0 on `src` so quiche COLLECTS it — the pre-fix InvalidStreamState
+        // precondition.
         src.stream_send(0, &[], true).unwrap();
         peer.stream_send(0, &[], true).ok();
         for _ in 0..8 {
@@ -1769,7 +1773,8 @@ mod tests {
     }
 
     /// Establish a peer→server pair where the peer opens `open_count` bidi streams (one byte + FIN
-    /// each) and ferries them so `server` sees them all readable; `bidi_limit` must be >= `open_count`.
+    /// each) and ferries them so `server` sees them all readable; `bidi_limit` must be >=
+    /// `open_count`.
     fn server_with_n_readable_streams(
         certs: &TestCerts,
         open_count: u64,

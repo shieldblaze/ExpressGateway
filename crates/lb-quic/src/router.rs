@@ -49,7 +49,8 @@ pub struct RouterParams {
     pub h3_backend: Option<(QuicUpstreamPool, SocketAddr, String)>,
     /// Optional upstream H2 backend `(pool, addr)`.
     pub h2_backend: Option<(lb_io::http2_pool::Http2Pool, SocketAddr)>,
-    /// Mode B seam. `Some` ⇒ every accepted connection goes to [`crate::raw_proxy`], not the H3 actor.
+    /// Mode B seam. `Some` ⇒ every accepted connection goes to [`crate::raw_proxy`], not the H3
+    /// actor.
     pub raw_quic_backend: Option<crate::raw_proxy::RawBackend>,
     /// Mode B `quic_modeb_*` observability handles.
     pub quic_modeb_metrics: Option<lb_observability::QuicModeBMetrics>,
@@ -325,7 +326,8 @@ fn spawn_new_connection(
     // CODE-2-08: wrap the two DashMap entries in a `CidEntryGuard` so cleanup runs unconditionally
     // — clean exit, async-cancel future-drop, OR panic unwind. Pre-fix the explicit
     // `connections.remove(...)` calls below the await were skipped on unwind, pinning two entries
-    // per panicked actor. Dead code under `panic = "abort"`; kept for dev/test, where unwind is preserved.
+    // per panicked actor. Dead code under `panic = "abort"`; kept for dev/test, where unwind is
+    // preserved.
     let guard = crate::cleanup_guard::CidEntryGuard::new(
         Arc::clone(connections),
         router_key,

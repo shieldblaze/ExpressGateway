@@ -69,7 +69,8 @@ const GRACEFUL_SHUTDOWN_BUDGET: Duration = Duration::from_millis(500);
 const H3_REQUEST_CANCELLED: u64 = 0x010c;
 
 /// RFC 9114 §8.1 `H3_REQUEST_REJECTED` — reset onto a request stream arriving AFTER the
-/// cap-triggered GOAWAY; §5.2 lets the client retry it on a fresh connection (the recycle semantics).
+/// cap-triggered GOAWAY; §5.2 lets the client retry it on a fresh connection (the recycle
+/// semantics).
 const H3_REQUEST_REJECTED: u64 = 0x010b;
 
 /// Per-stream WebSocket tunnel state. The actor shuttles bytes between the H3 stream and the
@@ -132,7 +133,8 @@ pub struct ActorParams {
     /// Optional upstream H2 pool + backend `(addr)`.
     pub h2_backend: Option<(Http2Pool, SocketAddr)>,
     /// Mode B (terminate-and-re-originate) seam. When `Some`, [`run_actor`] dispatches to
-    /// [`crate::raw_proxy`] BEFORE any H3 state is built, so the H3 path is byte-identical on `None`.
+    /// [`crate::raw_proxy`] BEFORE any H3 state is built, so the H3 path is byte-identical on
+    /// `None`.
     pub raw_quic_backend: Option<RawBackend>,
     /// Mode B `quic_modeb_*` observability handles; `None` ⇒ every update is a no-op.
     pub quic_modeb_metrics: Option<lb_observability::QuicModeBMetrics>,
@@ -268,7 +270,8 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
                     params.h3_recycle_metrics.as_ref(),
                 );
                 // S36-A: retry a cap GOAWAY whose first send hit a full control-stream window —
-                // the triggering client may send nothing more, so the retry cannot live in `poll_h3`.
+                // the triggering client may send nothing more, so the retry cannot live in
+                // `poll_h3`.
                 try_send_pending_goaway(
                     &mut params.conn,
                     h3c,
@@ -280,7 +283,8 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
             }
         }
 
-        // DEFECT-CLIENTGONE: detect a client cancel of the response stream and stop the upstream read.
+        // DEFECT-CLIENTGONE: detect a client cancel of the response stream and stop the upstream
+        // read.
         reap_client_cancelled_responses(
             &mut params.conn,
             &mut resp_rx_by_stream,
@@ -897,7 +901,7 @@ fn poll_h3(
                     // 1) Already recycling: reject any stream opened AFTER the GOAWAY's
                     //    last-processed id. The gate is `goaway_pending`, NOT `goaway_sent`:
                     //    admission stops the moment the cap trips, even while the GOAWAY frame
-                    //    waits on a full control-stream window. RFC 9114 §5.2 lets the client retry.
+                    // waits on a full control-stream window. RFC 9114 §5.2 lets the client retry.
                     if *goaway_pending && sid > *goaway_last_id {
                         tracing::debug!(
                             stream_id = sid,
@@ -1138,7 +1142,8 @@ fn poll_h3(
             Ok((_sid, _)) => {}
             Err(quiche::h3::Error::Done) => break,
             Err(e) => {
-                // quiche enforces the control / QPACK / frame-sequence rules and has closed the conn.
+                // quiche enforces the control / QPACK / frame-sequence rules and has closed the
+                // conn.
                 tracing::debug!(error = %e, "INC-2: h3.poll error (quiche closed the connection)");
                 break;
             }

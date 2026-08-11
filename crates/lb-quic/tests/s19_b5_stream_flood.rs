@@ -44,7 +44,6 @@ const CONCURRENCY: u64 = 4;
 /// Tiny: this test is about stream COUNT / table lifetime, not per-stream volume.
 const PAYLOAD_LEN: usize = 64;
 
-
 static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 
 struct TestCerts {

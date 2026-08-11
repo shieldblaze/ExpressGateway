@@ -270,7 +270,6 @@ mod tests {
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-
     /// A chunk pushed by the actor reads back byte-identically, including across a small buffer.
     #[tokio::test]
     async fn read_chunk_byte_identical_with_small_buffer() {
@@ -338,7 +337,6 @@ mod tests {
         let err = tunnel.read(&mut buf).await.unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::ConnectionReset);
     }
-
 
     /// Bytes written through the tunnel arrive on `from_writer`, chunked.
     #[tokio::test]
