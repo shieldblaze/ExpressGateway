@@ -1,8 +1,6 @@
-//! Metrics, tracing, and logging.
-//!
-//! [`MetricsRegistry`] adds a handle cache over [`prometheus::Registry`] so `counter(...)` and
-//! friends are IDEMPOTENT — repeat calls return the same handle instead of splitting increments
-//! across two registrations.
+//! Metrics, tracing, and logging. [`MetricsRegistry`] adds a handle cache over
+//! [`prometheus::Registry`] so `counter(...)` and friends are IDEMPOTENT — repeat calls return the
+//! same handle instead of splitting increments across two registrations.
 #![deny(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -118,7 +116,6 @@ impl MetricsRegistry {
 
     /// Get-or-create an [`IntCounter`]; on a cache hit `help` is IGNORED.
     pub fn counter(&self, name: &str, help: &str) -> Result<IntCounter, MetricsError> {
-        // Fast path: a previous registration is visible — return its handle.
         if let Some(entry) = self.handles.get(name) {
             if let Handle::Counter(c) = entry.value() {
                 return Ok(c.clone());
@@ -127,8 +124,7 @@ impl MetricsRegistry {
                 name: name.to_owned(),
             });
         }
-        // The write lock must cover registration, not just insertion: otherwise two threads
-        // register separately and increments split across two handles or vanish via AlreadyReg.
+        // The write lock must cover registration, not just insertion, or increments split or vanish.
         match self.handles.entry(name.to_owned()) {
             Entry::Occupied(occ) => match occ.get() {
                 Handle::Counter(c) => Ok(c.clone()),
@@ -316,8 +312,7 @@ impl MetricsRegistry {
         )
     }
 
-    /// Increment `accept_inflight{listener}`. BEST-EFFORT: a registration failure warns and drops
-    /// the sample rather than failing the hot path.
+    /// Increment `accept_inflight{listener}`. BEST-EFFORT: a registration failure only warns.
     pub fn accept_inflight_inc(&self, listener: &str) {
         match self.accept_inflight_gauge() {
             Ok(g) => g.with_label_values(&[listener]).inc(),
@@ -357,8 +352,7 @@ impl MetricsRegistry {
         &self.inner
     }
 
-    /// Increment a counter, creating it on first touch. The help string is the NAME — use
-    /// [`Self::counter`] for real help text.
+    /// Increment a counter, creating it on first touch; the help string is the NAME.
     pub fn increment(&self, name: &str, value: u64) {
         match self.counter(name, name) {
             Ok(c) => c.inc_by(value),

@@ -1,9 +1,8 @@
-//! Stateless-retry token mint/verify (RFC 9000 §8.1.3 — address validation).
-//!
-//! The token binds the peer address and the ODCID under HMAC-SHA256 with a short expiry, so a
-//! forged or replayed one buys a spoofer nothing. Wire format, big-endian, MAC over all of it:
-//! `version(1) | issued_ms_since_origin(8) | peer_kind(1: 4=v4, 6=v6) | peer_addr(4|16) |
-//! port(2) | odcid_len(1) | odcid(0..255) | mac(32)`.
+//! Stateless-retry token mint/verify (RFC 9000 §8.1.3 — address validation). The token binds the
+//! peer address and the ODCID under HMAC-SHA256 with a short expiry, so a forged or replayed one
+//! buys a spoofer nothing. Wire format, big-endian, MAC over all of it:
+//! `version(1) | issued_ms(8) | peer_kind(1: 4=v4, 6=v6) | peer_addr(4|16) | port(2) |
+//! odcid_len(1) | odcid(0..255) | mac(32)`.
 
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
@@ -18,8 +17,7 @@ pub const RETRY_SECRET_LEN: usize = 32;
 /// ODCID cap. Wire CIDs are ≤20 bytes; 255 keeps the length field to one byte.
 const RETRY_MAX_ODCID: usize = 255;
 
-/// Wire-format version tag. Bump it (and branch in `verify`) on any layout change so old tokens
-/// are cleanly rejected rather than misparsed.
+/// Wire-format version tag; bump it (and branch in `verify`) on any layout change.
 const RETRY_TOKEN_VERSION: u8 = 0x01;
 
 /// HMAC-SHA256 tag size.
@@ -82,8 +80,7 @@ impl std::fmt::Debug for RetryTokenSigner {
 }
 
 impl RetryTokenSigner {
-    /// Build a signer with a fresh 32-byte secret from [`ring::rand::SystemRandom`]; errors carry
-    /// the `ring` failure as a string.
+    /// Build a signer with a fresh 32-byte secret from [`ring::rand::SystemRandom`].
     pub fn new_random() -> Result<Self, String> {
         let mut secret = [0u8; RETRY_SECRET_LEN];
         ring::rand::SystemRandom::new()
@@ -115,10 +112,9 @@ impl RetryTokenSigner {
         self.max_age
     }
 
-    /// Mint a retry token binding `peer` and `odcid`. Never panics: an `odcid` longer than
-    /// [`RETRY_MAX_ODCID`] is SILENTLY TRUNCATED (the wire length field is a `u8`), so a caller
-    /// holding untrusted ODCID bytes must reject over-length input itself rather than rely on
-    /// `verify` round-tripping what it passed in.
+    /// Mint a retry token binding `peer` and `odcid`. Never panics: an over-[`RETRY_MAX_ODCID`]
+    /// `odcid` is SILENTLY TRUNCATED, so a caller holding untrusted bytes must reject it itself
+    /// rather than rely on `verify` round-tripping what it passed in.
     #[must_use]
     pub fn mint(&self, peer: SocketAddr, odcid: &[u8]) -> Vec<u8> {
         self.mint_at(peer, odcid, Instant::now())

@@ -1,11 +1,7 @@
-//! Prometheus mirror of the eBPF STATS map, sampled at 1 Hz.
-//!
-//! The eBPF side exposes absolute counters, so each tick must DELTA against the previous one —
-//! and must detect a decrease (loader reattach clears the map) and re-baseline instead of
-//! wrapping.
-//!
-//! On non-Linux the sampler is a stub, but the families are still registered so a dev-build
-//! scrape does not 404 the dashboard panels.
+//! Prometheus mirror of the eBPF STATS map, sampled at 1 Hz. The eBPF side exposes absolute
+//! counters, so each tick DELTAs against the previous one and must treat a decrease (loader
+//! reattach clears the map) as a re-baseline rather than a wrap. On non-Linux the sampler is a
+//! stub, but the families still register so a dev-build scrape does not 404 the dashboards.
 
 use std::sync::Arc;
 
@@ -48,8 +44,7 @@ impl XdpMetrics {
             "Current XDP attach mode (1 = active, 0 = inactive).",
             &["mode"],
         )?;
-        // Pre-seed so the labelled rows exist before the first kernel event — operators alert on
-        // the row, and a missing row reads as a broken scrape.
+        // Pre-seed so labelled rows exist before the first kernel event; a missing row reads as broken.
         conntrack_full_total.with_label_values(&["v4"]).inc_by(0);
         conntrack_full_total.with_label_values(&["v6"]).inc_by(0);
         for mode in ["drv", "skb", "hw"] {
@@ -98,8 +93,7 @@ pub struct SamplerBaseline {
 }
 
 impl SamplerBaseline {
-    /// Apply a snapshot and return the per-slot deltas. A DECREASE means the map was cleared, so
-    /// the baseline is re-adopted and the delta is 0 rather than a wrapped huge number.
+    /// Apply a snapshot and return per-slot deltas; a DECREASE means a cleared map, so re-baseline to 0.
     #[must_use]
     pub fn delta(&mut self, summed: &[u64]) -> Vec<u64> {
         if self.last_summed.len() != summed.len() {
@@ -179,12 +173,9 @@ mod tests {
     fn register_pre_seeds_all_label_slots() {
         let reg = MetricsRegistry::new();
         let m = XdpMetrics::register(&reg).expect("register succeeds");
-        // Conntrack v4 + v6 rows present at zero.
         assert_eq!(m.conntrack_full_total.with_label_values(&["v4"]).get(), 0);
         assert_eq!(m.conntrack_full_total.with_label_values(&["v6"]).get(), 0);
-        // Attached-mode rows present at zero.
         assert_eq!(m.attached_mode.with_label_values(&["drv"]).get(), 0);
-        // All 10 packet-action rows present at zero.
         for action in stat_slot_labels() {
             assert_eq!(
                 m.packets_total.with_label_values(&[*action]).get(),
@@ -220,7 +211,6 @@ mod tests {
         // Counter reset (loader replaced); current < baseline.
         let d = base.delta(&[5, 0]);
         assert_eq!(d, vec![0, 0], "reset must emit zero delta, not panic");
-        // New baseline adopted for the next tick.
         let d = base.delta(&[6, 1]);
         assert_eq!(d, vec![1, 1]);
     }
@@ -230,7 +220,6 @@ mod tests {
         let reg = MetricsRegistry::new();
         let m = XdpMetrics::register(&reg).unwrap();
         let mut deltas = vec![0u64; stat_slot_labels().len()];
-        // Bump Pass=3, Drop=1, TxV4=5.
         if let Some(slot) = deltas.get_mut(0) {
             *slot = 3;
         }

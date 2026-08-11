@@ -1,11 +1,9 @@
 //! Slowloris / slow-POST connection watchdog (SEC-2-03).
-//!
-//! SCOPE (F-RES-5, S38): this DETECTS, it does not ENFORCE. `progress` is called once per request
-//! (the H1/H2 header-phase checkpoint), never per body frame, so the `SlowRate` check is dormant
-//! by design; the sweeper logs the swept count but does not close the socket (that would race the
-//! graceful-drain coordinator). The bounds that actually close a stalled connection live in the
-//! timeout stack: hyper `header_read_timeout` (F-RES-1), `idle_bounded_send` Phase-A +
-//! `HttpTimeouts::total`, the H2 keepalive PING, and QUIC `set_max_idle_timeout`.
+//! SCOPE (F-RES-5, S38): this DETECTS, it does not ENFORCE. `progress` is called once per request,
+//! never per body frame, so `SlowRate` is dormant by design, and the sweeper logs rather than
+//! closing (closing would race the drain coordinator). The bounds that actually close a stalled
+//! connection live in the timeout stack: hyper `header_read_timeout` (F-RES-1), `idle_bounded_send`
+//! Phase-A + `HttpTimeouts::total`, the H2 keepalive PING, and QUIC `set_max_idle_timeout`.
 
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -13,8 +11,7 @@ use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 
-/// Identifier for a watched connection; `(peer_ip, accept_seqno)` keeps two connections behind
-/// one NAT egress IP distinguishable.
+/// Watched-connection id; `(peer_ip, accept_seqno)` keeps two conns behind one NAT IP distinct.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ConnId {
     /// Peer IP, for eviction logging.
@@ -67,8 +64,7 @@ pub struct WatchdogConfig {
 
 impl Default for WatchdogConfig {
     fn default() -> Self {
-        // SEC-2-03 header-phase bound (the lower of the two); the caller sets the per-`register`
-        // deadline.
+        // SEC-2-03 header-phase bound; the caller sets the per-`register` deadline.
         Self {
             min_rate_bps: 64,
             rate_window: Duration::from_secs(1),
@@ -126,8 +122,7 @@ impl Watchdog {
         self.inner.table.is_empty()
     }
 
-    /// Register a new connection. `false` means the table is at `max_registered` — the caller must
-    /// reject the connection, same as a listener-cap exhaustion.
+    /// Register a connection; `false` means the table is at `max_registered` and the caller must reject.
     pub fn register(&self, id: ConnId, deadline: Instant) -> bool {
         if self.inner.table.len() >= self.inner.config.max_registered {
             return false;
@@ -195,8 +190,7 @@ impl Watchdog {
         self.inner.table.remove(&id).is_some()
     }
 
-    /// Drop and return every entry past its deadline. Needed because a fully stalled connection
-    /// sends no bytes, so no `progress` call ever observes its deadline trip.
+    /// Drop and return every entry past its deadline — a fully stalled conn never calls `progress`.
     pub fn sweep_expired(&self) -> Vec<ConnId> {
         let now = Instant::now();
         let mut evicted = Vec::new();

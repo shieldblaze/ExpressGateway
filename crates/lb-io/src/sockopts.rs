@@ -101,10 +101,8 @@ pub fn apply_listener(socket: &TcpListener, cfg: &ListenerSockOpts) -> io::Resul
             set_int(fd, libc::IPPROTO_TCP, libc::TCP_FASTOPEN, qlen_i)?;
         }
         if let Some(backlog) = cfg.backlog {
-            // SAFETY: `socket` is a live, bound TCP listener fd that we
-            // borrow immutably; `listen(2)` takes an `int` backlog and has
-            // no memory effects. A non-zero return is translated into an
-            // io::Error via `last_os_error`.
+            // SAFETY: `socket` is a live bound listener fd borrowed immutably, and `listen(2)` takes
+            // an `int` backlog with no memory effects.
             let rc = unsafe { libc::listen(fd, backlog) };
             if rc != 0 {
                 return Err(io::Error::last_os_error());
@@ -161,8 +159,7 @@ pub fn apply_connected(socket: &TcpStream, cfg: &BackendSockOpts) -> io::Result<
     Ok(())
 }
 
-/// [`apply_connected`] for a tokio stream, so the async dial path never has to unregister the fd
-/// from the reactor and back.
+/// [`apply_connected`] for a tokio stream, so the async dial path never unregisters the fd.
 pub fn apply_connected_tokio(
     socket: &tokio::net::TcpStream,
     cfg: &BackendSockOpts,
@@ -247,10 +244,8 @@ fn set_int(
 ) -> io::Result<()> {
     let len = libc::socklen_t::try_from(core::mem::size_of::<libc::c_int>())
         .map_err(|_| io::Error::other("c_int size exceeds socklen_t"))?;
-    // SAFETY: `fd` is a live socket file descriptor borrowed by the caller.
-    // `&value` points to a local `c_int` on the stack; its size matches the
-    // `socklen_t` we pass. `setsockopt` does not retain the pointer beyond
-    // the duration of this call.
+    // SAFETY: `fd` is a live socket fd borrowed by the caller; `&value` is a stack `c_int` whose
+    // size matches the `socklen_t` passed, and `setsockopt` does not retain the pointer.
     let rc = unsafe { libc::setsockopt(fd, level, name, std::ptr::addr_of!(value).cast(), len) };
     if rc == 0 {
         Ok(())
