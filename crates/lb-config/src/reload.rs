@@ -1,55 +1,27 @@
-//! S37-C: config hot-reload diff/partition.
+//! Config hot-reload diff: partition every change into swappable (applied live via the
+//! per-listener `ArcSwap`) and restart-required (structural or establishment-input).
 //!
-//! [`LbConfig::diff`] compares a currently-applied config against a
-//! freshly-loaded (already validated) one and partitions every change into
-//! two buckets:
+//! HONESTY CONTRACT: every restart-required change must be DETECTED and reported so the reload
+//! routine can warn per field. A change that is silently dropped, or reported as a clean success,
+//! makes the reload lie about what is running.
 //!
-//! * **swappable** — applied live via the per-listener `ArcSwap` snapshot
-//!   (backends/weights, timeouts, limits, …) without rebinding ports or
-//!   resetting in-flight connections.
-//! * **restart-required** — structural / establishment-input changes
-//!   (listener add/remove, bind address, protocol, XDP, QUIC transport
-//!   params, …) that the running process CANNOT apply via a config swap.
-//!
-//! The HONESTY contract (S37-C non-negotiable): the diff DETECTS and
-//! reports EVERY restart-required change so the reload routine can log a
-//! clear per-field "requires restart, not applied" warning + bump a
-//! metric. A restart-required change is NEVER silently dropped or
-//! mistaken for a clean success.
-//!
-//! Listener identity is the **bind address** (`ListenerConfig.address`):
-//! a listener present in old-but-not-new (or vice versa), or whose
-//! `address` changed, is a structural (restart-required) change.
+//! Listener identity is the BIND ADDRESS, so a changed `address` reads as a remove plus an add.
 
 use crate::LbConfig;
 
-/// A single swappable change detected by [`LbConfig::diff`]. Each variant
-/// names the field + the listener it belongs to so the reload log is
-/// precise.
+/// A swappable change; each variant names the field and listener for the reload log.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SwappableChange {
-    /// One or more of a listener's per-listener L7 fields changed and ALL
-    /// of them are applied live by rebuilding the listener's `H1Proxy` /
-    /// `H2Proxy` from the new config (the rebuild reads the WHOLE new
-    /// listener config, so this set must EXACTLY match what the rebuild
-    /// applies — the honesty invariant). `fields` lists the specific
-    /// changed L7 fields for the operator log. Identified by bind address.
-    ///
-    /// In scope: `backends` (addresses/weights/protocols), `http`
-    /// (header/body/total/head timeouts), `h2_security`, `websocket`
-    /// (the H1/H2 knobs; the H3 `h3_extended_connect` sub-field only
-    /// affects the QUIC datapath and is irrelevant on an L7 listener),
-    /// `alt_svc`, `grpc`.
+    /// Per-listener L7 fields applied live by rebuilding the proxy. This set must EXACTLY match
+    /// what `rebuild_l7_proxies` consumes, or the diff reports as applied something that is not:
+    /// `backends`, `http`, `h2_security`, `websocket`, `alt_svc`, `grpc`.
     ListenerL7 {
         /// Bind address of the affected listener.
         address: String,
         /// The specific changed L7 fields (for the operator log).
         fields: Vec<&'static str>,
     },
-    /// The process-wide `[runtime].max_keepalive_requests` cap changed.
-    /// Applied live by rebuilding EVERY L7 listener's proxy with the new
-    /// value (the cap is baked into each `H1Proxy`/`H2Proxy`). Carried as
-    /// a single process-wide change, not per-listener.
+    /// `[runtime].max_keepalive_requests` changed; applied by rebuilding EVERY L7 proxy.
     RuntimeMaxKeepaliveRequests,
 }
 
@@ -90,24 +62,20 @@ impl SwappableChange {
     }
 }
 
-/// A single restart-required change detected by [`LbConfig::diff`]. Each
-/// variant carries enough context to name the field + scope in the
-/// operator-facing "requires restart, not applied" warning.
+/// A restart-required change, carrying enough context for the "not applied" warning.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RestartRequiredChange {
-    /// A listener was added (present in the new config, absent in the
-    /// old). Adding a listener binds a new port — not a config swap.
+    /// Listener added — binds a new port.
     ListenerAdded {
         /// Bind address of the added listener.
         address: String,
     },
-    /// A listener was removed (present in old, absent in new). Removing a
-    /// listener unbinds a port — not a config swap.
+    /// Listener removed — unbinds a port.
     ListenerRemoved {
         /// Bind address of the removed listener.
         address: String,
     },
-    /// A listener's protocol changed — the entire datapath would change.
+    /// Protocol changed — the whole datapath differs.
     ListenerProtocol {
         /// Bind address of the affected listener.
         address: String,
@@ -116,19 +84,15 @@ pub enum RestartRequiredChange {
         /// New protocol.
         new: String,
     },
-    /// A listener's non-swappable settings changed (TLS cert/key path,
-    /// ALPN, QUIC transport params, drain budgets, the websocket H3
-    /// extended-connect toggle, …). These are establishment-input /
-    /// structural fields baked at spawn. Carried as one bucket per
-    /// listener with a field tag so the warning is still per-field.
+    /// A listener field baked at spawn changed (TLS paths, ALPN, QUIC transport params, drain
+    /// budgets, the H3 extended-connect toggle).
     ListenerField {
         /// Bind address of the affected listener.
         address: String,
         /// The specific non-swappable field that changed.
         field: &'static str,
     },
-    /// A process-wide `[runtime]` field that is an establishment input
-    /// (XDP attach) changed.
+    /// A `[runtime]` establishment input (XDP attach) changed.
     RuntimeField {
         /// The specific non-swappable runtime field that changed.
         field: &'static str,
@@ -137,9 +101,7 @@ pub enum RestartRequiredChange {
     ObservabilityBind,
     /// The `[admin]` block (auth / bind policy) changed.
     AdminBlock,
-    /// The `[passthrough]` (Mode A) block changed. Mode A is a
-    /// flow-keyed datapath baked at spawn; treated restart-required for
-    /// v1 (documented).
+    /// `[passthrough]` changed; Mode A is a flow-keyed datapath baked at spawn.
     PassthroughBlock,
 }
 
@@ -188,21 +150,18 @@ impl RestartRequiredChange {
     }
 }
 
-/// The result of [`LbConfig::diff`]: the full partition of every change
-/// between two configs.
+/// The full partition of every change between two configs.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ReloadPlan {
     /// Changes that can be applied live via the per-listener `ArcSwap`.
     pub swappable: Vec<SwappableChange>,
-    /// Changes that the running process cannot apply (logged + counted,
-    /// never silently dropped).
+    /// Changes the process cannot apply; logged and counted, never dropped.
     pub restart_required: Vec<RestartRequiredChange>,
 }
 
 impl ReloadPlan {
-    /// `true` when the two configs are byte-for-byte equivalent (no
-    /// change at all). Distinct from "only restart-required changes",
-    /// which is NOT a no-op (it still produces honest warnings).
+    /// True only when NOTHING changed. "Only restart-required changes" is not a no-op — it still
+    /// has to produce warnings.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.swappable.is_empty() && self.restart_required.is_empty()
@@ -216,19 +175,14 @@ impl ReloadPlan {
 }
 
 impl LbConfig {
-    /// Partition the change-set between `self` (currently applied) and
-    /// `new` (freshly loaded + validated) into swappable vs
-    /// restart-required (see module docs).
+    /// Partition every change between the applied config and `new`.
     ///
-    /// Listener identity is the bind address. The diff is exhaustive:
-    /// every field that differs lands in exactly one bucket, so a caller
-    /// can rely on `restart_required` to be the COMPLETE set of changes
-    /// it must warn about (HONESTY contract).
+    /// EXHAUSTIVE: every differing field lands in exactly one bucket, so `restart_required` is
+    /// the complete set a caller must warn about.
     #[must_use]
     pub fn diff(&self, new: &Self) -> ReloadPlan {
         let mut plan = ReloadPlan::default();
 
-        // ── listeners (matched by bind address) ──
         for old_l in &self.listeners {
             match new.listeners.iter().find(|n| n.address == old_l.address) {
                 None => plan
@@ -248,7 +202,6 @@ impl LbConfig {
             }
         }
 
-        // ── process-wide blocks ──
         diff_runtime(self.runtime.as_ref(), new.runtime.as_ref(), &mut plan);
         if self.observability != new.observability {
             plan.restart_required
@@ -259,12 +212,8 @@ impl LbConfig {
                 .push(RestartRequiredChange::AdminBlock);
         }
         if self.security != new.security {
-            // `[security].strict_te` feeds the shared HooksBundle — a
-            // SWAPPABLE knob in the taxonomy. Increment 1 wires only the
-            // backend-set swap; until the strict_te swap lands, surface
-            // it honestly as a restart-required field so it is NEVER a
-            // silent no-op. (Reclassified to swappable in a later
-            // increment.)
+            // `strict_te` is swappable in the taxonomy but the swap is NOT WIRED, so it is
+            // reported restart-required rather than becoming a silent no-op.
             plan.restart_required
                 .push(RestartRequiredChange::RuntimeField {
                     field: "security.strict_te",
@@ -283,7 +232,6 @@ impl LbConfig {
 fn diff_listener(old: &crate::ListenerConfig, new: &crate::ListenerConfig, plan: &mut ReloadPlan) {
     let addr = &old.address;
 
-    // Protocol change = whole datapath change (restart-required).
     if old.protocol != new.protocol {
         plan.restart_required
             .push(RestartRequiredChange::ListenerProtocol {
@@ -291,18 +239,13 @@ fn diff_listener(old: &crate::ListenerConfig, new: &crate::ListenerConfig, plan:
                 old: old.protocol.clone(),
                 new: new.protocol.clone(),
             });
-        // A protocol change subsumes every other field diff on this
-        // listener — don't double-report.
+        // A protocol change subsumes every other field diff here.
         return;
     }
 
-    // SWAPPABLE: the per-listener L7 fields the proxy rebuild applies
-    // from the new config. These MUST exactly match what
-    // `rebuild_l7_proxies` consumes from the new `ListenerConfig` (the
-    // honesty invariant — the diff's "applied" set == the actually-
-    // applied behaviour). The rebuild calls `build_h1_proxy` /
-    // `build_h2_proxy` with `new.{backends, http, h2_security, websocket,
-    // alt_svc, grpc}`, so a change to ANY of these is applied live.
+    // This set MUST exactly match what `rebuild_l7_proxies` consumes — the rebuild passes
+    // `new.{backends, http, h2_security, websocket, alt_svc, grpc}`. Diverge and the diff reports
+    // as applied something that is not.
     let mut l7_fields: Vec<&'static str> = Vec::new();
     macro_rules! swappable_l7 {
         ($field:ident, $tag:literal) => {
@@ -324,16 +267,9 @@ fn diff_listener(old: &crate::ListenerConfig, new: &crate::ListenerConfig, plan:
         });
     }
 
-    // RESTART-REQUIRED per-listener fields — establishment inputs or
-    // values the proxy rebuild does NOT touch, so reporting them
-    // restart-required is TRUTHFUL:
-    //   * `tls`  — cert/key PATH + ALPN: the TLS bundle is owned by the
-    //     listener mode + the SIGUSR1 cert-reload path, not rebuilt here.
-    //   * `quic` — transport params + retry secret: QUIC datapath, baked
-    //     into the config_factory at spawn (not an L7 proxy field).
-    //   * `drain_timeout_ms` / `drain_jitter_ms` — read at SHUTDOWN from
-    //     the boot config, never from the proxy, so a rebuild does not
-    //     apply them.
+    // The proxy rebuild does NOT touch these, so restart-required is truthful: `tls` belongs to
+    // the listener mode and SIGUSR1 cert-reload path, `quic` is baked into the config_factory at
+    // spawn, and the drain budgets are read at SHUTDOWN from the boot config.
     macro_rules! restart_field {
         ($field:ident, $tag:literal) => {
             if old.$field != new.$field {
@@ -351,19 +287,15 @@ fn diff_listener(old: &crate::ListenerConfig, new: &crate::ListenerConfig, plan:
     restart_field!(drain_jitter_ms, "drain_jitter_ms");
 }
 
-/// Diff the `[runtime]` block. XDP attach fields are establishment
-/// inputs (restart-required); the swappable runtime knobs
-/// (`max_keepalive_requests`, limits, …) are surfaced honestly as
-/// restart-required until their swap is wired in a later increment.
+/// Diff `[runtime]`. XDP attach is permanently restart-required; the taxonomy-swappable knobs
+/// are reported restart-required until their swap is actually wired.
 fn diff_runtime(
     old: Option<&crate::RuntimeConfig>,
     new: Option<&crate::RuntimeConfig>,
     plan: &mut ReloadPlan,
 ) {
-    // SWAPPABLE: `max_keepalive_requests` is applied live by rebuilding
-    // every L7 proxy with the new cap. Compare the EFFECTIVE values
-    // (default 100 when the block / field is absent) so it is detected
-    // even when the `[runtime]` block itself appears/disappears.
+    // Compare EFFECTIVE values, not `Option`s, so the change is still detected when the
+    // `[runtime]` block itself appears or disappears.
     let eff_keepalive =
         |c: Option<&crate::RuntimeConfig>| c.map_or(100, |r| r.max_keepalive_requests);
     if eff_keepalive(old) != eff_keepalive(new) {
@@ -375,9 +307,7 @@ fn diff_runtime(
         (None, None) => {}
         (Some(o), Some(n)) if o == n => {}
         (None, Some(_)) | (Some(_), None) => {
-            // The whole block appeared or disappeared — every NON-swappable
-            // field it carries is affected; report it once as a runtime
-            // change. (`max_keepalive_requests` is handled swappably above.)
+            // The whole block appeared or disappeared; report once.
             plan.restart_required
                 .push(RestartRequiredChange::RuntimeField { field: "runtime" });
         }
@@ -390,7 +320,6 @@ fn diff_runtime(
                     }
                 };
             }
-            // Establishment inputs (PERMANENTLY restart-required).
             rt_field!(xdp_enabled, "xdp_enabled");
             rt_field!(xdp_interface, "xdp_interface");
             rt_field!(xdp_mode, "xdp_mode");
@@ -399,8 +328,7 @@ fn diff_runtime(
                 "xdp_new_flow_cap_per_sec_per_cpu"
             );
             rt_field!(tls, "runtime.tls");
-            // Swappable-in-taxonomy knobs — surfaced honestly until
-            // wired (later increments reclassify these to swappable).
+            // Swappable in the taxonomy, but the swap is not wired yet.
             rt_field!(drain_timeout_ms, "drain_timeout_ms");
             rt_field!(readiness_settle_ms, "readiness_settle_ms");
             rt_field!(drain_jitter_ms, "drain_jitter_ms");
@@ -410,8 +338,7 @@ fn diff_runtime(
             rt_field!(per_ip_connection_cap, "per_ip_connection_cap");
             rt_field!(watchdog, "watchdog");
             rt_field!(header_underscore_policy, "header_underscore_policy");
-            // NOTE: `max_keepalive_requests` is SWAPPABLE — handled above
-            // (rebuilds every L7 proxy with the new cap), NOT here.
+            // `max_keepalive_requests` is handled swappably above, deliberately not here.
             rt_field!(
                 max_requests_per_h3_connection,
                 "max_requests_per_h3_connection"
@@ -537,9 +464,7 @@ mod tests {
 
     #[test]
     fn bind_address_change_is_add_plus_remove() {
-        // Identity is the bind address, so changing it reads as one
-        // listener removed + one added (both restart-required) — never
-        // mistaken for a swappable change.
+        // A changed bind address must read as remove + add, never as a swappable change.
         let a = cfg(vec![listener(
             "0.0.0.0:8080",
             vec![backend("10.0.0.1:80", 1)],
@@ -566,8 +491,7 @@ mod tests {
         bl.protocol = "h1s".to_owned();
         let b = cfg(vec![bl]);
         let plan = a.diff(&b);
-        // protocol change subsumes the backend change — exactly one
-        // restart-required entry, no swappable.
+        // The protocol change subsumes the backend change.
         assert!(plan.swappable.is_empty());
         assert_eq!(plan.restart_required.len(), 1);
         assert_eq!(plan.restart_required[0].field(), "listener.protocol");
@@ -575,8 +499,7 @@ mod tests {
 
     #[test]
     fn mixed_change_partitions_both_buckets() {
-        // Listener A: backend swap (swappable). Listener B: added
-        // (restart-required). Exhaustive partition.
+        // Exhaustive partition across two listeners.
         let a = cfg(vec![listener(
             "0.0.0.0:8080",
             vec![backend("10.0.0.1:80", 1)],
@@ -601,9 +524,7 @@ mod tests {
 
     #[test]
     fn http_timeout_change_is_swappable_l7() {
-        // The rebuild applies new.http, so an http-timeout change MUST be
-        // classified swappable (the honesty invariant — the diff's
-        // "applied" set must match what the rebuild actually applies).
+        // The rebuild applies `new.http`, so this MUST classify swappable.
         let mut a_l = listener("0.0.0.0:8080", vec![backend("10.0.0.1:80", 1)]);
         a_l.http = Some(http(5_000));
         let mut b_l = listener("0.0.0.0:8080", vec![backend("10.0.0.1:80", 1)]);
@@ -619,8 +540,7 @@ mod tests {
         assert!(!fields.contains(&"backends"), "backends did not change");
     }
 
-    /// Extract the changed-field list from a `ListenerL7` swappable change
-    /// (test helper — avoids `panic!` which the crate's lint set denies).
+    /// Changed-field list from a `ListenerL7`; returns rather than panicking, which is denied.
     fn l7_fields(change: &SwappableChange) -> Vec<&'static str> {
         match change {
             SwappableChange::ListenerL7 { fields, .. } => fields.clone(),
@@ -630,10 +550,8 @@ mod tests {
 
     #[test]
     fn combined_backend_and_http_change_is_one_swappable_with_both_fields() {
-        // HONESTY: a reload changing backends AND an http timeout together
-        // must report BOTH as swappable (the rebuild applies both) — never
-        // "backend swapped, timeout silently applied while claimed
-        // restart-required". One ListenerL7 entry listing both fields.
+        // Both fields must appear on ONE entry — the rebuild applies both, so claiming either is
+        // restart-required would be a lie.
         let mut a_l = listener("0.0.0.0:8080", vec![backend("10.0.0.1:80", 1)]);
         a_l.http = Some(http(5_000));
         let mut b_l = listener("0.0.0.0:8080", vec![backend("10.0.0.2:80", 1)]);
@@ -648,10 +566,8 @@ mod tests {
 
     #[test]
     fn max_keepalive_requests_change_is_swappable() {
-        // The cap is rebuilt into every L7 proxy on reload, so a change is
-        // SWAPPABLE (RuntimeMaxKeepaliveRequests), not restart-required.
-        // Build via parse_config so [runtime] gets its serde defaults
-        // (RuntimeConfig has no Default derive).
+        // Built via `parse_config` so `[runtime]` gets its serde defaults — `RuntimeConfig` has
+        // no `Default` derive.
         let base = "[[listeners]]\naddress = \"0.0.0.0:8080\"\nprotocol = \"h1\"\n\
                     [[listeners.backends]]\naddress = \"10.0.0.1:80\"\nweight = 1\n";
         let a =
@@ -677,9 +593,8 @@ mod tests {
 
     #[test]
     fn tls_and_drain_changes_are_restart_required_not_swappable() {
-        // tls (cert/key path + ALPN) and drain budgets are NOT applied by
-        // the proxy rebuild, so reporting them restart-required is
-        // truthful — they must NOT leak into the swappable bucket.
+        // The rebuild does not apply tls or the drain budgets, so they must not leak into the
+        // swappable bucket.
         let mut a_l = listener("0.0.0.0:8443", vec![backend("10.0.0.1:80", 1)]);
         a_l.protocol = "h1s".to_owned();
         a_l.tls = Some(crate::TlsConfig {
