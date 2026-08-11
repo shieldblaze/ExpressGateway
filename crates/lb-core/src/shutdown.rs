@@ -213,6 +213,7 @@ impl Shutdown {
                 Err(_) => ListenerOutcome::TimedOut,
             }
         } else {
+            // Degenerate path: no deadline → poll once (best effort).
             if self.tracker.is_empty() {
                 ListenerOutcome::Clean
             } else {
