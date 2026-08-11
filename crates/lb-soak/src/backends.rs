@@ -1,13 +1,6 @@
 //! Origin servers the gateway proxies to during a soak: H1 + H2 (hyper) and a
-//! multi-connection QUIC echo server (quiche) used as the far end of both Mode
-//! A (passthrough, end-to-end) and Mode B (terminate/re-originate).
-//!
-//! Each backend is controllable at runtime via [`BackendControl`] so the chaos
-//! injectors can flip it to slow / dropping without restarting it (backend-slow
-//! and backend-drop chaos). The QUIC echo server mirrors the proven echo logic
-//! in `crates/lb-quic/tests/s16_b2_stream_relay_smoke.rs` but demultiplexes
-//! MANY concurrent connections by DCID (the gateway dials one backend
-//! connection per client connection, so a soak drives many at once).
+//! multi-connection QUIC echo server (quiche), each runtime-tunable via [`BackendControl`]
+//! so the chaos injectors can flip it slow/dropping without a restart.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -25,44 +18,33 @@ use tokio::net::{TcpListener, UdpSocket};
 
 const MAX_UDP: usize = 65_535;
 
-/// Runtime-tunable backend behaviour, shared with the chaos injectors.
 #[derive(Debug, Default)]
 pub struct BackendControl {
-    /// Artificial per-request delay before responding (backend-slow chaos).
     slow_ms: AtomicU64,
-    /// Per-mille probability of dropping a freshly-accepted connection without
-    /// responding (backend-drop chaos). 0 = never.
     drop_permille: AtomicU32,
-    /// Set to stop the accept loop.
     stop: AtomicBool,
-    /// Total requests served (sanity / liveness).
     served: AtomicU64,
 }
 
 impl BackendControl {
-    /// A new, fully-healthy control handle.
     #[must_use]
     pub fn new() -> Arc<Self> {
         Arc::new(Self::default())
     }
 
-    /// Set the artificial response delay (ms). 0 disables.
     pub fn set_slow_ms(&self, ms: u64) {
         self.slow_ms.store(ms, Ordering::Relaxed);
     }
 
-    /// Set the per-mille connection-drop probability. 0 disables.
     pub fn set_drop_permille(&self, permille: u32) {
         self.drop_permille
             .store(permille.min(1000), Ordering::Relaxed);
     }
 
-    /// Signal the accept loop to stop.
     pub fn stop(&self) {
         self.stop.store(true, Ordering::Relaxed);
     }
 
-    /// Total requests served so far.
     #[must_use]
     pub fn served(&self) -> u64 {
         self.served.load(Ordering::Relaxed)
@@ -73,7 +55,6 @@ impl BackendControl {
         if p == 0 {
             return false;
         }
-        // Cheap deterministic-ish sampler: hash the served counter. No RNG dep.
         let n = self.served.load(Ordering::Relaxed);
         (n.wrapping_mul(2_654_435_761) % 1000) < u64::from(p)
     }
@@ -87,9 +68,6 @@ impl BackendControl {
     }
 }
 
-/// The service handler shared by the H1 and H2 backends: read the request body
-/// fully (so the gateway's upload leg completes), honour the slow knob, then
-/// return 200 with a small fixed body.
 async fn handle(
     req: Request<Incoming>,
     ctrl: Arc<BackendControl>,
@@ -107,9 +85,8 @@ async fn handle(
         .unwrap_or_else(|_| Response::new(Full::new(Bytes::from_static(b"ok")))))
 }
 
-/// Response body that yields the echoed request bytes (one DATA frame) then a
-/// `grpc-status: 0` trailing HEADERS — the gRPC happy-path shape that drives
-/// the gateway's H3 response-trailer egress (the S29 F-S29-1 path) end to end.
+/// Response body: the echoed request bytes then a `grpc-status: 0` trailing HEADERS — the
+/// shape that drives the gateway's H3 response-trailer egress (the F-S29-1 path).
 struct GrpcEchoBody {
     data: Option<Bytes>,
     trailer_sent: bool,
@@ -135,8 +112,6 @@ impl hyper::body::Body for GrpcEchoBody {
     }
 }
 
-/// gRPC service handler: echo the framed request body back verbatim (the
-/// gateway is opaque — no gRPC parsing) + a `grpc-status: 0` trailer.
 async fn grpc_handle(
     req: Request<Incoming>,
     ctrl: Arc<BackendControl>,
@@ -167,10 +142,7 @@ async fn grpc_handle(
         }))
 }
 
-/// Spawn an HTTP/2 gRPC echo origin on an ephemeral loopback port (S29
-/// sc9_grpc_h3). Echoes the framed request body + a `grpc-status: 0` trailing
-/// HEADERS — the far end of the gateway's opaque gRPC-over-H3 relay whose
-/// per-RPC stream/fd/memory bound the soak proves.
+/// Spawn an HTTP/2 gRPC echo origin on an ephemeral loopback port (S29 sc9_grpc_h3).
 pub async fn spawn_grpc_h2_backend(ctrl: Arc<BackendControl>) -> anyhow::Result<SocketAddr> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
     let addr = listener.local_addr()?;
@@ -199,7 +171,6 @@ pub async fn spawn_grpc_h2_backend(ctrl: Arc<BackendControl>) -> anyhow::Result<
     Ok(addr)
 }
 
-/// Spawn an HTTP/1.1 origin on an ephemeral loopback port. Returns its address.
 pub async fn spawn_h1_backend(ctrl: Arc<BackendControl>) -> anyhow::Result<SocketAddr> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
     let addr = listener.local_addr()?;
@@ -228,8 +199,6 @@ pub async fn spawn_h1_backend(ctrl: Arc<BackendControl>) -> anyhow::Result<Socke
     Ok(addr)
 }
 
-/// Spawn an HTTP/2 (prior-knowledge, cleartext h2c) origin — the shape the
-/// gateway's `Http2Pool` dials. Returns its address.
 pub async fn spawn_h2_backend(ctrl: Arc<BackendControl>) -> anyhow::Result<SocketAddr> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
     let addr = listener.local_addr()?;
@@ -258,16 +227,6 @@ pub async fn spawn_h2_backend(ctrl: Arc<BackendControl>) -> anyhow::Result<Socke
     Ok(addr)
 }
 
-/// Spawn an HTTP/1.1 WebSocket echo origin (S27 sc8_ws_h1). Each accepted TCP
-/// connection completes the RFC 6455 handshake via `tokio_tungstenite::
-/// accept_async`, then echoes every inbound Text/Binary frame back verbatim;
-/// Ping/Pong are handled by tungstenite's auto-state-machine and a Close ends
-/// the per-connection task cleanly. This is the far end of the gateway's WS
-/// relay (`WsProxy::proxy_frames`) — the long-lived bidirectional opaque tunnel
-/// whose connection/fd/memory bound the soak proves.
-///
-/// Mirrors `tests/ws_proxy_e2e.rs::spawn_echo_backend`. `stop` ends the accept
-/// loop (the soak signals it on teardown so the backend never outlives the run).
 pub async fn spawn_ws_h1_backend(stop: Arc<AtomicBool>) -> anyhow::Result<SocketAddr> {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
     let addr = listener.local_addr()?;
@@ -289,9 +248,7 @@ pub async fn spawn_ws_h1_backend(stop: Arc<AtomicBool>) -> anyhow::Result<Socket
                 };
                 let (mut tx, mut rx) = ws.split();
                 while let Some(Ok(msg)) = rx.next().await {
-                    // The echo lives inside the match arm (not a guard) for
-                    // the rust-1.95.0 clippy::collapsible_match reason
-                    // documented in tests/ws_proxy_e2e.rs.
+                    // Echo in the arm, not a guard: clippy::collapsible_match (rust 1.95).
                     #[allow(clippy::collapsible_match)]
                     match msg {
                         Message::Text(_) | Message::Binary(_) => {
@@ -310,20 +267,14 @@ pub async fn spawn_ws_h1_backend(stop: Arc<AtomicBool>) -> anyhow::Result<Socket
     Ok(addr)
 }
 
-/// Per-stream echo bookkeeping: (queued bytes still to echo, peer-FIN-seen,
-/// FIN-sent).
+/// Per-stream echo bookkeeping: (queued bytes still to echo, peer-FIN-seen, FIN-sent).
 type EchoState = (Vec<u8>, bool, bool);
 
-/// Spawn a multi-connection QUIC echo backend. It accepts any number of
-/// concurrent QUIC connections (demuxed by DCID), echoes every received bidi
-/// stream's bytes back on the same stream id (FIN-aware), and echoes back any
-/// received DATAGRAM. Advertises ALPN `h3` (matching the gateway listener) and
-/// serves `cert`/`key`. `stop` ends the loop.
+/// Spawn a multi-connection QUIC echo backend: demuxes by DCID, echoes each bidi stream's
+/// bytes back on the same stream id (FIN-aware), and echoes back DATAGRAMs.
 ///
-/// This is the far end for BOTH Mode A (the client speaks QUIC to it
-/// end-to-end through the passthrough) and Mode B (the gateway dials it). It
-/// does NOT speak real H3 — the raw proxy relays opaque stream bytes, so a byte
-/// echo is sufficient and exactly mirrors the s16 stream-relay self-check.
+/// It does NOT speak real H3 — the raw proxy relays opaque stream bytes, so a byte echo is
+/// the correct far end for BOTH Mode A and Mode B.
 pub fn spawn_quic_echo_backend(
     cert_path: std::path::PathBuf,
     key_path: std::path::PathBuf,
@@ -343,8 +294,7 @@ pub fn spawn_quic_echo_backend(
         let mut in_buf = vec![0u8; MAX_UDP];
         let mut out_buf = vec![0u8; MAX_UDP];
         let mut rd = vec![0u8; MAX_UDP];
-        // Connections keyed by the SCID we assigned (the client's subsequent
-        // DCID). Each carries its per-stream echo state.
+        // Keyed by the SCID we assigned — the client's subsequent DCID.
         let mut conns: HashMap<Vec<u8>, (quiche::Connection, HashMap<u64, EchoState>)> =
             HashMap::new();
 
@@ -352,7 +302,6 @@ pub fn spawn_quic_echo_backend(
             if stop.load(Ordering::Relaxed) {
                 return;
             }
-            // Service every live connection: read→echo→datagram→flush.
             let keys: Vec<Vec<u8>> = conns.keys().cloned().collect();
             for k in keys {
                 if let Some((c, echo)) = conns.get_mut(&k) {
@@ -363,7 +312,6 @@ pub fn spawn_quic_echo_backend(
                 }
             }
 
-            // Smallest timeout across conns (or a short poll if none).
             let timeout = conns
                 .values()
                 .filter_map(|(c, _)| c.timeout())
@@ -372,8 +320,7 @@ pub fn spawn_quic_echo_backend(
 
             match tokio::time::timeout(timeout, socket.recv_from(&mut in_buf)).await {
                 Ok(Ok((n, from))) => {
-                    // Parse the header in a scope so its borrow of in_buf is
-                    // released before we recv() into the same buffer.
+                    // Scoped so the header's borrow of in_buf is released before recv() reuses it.
                     let parsed =
                         match quiche::Header::from_slice(&mut in_buf[..n], quiche::MAX_CONN_ID_LEN)
                         {
@@ -387,7 +334,6 @@ pub fn spawn_quic_echo_backend(
                         let info = quiche::RecvInfo { from, to: addr };
                         let _ = c.recv(&mut in_buf[..n], info);
                     } else if is_initial {
-                        // New connection: assign our own SCID and accept.
                         let scid = random_cid();
                         let scid_ref = quiche::ConnectionId::from_ref(&scid);
                         match quiche::accept(&scid_ref, None, addr, from, &mut config) {
@@ -412,8 +358,6 @@ pub fn spawn_quic_echo_backend(
     Ok(addr)
 }
 
-/// Read readable streams into the echo queues, drain them back onto the same
-/// stream, echo datagrams, then flush outbound. Mirrors the s16 echo logic.
 async fn service_conn(
     c: &mut quiche::Connection,
     echo: &mut HashMap<u64, EchoState>,
@@ -421,7 +365,6 @@ async fn service_conn(
     rd: &mut [u8],
     out: &mut [u8],
 ) {
-    // 1) Stream reads.
     let readable: Vec<u64> = c.readable().collect();
     for sid in readable {
         while let Ok((n, fin)) = c.stream_recv(sid, rd) {
@@ -435,7 +378,6 @@ async fn service_conn(
             }
         }
     }
-    // 2) Drain echo queues.
     let sids: Vec<u64> = echo.keys().copied().collect();
     for sid in sids {
         if let Some(e) = echo.get_mut(&sid) {
@@ -461,11 +403,9 @@ async fn service_conn(
             }
         }
     }
-    // 3) Echo datagrams.
     while let Ok(len) = c.dgram_recv(rd) {
         let _ = c.dgram_send(rd.get(..len).unwrap_or(&[]));
     }
-    // 4) Flush outbound.
     while let Ok((n, info)) = c.send(out) {
         let _ = socket.send_to(out.get(..n).unwrap_or(&[]), info.to).await;
     }
@@ -538,7 +478,6 @@ mod tests {
     async fn h1_backend_serves_200() {
         let ctrl = BackendControl::new();
         let addr = spawn_h1_backend(Arc::clone(&ctrl)).await.unwrap();
-        // Minimal raw H1 client.
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
         s.write_all(b"GET / HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n")

@@ -1,42 +1,20 @@
 //! Generate the gateway's TOML config + TLS material for each soak datapath.
 //!
-//! Mirrors the proven templates in `tests/reload_zero_drop.rs` and the QUIC
-//! cert factory in `crates/lb-quic/tests/s16_raw_proxy_smoke.rs`, but produces
-//! the EXACT block shapes the soak scenarios need (a wrong key silently
-//! disables the datapath under test, so the shapes are pinned here and
-//! validated by the apparatus smoke run before any long soak).
-//!
-//! Config facts pinned (verified against `crates/lb-config/src/lib.rs`):
-//! * listener protocols: `h1` (plain TCP), `h1s` (TLS + ALPN h2/http1.1),
-//!   `quic`; backend proto via `[[listeners.backends]].protocol` =
-//!   `tcp|h1|h2|h3`.
-//! * Mode B = `[listeners.quic.raw_proxy]` with `backend_addr` + `sni` +
-//!   `backend_ca_path` (the gateway ALWAYS `verify_peer`s the backend, so the
-//!   CA path is mandatory for a self-signed backend — omitting it makes the
-//!   dial fail and the soak would test a dead path).
-//! * Mode A = top-level `[passthrough]` (no `[[listeners]]` required;
-//!   passthrough-only configs are valid).
-//! * metrics endpoint = `[observability].metrics_bind`.
+//! A wrong key silently disables the datapath under test, so the block shapes are pinned here
+//! and validated by the apparatus smoke run before any long soak. Mode B is
+//! `[listeners.quic.raw_proxy]` and its `backend_ca_path` is MANDATORY for a self-signed
+//! backend (the gateway always `verify_peer`s, so omitting it makes the dial fail and the soak
+//! would test a dead path); Mode A is the top-level `[passthrough]` block.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
-/// Self-signed TLS material usable as BOTH a server cert (serverAuth EKU, SAN
-/// for loopback + the SNI) and its own CA (so a peer can `verify_peer` it).
 pub struct Certs {
-    /// PEM cert chain path.
     pub cert: PathBuf,
-    /// PEM private key path (written 0600).
     pub key: PathBuf,
-    /// PEM trust anchor path (== the self-signed cert, usable as CA bundle).
     pub ca: PathBuf,
 }
 
-/// Generate a self-signed cert/key into `dir`, with SANs covering `127.0.0.1`,
-/// `localhost` and `sni`. The cert is marked as a CA with the serverAuth EKU so
-/// BoringSSL (QUIC) and rustls (TLS) both accept it as a loopback peer and a
-/// trust anchor. The key is written with mode 0600 (the gateway rejects
-/// group/other-readable keys in strict mode).
 pub fn generate_certs(dir: &Path, sni: &str) -> anyhow::Result<Certs> {
     let mut params = rcgen::CertificateParams::new(vec![
         "127.0.0.1".to_string(),
@@ -63,8 +41,7 @@ pub fn generate_certs(dir: &Path, sni: &str) -> anyhow::Result<Certs> {
     })
 }
 
-/// Write a private key with mode 0600 (the gateway's strict TLS-key-permission
-/// check rejects group/other-readable keys and exits before binding).
+/// Write a private key with mode 0600 (the gateway's strict TLS-key-permission check rejects group/other-readable keys and exits before binding).
 fn write_key_0600(path: &Path, pem: &str) -> anyhow::Result<()> {
     std::fs::write(path, pem)?;
     #[cfg(unix)]
@@ -75,9 +52,6 @@ fn write_key_0600(path: &Path, pem: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// A short `[runtime]` block — small drain budget so the soak's per-scenario
-/// SIGTERM teardown is quick, and the security caps left at their defaults so
-/// the soak OBSERVES them bounding state under flood.
 fn runtime_block() -> &'static str {
     "[runtime]\ndrain_timeout_ms = 5000\nreadiness_settle_ms = 100\n\n"
 }
@@ -86,9 +60,6 @@ fn observability_block(metrics: SocketAddr) -> String {
     format!("[observability]\nmetrics_bind = \"{metrics}\"\n")
 }
 
-/// `h1` front (plain TCP HTTP/1.1) → backend speaking `backend_proto`
-/// (`h1`/`tcp` for an H1 backend, `h2` for an H2 backend). Covers the
-/// H1→H1 and H1→H2 cells.
 #[must_use]
 pub fn h1_front(
     listener: SocketAddr,
@@ -105,17 +76,10 @@ pub fn h1_front(
     )
 }
 
-/// `h1` front (plain TCP HTTP/1.1) with a `[listeners.websocket]` block ENABLED
-/// → an H1 WebSocket backend. The S27 sc8_ws_h1 scenario: the binary wires
-/// `with_websocket` on the H1 path (`build_h1_proxy`), so a WS upgrade arriving
-/// here is intercepted, the gateway dials the backend, and the long-lived
-/// `WsProxy::proxy_frames` relay runs. The block carries the canonical knobs
-/// (idle/read-frame/ping caps) so the soak OBSERVES them bounding state.
+/// `h1` front with `[listeners.websocket]` ENABLED -> an H1 WebSocket backend (sc8_ws_h1).
 ///
-/// `idle_timeout_seconds` is the WS idle close (1001) — kept generous so the
-/// sustained echo clients stay up and the churn clients control their own
-/// open→close cadence (we are proving connection RECLAIM on clean close, not
-/// idle-reap). The backend speaks plain HTTP/1.1 (`backend_proto = "h1"`).
+/// `idle_timeout_seconds` is kept generous on purpose: we are proving connection RECLAIM on
+/// clean close, not idle-reap, so the sustained echo clients must stay up.
 #[must_use]
 pub fn h1_front_ws(
     listener: SocketAddr,
@@ -139,13 +103,9 @@ pub fn h1_front_ws(
     )
 }
 
-/// `h1s` front (TLS, ALPN advertises `h2` then `http/1.1`) with a
-/// `[listeners.websocket]` block ENABLED **and `h2_extended_connect = true`** →
-/// an H1 WebSocket backend. The S27 sc8b_ws_h2 scenario: an H2 client drives WS
-/// via RFC 8441 extended CONNECT; the gateway (`build_h2_proxy`) advertises
-/// `SETTINGS_ENABLE_CONNECT_PROTOCOL`, intercepts the extended CONNECT, and runs
-/// the same relay onto an H1 WS backend. `h2_extended_connect` is OFF by default
-/// (CF-S27-2), so the soak must explicitly opt in to exercise the H2 path.
+/// `h1s` front with `[listeners.websocket]` ENABLED **and `h2_extended_connect = true`** ->
+/// an H1 WebSocket backend (sc8b_ws_h2, RFC 8441). The knob is OFF by default (CF-S27-2), so
+/// the soak must explicitly opt in to exercise the H2 path.
 #[must_use]
 pub fn h1s_front_ws(
     listener: SocketAddr,
@@ -174,9 +134,6 @@ pub fn h1s_front_ws(
     )
 }
 
-/// `h1s` front (TLS, ALPN advertises `h2` then `http/1.1` — an H2 client
-/// negotiates HTTP/2) → backend speaking `backend_proto`. Covers the H2→H1 and
-/// H2→H2 cells.
 #[must_use]
 pub fn h1s_front(
     listener: SocketAddr,
@@ -197,9 +154,6 @@ pub fn h1s_front(
     )
 }
 
-/// `quic` front in Mode B (terminate + re-originate) → a QUIC backend at
-/// `backend`. `front_certs` terminate the client TLS; `backend_ca` is the trust
-/// anchor the gateway uses to `verify_peer` the upstream QUIC backend.
 #[must_use]
 pub fn quic_mode_b(
     listener: SocketAddr,
@@ -231,32 +185,13 @@ pub fn quic_mode_b(
     )
 }
 
-/// `quic` front in **H3-terminate** mode (the default QUIC datapath — no
-/// `[listeners.quic.raw_proxy]` block, so `raw_quic_backend = None` and the
-/// listener terminates client QUIC + speaks HTTP/3 via `quiche::h3`; R3).
+/// `quic` front in **H3-terminate** mode — the default QUIC datapath (no
+/// `[listeners.quic.raw_proxy]`, so `raw_quic_backend = None`; R3).
 ///
-/// ## F-S26-1 — this front is BACKEND-LESS in the production binary
-///
-/// The shipped `expressgateway` binary NEVER wires an HTTP backend onto a
-/// `protocol = "quic"` listener: `spawn_quic` → `quic_listener_params_from_config`
-/// does not call `with_backends`/`with_h3_backend`/`with_h2_backend`, and the
-/// listener loop ignores `[[listeners.backends]]` on the QUIC path. So a real
-/// H3 request to this front reaches `conn_actor::poll_h3` with no pool/backends
-/// and the stream is dropped ("no backends available for H3 request"). The full
-/// H3→{H1,H2,H3} relay + the §7.1 content-length truncation guard are
-/// library/harness-reachable only (covered by the e2e harnesses + Phase-3 R13
-/// bursts, NOT by this soak). The soak therefore deliberately emits NO backend
-/// block — adding one would test a path the binary cannot enter and silently
-/// mislead the verdict. What this front DOES exercise end-to-end (and what the
-/// soak drives): the migrated `quiche::h3` ingress (handshake + control/QPACK
-/// streams + HEADERS/DATA decode + the request-body cap/backpressure), the
-/// inline-400 DECODED egress (a bad-`:authority` request → `send_response`/
-/// `send_body` 400 "bad request", a true request→response round-trip), F-MD-4
-/// RST/STOP_SENDING mapping, and the no-backend stream-drop path.
-///
-/// `front_certs` terminate the client TLS (ALPN `h3` — matches the listener's
-/// `H3_ALPN_PROTOS`); the client trusts them. No DATAGRAM support (R3: only
-/// `with_raw_backend` flips that on).
+/// This scenario deliberately emits NO backend block, so what it exercises end to end is the
+/// `quiche::h3` ingress (handshake, control/QPACK streams, HEADERS/DATA decode, request-body
+/// cap), the inline-400 DECODED egress, F-MD-4 RST/STOP_SENDING mapping, and the no-backend
+/// stream-drop path. The full H3->{H1,H2,H3} relay is covered by the e2e harnesses, not here.
 #[must_use]
 pub fn quic_h3_terminate(
     listener: SocketAddr,
@@ -276,14 +211,8 @@ pub fn quic_h3_terminate(
     )
 }
 
-/// `quic` H3-terminate front with a `[listeners.websocket]` block carrying
-/// `h3_extended_connect = true` (the WS-over-H3 opt-in) → an H1 WebSocket
-/// backend. The S28 sc8c_ws_h3 scenario: a quiche::h3 client drives WS via
-/// RFC 9220 extended CONNECT; the gateway advertises
-/// `SETTINGS_ENABLE_CONNECT_PROTOCOL`, intercepts the extended CONNECT, dials
-/// the H1 backend (upstream-before-200), and runs the single-sourced
-/// `proxy_frames` relay over the bounded `H3WsTunnel`. Same long-lived-relay
-/// leak-class question as sc8_ws_h1, over the H3/quiche datapath.
+/// `quic` H3-terminate front with `h3_extended_connect = true` -> an H1 WebSocket backend
+/// (sc8c_ws_h3, RFC 9220). Same long-lived-relay leak class as sc8_ws_h1, over quiche.
 #[must_use]
 pub fn quic_h3_terminate_ws(
     listener: SocketAddr,
@@ -314,16 +243,11 @@ pub fn quic_h3_terminate_ws(
     )
 }
 
-/// `quic` H3-terminate front → an HTTP/2 backend (the gRPC origin). The S29
-/// `sc9_grpc_h3` scenario: a quiche::h3 client sends opaque gRPC (5-byte
-/// length-prefixed messages + a trailing `grpc-status` HEADERS) as ordinary H3
-/// POSTs; the gateway terminates H3 and proxies to the H2 gRPC backend,
-/// relaying the trailing HEADERS + FIN back over the H3 response egress (the
-/// `drain_resp_channels` path the S29 F-S29-1 fix corrected). Leak-class
-/// signal: per-RPC stream open/close + the response-trailer terminal cleanup
-/// (the stale-receiver respawn the fix removed) under sustained load + churn —
-/// `fds` (each in-flight RPC pins a client udp + a pooled backend tcp) +
-/// RSS/VmHWM + panic=0, with `grpc-status:0` verified in-client throughout.
+/// `quic` H3-terminate front -> an HTTP/2 gRPC origin (sc9_grpc_h3).
+///
+/// Leak-class signal: per-RPC stream open/close plus the response-trailer terminal cleanup
+/// (the `drain_resp_channels` path F-S29-1 corrected) under sustained churn — `fds` (each
+/// in-flight RPC pins a client udp + a pooled backend tcp), RSS/VmHWM, and panic=0.
 #[must_use]
 pub fn quic_h3_terminate_h2(
     listener: SocketAddr,
@@ -345,17 +269,13 @@ pub fn quic_h3_terminate_h2(
     )
 }
 
-/// Mode A QUIC passthrough — a top-level `[passthrough]` block routing flows to
-/// `backend`. TLS is end-to-end client↔backend; the gateway never decrypts.
+/// Mode A QUIC passthrough — a top-level `[passthrough]` block. TLS is end-to-end; the
+/// gateway never decrypts.
 ///
-/// `mint_retry = false` is emitted unconditionally: the soak drives REAL
-/// application streams end-to-end through Mode A, and with `mint_retry = true`
-/// the LB-minted Retry triggers CF-S15-PASSTHROUGH-RETRY-ODCID (the backend
-/// rejects the post-Retry `original_destination_connection_id`, so the client
-/// is granted 0 streams). `false` forwards the Initial verbatim so the
-/// end-to-end handshake completes and streams flow. `flow_idle_timeout_ms` is
-/// the F-S20-2 idle-flow reaper window (short for the soak so reclamation is
-/// visible within the run; the product default is 60 s).
+/// `mint_retry = false` is emitted unconditionally: with `true`, the LB-minted Retry trips
+/// CF-S15-PASSTHROUGH-RETRY-ODCID and the client is granted 0 streams, so the soak would
+/// drive a dead path. `flow_idle_timeout_ms` is the F-S20-2 reaper window, shortened so
+/// reclamation is visible within the run (product default 60 s).
 #[must_use]
 pub fn passthrough_mode_a(
     bind: SocketAddr,
@@ -467,9 +387,8 @@ mod tests {
         assert!(toml.contains("protocol = \"quic\""));
         assert!(toml.contains("[listeners.quic]"));
         assert!(toml.contains("retry_secret_path ="));
-        // R3 / F-S26-1: a H3-terminate front must NOT carry a raw_proxy block
-        // (that would flip it to Mode B) NOR a backend block (the binary
-        // ignores it on the quic path — emitting one would mislead the soak).
+        // R3 / F-S26-1: an H3-terminate front must carry NEITHER a raw_proxy block (that
+        // flips it to Mode B) NOR a backend block.
         assert!(
             !toml.contains("[listeners.quic.raw_proxy]"),
             "H3-terminate must have no raw_proxy block (else it's Mode B)"

@@ -1,24 +1,6 @@
-//! Chaos injectors — clients that deliberately misbehave to stress the
-//! gateway's admission / timeout / reset-accounting paths. Each `run_*` loops
-//! until the shared [`CancellationToken`] fires.
-//!
-//! The soak's question for every injector is the same R8 one: does the gateway
-//! stay BOUNDED (fd / connection-table / stream-table / RSS flat) while the
-//! abuse is sustained? The injectors create the pressure; the sampler watches
-//! the bound.
-//!
-//! * conn-flood — rapid TCP connect/close churn (accept path, per-IP cap, fd).
-//! * slowloris — many connections dribbling a partial header forever (header
-//!   timeout must reap them; fd bounded).
-//! * slow-POST — full headers then a trickled body (body timeout must reap).
-//! * mid-stream disconnect — start a request, abruptly drop mid-response.
-//! * oversize + teardown — over-cap request over TLS, torn down mid-reply
-//!   (reproduces CF-S19-TLS-TEARDOWN-413 under load).
-//! * rapid-reset — H2 open-stream-then-reset churn (CVE-2023-44487 accounting).
-//! * stream-flood — H2 hold many concurrent streams (max_concurrent_streams).
-//!
-//! Datagram-flood lives in [`crate::loadgen`] (it is a property of the QUIC
-//! session, not a separate TCP injector).
+//! Chaos injectors — clients that deliberately misbehave to stress the gateway's admission,
+//! timeout and reset-accounting paths. Each `run_*` loops until the [`CancellationToken`] fires.
+//! The question for every injector is the same R8 one: does the gateway stay BOUNDED under it?
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -35,9 +17,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::loadgen::{LoadStats, h2_tls_connector};
 
-/// Rapid TCP connect → (optional tiny write) → close, at `concurrency`
-/// parallel loopers. Exercises the accept path, the per-IP connection cap, and
-/// fd churn.
+/// Rapid TCP connect → (optional tiny write) → close, at `concurrency` parallel loopers.
 pub async fn run_conn_flood(
     target: SocketAddr,
     concurrency: usize,
@@ -53,7 +33,6 @@ pub async fn run_conn_flood(
                 match tokio::time::timeout(Duration::from_secs(2), TcpStream::connect(target)).await
                 {
                     Ok(Ok(mut s)) => {
-                        // Half a request line then immediate close — pure churn.
                         let _ = s.write_all(b"GET / HT").await;
                         drop(s);
                         stats.ok();
@@ -68,10 +47,7 @@ pub async fn run_conn_flood(
     }
 }
 
-/// Hold `n_conns` connections open, each having sent only a partial request
-/// header (no terminating CRLF-CRLF), dribbling a header byte every few seconds
-/// to look alive. The gateway's header-read timeout must reap them, so fd stays
-/// bounded. Reaped connections are re-established.
+/// Hold `n_conns` connections open, each having sent only a partial request header (no terminating CRLF-CRLF), dribbling a header byte every few seconds to look alive.
 pub async fn run_slowloris(target: SocketAddr, n_conns: usize, cancel: CancellationToken) {
     let mut workers = Vec::new();
     for w in 0..n_conns {
@@ -82,7 +58,6 @@ pub async fn run_slowloris(target: SocketAddr, n_conns: usize, cancel: Cancellat
                     tokio::time::timeout(Duration::from_secs(2), TcpStream::connect(target)).await
                 {
                     let _ = s.write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n").await;
-                    // Dribble a bogus header byte periodically; never finish.
                     let mut ticks = 0u64;
                     while !cancel.is_cancelled() && ticks < 30 {
                         tokio::time::sleep(Duration::from_secs(3)).await;
@@ -105,9 +80,7 @@ pub async fn run_slowloris(target: SocketAddr, n_conns: usize, cancel: Cancellat
     }
 }
 
-/// Send a complete header block declaring a large `Content-Length`, then
-/// trickle the body one byte at a time. The body-read timeout must reap the
-/// connection (bounded fd), not buffer unboundedly.
+/// Send a complete header block declaring a large `Content-Length`, then trickle the body one byte at a time.
 pub async fn run_slow_post(target: SocketAddr, n_conns: usize, cancel: CancellationToken) {
     let mut workers = Vec::new();
     for _ in 0..n_conns {
@@ -139,9 +112,7 @@ pub async fn run_slow_post(target: SocketAddr, n_conns: usize, cancel: Cancellat
     }
 }
 
-/// Begin a normal request, read part of the response, then abruptly drop the
-/// socket mid-response. Stresses the gateway's downstream-abort / cleanup path
-/// repeatedly (no half-closed leak).
+/// Begin a normal request, read part of the response, then abruptly drop the socket mid-response.
 pub async fn run_mid_stream_disconnect(
     target: SocketAddr,
     concurrency: usize,
@@ -175,12 +146,9 @@ pub async fn run_mid_stream_disconnect(
     }
 }
 
-/// Over TLS (h1s front), send an over-cap request (an oversized header block
-/// that trips the gateway's header-list / 4xx path) and then tear the TLS
-/// connection down mid-reply. This reproduces CF-S19-TLS-TEARDOWN-413 — the
-/// TLS-teardown-vs-error-head race — under sustained load. `stats.err()` counts
-/// connections where the teardown raced the head (no clean status read); a
-/// non-zero-but-bounded err rate is expected, a panic/leak is the finding.
+/// Over TLS (h1s front), send an over-cap request and tear the TLS connection down
+/// mid-reply — reproduces CF-S19-TLS-TEARDOWN-413 (the teardown-vs-error-head race) under
+/// sustained load. A bounded non-zero `stats.err()` is expected; a panic/leak is the finding.
 pub async fn run_oversize_teardown(
     target: SocketAddr,
     sni: String,
@@ -206,21 +174,13 @@ pub async fn run_oversize_teardown(
         let sni = sni.clone();
         let big_value = big_value.clone();
         workers.push(tokio::spawn(async move {
-            // CF-S19 (S21): SHARPER teardown-vs-error-head race. The error head
-            // for every `error_response` (4xx/413/502) flows through the SAME
-            // buffered `Bytes` body returned to hyper (h2_proxy.rs::error_response),
-            // so a cheap oversize-HEADER 4xx exercises the identical
-            // response-flush-vs-teardown window the 413 would (the 413-only code
-            // is the >64 MiB body buffering BEFORE the flush, unrelated to
-            // teardown timing — and flooding 64 MiB bodies would saturate the
-            // box, the S20 anti-pattern). We sweep the abort delay across the
-            // sub-millisecond..few-ms window where the gateway is mid-flush, to
-            // maximise the chance of catching any teardown race.
+            // CF-S19 (S21): a cheap oversize-HEADER 4xx flows through the SAME buffered
+            // error-response body as a 413, so it exercises the identical flush-vs-teardown
+            // window without flooding 64 MiB bodies (the S20 anti-pattern).
             let mut iter = w as u64;
             while !cancel.is_cancelled() {
                 iter = iter.wrapping_add(1);
-                // 0,1,2,4,8 ms cycle — 0ms = drop the instant send_request is
-                // issued (head not yet read), the tightest race.
+                // 0,1,2,4,8 ms cycle — 0ms drops before the head is read: the tightest race.
                 let abort_after = match iter % 5 {
                     0 => Duration::from_millis(0),
                     1 => Duration::from_millis(1),
@@ -260,9 +220,7 @@ async fn oversize_once(
         .uri(format!("https://{sni}/"))
         .header("x-oversize", big_value)
         .body(Full::new(Bytes::new()))?;
-    // Race the (likely 4xx) error head against a TIGHT teardown: issue the
-    // request, then abort the connection after `abort_after` (0ms = drop while
-    // the head is still in flight). Returns whether we observed a clean head.
+    // Race the error head against a tight teardown. Returns whether a clean head was seen.
     let saw_head = tokio::select! {
         biased;
         () = tokio::time::sleep(abort_after) => false,
@@ -273,11 +231,8 @@ async fn oversize_once(
     Ok(saw_head)
 }
 
-/// H2 rapid-reset churn (CVE-2023-44487 accounting): over a TLS+h2 connection,
-/// open a stream and immediately abort it (RST_STREAM), as fast as possible.
-/// When the gateway's reset-accounting trips and GOAWAYs, the connection
-/// breaks and is re-established. The bound under test: this must not grow
-/// memory / streams unboundedly.
+/// H2 rapid-reset churn (CVE-2023-44487 accounting): open a stream and immediately abort it.
+/// The bound under test: memory and the stream table must not grow unboundedly.
 pub async fn run_rapid_reset(
     target: SocketAddr,
     sni: String,
@@ -332,7 +287,6 @@ pub async fn run_rapid_reset(
                     continue;
                 };
                 let driver = tokio::spawn(conn);
-                // Open-then-reset as fast as the gateway tolerates.
                 let mut n = 0u32;
                 while !cancel.is_cancelled() && n < 500 {
                     let mut s = sender.clone();
@@ -341,7 +295,6 @@ pub async fn run_rapid_reset(
                         .uri(format!("https://{sni}/"))
                         .body(Full::new(Bytes::new()));
                     let Ok(req) = req else { break };
-                    // Spawn so hyper emits HEADERS, then abort → RST_STREAM.
                     let h = tokio::spawn(async move {
                         let _ = s.send_request(req).await;
                     });
@@ -364,9 +317,7 @@ pub async fn run_rapid_reset(
     }
 }
 
-/// H2 concurrent-stream flood: hold many in-flight streams open at once,
-/// pressing on `max_concurrent_streams` (default 256). The cap must bound the
-/// stream table; this must not leak.
+/// H2 concurrent-stream flood: hold many in-flight streams open at once, pressing on `max_concurrent_streams` (default 256).
 pub async fn run_stream_flood(
     target: SocketAddr,
     sni: String,
@@ -409,8 +360,7 @@ pub async fn run_stream_flood(
                     continue;
                 };
                 let driver = tokio::spawn(conn);
-                // Launch many streams and HOLD them (don't await) to press the
-                // concurrent-stream cap, for a bounded window, then recycle.
+                // HOLD the streams (do not await) to press the concurrent-stream cap.
                 let mut holders = Vec::new();
                 for _ in 0..300 {
                     if cancel.is_cancelled() {
@@ -420,7 +370,6 @@ pub async fn run_stream_flood(
                     let req = Request::builder()
                         .method("POST")
                         .uri(format!("https://{sni}/"))
-                        // Large CL but we never send the body → stream stays open.
                         .header("content-length", "1000000")
                         .body(Full::new(Bytes::new()));
                     let Ok(req) = req else { break };
@@ -447,8 +396,6 @@ mod tests {
 
     #[tokio::test]
     async fn conn_flood_stops_on_cancel() {
-        // Point at a closed port; the flood should still loop+error and stop
-        // promptly on cancel (no hang).
         let stats = LoadStats::new();
         let cancel = CancellationToken::new();
         let target: SocketAddr = "127.0.0.1:1".parse().unwrap();

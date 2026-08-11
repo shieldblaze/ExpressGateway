@@ -1,20 +1,11 @@
-//! `eg-soak` — the chaos/soak scenario orchestrator (S20).
+//! `eg-soak` — the chaos/soak scenario orchestrator.
 //!
-//! Runs ONE scenario for a fixed duration against the real `expressgateway`
-//! binary: spawn backend(s), generate the TOML, launch + ready-gate the
-//! gateway child, drive co-located load + chaos, sample `/proc` + `/metrics`
-//! into a time-series, then (on duration elapse) stop load, SIGTERM + reap the
-//! gateway, run the BOUNDED/DRIFT trend analyzer, and write the CSV +
-//! `verdict.json` + `summary.txt` + a `soak_complete.marker`.
+//! Runs ONE scenario for a fixed duration against the real `expressgateway` binary, then
+//! writes the CSV + `verdict.json` + `summary.txt` + a `soak_complete.marker`.
 //!
 //! Usage:
-//!   eg-soak --scenario <name> --duration-secs N [--sample-secs S] [--scale K]
-//!           --out <dir>
-//!   eg-soak --list
-//!
-//! Scenarios: sc1_h1h1, sc1b_h1h2, sc2_h2h2, sc3_slowloris, sc4_modeb,
-//!            sc5_modea, sc6_413teardown, sc7_h3terminate, sc8_ws_h1,
-//!            sc8b_ws_h2.
+//!   eg-soak --scenario <name> --duration-secs N [--sample-secs S] [--scale K] --out <dir>
+//!   eg-soak --list        (the authoritative scenario list)
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -52,8 +43,7 @@ const SCENARIOS: &[&str] = &[
 
 struct Args {
     scenario: String,
-    /// Output-file prefix (defaults to `scenario`); lets the same scenario run
-    /// under two configs (e.g. Mode B 4-stream vs 1-stream) into one out dir.
+    /// Output-file prefix (defaults to `scenario`); lets the same scenario run under two configs (e.g. Mode B 4-stream vs 1-stream) into one out dir.
     label: String,
     duration: u64,
     sample: u64,
@@ -122,7 +112,6 @@ async fn async_main() -> anyhow::Result<()> {
     let Some(args) = parse_args()? else {
         return Ok(());
     };
-    // rustls process-wide crypto provider (needed by the H2/TLS load clients).
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     std::fs::create_dir_all(&args.out)?;
@@ -148,7 +137,6 @@ async fn async_main() -> anyhow::Result<()> {
         running.metrics_addr, args.duration
     );
 
-    // Duration timer → cancel.
     let dur = Duration::from_secs(args.duration);
     let cancel_timer = cancel.clone();
     let timer = tokio::spawn(async move {
@@ -156,7 +144,6 @@ async fn async_main() -> anyhow::Result<()> {
         cancel_timer.cancel();
     });
 
-    // Foreground sampler: returns the full series when cancelled.
     let ts = sampler::run_sampler(
         pid,
         running.metrics_addr,
@@ -167,7 +154,6 @@ async fn async_main() -> anyhow::Result<()> {
     )
     .await;
 
-    // Stop load + chaos (they observe the cancel) and reap them.
     timer.abort();
     for t in running.tasks.drain(..) {
         let _ = tokio::time::timeout(Duration::from_secs(8), t).await;
@@ -178,13 +164,11 @@ async fn async_main() -> anyhow::Result<()> {
     for s in &running.quic_stop {
         s.store(true, std::sync::atomic::Ordering::Relaxed);
     }
-    // SIGTERM + reap the gateway (clean drain), then analyze.
     running.gateway.terminate_and_reap();
 
     let verdicts = ts.analyze(&TrendConfig::default(), &running.kinds);
     let overall_drift = verdicts.iter().any(|v| v.verdict == Verdict::Drift);
 
-    // Write outputs.
     let csv_path = args.out.join(format!("{}.csv", args.label));
     std::fs::write(&csv_path, ts.to_csv())?;
 
@@ -267,8 +251,7 @@ fn tcp_addr(port: u16) -> SocketAddr {
     format!("127.0.0.1:{port}").parse().expect("addr")
 }
 
-/// sc1 / sc1b — H1 front → H1 or H2 backend, sustained keep-alive + churn +
-/// connection-flood.
+/// sc1 / sc1b — H1 front → H1 or H2 backend, sustained keep-alive + churn + connection-flood.
 async fn setup_h1(
     args: &Args,
     bin: &std::path::Path,
@@ -321,8 +304,7 @@ async fn setup_h1(
     })
 }
 
-/// sc2 — H2-over-TLS front → H2 backend, sustained H2 + rapid-reset +
-/// stream-flood.
+/// sc2 — H2-over-TLS front → H2 backend, sustained H2 + rapid-reset + stream-flood.
 async fn setup_h2h2(
     args: &Args,
     bin: &std::path::Path,
@@ -433,8 +415,7 @@ async fn setup_slowloris(
     })
 }
 
-/// sc4 (Mode B terminate) / sc5 (Mode A passthrough) — QUIC load + datagram
-/// flood against a real QUIC echo backend.
+/// sc4 (Mode B terminate) / sc5 (Mode A passthrough) — QUIC load + datagram flood against a real QUIC echo backend.
 async fn setup_quic(
     args: &Args,
     bin: &std::path::Path,
@@ -442,7 +423,6 @@ async fn setup_quic(
     cancel: CancellationToken,
     mode_b: bool,
 ) -> anyhow::Result<Running> {
-    // Backend QUIC echo server with its own cert.
     let backend_dir = workdir.join("backend");
     std::fs::create_dir_all(&backend_dir)?;
     let backend_certs = config_gen::generate_certs(&backend_dir, "soak-backend")?;
@@ -460,7 +440,6 @@ async fn setup_quic(
     let (client_ca, client_sni): (PathBuf, String);
     let cfg = workdir.join("gateway.toml");
     let (gauges, kinds) = if mode_b {
-        // Mode B: gateway terminates with its OWN front cert; client trusts it.
         let front_certs = config_gen::generate_certs(workdir, "soak-front")?;
         let retry = workdir.join("retry.bin");
         let toml = config_gen::quic_mode_b(
@@ -479,9 +458,8 @@ async fn setup_quic(
         client_sni = "soak-front".to_string();
         (modeb_gauges(), modeb_kinds())
     } else {
-        // Mode A: end-to-end; client trusts the BACKEND cert. F-S20-2: a
-        // short idle-flow reaper window (overridable) so reclamation is
-        // visible within a bounded soak; the product default is 60s.
+        // Mode A: end-to-end; client trusts the BACKEND cert. F-S20-2: a short idle-flow
+        // reaper window so reclamation is visible within a bounded soak (product default 60s).
         let retry = workdir.join("retry.bin");
         let idle_ms = env_usize("QUIC_FLOW_IDLE_MS", 10_000) as u64;
         let toml =
@@ -491,12 +469,10 @@ async fn setup_quic(
         client_sni = "soak-backend".to_string();
         (modea_gauges(), modea_kinds())
     };
-    // keep the front Certs dir alive via workdir; backend_certs via backend_dir.
     let _ = &backend_certs;
 
     let gw = spawn_gateway(bin, &cfg, metrics, workdir).await?;
 
-    // QUIC load shape — overridable via env for targeted repro/tuning.
     let conc = env_usize("QUIC_CONCURRENCY", 4) * args.scale;
     let streams = env_usize("QUIC_STREAMS", 4);
     let payload = env_usize("QUIC_PAYLOAD", 4096);
@@ -531,8 +507,7 @@ async fn setup_quic(
     })
 }
 
-/// sc6 — CF-S19-TLS-TEARDOWN-413: oversize requests over TLS torn down
-/// mid-reply, plus mid-stream disconnects.
+/// sc6 — CF-S19-TLS-TEARDOWN-413: oversize requests over TLS torn down mid-reply, plus mid-stream disconnects.
 async fn setup_413(
     args: &Args,
     bin: &std::path::Path,
@@ -584,19 +559,13 @@ async fn setup_413(
     })
 }
 
-/// sc7 (S26 / INC-D) — H3-terminate front (`quiche::h3` ingress, E1 — the path
-/// the S24–S26 workstream re-pointed). Sustained REAL H3 client load + an H3
+/// sc7 — H3-terminate front (`quiche::h3` ingress). Sustained REAL H3 client load + an H3
 /// RST/STOP_SENDING flood against the terminating QUIC listener.
 ///
-/// F-S26-1: the production binary wires NO backend onto a `protocol="quic"`
-/// listener, so this front is exercised on its INGRESS + the inline-400 decoded
-/// egress + F-MD-4 + the no-backend-drop path — NOT a live relay (which is
-/// library/harness-reachable only). The config therefore carries no backend
-/// (see `config_gen::quic_h3_terminate`), and there is no origin server to
-/// spawn. The bounded-state signal is the OS footprint (RSS/fd/threads) + the
-/// universal `panic_total=0`; the H3-terminate front exposes no dedicated
-/// Prometheus state gauge (the response-retained gauge is `test-gauges`-only
-/// and the QUIC listener does not feed `accept_inflight`).
+/// The config deliberately carries no backend, so what is exercised is the INGRESS + the
+/// inline-400 decoded egress + F-MD-4 + the no-backend-drop path — not a live relay. The
+/// bounded-state signal is therefore the OS footprint + `panic_total=0`: this front exposes no
+/// dedicated Prometheus state gauge (the QUIC listener does not feed `accept_inflight`).
 async fn setup_h3_terminate(
     args: &Args,
     bin: &std::path::Path,
@@ -605,8 +574,6 @@ async fn setup_h3_terminate(
 ) -> anyhow::Result<Running> {
     let metrics = metrics_addr()?;
     let listener = tcp_addr(gateway::ephemeral_udp_port()?);
-    // The gateway terminates with its OWN front cert; the H3 client trusts it
-    // and sends SNI `soak-front`. ALPN `h3` matches the listener's advertisement.
     let front_certs = config_gen::generate_certs(workdir, "soak-front")?;
     let retry = workdir.join("retry.bin");
     let toml = config_gen::quic_h3_terminate(listener, metrics, &front_certs, &retry);
@@ -617,15 +584,12 @@ async fn setup_h3_terminate(
     let sni = "soak-front".to_string();
     let ca = front_certs.ca.clone();
 
-    // H3 request shape — overridable for targeted repro/tuning.
     let conc = env_usize("H3_CONCURRENCY", 4) * args.scale;
     let reqs = env_usize("H3_REQS_PER_CONN", 8);
     let reset_conc = env_usize("H3_RESET_CONCURRENCY", 2) * args.scale;
 
     let mut tasks = Vec::new();
     let mut stats = Vec::new();
-    // Sustained mixed H3 load (inline-400 round-trip + no-backend drop), both
-    // outcomes asserted in-client (non-vacuous).
     let load = LoadStats::new();
     stats.push(("h3_load".into(), Arc::clone(&load)));
     tasks.push(tokio::spawn(loadgen::run_h3_load(
@@ -637,7 +601,6 @@ async fn setup_h3_terminate(
         Arc::clone(&load),
         cancel.clone(),
     )));
-    // F-MD-4 RST/STOP_SENDING flood (reset accounting + stream-table bound).
     let flood = LoadStats::new();
     stats.push(("h3_reset_flood".into(), Arc::clone(&flood)));
     tasks.push(tokio::spawn(loadgen::run_h3_reset_flood(
@@ -662,24 +625,13 @@ async fn setup_h3_terminate(
     })
 }
 
-/// sc9_grpc_h3 (S29) — gRPC-over-HTTP/3 soak. A `quic` H3-terminate front → an
-/// H2 gRPC echo backend (`[[listeners.backends]] protocol = "h2"`). A quiche::h3
-/// client sends opaque gRPC (framed messages + a trailing `grpc-status` HEADERS)
-/// as ordinary H3 POSTs; the gateway proxies to the H2 backend and relays the
-/// echo + the trailer back over the H3 response egress — the F-S29-1 path.
-/// Unlike sc7's BACKENDLESS inline-400 H3 front, this drives the REAL
-/// backend-proxied response-trailer path the S29 fix corrected.
+/// sc9_grpc_h3 (S29) — gRPC-over-HTTP/3 soak: a `quic` H3-terminate front → an H2 gRPC echo
+/// backend. Unlike sc7's backendless front, this drives the REAL backend-proxied
+/// response-trailer path the F-S29-1 fix corrected.
 ///
-/// Leak-class signal: `fds` (each in-flight RPC pins a client udp + a pooled
-/// backend tcp) + RSS/VmHWM + `panic_total == 0`. Two drivers create the
-/// pressure: a SUSTAINED driver (workers holding a QUIC conn and issuing unary
-/// RPCs back-to-back — per-RPC response-trailer egress + the terminal cleanup
-/// the fix touched), and a CHURN driver (workers that open, do N RPCs, then
-/// CLEAN-close — exercising stream + connection/fd RECLAIM, the leak class the
-/// F-S29-1 fix also touched via the stale-receiver cleanup + the eliminated
-/// post-response busy-loop). In-client every RPC verifies `grpc-status: 0` + the
-/// echoed message, so a trailer-drop regression under load surfaces as `err()`,
-/// never a silent pass.
+/// Leak-class signal: `fds` (each in-flight RPC pins a client udp + a pooled backend tcp) +
+/// RSS/VmHWM + `panic_total == 0`, under both a SUSTAINED and a CHURN driver. Every RPC
+/// verifies `grpc-status: 0` in-client, so a trailer-drop regression surfaces as `err()`.
 async fn setup_grpc_h3(
     args: &Args,
     bin: &std::path::Path,
@@ -708,7 +660,6 @@ async fn setup_grpc_h3(
     let mut tasks = Vec::new();
     let mut stats = Vec::new();
 
-    // Sustained: held QUIC conns issuing unary RPCs back-to-back.
     let load = LoadStats::new();
     stats.push(("grpc_h3_sustained".into(), Arc::clone(&load)));
     tasks.push(tokio::spawn(loadgen::run_grpc_h3_load(
@@ -720,7 +671,6 @@ async fn setup_grpc_h3(
         cancel.clone(),
     )));
 
-    // Churn: open → N RPCs → close (stream + connection/fd reclaim).
     let chstats = LoadStats::new();
     stats.push(("grpc_h3_churn".into(), Arc::clone(&chstats)));
     tasks.push(tokio::spawn(loadgen::run_grpc_h3_churn(
@@ -746,44 +696,28 @@ async fn setup_grpc_h3(
     })
 }
 
-/// sc8_ws_h1 (S27) — WebSocket-over-HTTP/1.1 soak. An `h1` front with a
-/// `[listeners.websocket]` block (enabled) → a co-located tungstenite WS echo
-/// backend. The binary wires the WS relay on the H1 path (`build_h1_proxy` →
-/// `with_websocket`), so an upgrade is intercepted and the long-lived
-/// `WsProxy::proxy_frames` relay runs end-to-end — this drives the REAL relay
-/// (unlike sc7's backendless H3 front).
+/// sc8_ws_h1 (S27) — WebSocket-over-HTTP/1.1 soak. An `h1` front with `[listeners.websocket]`
+/// enabled → a tungstenite WS echo backend, so the long-lived `WsProxy::proxy_frames` relay
+/// runs end to end (unlike sc7's backendless H3 front).
 ///
-/// The soak-class risk for a long-lived opaque relay is a connection / fd /
-/// memory LEAK under churn (cf. S20's F-S20-2 idle-reclaim leak). Two drivers
-/// create the pressure:
-///   * sustained: many LONG-LIVED WS clients each looping a bidirectional echo
-///     (held connection + relay task for the whole run).
-///   * churn: clients that repeatedly open→echo→CLEAN-close, exercising
-///     connection + relay-task RECLAIM (the F-S20-2 probe).
-///
-/// Bounded-state signal: the OS file-descriptor count (`fds`). Every live WS
-/// tunnel pins a client fd + a backend fd + the gateway relay task, so a
-/// connection / relay-task LEAK (the F-S20-2 class) ratchets `fds` up
-/// monotonically; a reclaimed tunnel returns its fds, so a bounded `fds` series
-/// IS the no-leak proof. RSS/VmHWM corroborate the memory bound and
-/// `panic_total` must stay zero. (`accept_inflight` is scraped for visibility
-/// but is a low-baseline sawtooth under churn — see `ws_gauges` for why `fds`,
-/// not `accept_inflight`, is the leak discriminant.)
+/// Two drivers create the pressure: sustained held tunnels, and open→echo→CLEAN-close churn
+/// (the F-S20-2 RECLAIM probe). Bounded-state signal: `fds` — every live tunnel pins a client
+/// fd + a backend fd + the relay task, so a leak ratchets it up monotonically and a bounded
+/// series IS the no-leak proof. (`accept_inflight` is scraped but is NOT the discriminant —
+/// see `ws_gauges`.)
 async fn setup_ws_h1(
     args: &Args,
     bin: &std::path::Path,
     workdir: &std::path::Path,
     cancel: CancellationToken,
 ) -> anyhow::Result<Running> {
-    // WS echo backend (tungstenite). Stopped on teardown via the AtomicBool.
     let ws_stop = Arc::new(AtomicBool::new(false));
     let backend = backends::spawn_ws_h1_backend(Arc::clone(&ws_stop)).await?;
 
     let metrics = metrics_addr()?;
     let listener = tcp_addr(gateway::ephemeral_port()?);
-    // Generous WS idle close (1001) so sustained echo clients stay up and the
-    // churn clients control their own open→close cadence; a tight read-frame
-    // watchdog still bounds a wedged half. Overridable for targeted tuning.
+    // Generous WS idle close (1001) so sustained clients stay up and the churn clients control
+    // their own cadence; the read-frame watchdog still bounds a wedged half.
     let ws_idle = env_usize("WS_IDLE_SECS", 120) as u64;
     let ws_read_frame = env_usize("WS_READ_FRAME_SECS", 30) as u64;
     let toml = config_gen::h1_front_ws(listener, backend, metrics, ws_idle, ws_read_frame);
@@ -791,7 +725,6 @@ async fn setup_ws_h1(
     std::fs::write(&cfg, toml)?;
     let gw = spawn_gateway(bin, &cfg, metrics, workdir).await?;
 
-    // WS load shape — overridable via env for targeted repro/tuning.
     let sustained = env_usize("WS_SUSTAINED", 8) * args.scale;
     let churn = env_usize("WS_CHURN", 8) * args.scale;
     let frames_per_cycle = env_usize("WS_CHURN_FRAMES", 4);
@@ -799,7 +732,6 @@ async fn setup_ws_h1(
     let mut tasks = Vec::new();
     let mut stats = Vec::new();
 
-    // Sustained long-lived bidirectional echo (held-tunnel pressure).
     let load = LoadStats::new();
     stats.push(("ws_sustained".into(), Arc::clone(&load)));
     tasks.push(tokio::spawn(loadgen::run_ws_h1_load(
@@ -809,7 +741,6 @@ async fn setup_ws_h1(
         cancel.clone(),
     )));
 
-    // Open/close churn (connection + relay RECLAIM — the F-S20-2 probe).
     let chstats = LoadStats::new();
     stats.push(("ws_churn".into(), Arc::clone(&chstats)));
     tasks.push(tokio::spawn(loadgen::run_ws_h1_churn(
@@ -827,28 +758,18 @@ async fn setup_ws_h1(
         kinds: ws_kinds(),
         tasks,
         backend_ctrls: vec![],
-        // Reuse the AtomicBool stop-vec to end the WS backend on teardown.
         quic_stop: vec![ws_stop],
         stats,
         _tmp: workdir.to_path_buf(),
     })
 }
 
-/// sc8b_ws_h2 (S27) — WebSocket-over-HTTP/2 soak (RFC 8441 extended CONNECT). An
-/// `h1s` (TLS, ALPN h2) front with a `[listeners.websocket]` block carrying
-/// `h2_extended_connect = true` (the CF-S27-2 opt-in) → the same co-located
-/// tungstenite H1 WS echo backend. An H2 client drives WS via extended CONNECT;
-/// the gateway (`build_h2_proxy` → `with_websocket` + `with_h2_extended_connect`)
-/// answers 200, keeps the stream open as the tunnel, and runs the shared
-/// `WsProxy::proxy_frames` relay onto the H1 backend.
+/// sc8b_ws_h2 (S27) — WebSocket-over-HTTP/2 soak (RFC 8441 extended CONNECT), over an `h1s`
+/// front with `h2_extended_connect = true` (the CF-S27-2 opt-in) onto the same H1 WS backend.
 ///
-/// Same long-lived-relay leak-class question as sc8_ws_h1, over the RFC 8441
-/// path. F-S27-2 NOTE: the load client READS NORMALLY (drains H2 DATA frames +
-/// releases flow-control capacity) — it intentionally does NOT exercise the
-/// gated, carried H2 unbounded-buffer DoS (a non-reading client); the soak
-/// proves the NORMAL-load bound (fd/connection/memory under churn), which is the
-/// shippable property. Leak discriminant: `fds` (every live tunnel pins a client
-/// fd + a backend fd + the relay task) + RSS + `panic_total = 0`.
+/// Same leak class as sc8_ws_h1. F-S27-2 NOTE: the load client READS NORMALLY (drains DATA +
+/// releases flow-control capacity) — it intentionally does NOT exercise the gated H2
+/// unbounded-buffer DoS. Leak discriminant: `fds` + RSS + `panic_total = 0`.
 async fn setup_ws_h2(
     args: &Args,
     bin: &std::path::Path,
@@ -860,8 +781,6 @@ async fn setup_ws_h2(
 
     let metrics = metrics_addr()?;
     let listener = tcp_addr(gateway::ephemeral_port()?);
-    // The gateway terminates client TLS with its own front cert; the H2 WS load
-    // client trusts it (accept-any loopback verifier) and sends SNI `localhost`.
     let certs = config_gen::generate_certs(workdir, "localhost")?;
     let ws_idle = env_usize("WS_IDLE_SECS", 120) as u64;
     let ws_read_frame = env_usize("WS_READ_FRAME_SECS", 30) as u64;
@@ -915,17 +834,10 @@ async fn setup_ws_h2(
     })
 }
 
-/// sc8c_ws_h3 (S28) — WebSocket-over-HTTP/3 soak (RFC 9220 extended CONNECT). A
-/// `quic` H3-terminate front with a `[listeners.websocket]` block carrying
-/// `h3_extended_connect = true` (the WS-over-H3 opt-in) → the same co-located
-/// tungstenite H1 WS echo backend. A quiche::h3 client drives WS via extended
-/// CONNECT; the gateway advertises `SETTINGS_ENABLE_CONNECT_PROTOCOL`, intercepts
-/// it, dials the H1 backend (upstream-before-200), keeps the request stream open
-/// as the tunnel, and runs the single-sourced `proxy_frames` relay over the
-/// bounded `H3WsTunnel`. Same long-lived-relay leak-class question as sc8_ws_h1
-/// (a held opaque relay + per-tunnel relay task must be RECLAIMED on close), over
-/// the H3/quiche datapath. Bounded-state signal: `fds` (each live tunnel pins a
-/// client udp + backend tcp + the gateway relay task) + RSS/VmHWM + panic=0.
+/// sc8c_ws_h3 (S28) — WebSocket-over-HTTP/3 soak (RFC 9220 extended CONNECT): a `quic`
+/// H3-terminate front with `h3_extended_connect = true` → the same H1 WS echo backend, running
+/// the single-sourced `proxy_frames` relay over the bounded `H3WsTunnel`. Same leak class as
+/// sc8_ws_h1; signal is `fds` (each tunnel pins a client udp + backend tcp + relay task).
 async fn setup_ws_h3(
     args: &Args,
     bin: &std::path::Path,
@@ -964,7 +876,6 @@ async fn setup_ws_h3(
     let mut tasks = Vec::new();
     let mut stats = Vec::new();
 
-    // Sustained long-lived bidirectional echo (held-tunnel pressure).
     let load = LoadStats::new();
     stats.push(("ws_h3_sustained".into(), Arc::clone(&load)));
     tasks.push(tokio::spawn(loadgen::run_ws_h3_load(
@@ -976,7 +887,6 @@ async fn setup_ws_h3(
         cancel.clone(),
     )));
 
-    // Open/close churn (tunnel + relay-task RECLAIM — the F-S20-2 probe over H3).
     let chstats = LoadStats::new();
     stats.push(("ws_h3_churn".into(), Arc::clone(&chstats)));
     tasks.push(tokio::spawn(loadgen::run_ws_h3_churn(
@@ -1012,42 +922,29 @@ async fn spawn_gateway(
     GatewayChild::spawn_and_wait_ready(bin, cfg, metrics, log, BOOT_BUDGET).await
 }
 
-// ── per-family gauge + kind tables ──────────────────────────────────────────
-
 fn tcp_gauges() -> Vec<String> {
     vec!["accept_inflight".into(), "panic_total".into()]
 }
 fn tcp_kinds() -> Vec<(String, MetricKind)> {
     vec![("panic_total".into(), MetricKind::CounterMustBeZero)]
 }
-/// sc8_ws_h1 connection-leak signal: the OS file-descriptor count (`fds`, a
-/// `BASE_COLUMN`, Trend-analyzed). Every live WS tunnel pins a client fd + a
-/// backend fd + the gateway's relay task, so a connection / relay-task LEAK (the
-/// F-S20-2 class) ratchets `fds` up monotonically and is caught there; a
-/// reclaimed tunnel returns its fds, so a bounded `fds` series IS the no-leak
-/// proof. RSS/VmHWM corroborate the memory bound, and `panic_total` (must stay
-/// zero) is universal.
+/// sc8_ws_h1 connection-leak signal: the OS file-descriptor count (`fds`). Every live WS
+/// tunnel pins a client fd + a backend fd + the relay task, so a leak ratchets `fds` up
+/// monotonically and a bounded series IS the no-leak proof.
 ///
-/// `accept_inflight` is deliberately NOT in the analyzed set here: under
-/// open/close CHURN it is a SAWTOOTH at a low integer baseline (live tunnels
-/// constantly opening + closing between 15 s samples, dipping to 0 mid-cycle),
-/// which the relative-growth Trend analyzer mis-flags (a 0→2 wiggle reads as
-/// "+200%" once the first-third median lands on a 0 trough). The reliable
-/// connection-resource bound is `fds`, which does not have the low-baseline
-/// sawtooth pathology. The gauge is still scraped into the CSV (the gateway
-/// exposes it) — it is just not the leak DISCRIMINANT. This mirrors sc7's
-/// posture (OS footprint + `panic_total`, no per-connection state gauge).
+/// `accept_inflight` is deliberately NOT the discriminant: under open/close churn it is a
+/// SAWTOOTH at a low integer baseline, and the relative-growth Trend analyzer mis-flags a 0→2
+/// wiggle as +200% once the first-third median lands on a trough. It is still scraped into the
+/// CSV — just not the leak DISCRIMINANT.
 fn ws_gauges() -> Vec<String> {
     vec!["panic_total".into()]
 }
 fn ws_kinds() -> Vec<(String, MetricKind)> {
     vec![("panic_total".into(), MetricKind::CounterMustBeZero)]
 }
-/// H3-terminate has NO dedicated Prometheus state-table family: the
-/// response-retained R8 gauge is `test-gauges`-only and the QUIC listener does
-/// not feed `accept_inflight` (that gauge is on the TCP accept path). So the
-/// bounded-state proof is the OS footprint (rss/vmhwm/fds/threads, already the
-/// `BASE_COLUMNS`) plus the universal `panic_total` (must stay zero).
+/// H3-terminate has NO dedicated Prometheus state-table family (the response-retained gauge is
+/// `test-gauges`-only and the QUIC listener does not feed `accept_inflight`), so the
+/// bounded-state proof is the OS footprint plus the universal `panic_total`.
 fn h3term_gauges() -> Vec<String> {
     vec!["panic_total".into()]
 }
@@ -1087,8 +984,6 @@ fn modea_kinds() -> Vec<(String, MetricKind)> {
         ("panic_total".into(), MetricKind::CounterMustBeZero),
     ]
 }
-
-// ── output rendering ─────────────────────────────────────────────────────────
 
 fn render_summary(
     args: &Args,

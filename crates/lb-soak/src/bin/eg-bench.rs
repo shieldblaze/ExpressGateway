@@ -1,18 +1,13 @@
 //! `eg-bench` — the S39 closed-loop perf characterization driver (R12).
 //!
-//! Sets up the SAME real `expressgateway` binary + backends/config the soak uses
-//! (reusing `lb_soak::{gateway,backends,config_gen}`), then drives one protocol
-//! path at a fixed concurrency for a fixed window, timing every request into a
-//! latency distribution (`lb_soak::bench`). Reports achieved RPS + p50/p99/p999
-//! + the gateway child's resource cost (RSS/fd/CPU%) at load.
+//! Sets up the SAME binary + backends/config the soak uses, drives one protocol path at a fixed
+//! concurrency for a fixed window, and reports achieved RPS + p50/p99/p999 + the child's
+//! RSS/fd/CPU cost.
 //!
 //! Usage:
 //!   eg-bench --protocol <P> --connections <C> --duration-secs <D> \
 //!            [--warmup-secs <W=5>] [--payload <bytes=0>] [--out <dir>] [--label <s>]
 //!   P ∈ { h1, h2, h3, quic_modea, ws_h1 }
-//!
-//! Stability/teardown: the gateway child is reaped on drop (SIGTERM); backends
-//! stop on their flag — no process outlives the run (R9).
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::too_many_arguments)]
 
@@ -40,9 +35,7 @@ struct Args {
     payload: usize,
     out: Option<PathBuf>,
     label: Option<String>,
-    /// When nonzero, run "serve only": set up gateway+backend, print the
-    /// listener (so an external tool — oha — can drive it for the H1/H1s/H2
-    /// cross-validation), idle for N secs, tear down. No internal load is run.
+    /// When nonzero, run "serve only": set up gateway+backend, print the listener (so an external tool — oha — can drive it for the H1/H1s/H2 cross-validation), idle for N secs, tear down.
     serve_secs: u64,
 }
 
@@ -120,8 +113,8 @@ struct ResSample {
     threads: u64,
 }
 
-/// Read utime+stime (clock ticks) from `/proc/<pid>/stat`. Robust to a `comm`
-/// containing spaces/parens (split on the final ')').
+/// Read utime+stime (clock ticks) from `/proc/<pid>/stat`. Robust to a `comm` containing
+/// spaces/parens (splits on the final `)`).
 fn read_proc_ticks(pid: u32) -> Option<u64> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let rparen = stat.rfind(')')?;
@@ -156,14 +149,12 @@ async fn main() -> anyhow::Result<()> {
         bin.display()
     );
 
-    // Keep backends + their control/stop flags alive for the whole run.
     let mut ctrls: Vec<Arc<BackendControl>> = Vec::new();
     let mut stops: Vec<Arc<AtomicBool>> = Vec::new();
 
     let metrics = metrics_addr()?;
     let cfg = workdir.join("gateway.toml");
 
-    // Per-protocol setup: produce (target, optional sni, optional ca).
     enum Target {
         Tcp(SocketAddr),
         Quic {
@@ -263,8 +254,7 @@ async fn main() -> anyhow::Result<()> {
     let gw_pid = gw.pid();
     eprintln!("[eg-bench] gateway ready pid={gw_pid} metrics={metrics}");
 
-    // Serve-only mode (oha cross-validation for H1/H1s/H2): print the listener
-    // + (for TLS/QUIC) SNI/CA, idle, then tear down. No internal load.
+    // Serve-only mode (oha cross-validation): print the listener, idle, tear down.
     if args.serve_secs > 0 {
         match &target {
             Target::Tcp(addr) => println!("LISTENER={addr} PID={gw_pid}"),
@@ -288,7 +278,6 @@ async fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Background resource sampler on the gateway child.
     let samples: Arc<std::sync::Mutex<Vec<ResSample>>> =
         Arc::new(std::sync::Mutex::new(Vec::new()));
     let sampler_stop = Arc::new(AtomicBool::new(false));
@@ -364,7 +353,6 @@ async fn main() -> anyhow::Result<()> {
     };
     let measured_wall = run_t0.elapsed().as_secs_f64() - args.warmup_secs as f64;
 
-    // Stop the sampler + tear down.
     sampler_stop.store(true, std::sync::atomic::Ordering::Relaxed);
     let _ = sampler.await;
     gw.terminate_and_reap();
@@ -375,7 +363,6 @@ async fn main() -> anyhow::Result<()> {
         c.stop();
     }
 
-    // Resource stats over the MEASURE window (drop warmup-prefix samples).
     let res = {
         let v = samples.lock().map(|g| g.clone()).unwrap_or_default();
         let warm = args.warmup_secs as f64;
@@ -384,8 +371,7 @@ async fn main() -> anyhow::Result<()> {
         let max_vmhwm = win.iter().map(|s| s.vmhwm_kb).max().unwrap_or(0);
         let max_fds = win.iter().map(|s| s.fds).max().unwrap_or(0);
         let max_thr = win.iter().map(|s| s.threads).max().unwrap_or(0);
-        // CPU% across the window: tick delta / USER_HZ / wall * 100 (can exceed
-        // 100 = multi-core).
+        // CPU% across the window: tick delta / USER_HZ / wall * 100 (>100 = multi-core).
         let cpu_pct = match (win.first(), win.last()) {
             (Some(a), Some(b)) if b.elapsed > a.elapsed => {
                 let dt = b.elapsed - a.elapsed;
@@ -433,7 +419,6 @@ async fn main() -> anyhow::Result<()> {
         eprintln!("[eg-bench] wrote {}", path.display());
     }
 
-    // Best-effort workdir cleanup (certs/logs only — small).
     let _ = std::fs::remove_dir_all(&workdir);
     Ok(())
 }
