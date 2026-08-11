@@ -54,4 +54,8 @@ fn attach_replacing_signature_present() {
 /// Ignored: requires CAP_BPF + the `dummy` netlink driver.
 #[test]
 #[ignore = "kernel-touching: requires CAP_BPF + dummy netdev"]
-fn detach_verifying_on_real_iface() {}
+fn detach_verifying_on_real_iface() {
+    // Placeholder for the privileged CI lane: creates a `dummy0` iface via `rtnetlink`,
+    // attaches an XDP_PASS-only prog, then runs `detach_verifying` and checks the
+    // post-condition.
+}

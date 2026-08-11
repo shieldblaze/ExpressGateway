@@ -96,7 +96,10 @@ mod tests {
                     "hint must surface the mount command, got: {hint}"
                 );
             }
-            Err(XdpLoaderError::PinPathStatFailed { .. }) => {}
+            Err(XdpLoaderError::PinPathStatFailed { .. }) => {
+                // Acceptable if the sandbox blocks statfs; the contract under test is
+                // "no false-positive Ok on non-bpffs".
+            }
             Ok(()) => panic!("tempdir cannot be bpffs but assert_bpffs returned Ok"),
             other => panic!("unexpected: {other:?}"),
         }
