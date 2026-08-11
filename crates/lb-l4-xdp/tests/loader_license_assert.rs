@@ -1,30 +1,10 @@
-//! SEC-2-12 proof: the loader's belt-and-suspenders license check
-//! must refuse an ELF that lacks a `license` section, and must
-//! refuse an ELF whose `license` section payload is not `"GPL\0"`.
-//!
-//! Both assertions live in
-//! [`lb_l4_xdp::loader::XdpLoader::load_from_bytes`] (which delegates
-//! to `load_from_bytes_pinned`). The integration test exercises the
-//! public entry-point — the corresponding unit test in
-//! `src/loader.rs` calls the private `assert_license_is_gpl` helper
-//! directly with hand-crafted ELFs.
-//!
-//! Linux-only: the loader module itself is gated on `target_os =
-//! "linux"` because aya talks to the BPF syscall. On non-Linux this
-//! file compiles as an empty module.
+//! SEC-2-12 proof: the loader's belt-and-suspenders license check must refuse an ELF that lacks a `license` section, and must refuse an ELF whose `license` section payload is not `"GPL\0"`.
 
 #![cfg(target_os = "linux")]
 
 use lb_l4_xdp::loader::{XdpLoader, XdpLoaderError};
 
 /// SEC-2-12: an ELF without a `license` section is rejected.
-///
-/// We pass a 16-byte zero buffer — not a valid ELF, so the
-/// `object` parser short-circuits inside the license check and
-/// surfaces `LicenseInvalid` with a parse-failure message. The
-/// crucial property is the error variant: a regression that
-/// removes the license check would silently fall through to aya,
-/// which returns `EbpfError`/`Load(_)` instead.
 #[test]
 fn test_loader_refuses_elf_without_license() {
     let garbage = [0u8; 16];
@@ -35,13 +15,9 @@ fn test_loader_refuses_elf_without_license() {
     );
 }
 
-/// SEC-2-12: a "real" looking ELF (valid header) but no `license`
-/// section is also rejected with a message that names the missing
-/// section, so operators can fix the build.
+/// SEC-2-12: a "real" looking ELF (valid header) but no `license` section is also rejected with a message that names the missing section, so operators can fix the build.
 #[test]
 fn test_loader_refuses_real_elf_without_license_section() {
-    // Minimal 64-bit LSB BPF ELF, no sections. `object::File::parse`
-    // accepts it; `section_by_name("license")` returns None.
     let mut elf = vec![0u8; 64];
     elf[0..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
     elf[4] = 2; // ELFCLASS64

@@ -1,32 +1,11 @@
-//! ROUND8-L4-05: known-bad NIC + firmware blocklist for native
-//! (`Drv`) XDP, and the post-attach silent-drop probe scaffold.
+//! ROUND8-L4-05: known-bad NIC + firmware blocklist for native (`Drv`) XDP, plus the
+//! post-attach silent-drop probe scaffold (Linux-only — sysfs/ethtool).
 //!
-//! Reference: aya issue #1193 (MLX5 / ConnectX-6 silently drops
-//! `XDP_REDIRECT` — and on some firmware `XDP_TX` — in DRV mode:
-//! `bpf_link_create` returns success, every map op reports success,
-//! the packet path goes to /dev/null); Cilium lesson 8 (ConnectX-4
-//! Lx VF silent fail — Cilium added a runtime fallback after the
-//! scar); Round-8 handoff item 5.
-//!
-//! Two defences, layered:
-//!
-//!   1. **Static blocklist** (this module): refuse `Drv` on a
-//!      `(driver, firmware-version)` combination known to silently
-//!      drop. Best-effort — the list goes stale; it is the cheap
-//!      first gate, not the backstop.
-//!
-//!   2. **Runtime probe** (the backstop, [`probe_xdp_silent_drop`]):
-//!      after a `Drv` attach, fire a synthetic packet through
-//!      `BPF_PROG_TEST_RUN` and verify the program actually ran. If
-//!      not, demote to `Skb`. **API blocker**: aya 0.13.1 exposes no
-//!      public `BPF_PROG_TEST_RUN` wrapper on the `Xdp` program type
-//!      (only the raw kernel binding constant exists in aya-obj's
-//!      generated bindings). The probe is shipped as a typed
-//!      structure + an explicit deferred-to-CI marker, the same
-//!      posture as ROUND8-L4-12's `query_xdp` netlink stub. The
-//!      blocklist gate (defence 1) IS fully wired today.
-//!
-//! Linux-only: sysfs / ethtool are Linux facilities.
+//! The hazard (aya #1193, Cilium lesson 8): on some MLX5/ConnectX firmware, DRV mode silently
+//! drops — `bpf_link_create` returns success, every map op reports success, and the packet path
+//! goes to /dev/null. Two layered defences: a static `(driver, firmware)` blocklist (wired
+//! today, best-effort, goes stale) and a runtime `BPF_PROG_TEST_RUN` probe (the real backstop,
+//! blocked on aya 0.13.1 exposing no public wrapper — see [`probe_xdp_silent_drop`]).
 
 #![cfg(target_os = "linux")]
 
@@ -35,19 +14,9 @@ use std::path::Path;
 
 /// Outcome of [`probe_xdp_silent_drop`].
 ///
-/// `Ok` — the synthetic packet round-tripped with the rewrite
-/// applied; the `Drv` attach is genuinely live.
-///
-/// `SilentDrop` — `BPF_PROG_TEST_RUN` returned but the action was not
-/// the expected `XDP_TX` (the aya #1193 class).
-///
-/// `NotExecuted` — the action looked right but the program body did
-/// not run (dst MAC unchanged) — the subtler silent-drop variant.
-///
-/// `ProbeUnavailable` — `BPF_PROG_TEST_RUN` is not reachable on this
-/// build (aya 0.13.1 API blocker). The caller MUST treat this as
-/// "probe inconclusive", keep the attach, and rely on the static
-/// blocklist + the `xdp_attach_probe_failed_total` alert wired in CI.
+/// `ProbeUnavailable` means the probe could not run at all (aya API blocker): the caller MUST
+/// treat it as inconclusive, KEEP the attach, and lean on the static blocklist plus the
+/// `xdp_attach_probe_failed_total` alert.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProbeOutcome {
     /// Synthetic packet round-tripped with the expected rewrite.
@@ -63,25 +32,21 @@ pub enum ProbeOutcome {
 /// Whether `Drv` mode is safe to attempt on a given interface.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DrvSupport {
-    /// No blocklist match — `Drv` may be attempted (the runtime probe
-    /// is still the backstop once it is reachable).
+    /// No blocklist match — `Drv` may be attempted (the runtime probe is still the backstop once it is reachable).
     Allowed,
-    /// The `(driver, firmware)` combination is known to silently
-    /// drop. `Drv` MUST be skipped; `reason` is the operator-facing
-    /// explanation incl. the bug-id link.
+    /// The `(driver, firmware)` combination is known to silently drop, so `Drv` MUST be
+    /// skipped; `reason` is the operator-facing explanation with the bug-id link.
     Refuse {
         /// Operator-facing reason (driver, firmware, bug-id link).
         reason: String,
     },
 }
 
-/// Errors from the sysfs / ethtool introspection path. A read
-/// failure is NOT fatal — the caller treats an error as "could not
-/// determine, allow `Drv` and rely on the runtime probe + alert".
+/// Errors from the sysfs / ethtool introspection path. A read failure is NOT fatal — the
+/// caller treats it as `could not determine`, allows `Drv`, and relies on the probe + alert.
 #[derive(Debug, thiserror::Error)]
 pub enum NicCompatError {
-    /// `/sys/class/net/<iface>/device/driver` could not be read
-    /// (interface gone, virtual device with no driver symlink, ...).
+    /// `/sys/class/net/<iface>/device/driver` could not be read (interface gone, virtual device with no driver symlink, ...).
     #[error("could not resolve driver for {iface}: {source}")]
     DriverUnresolved {
         /// Interface name.
@@ -100,37 +65,26 @@ pub enum NicCompatError {
     },
 }
 
-/// A single blocklist row: a driver name and an inclusive
-/// firmware-version *upper bound* below which `Drv` is unsafe. We
-/// only ever compare "firmware < first_safe", so the row carries the
-/// first KNOWN-GOOD version string and a human reason.
+/// A single blocklist row. Only `firmware < first_safe` is ever compared, so the row carries
+/// the first KNOWN-GOOD version string plus a human reason.
 #[derive(Debug, Clone, Copy)]
 struct BlockRow {
     /// Kernel driver name (basename of the `device/driver` symlink).
     driver: &'static str,
     /// First firmware version considered safe (dotted numeric).
     first_safe: &'static str,
-    /// Operator-facing reason incl. the bug-id link.
+    /// Operator-facing reason incl.
     reason: &'static str,
-    /// F-COR-7: `Some((major, minor))` = first kernel version at/above
-    /// which this driver's silent-drop window does NOT apply, used as
-    /// a driver+kernel fallback key when firmware is UNRESOLVED (some
-    /// drivers — notably `ena` on AWS — never report a firmware string
-    /// via `ethtool -i`, so the firmware-only key was permanently
-    /// dead and `drv_supported` fail-OPENed). The boundary is taken
-    /// directly from the row's own documented condition (NOT a new
-    /// fleet-wide product guess): the `ena` reason states the
-    /// silent-drop window is "pre-2024 kernels" — kernel 6.7 (Jan
-    /// 2024) is the first 2024 mainline line, so `(6, 7)` means
-    /// "kernel < 6.7 with this driver and unresolved firmware is the
-    /// known-bad combo; kernel >= 6.7 is NOT known-bad and stays
-    /// Allowed". `None` = no kernel fallback (firmware-only row).
+    /// F-COR-7: `Some((major, minor))` = the first kernel version at/above which this driver's
+    /// silent-drop window does NOT apply, used as a driver+kernel fallback key when firmware is
+    /// UNRESOLVED (notably `ena` on AWS never reports one via `ethtool -i`, which left the
+    /// firmware-only key permanently dead and fail-OPEN). The boundary comes from the row's own
+    /// documented condition, not a fleet-wide guess. `None` = firmware-only row.
     bad_kernel_below: Option<(u8, u8)>,
 }
 
-/// ROUND8-L4-05 source-of-truth blocklist. Best-effort; the runtime
-/// probe is the always-on backstop. Add rows here as new silent-drop
-/// firmware windows are confirmed.
+/// ROUND8-L4-05 source-of-truth blocklist. Best-effort — the runtime probe is the always-on
+/// backstop. Add rows as new silent-drop firmware windows are confirmed.
 const BLOCKLIST: &[BlockRow] = &[
     BlockRow {
         driver: "mlx5_core",
@@ -146,15 +100,11 @@ const BLOCKLIST: &[BlockRow] = &[
         first_safe: "2.10.0",
         reason: "ena firmware < 2.10 on c5n/m5n silently drops native XDP \
                  in pre-2024 kernels. Force runtime.xdp_mode = \"skb\".",
-        // F-COR-7: ena never reports firmware via `ethtool -i` on AWS,
-        // so the firmware key alone is permanently dead. The row's own
-        // documented condition is "pre-2024 kernels"; kernel 6.7 (Jan
-        // 2024) is the first 2024 mainline line. So a kernel < 6.7 ena
-        // box with unresolved firmware IS the known-bad combo (now
-        // Refuse — the dead defence path is live); a kernel >= 6.7 ena
-        // box (e.g. this audit box, ena/7.0, D-1 PASS) is NOT
-        // known-bad and stays Allowed (no fleet-wide native-XDP
-        // regression).
+        // F-COR-7: ena never reports firmware via `ethtool -i` on AWS, so the firmware key
+        // alone is permanently dead. The row's documented condition is `pre-2024 kernels` and
+        // 6.7 (Jan 2024) is the first 2024 mainline line: kernel < 6.7 with unresolved firmware
+        // IS the known-bad combo (the dead defence path is now live), while kernel >= 6.7 stays
+        // Allowed so there is no fleet-wide native-XDP regression.
         bad_kernel_below: Some((6, 7)),
     },
     BlockRow {
@@ -166,10 +116,8 @@ const BLOCKLIST: &[BlockRow] = &[
     },
 ];
 
-/// F-COR-7: `(major, minor)` of the running kernel via aya's
-/// `KernelVersion::current()`, or `None` if it cannot be resolved.
-/// Used only as the driver+kernel fallback key when firmware is
-/// unresolved on a driver that carries a `bad_kernel_below`.
+/// F-COR-7: `(major, minor)` of the running kernel, or `None` if unresolvable. Used ONLY as
+/// the driver+kernel fallback key when firmware is unresolved on a row with `bad_kernel_below`.
 fn current_kernel_mm() -> Option<(u8, u8)> {
     let kv = aya::util::KernelVersion::current().ok()?;
     // KernelVersion fields are crate-private; reconstruct (major,
@@ -186,10 +134,8 @@ fn kernel_below(k: (u8, u8), bound: (u8, u8)) -> bool {
     k.0 < bound.0 || (k.0 == bound.0 && k.1 < bound.1)
 }
 
-/// Parse a dotted-numeric version into a comparable `Vec<u64>`.
-/// Non-numeric trailing junk (e.g. `16.32.1010 (MT_0000000080)`) is
-/// truncated at the first non `[0-9.]` run. Missing components compare
-/// as 0 so `16.32` < `16.32.1` as expected.
+/// Parse a dotted-numeric version into a comparable `Vec<u64>`. Trailing non-numeric junk
+/// (e.g. `16.32.1010 (MT_0000000080)`) is truncated; missing components compare as 0.
 fn parse_version(v: &str) -> Vec<u64> {
     let trimmed: String = v
         .trim()
@@ -218,9 +164,8 @@ fn version_lt(a: &str, b: &str) -> bool {
     false
 }
 
-/// Decide whether `Drv` is safe for `(driver, firmware)` against the
-/// static blocklist. Pure function so it is unit-testable without a
-/// real NIC.
+/// Decide whether `Drv` is safe for `(driver, firmware)` against the static blocklist. Pure,
+/// so it is unit-testable without a real NIC.
 #[must_use]
 pub fn classify(driver: &str, firmware: &str) -> DrvSupport {
     for row in BLOCKLIST {
@@ -236,21 +181,13 @@ pub fn classify(driver: &str, firmware: &str) -> DrvSupport {
     DrvSupport::Allowed
 }
 
-/// F-COR-7: driver + kernel classification used ONLY when firmware is
-/// UNRESOLVED. Pure (kernel passed in, not read) so it is unit-
-/// testable for both this box (ena/7.0 → Allowed) and a synthetic
-/// known-bad combo (ena/pre-6.7 → Refuse). `classify` itself is left
-/// pure and UNCHANGED.
+/// F-COR-7: driver + kernel classification used ONLY when firmware is UNRESOLVED. Pure (the
+/// kernel version is passed in, not read), and [`classify`] itself stays pure and UNCHANGED.
 ///
-/// Rationale: for a driver carrying a `bad_kernel_below`, an
-/// unresolved firmware must NOT silently fail-open (that was the dead
-/// path — the ROUND8-L4-05 ena row could never fire on real AWS ena
-/// because `ethtool -i` reports no firmware). Instead we key on the
-/// row's own documented kernel condition: kernel below the boundary
-/// = the known-bad combo → Refuse; kernel at/above = NOT known-bad →
-/// Allowed (native XDP preserved, D-1-consistent). Drivers without a
-/// `bad_kernel_below` keep fail-open on unresolved firmware
-/// (virtual/dummy/veth and firmware-reliable drivers unaffected).
+/// For a driver carrying a `bad_kernel_below`, an unresolved firmware must NOT silently
+/// fail-open — that was the dead path. Kernel below the boundary = the known-bad combo →
+/// Refuse; at/above = Allowed (native XDP preserved). Drivers without the field keep
+/// fail-open.
 #[must_use]
 pub fn classify_unresolved_firmware(driver: &str, kernel: Option<(u8, u8)>) -> DrvSupport {
     for row in BLOCKLIST {
@@ -258,8 +195,8 @@ pub fn classify_unresolved_firmware(driver: &str, kernel: Option<(u8, u8)>) -> D
             continue;
         }
         let Some(bound) = row.bad_kernel_below else {
-            // Firmware-only row, firmware unresolved → fail-open (the
-            // runtime probe + alert remain the backstop, unchanged).
+            // Firmware-only row with unresolved firmware → fail-open; the probe + alert remain
+            // the backstop.
             return DrvSupport::Allowed;
         };
         return match kernel {
@@ -272,10 +209,8 @@ pub fn classify_unresolved_firmware(driver: &str, kernel: Option<(u8, u8)>) -> D
                     row.reason, k.0, k.1, bound.0, bound.1
                 ),
             },
-            // kernel >= boundary (e.g. this audit box ena/7.0) → NOT a
-            // known-bad combo → Allowed (D-1 native xdpdrv preserved).
-            // Kernel unknowable → fail-open (cannot prove known-bad;
-            // do not fleet-regress on an unprovable guess).
+            // kernel >= boundary → NOT a known-bad combo → Allowed. Kernel unknowable →
+            // fail-open: do not fleet-regress on an unprovable guess.
             _ => DrvSupport::Allowed,
         };
     }
@@ -283,14 +218,8 @@ pub fn classify_unresolved_firmware(driver: &str, kernel: Option<(u8, u8)>) -> D
     DrvSupport::Allowed
 }
 
-/// Resolve the kernel driver name for `iface` from
-/// `/sys/class/net/<iface>/device/driver` (a symlink whose basename
-/// is the driver, e.g. `…/drivers/mlx5_core`).
-///
-/// # Errors
-///
-/// [`NicCompatError::DriverUnresolved`] if the symlink is absent
-/// (virtual device) or unreadable.
+/// Resolve the kernel driver name for `iface` from `/sys/class/net/<iface>/device/driver`
+/// (a symlink whose basename is the driver).
 pub fn driver_of(iface: &str) -> Result<String, NicCompatError> {
     let link = format!("/sys/class/net/{iface}/device/driver");
     let target = fs::read_link(&link).map_err(|source| NicCompatError::DriverUnresolved {
@@ -304,17 +233,8 @@ pub fn driver_of(iface: &str) -> Result<String, NicCompatError> {
         .to_owned())
 }
 
-/// Read the firmware-version line from `ethtool -i <iface>`.
-///
-/// v1 shells out to `ethtool`; an aya-native ethtool binding is a
-/// documented follow-up (the plan calls this out). A missing
-/// `ethtool` binary or a NIC that does not report a firmware version
-/// is NOT fatal — the caller treats it as "could not determine".
-///
-/// # Errors
-///
-/// [`NicCompatError::FirmwareUnresolved`] if `ethtool` is missing,
-/// fails, or emits no `firmware-version:` line.
+/// Read the firmware-version line from `ethtool -i <iface>`. A missing `ethtool` binary or a
+/// NIC that reports no firmware is NOT fatal — the caller treats it as `could not determine`.
 pub fn firmware_of(iface: &str) -> Result<String, NicCompatError> {
     let out = std::process::Command::new("ethtool")
         .arg("-i")
@@ -338,7 +258,6 @@ pub fn firmware_of(iface: &str) -> Result<String, NicCompatError> {
 }
 
 /// Extract the `firmware-version:` value from `ethtool -i` text.
-/// Split out so it is unit-testable without a real NIC.
 #[must_use]
 pub fn parse_ethtool_firmware(ethtool_out: &str) -> Option<String> {
     for line in ethtool_out.lines() {
@@ -352,37 +271,21 @@ pub fn parse_ethtool_firmware(ethtool_out: &str) -> Option<String> {
     None
 }
 
-/// Top-level gate called by `XdpLoader::attach_with_fallback` BEFORE
-/// attempting `Drv`. Resolves driver + firmware from sysfs/ethtool
-/// and runs [`classify`]. A resolution failure returns
-/// [`DrvSupport::Allowed`] (fail-open: we never block `Drv` just
-/// because introspection failed — the runtime probe + alert is the
-/// backstop) but is surfaced to the caller's tracing via the
-/// returned `Err` path being mapped to `Allowed` by
-/// [`drv_supported`].
-///
-/// # Errors
-///
-/// Never returns `Err` for a resolution failure (those map to
-/// `Allowed`); the `Result` is reserved for future hard-fail
-/// classes. Today it is always `Ok`.
+/// Top-level gate called by `XdpLoader::attach_with_fallback` BEFORE attempting `Drv`.
+/// Resolves driver + firmware and runs [`classify`]. A resolution failure maps to
+/// [`DrvSupport::Allowed`] — `Drv` is never blocked merely because introspection failed.
 pub fn drv_supported(iface: &str) -> Result<DrvSupport, NicCompatError> {
     let driver = match driver_of(iface) {
         Ok(d) => d,
-        // Virtual / driverless device (dummy0 in CI, veth, ...). No
-        // blocklist row can match; allow `Drv`.
+        // Virtual / driverless device (dummy0 in CI, veth). No row can match; allow `Drv`.
         Err(_) => return Ok(DrvSupport::Allowed),
     };
     let firmware = match firmware_of(iface) {
         Ok(f) => f,
-        // F-COR-7: firmware unresolved. Previously this fail-OPENed
-        // unconditionally, which made the ROUND8-L4-05 ena blocklist
-        // row permanently dead on real AWS ena (it never reports a
-        // firmware string). Instead use the driver+kernel fallback
-        // key: a known-bad driver+kernel combo → Refuse (dead path
-        // now live); a not-known-bad combo (e.g. ena/7.0, D-1 PASS) →
-        // Allowed (no fleet-wide native-XDP regression); a driver
-        // without a kernel-keyed row → still fail-open (probe backstop).
+        // F-COR-7: firmware unresolved. This used to fail-OPEN unconditionally, which made the
+        // ena blocklist row permanently dead on real AWS. Now it keys on driver+kernel: a
+        // known-bad combo Refuses, anything else stays Allowed, and a driver without a
+        // kernel-keyed row still fails open.
         Err(_) => {
             return Ok(classify_unresolved_firmware(&driver, current_kernel_mm()));
         }
@@ -390,9 +293,7 @@ pub fn drv_supported(iface: &str) -> Result<DrvSupport, NicCompatError> {
     Ok(classify(&driver, &firmware))
 }
 
-/// Path used by [`Path::exists`] gating in tests; kept here so the
-/// sysfs root is a single source of truth if a future mock harness
-/// needs to override it.
+/// Sysfs root as a single source of truth, so a future mock harness can override it.
 #[must_use]
 pub fn driver_link_path(iface: &str) -> std::path::PathBuf {
     Path::new("/sys/class/net")
@@ -400,24 +301,13 @@ pub fn driver_link_path(iface: &str) -> std::path::PathBuf {
         .join("device/driver")
 }
 
-/// ROUND8-L4-05 runtime probe scaffold.
+/// ROUND8-L4-05 runtime probe scaffold: fire a synthetic packet through `BPF_PROG_TEST_RUN`
+/// and assert the action is `XDP_TX` AND the dst MAC was rewritten.
 ///
-/// Intended behaviour: build a synthetic Ethernet+IPv4+TCP packet
-/// matching a pre-inserted synthetic CONNTRACK entry, fire it through
-/// `BPF_PROG_TEST_RUN`, and assert the returned action is `XDP_TX`
-/// AND the dst MAC was rewritten.
-///
-/// **API blocker (explicit)**: aya 0.13.1 exposes no public
-/// `BPF_PROG_TEST_RUN` / `test_run` wrapper on the `Xdp` program
-/// type. Implementing this would require either a raw `bpf(2)`
-/// syscall via `libc` (out of scope for this plan's blast radius) or
-/// an aya upgrade. Per the Round-8 instruction to "ship the
-/// structure + a deferred-to-CI note rather than nothing", this
-/// returns [`ProbeOutcome::ProbeUnavailable`]. The caller keeps the
-/// attach, records nothing as a failure, and the static blocklist
-/// (fully wired) plus the CI privileged-stage probe fixture +
-/// `xdp_attach_probe_failed_total` alert are the active defence
-/// until the aya API lands.
+/// API BLOCKER: aya 0.13.1 exposes no public `test_run` wrapper on the `Xdp` program type, so
+/// this returns [`ProbeOutcome::ProbeUnavailable`] and the caller keeps the attach. The static
+/// blocklist plus the CI probe fixture and `xdp_attach_probe_failed_total` alert are the
+/// active defence until the aya API lands.
 #[must_use]
 pub const fn probe_xdp_silent_drop() -> ProbeOutcome {
     ProbeOutcome::ProbeUnavailable
@@ -467,7 +357,6 @@ mod tests {
 
     #[test]
     fn unknown_driver_allowed() {
-        // virtio_net / dummy / veth — no blocklist row, always allow.
         assert_eq!(classify("virtio_net", "1.0"), DrvSupport::Allowed);
         assert_eq!(classify("dummy", ""), DrvSupport::Allowed);
     }
@@ -502,12 +391,10 @@ mod tests {
         assert_eq!(probe_xdp_silent_drop(), ProbeOutcome::ProbeUnavailable);
     }
 
-    // ---- F-COR-7: driver+kernel fallback when firmware unresolved ----
-
     #[test]
     fn classify_unchanged_is_pure_and_untouched() {
-        // classify() itself MUST stay pure/unchanged by F-COR-7 (lead
-        // D1): the firmware-keyed behaviour is identical.
+        // classify() itself MUST stay pure/unchanged by F-COR-7: firmware-keyed behaviour is
+        // identical.
         assert!(matches!(
             classify("ena", "2.9.5"),
             DrvSupport::Refuse { .. }
@@ -518,9 +405,8 @@ mod tests {
 
     #[test]
     fn ena_unresolved_fw_modern_kernel_stays_allowed() {
-        // (1) lead D1: NOT-known-bad ena box (ena, kernel >= 6.7, e.g.
-        // this audit box's 7.0) with unresolved firmware stays Allowed
-        // — native XDP preserved, D-1-consistent, no fleet regression.
+        // NOT-known-bad ena box (kernel >= 6.7) with unresolved firmware stays Allowed —
+        // native XDP preserved, no fleet regression.
         assert_eq!(
             classify_unresolved_firmware("ena", Some((7, 0))),
             DrvSupport::Allowed
@@ -530,8 +416,7 @@ mod tests {
             DrvSupport::Allowed,
             "6.7 is the known-good boundary (inclusive) → Allowed"
         );
-        // Kernel unknowable → cannot prove known-bad → fail-open
-        // (do not fleet-regress on an unprovable guess).
+        // Kernel unknowable → cannot prove known-bad → fail-open.
         assert_eq!(
             classify_unresolved_firmware("ena", None),
             DrvSupport::Allowed
@@ -540,10 +425,8 @@ mod tests {
 
     #[test]
     fn ena_unresolved_fw_prebad_kernel_refuses() {
-        // (2) lead D1: a synthetic KNOWN-BAD ena/kernel combo (the
-        // row's documented "pre-2024" window) → Refuse — the
-        // previously-dead ROUND8-L4-05 defence path now genuinely
-        // fires.
+        // A synthetic KNOWN-BAD ena/kernel combo (the row's pre-2024 window) → Refuse: the
+        // previously-dead defence path genuinely fires.
         for k in [(6, 6), (6, 1), (5, 15), (5, 10)] {
             match classify_unresolved_firmware("ena", Some(k)) {
                 DrvSupport::Refuse { reason } => {
@@ -565,10 +448,8 @@ mod tests {
 
     #[test]
     fn non_kernel_keyed_driver_unresolved_fw_still_fail_open() {
-        // mlx5/ice report firmware reliably (bad_kernel_below=None) →
-        // unresolved firmware keeps the original fail-open semantics
-        // (the runtime probe + alert remain the backstop). Drivers
-        // with no row also fail-open.
+        // Drivers that report firmware reliably (bad_kernel_below=None) keep the original
+        // fail-open on unresolved firmware, as do drivers with no row at all.
         assert_eq!(
             classify_unresolved_firmware("mlx5_core", Some((5, 15))),
             DrvSupport::Allowed
@@ -585,9 +466,8 @@ mod tests {
 
     #[test]
     fn current_kernel_mm_resolves_on_this_box() {
-        // This audit box runs kernel 7.0; aya KernelVersion must
-        // resolve a plausible (major, minor) so the real drv_supported
-        // path keys correctly.
+        // aya KernelVersion must resolve a plausible (major, minor) so drv_supported keys
+        // correctly on the real path.
         let k = current_kernel_mm().expect("kernel version must resolve");
         assert!(k.0 >= 3, "implausible kernel major {}", k.0);
     }

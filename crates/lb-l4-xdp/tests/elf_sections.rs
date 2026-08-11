@@ -1,19 +1,9 @@
-//! EBPF-2-01 / EBPF-2-02 proof test: the committed BPF ELF must carry
-//! a `license` section spelling exactly `"GPL\0"`, must carry `.BTF`
-//! and `.BTF.ext` sections with non-zero size, and must stay under the
-//! 64 KiB ceiling enforced by `build.rs`.
+//! EBPF-2-01 / EBPF-2-02 proof: the committed BPF ELF must carry a `license` section spelling
+//! exactly GPL + NUL, must carry non-empty `.BTF` and `.BTF.ext` sections, and must stay under
+//! the 64 KiB ceiling `build.rs` enforces. The assertions are strict by default so a stale ELF
+//! is caught the moment someone ships without a rebuild.
 //!
-//! Gated on `cfg(lb_xdp_elf)` — when the ELF file is absent (e.g. on
-//! an aarch64-musl CI image that skips the build-xdp step) this test
-//! file compiles as an empty module so `cargo test` still acknowledges
-//! it.
-//!
-//! NOTE on the local sandbox: until `scripts/build-xdp.sh` is re-run
-//! against the post-EBPF-2-01 source, the committed ELF still lacks
-//! the new sections. CI is responsible for rebuilding and committing
-//! the refreshed ELF, after which this test runs green. The
-//! assertions are written strict-by-default so a stale ELF is caught
-//! the moment a contributor tries to ship without a rebuild.
+//! Gated on `cfg(lb_xdp_elf)`: when the ELF is absent this file compiles as an empty module.
 
 #![cfg(all(target_os = "linux", lb_xdp_elf))]
 
@@ -57,10 +47,8 @@ fn btf_sections_present_and_non_empty() {
 
 #[test]
 fn elf_size_within_budget() {
-    // build.rs hard-fails over MAX_ELF_BYTES, but cargo runs build.rs
-    // and tests in different processes — repeat the assertion here so
-    // a manual `cargo test --no-run` past a stale `target/` still
-    // catches the regression.
+    // build.rs hard-fails over MAX_ELF_BYTES, but cargo runs build.rs and tests in different
+    // processes — repeat it here so a stale `target/` still catches the regression.
     let elf_len = LB_XDP_ELF.len() as u64;
     assert!(
         elf_len <= MAX_ELF_BYTES,

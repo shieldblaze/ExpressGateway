@@ -1,29 +1,11 @@
-//! F-ESC-1 — REAL kernel-7.0 eBPF verifier baseline capture.
+//! F-ESC-1 — REAL kernel-7.0 eBPF verifier baseline capture (privileged, `#[ignore]`d).
 //!
-//! Loads the shipped `lb_xdp.bin` via the PROVEN aya path (the same
-//! `XdpLoader::load_from_bytes_pinned` + `kernel_load` the D-1 test
-//! uses — a genuine `BPF_PROG_LOAD` on the running kernel) and then
-//! reads the loaded program's REAL kernel verifier-derived facts via
-//! aya `ProgramInfo` (`verified_instruction_count` = kernel
-//! `verified_insns`, `size_translated` = xlated bytes, `size_jitted` =
-//! jited bytes, `tag`, `name`, prog id). These are genuine kernel
-//! verifier outputs, NOT a placeholder.
+//! Loads `lb_xdp.bin` through the proven aya path (a genuine `BPF_PROG_LOAD`) and records the
+//! kernel's own verifier facts via aya `ProgramInfo` plus `bpftool prog show --json`, writing a
+//! structured baseline to `audit/ebpf/verifier-logs/7.0.log.committed`. NOT a placeholder.
 //!
-//! It then ALSO runs `bpftool prog show id <id> --json` on the
-//! aya-loaded prog (bpftool can INSPECT an already-loaded prog even
-//! though libbpf cannot LOAD this legacy-map ELF — auditor-3 tooling
-//! note) for the authoritative kernel verifier STATS line, and writes
-//! a structured real baseline to
-//! `audit/ebpf/verifier-logs/7.0.log.committed` (uname, counters,
-//! GPL license assertion, capture method, timestamp).
-//!
-//! NO attach is performed (no MTU/channel disruption): the load alone
-//! is what the kernel verifier runs, so the load is sufficient for the
-//! verifier baseline.
-//!
-//! Privileged + `#[ignore]`d (needs CAP_BPF + bpffs). Run via:
-//!   sudo -E env "PATH=$PATH" cargo test -p lb-l4-xdp \
-//!     --test round8_verifier_baseline_70 -- --ignored --nocapture
+//! No attach is performed (no MTU/channel disruption): the LOAD is what runs the verifier, so
+//! the load alone suffices for the baseline.
 
 use lb_l4_xdp::LB_XDP_ELF;
 use lb_l4_xdp::loader::XdpLoader;
@@ -59,15 +41,13 @@ fn capture_real_70_verifier_baseline() {
     let uname = cmd("uname", &["-a"]);
     let kver = cmd("uname", &["-r"]);
 
-    // Real BPF_PROG_LOAD via the proven aya loader (legacy-map ELF —
-    // aya is the only loader that can load it; D-1 proved this path).
+    // Real BPF_PROG_LOAD via aya — the only loader that can load this legacy-map ELF.
     let mut loader = XdpLoader::load_from_bytes_pinned(LB_XDP_ELF, Some(Path::new(BPFFS)))
         .expect("load_from_bytes_pinned(lb_xdp.bin, /sys/fs/bpf)");
     loader
         .kernel_load(PROG)
         .expect("kernel_load(lb_xdp) — real BPF_PROG_LOAD on the running 7.0 kernel");
 
-    // Read the loaded program's REAL kernel verifier-derived facts.
     use aya::programs::{Program, Xdp};
     let ebpf = loader.ebpf_mut();
     let prog: &mut Program = ebpf
@@ -86,7 +66,6 @@ fn capture_real_70_verifier_baseline() {
     let xlated = info.size_translated();
     let jited = info.size_jitted();
 
-    // Authoritative kernel STATS via bpftool on the aya-loaded prog.
     let bpftool_json = cmd(
         "bpftool",
         &["prog", "show", "id", &prog_id.to_string(), "--json"],

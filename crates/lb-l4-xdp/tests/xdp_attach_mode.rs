@@ -1,41 +1,13 @@
-//! EBPF-2-04 proof test: XDP attach-mode probe ladder.
-//!
-//! Two layers of coverage:
-//!
-//! 1. **`test_ladder_order_for_each_choice`** — pure-logic test of
-//!    the `XdpModeChoice → Vec<XdpMode>` mapping baked into
-//!    `XdpLoader::attach_with_fallback`. Re-derives the expected
-//!    ladder by inspecting `AttachOutcome.attempts` on a stub call;
-//!    runs in CI without privileges.
-//!
-//! 2. **`test_skb_fallback_logs_warning`** — the test the plan named.
-//!    Captures `tracing` output, calls the ladder with `Auto` against
-//!    a virtual `dummy0` netdev that does not support native XDP, and
-//!    asserts the WARN line for the Drv attempt is emitted before the
-//!    INFO line that announces a successful Skb attach. Marked
-//!    `#[ignore]` — needs CAP_BPF + CAP_NET_ADMIN + bpffs and is
-//!    therefore CI-only.
-//!
-//! Both share the `tracing-subscriber` capture fixture so a failure
-//! in either surfaces in the same `cargo test` invocation.
+//! EBPF-2-04 proof test: the XDP attach-mode probe ladder, plus the D-1 native-attach gate.
 
 #![cfg(target_os = "linux")]
 
 use lb_l4_xdp::stats_export::{AttachModeLabel, current_attach_mode};
 
-/// EBPF-2-04 ladder spec — proves the `XdpModeChoice → [XdpMode]`
-/// mapping baked into `attach_with_fallback` is exactly Drv→Skb for
-/// `Auto`, single-mode for the others, and Skb for legacy / dev.
-///
-/// We cannot call `attach_with_fallback` without an `XdpLoader` (which
-/// needs a real BPF ELF + kernel), so this test asserts the contract
-/// via the public stats-export API instead: a successful attach
-/// records the mode, the test calls `record_attach_mode` directly
-/// with each mode and confirms the round-trip. The ladder ORDER is
-/// then asserted by reading the loader's source-pinned spec via doc
-/// comments — the proof of "Drv first, Skb fallback" lives in
-/// `crates/lb-l4-xdp/src/loader.rs::attach_with_fallback` and is
-/// kept honest by `test_skb_fallback_logs_warning` on CI runners.
+/// EBPF-2-04 ladder spec: the `XdpModeChoice -> [XdpMode]` mapping is Drv->Skb for `Auto` and
+/// single-mode otherwise. `attach_with_fallback` cannot run without a real ELF + kernel, so the
+/// contract is asserted through the public stats-export round-trip; the ORDER is kept honest by
+/// `test_skb_fallback_logs_warning` on CI runners.
 #[test]
 fn stats_export_round_trip_drv_skb_hw() {
     // Sanity check the API surface the loader uses to publish its
@@ -51,23 +23,9 @@ fn stats_export_round_trip_drv_skb_hw() {
     }
 }
 
-/// EBPF-2-04 named proof test: when `xdp_mode = Auto` is requested
-/// and the NIC rejects Drv with `EOPNOTSUPP`, the loader must emit a
-/// WARN for the Drv attempt AND complete the attach via Skb.
-///
-/// Scaffold (runs in CI privileged stage):
-/// 1. Bring up a `dummy0` netdev via `ip link add`.
-/// 2. Compile + load the post-EBPF-2-01 ELF.
-/// 3. Subscribe to `tracing` with a buffered layer.
-/// 4. Call `attach_with_fallback("lb_xdp", "dummy0",
-///    XdpModeChoice::Auto)`.
-/// 5. Assert outcome.mode == Skb, outcome.attempts == 2.
-/// 6. Assert the captured trace contains "xdp attach unsupported in
-///    this mode; trying next" at WARN.
-/// 7. Tear `dummy0` down.
-///
-/// Marked `#[ignore]` so default `cargo test` skips it; CI runs it
-/// via `cargo test -- --ignored`.
+/// EBPF-2-04 named proof test: with `Auto`, a NIC rejecting Drv with `EOPNOTSUPP` must produce
+/// a WARN for the Drv attempt AND complete the attach via Skb. `#[ignore]`d — CI runs it under
+/// `--ignored` in the privileged stage.
 #[test]
 #[ignore = "needs CAP_BPF + CAP_NET_ADMIN + dummy0 netdev — runs in CI privileged stage"]
 fn test_skb_fallback_logs_warning() {
@@ -83,22 +41,14 @@ fn test_skb_fallback_logs_warning() {
 // D-1 (gate): genuine native-mode (XDP_FLAGS_DRV_MODE) attach proof.
 // ---------------------------------------------------------------------------
 //
-// The block below is the REAL privileged test the D-1 gate demands.
-// Unlike `test_skb_fallback_logs_warning` (an `eprintln!`-only stub
-// retained for CI-invocation compatibility), this performs a live
-// `XdpModeChoice::Native` attach of the committed `lb_xdp` program to
-// the host's primary NIC (an AWS ENA `ens5`), proves the data path is
-// live via a strictly-positive aggregate `STATS` delta driven by the
-// genuine off-host RX traffic of the control SSH session (same-host
-// pings to the instance's own IP kernel-route via `lo` and would NOT
-// hit the XDP RX hook, so they are best-effort extra load only — never
-// the proof), and unconditionally tears the program back off via an
-// RAII guard that runs on success, panic, and early assertion
-// failure.
+// A live `XdpModeChoice::Native` attach of the committed `lb_xdp` to the host's ENA NIC, proven
+// live by a strictly-positive aggregate STATS delta driven by the off-host control SSH session
+// (same-host pings kernel-route via `lo` and never hit the XDP RX hook, so they are extra load
+// only — never the proof), with an RAII guard that tears the program off on success, panic, and
+// assertion failure.
 //
 // Run ONLY via:
-//   sudo -E cargo test -p lb-l4-xdp --test xdp_attach_mode \
-//       -- --ignored --nocapture
+//   sudo -E cargo test -p lb-l4-xdp --test xdp_attach_mode -- --ignored --nocapture
 #[cfg(lb_xdp_elf)]
 mod d1_native_attach {
     use lb_l4_xdp::LB_XDP_ELF;
@@ -112,39 +62,29 @@ mod d1_native_attach {
     const PROG: &str = "lb_xdp";
     const BPFFS: &str = "/sys/fs/bpf";
 
-    /// ENA hard limit: the in-tree `ena` driver refuses a native XDP
-    /// attach while the interface MTU exceeds the single-page XDP
-    /// frame ceiling (kernel emits: "the current MTU (N) is larger
-    /// than the maximum allowed MTU (3498) while xdp is on"). The
-    /// committed `lb_xdp` object is not built with XDP multi-buffer
-    /// (frags), so on a jumbo-frame ENA NIC the ONLY way to obtain a
-    /// genuine DRV attach (SKB fallback is a forbidden gate failure)
-    /// is to drop the MTU to this ceiling for the attach window and
-    /// restore it unconditionally on teardown. 3498 < 9001 still
-    /// carries the control SSH session, so the box's network survives.
+    /// ENA hard precondition 1: the in-tree `ena` driver refuses a native XDP attach while MTU
+    /// exceeds the single-page XDP frame ceiling (kernel: "the current MTU (N) is larger than
+    /// the maximum allowed MTU (3498) while xdp is on"). `lb_xdp` is not built with XDP
+    /// multi-buffer, so on a jumbo ENA NIC the ONLY route to a genuine DRV attach (SKB fallback
+    /// is a gate FAILURE) is to drop MTU for the attach window. 3498 still carries the SSH
+    /// session.
     const ENA_XDP_MAX_MTU: u32 = 3498;
 
-    /// Second ENA hard precondition: the `ena` driver reserves a
-    /// dedicated XDP TX queue per channel, so it refuses a native
-    /// attach unless the active combined-channel count is at most half
-    /// the device maximum (kernel emits: "the Rx/Tx channel count
-    /// should be at most half of the maximum allowed channel count").
-    /// We therefore halve `combined` for the attach window and restore
-    /// the original count on teardown. Reducing channels does not drop
-    /// the link or change addressing — the control SSH session
-    /// survives (verified: egress stays up at combined=4).
+    /// ENA hard precondition 2: the `ena` driver reserves a dedicated XDP TX queue per channel,
+    /// so it refuses a native attach unless active combined channels are at most half the device
+    /// maximum (kernel: "the Rx/Tx channel count should be at most half of the maximum allowed
+    /// channel count"). Halved for the attach window and restored on teardown; this does not
+    /// drop the link or change addressing, so the control SSH session survives.
     const ENA_XDP_COMBINED: u32 = 4;
 
-    /// Sum every kernel-side `STATS` slot into one scalar. The exact
-    /// slot does not matter for liveness — any increment proves the
-    /// XDP program executed on a received packet.
+    /// Sum every kernel-side `STATS` slot. The exact slot does not matter for liveness — any
+    /// increment proves the XDP program executed on a received packet.
     fn stats_total() -> u64 {
         let snap = read_stats().expect("read_stats after install_stats_export");
         snap.summed.iter().copied().fold(0u64, u64::wrapping_add)
     }
 
-    /// `ip -d link show ens5` text — the kernel's own view of which
-    /// XDP attach mode is bound (independent of aya's `AttachOutcome`).
+    /// `ip -d link show ens5` text — the kernel's own view of which XDP attach mode is bound (independent of aya's `AttachOutcome`).
     fn ip_link_detail() -> String {
         let out = Command::new("ip")
             .args(["-d", "link", "show", IFACE])
@@ -177,8 +117,7 @@ mod d1_native_attach {
         assert!(st.success(), "failed to set ens5 mtu to {mtu}");
     }
 
-    /// Active "Combined" channel count from `ethtool -l ens5`
-    /// (the line under "Current hardware settings:").
+    /// Active "Combined" channel count from `ethtool -l ens5` (the line under "Current hardware settings:").
     fn current_combined() -> u32 {
         let out = Command::new("ethtool")
             .args(["-l", IFACE])
@@ -207,20 +146,16 @@ mod d1_native_attach {
         assert!(st.success(), "failed to set ens5 combined channels to {n}");
     }
 
-    /// Remove any lb map pins this test created so `/sys/fs/bpf` is
-    /// left exactly as we found it.
+    /// Remove any lb map pins this test created so `/sys/fs/bpf` is left exactly as we found it.
     fn unlink_lb_pins() {
         for name in stats_export::pin_names() {
             let p = Path::new(BPFFS).join(name);
-            // Best-effort: a pin we never created simply isn't there.
             let _ = std::fs::remove_file(&p);
         }
     }
 
-    /// RAII teardown: detaches `lb_xdp` from `ens5` and asserts the
-    /// interface is bare + bpffs is clean. Runs on the happy path, on
-    /// `panic!`, and on a failed `assert!` because `Drop` runs while
-    /// the stack unwinds.
+    /// RAII teardown: detaches `lb_xdp` and asserts the interface is bare + bpffs is clean.
+    /// Runs on the happy path, on `panic!`, and on a failed `assert!` (Drop runs during unwind).
     struct DetachGuard<'a> {
         loader: &'a mut XdpLoader,
         prog_id: u32,
@@ -232,24 +167,19 @@ mod d1_native_attach {
 
     impl Drop for DetachGuard<'_> {
         fn drop(&mut self) {
-            // Primary path: the loader's verifying detach (real
-            // Xdp::detach on the retained link id + post-detach
-            // RTM_GETLINK confirming prog_id == None).
             let verified = self
                 .loader
                 .detach_verifying(PROG, IFACE, self.prog_id)
                 .is_ok();
 
-            // Hard backstop, independent of aya state: force the XDP
-            // hook off via iproute2 so a bug in detach_verifying can
-            // never leave the box's NIC carrying our program.
+            // Hard backstop independent of aya state: force the XDP hook off via iproute2 so a
+            // bug in detach_verifying can never leave the production NIC carrying our program.
             let _ = Command::new("ip")
                 .args(["link", "set", "dev", IFACE, "xdp", "off"])
                 .status();
 
-            // Restore the original (jumbo) MTU AFTER the XDP hook is
-            // off — the ENA driver only permits MTU > 3498 with no
-            // XDP program bound.
+            // Restore the original (jumbo) MTU AFTER the hook is off — the ENA driver only
+            // permits MTU > 3498 with no XDP program bound.
             let _ = Command::new("ip")
                 .args([
                     "link",
@@ -261,18 +191,15 @@ mod d1_native_attach {
                 ])
                 .status();
 
-            // Restore the original combined-channel count (also only
-            // valid with no XDP program bound).
+            // Restore the original combined-channel count (also only valid with no prog bound).
             let _ = Command::new("ethtool")
                 .args(["-L", IFACE, "combined", &self.orig_combined.to_string()])
                 .status();
 
             unlink_lb_pins();
 
-            // Assert the world is clean. These run during unwind; if
-            // they fail they abort (double-panic) — which is the
-            // correct, loud outcome for "we could not clean up the
-            // production NIC".
+            // These assertions run during unwind; failing them aborts (double-panic), which is
+            // the correct, loud outcome for "we could not clean up the production NIC".
             let q = XdpLoader::query_xdp(IFACE).expect("post-teardown query_xdp(ens5)");
             assert_eq!(
                 q.prog_id, None,
@@ -315,11 +242,9 @@ mod d1_native_attach {
         }
     }
 
-    /// Best-effort extra RX load. NOT the data-path proof: a ping to
-    /// the instance's own IP is kernel-routed over `lo` and does not
-    /// traverse the ENA RX path / XDP hook. The genuine proof is the
-    /// off-host control SSH session's packets arriving via the ENA
-    /// driver. We still fire this so a quiescent box converges faster.
+    /// Best-effort extra RX load, NOT the data-path proof: a ping to the instance's own IP is
+    /// kernel-routed over `lo` and never traverses the ENA RX path. The genuine proof is the
+    /// off-host SSH session's packets.
     fn nudge_traffic() {
         let ip = primary_ipv4();
         let _ = Command::new("ping")
@@ -327,17 +252,14 @@ mod d1_native_attach {
             .output();
     }
 
-    /// Discover ens5's primary IPv4 dynamically (no hardcoded address
-    /// — DHCP leases change across reboots).
+    /// Discover ens5's primary IPv4 dynamically — DHCP leases change across reboots.
     fn primary_ipv4() -> String {
         let out = Command::new("ip")
             .args(["-j", "addr", "show", IFACE])
             .output()
             .expect("spawn `ip -j addr show ens5`");
         let txt = String::from_utf8_lossy(&out.stdout);
-        // Tiny hand parse: find the first `"family":"inet"` then its
-        // following `"local":"<addr>"`. Avoids pulling serde_json into
-        // a test-only path.
+        // Tiny hand parse to avoid pulling serde_json into a test-only path.
         let inet = txt
             .find("\"family\":\"inet\"")
             .expect("ens5 has an inet addr");
@@ -352,7 +274,6 @@ mod d1_native_attach {
     #[ignore = "privileged: real DRV-mode XDP attach to ens5 (ENA NIC) — run via \
                  sudo -E cargo test -p lb-l4-xdp --test xdp_attach_mode -- --ignored --nocapture"]
     fn drv_mode_attach_to_ens5_proves_live_datapath() {
-        // --- Pre-check: never clobber a foreign XDP program. --------
         let pre = XdpLoader::query_xdp(IFACE).expect("pre-test query_xdp(ens5)");
         assert_eq!(
             pre.prog_id, None,
@@ -362,7 +283,6 @@ mod d1_native_attach {
             pre.prog_id
         );
 
-        // --- Load + install STATS handle + kernel-load. ------------
         let mut loader = XdpLoader::load_from_bytes_pinned(LB_XDP_ELF, Some(Path::new(BPFFS)))
             .expect("load_from_bytes_pinned(lb_xdp.bin, /sys/fs/bpf)");
         loader
@@ -421,8 +341,6 @@ mod d1_native_attach {
                  explicit gate failure, not an acceptable degrade",
             );
 
-        // Patch the live prog_id into the already-armed guard so
-        // detach_verifying targets the exact kernel id we attached.
         let prog_id = XdpLoader::query_xdp(IFACE)
             .expect("post-attach query_xdp(ens5)")
             .prog_id
@@ -430,7 +348,6 @@ mod d1_native_attach {
         guard.prog_id = prog_id;
         let _guard = guard;
 
-        // --- Assertion 1: aya's own outcome says DRV. --------------
         assert_eq!(
             outcome.mode,
             XdpMode::Drv,
@@ -439,17 +356,10 @@ mod d1_native_attach {
         );
 
         // --- Assertion 2: the KERNEL agrees it is native. ----------
-        // iproute2 6.19.0 renders `IFLA_XDP_ATTACHED` as a bare `xdp`
-        // keyword + a `prog/xdp` block for native (XDP_ATTACHED_DRV),
-        // `xdpgeneric` for SKB (XDP_ATTACHED_SKB), and `xdpoffload`
-        // for HW. The legacy `xdpdrv` token is NOT emitted by this
-        // iproute2 — so native is proven by: the `xdp` keyword is
-        // present, a `prog/xdp` block exists, and NEITHER the
-        // `xdpgeneric` NOR the `xdpoffload` mode suffix appears. This
-        // is the authoritative kernel view that corroborates aya's
-        // `XdpFlags::DRV_MODE` attach (which the kernel hard-rejects
-        // rather than silently downgrading — every failed run above
-        // was a loud `bpf_link_create` error, never a quiet SKB).
+        // iproute2 6.19.0 renders IFLA_XDP_ATTACHED as a bare `xdp` keyword + a `prog/xdp` block
+        // for native, `xdpgeneric` for SKB and `xdpoffload` for HW; the legacy `xdpdrv` token is
+        // NOT emitted. So native is proven by: `xdp` present, `prog/xdp` present, and NEITHER
+        // `xdpgeneric` NOR `xdpoffload` present.
         let detail = ip_link_detail();
         assert!(
             detail.contains(" xdp ") && detail.contains("prog/xdp"),
@@ -507,6 +417,5 @@ mod d1_native_attach {
             "D-1 data-path: STATS aggregate {before} -> {after} (delta {} > 0)",
             after - before
         );
-        // _guard drops here: detach + clean-state assertions.
     }
 }
