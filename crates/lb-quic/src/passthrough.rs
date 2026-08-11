@@ -1,34 +1,13 @@
-//! Mode A passthrough datapath (S15 A2) — `audit/quic/s15-design.md`
-//! §3 + §5 + §A2.
+//! Mode A passthrough datapath — route encrypted QUIC packets by Connection ID
+//! without decrypting. There is NO TLS state on this path: no
+//! `quiche::Connection` is instantiated for client/backend flows, no BoringSSL
+//! handshake runs, no cert/key is loaded, and [`FlowEntry`] carries routing
+//! state ONLY — see its SAFETY/INVARIANT block and the
+//! [`_flow_entry_field_audit`] destructuring audit at the bottom of this module.
 //!
-//! The LB routes encrypted QUIC packets by Connection ID without
-//! decrypting. There is NO TLS state on this path:
-//!
-//! - No quiche::Connection ever instantiated for client/backend flows.
-//! - No BoringSSL handshake driven on the LB.
-//! - No cert/key file loaded by this module.
-//! - [`FlowEntry`] (the routing-table value) carries connection-ID +
-//!   routing state ONLY — see the SAFETY/INVARIANT block on
-//!   [`FlowEntry`] and the [`_flow_entry_field_audit`] destructuring
-//!   audit at the bottom of this module.
-//!
-//! Verify gates: see `audit/quic/s15-design.md` §A2 and the task #6
-//! description. Coverage target: ≥80% session-scope on this file.
-//!
-//! ## CF carry-forwards (S4 promote-report)
-//!
-//! - **CF-S15-PASSTHROUGH-FEATURE-GATING** — the `quic-terminate`
-//!   cfg gate on the existing H3 termination tree (lib.rs +
-//!   `terminate_loopback.rs`) is what closes the
-//!   `cargo bloat --filter quiche` linkage proof.
-//! - **CF-S15-FLOWENTRY-FIELD-AUDIT** — the
-//!   [`_flow_entry_field_audit`] fn below. Any new `FlowEntry` field
-//!   must be enumerated in the destructuring pattern AND
-//!   type-witnessed; verifier code-reads on every change.
-//! - **CF-S15-RETRY-NO-QUICHE** — hand-rolled [`build_retry_packet`]
-//!   per RFC 9000 §17.2.5 + RFC 9001 §5.8.
-//! - **CF-S15-DCID-MAP-XDP** — `UdpDataplane::dcid_map_fd` hook in
-//!   `udp_dataplane.rs`; passthrough doesn't consume it in v1.0.
+//! Carry-forwards: CF-S15-FLOWENTRY-FIELD-AUDIT (the field audit below),
+//! CF-S15-RETRY-NO-QUICHE (hand-rolled [`build_retry_packet`]),
+//! CF-S15-DCID-MAP-XDP (`UdpDataplane::dcid_map_fd`, unused in v1.0).
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -54,12 +33,7 @@ use crate::udp_dataplane::{
     MAX_UDP_DATAGRAM_SIZE, Packet, PacketHandler, TierPolicy, UdpDataplane, select_dataplane,
 };
 
-// ============================================================
-// Constants
-// ============================================================
-
-/// Length of LB-chosen SCIDs (in Retry packets). RFC 9000 §17.2.5
-/// requires `len > 0`; 16 bytes matches quiche / termination router.
+/// Length of LB-chosen SCIDs in Retry packets (RFC 9000 §17.2.5 allows ≤ 20).
 const LB_SCID_LEN: usize = 16;
 
 /// AEAD-AES-128-GCM tag length (RFC 9001 §5.8 fixed value).
@@ -75,79 +49,51 @@ const RETRY_NONCE_V1: [u8; 12] = [
     0x46, 0x15, 0x99, 0xd3, 0x5d, 0x63, 0x2b, 0xf2, 0x23, 0x98, 0x25, 0xbb,
 ];
 
-// ============================================================
-// Parameters
-// ============================================================
-
 /// Construction parameters for [`PassthroughListener::spawn`].
 #[derive(Debug, Clone)]
 pub struct PassthroughParams {
     /// Bind address for the listener UDP socket.
     pub bind_addr: SocketAddr,
-    /// Resolved backend addresses; consumed by Maglev consistent
-    /// hashing on every Initial.
+    /// Resolved backend addresses; consumed by Maglev consistent hashing.
     pub backends: Vec<SocketAddr>,
-    /// Path to a 32-byte retry-secret file. Generated with mode 0600
-    /// if missing — same discipline as the termination listener.
+    /// Path to a 32-byte retry-secret file (generated 0600 if absent).
     pub retry_secret_path: PathBuf,
-    /// Maximum concurrent QUIC flows. Default 100_000 per owner
-    /// ruling §9.4. Routing-table-entry cap = `2 * max`.
+    /// Maximum concurrent QUIC flows.
     pub max_quic_connections: usize,
-    /// Minimum client-chosen DCID length accepted. Default 8 per
-    /// owner ruling §9.3 (CVE 2022-30592-style cross-flow prefix
-    /// collision defence).
+    /// Minimum client-chosen DCID length accepted — the cap-violation floor.
     pub min_client_dcid_len: usize,
-    /// Per-flow datagram backlog. Default 32; drop-newest on Full
-    /// per design §5.1.
+    /// Per-flow datagram backlog; drop-newest when full.
     pub per_flow_backlog: usize,
-    /// Strict source-IP binding: when true, short-header packets
-    /// whose source 4-tuple differs from the flow's recorded peer are
-    /// dropped at the LB (breaks NAT-rebind path-migration but
-    /// catches off-path spoofed-CID injection cheaply). Default
-    /// **false** per owner ruling §9.1' — mobile availability is
-    /// load-bearing for the default deployment.
+    /// Strict source-IP binding: when true, a short-header packet whose peer
+    /// IP does not match the flow's recorded peer is DROPPED (off-path
+    /// injection guard) rather than treated as a NAT rebind.
     pub strict_source_binding: bool,
     /// Audit-log throttle window. 60s default — see §6.2.
     pub audit_throttle_window: Duration,
-    /// Short-header DCID length to try first when no per-flow length
-    /// is known. Default 20 (RFC 9000 §17.3 max) per §3.3 fallback.
+    /// Short-header DCID length to try first when no per-flow length is known.
     pub max_dcid_len_routed: usize,
-    /// Whether the LB mints stateless Retry on no-token Initials
-    /// (§6.5 Initial-flood defence per owner ruling §9.2). Default
-    /// **true** for production deployments.
+    /// Whether the LB mints stateless Retry on no-token Initials (the §6.5
+    /// Initial-flood defence). Default **true** in production.
     ///
-    /// **CF-S15-PASSTHROUGH-RETRY-ODCID:** with `mint_retry = true`,
-    /// the second Initial's wire DCID is the LB-chosen new_scid and
-    /// the backend cannot recover the client's original DCID
-    /// (`original_destination_connection_id` transport param)
-    /// without a side channel — RFC 9000 §17.2.5 anticipates this
-    /// via the "Retry Service" pattern (token-embedded ODCID +
-    /// backend extracts on verify); see CF for the S15.x / S16
-    /// follow-up. When `mint_retry = false`, no-token Initials are
-    /// forwarded to the backend verbatim and the backend's own
-    /// `quiche::accept` either accepts directly or initiates its
-    /// own Retry — the §6.5 Initial-flood defence is then the
-    /// BACKEND's responsibility. Documented test/trusted-network
-    /// escape; production leaves this `true`.
+    /// CF-S15-PASSTHROUGH-RETRY-ODCID: with `true`, the second Initial's wire
+    /// DCID is the LB-chosen new_scid, so the backend cannot recover the
+    /// client's original DCID (`original_destination_connection_id`) without a
+    /// side channel — RFC 9000 §17.2.5 anticipates this via the "Retry Service"
+    /// pattern. With `false` no-token Initials are forwarded verbatim and
+    /// Initial-flood defence becomes the BACKEND's responsibility: a documented
+    /// test/trusted-network escape, not a production setting.
     pub mint_retry: bool,
-    /// F-S20-2: idle-flow reaper threshold. A flow with no inbound packet
-    /// for longer than this is reclaimed by the periodic idle sweep (its
-    /// backend UDP socket fd + both pump tasks freed), bounding the table by
-    /// the LIVE connection count rather than the LRU cap at
-    /// `2 * max_quic_connections`. Default 60 s. `Duration::ZERO` disables
-    /// the sweep (LRU-only — the pre-S21 behaviour).
+    /// F-S20-2: idle-flow reaper threshold. Passthrough cannot observe the
+    /// encrypted CONNECTION_CLOSE, so without this a closed connection's flow
+    /// persists until the LRU cap.
     pub flow_idle_timeout: Duration,
-    /// `quic_passthrough_*` observability handles (S15 A3). `None` when
-    /// the listener is spawned without a metrics registry (unit tests,
-    /// or a build that doesn't wire observability) — every event-site
-    /// bump then becomes a no-op. Wired by
-    /// `lb/main.rs::spawn_passthrough` off the shared `MetricsRegistry`.
+    /// `quic_passthrough_*` observability handles; `None` ⇒ every update is a
+    /// no-op.
     pub metrics: Option<lb_observability::PassthroughMetrics>,
 }
 
 impl PassthroughParams {
-    /// Build params with reasonable defaults for the non-bind /
-    /// non-backends knobs.
+    /// Build params with defaults for the non-bind / non-backend fields.
     #[must_use]
     pub fn new(
         bind_addr: SocketAddr,
@@ -171,74 +117,35 @@ impl PassthroughParams {
     }
 }
 
-// ============================================================
-// FlowEntry — the routing-table value, NO key material.
-// ============================================================
-
-// SAFETY/INVARIANT: FlowEntry holds no key material — passthrough
-// never decrypts.
+// SAFETY/INVARIANT: FlowEntry holds no key material — passthrough never
+// decrypts, because the LB has no keys. Every field is non-cryptographic: a
+// destination `SocketAddr`, a wire-format length, an epoch-millis timestamp,
+// the client's 4-tuple, a kernel-owned UDP fd, and a datagram queue handle.
 //
-// Owner ruling §9.5 primary item 2: the LB cannot decrypt because
-// the LB has no keys. This struct is the routing-state record kept
-// per flow. Every field is non-cryptographic:
-//
-//   - backend          : SocketAddr (a destination address)
-//   - short_dcid_len   : AtomicUsize (a wire-format length 0..=20)
-//   - last_seen_ms     : AtomicU64 (millis-since-epoch for LRU)
-//   - peer             : Mutex<SocketAddr> (the client's current
-//                        4-tuple; updated on every recv for NAT
-//                        rebind)
-//   - backend_sock     : Arc<UdpSocket> (kernel-owned FD; no TLS
-//                        wrapping)
-//   - backlog_tx       : mpsc::Sender<Bytes> (datagram queue handle)
-//
-// **Adding a field**: enumerate it in [`_flow_entry_field_audit`]
-// below AND assign it a type-witness `let _: &T = field_name;`.
-// Compile error if the audit isn't updated. Per (b3)+(b4)+
-// destructuring-audit ruling from the A2 plan-approval. Verifier
-// code-reads on every change (Owner ruling §9.5: "explicit type-
-// level assertion in passthrough.rs ... verifier-checked").
+// **Adding a field**: enumerate it in [`_flow_entry_field_audit`] below AND
+// give it a type-witness `let _: &T = field_name;`. Omitting either is a
+// COMPILE ERROR, which is the point.
 pub(crate) struct FlowEntry {
-    /// The backend this flow is pinned to. Decided at first Initial
-    /// (after Retry-token verify) via Maglev over the live backend
-    /// set; immutable for the flow's lifetime (consistent-hash
-    /// stability under backend-set churn).
+    /// The backend this flow is pinned to, decided at the first Initial.
     pub(crate) backend: SocketAddr,
-    /// Short-header DCID length for this flow, recovered from the
-    /// backend's first server-side long-header response (its SCID
-    /// length byte). Default `0` before that response arrives.
+    /// Short-header DCID length for this flow, recovered from the long-header
+    /// SCID so short-header packets can be routed.
     pub(crate) short_dcid_len: AtomicUsize,
-    /// Last-seen millis-since-epoch for LRU eviction. Updated on
-    /// every inbound packet that hits this entry.
+    /// Last-seen millis-since-epoch, for LRU eviction and the idle sweep.
     pub(crate) last_seen_ms: AtomicU64,
-    /// Client's current 4-tuple (peer address). Updated on every
-    /// inbound from the client; the reverse-task uses this to write
-    /// backend→client. Supports NAT rebind path-migration: when the
-    /// client's external port changes, this field tracks the new
-    /// peer and the reverse-task starts writing there.
+    /// Client's current 4-tuple, updated on every recv so a NAT rebind keeps
+    /// routing to the same backend.
     pub(crate) peer: PlMutex<SocketAddr>,
-    /// Per-flow backend UDP socket. `connect()`-ed to `backend` so
-    /// the kernel filters incoming packets to those from the chosen
-    /// backend (anti-spoof, design §3.4).
+    /// Per-flow backend UDP socket, `connect()`-ed to `backend`.
     pub(crate) backend_sock: Arc<UdpSocket>,
-    /// Bounded mpsc queue feeding the per-flow forward task. Full →
-    /// drop-newest (design §5.1).
+    /// Bounded queue feeding the per-flow forward task; full ⇒ drop-newest.
     pub(crate) backlog_tx: mpsc::Sender<Vec<u8>>,
-    /// F-S20-2: per-flow shutdown signal. Cancelled by [`reclaim_flows`]
-    /// (LRU eviction or the idle sweep) so the reverse pump — which
-    /// otherwise blocks indefinitely on `backend_sock.recv()` — exits and
-    /// releases its `Arc<FlowEntry>`. Only then does the entry's strong
-    /// count reach zero, dropping the backend UDP socket fd and closing the
-    /// forward task's channel. Without this signal, removing the dispatch
-    /// keys alone could not reclaim the fd/tasks for a flow whose backend is
-    /// alive-but-silent (no recv error to break the loop). Not key material.
+    /// F-S20-2: per-flow shutdown signal. Cancelling it is what breaks the
+    /// reverse pump out of its otherwise-indefinite blocking `recv()` — the
+    /// load-bearing step, since an alive-but-silent backend never errors.
     pub(crate) closed: CancellationToken,
-    /// LRU-eviction observed-flag (R13(b) gauge). Set by [`Drop`] when
-    /// the entry's `Arc` reference count drops to zero (i.e. evicted
-    /// from the dispatch table AND the per-flow forward task has
-    /// exited). Tests poll this via [`PassthroughListener::dropped`].
-    /// Behind `test-gauges` so production builds don't carry the
-    /// atomic.
+    /// LRU-eviction observed-flag (test gauge), set by [`Drop`] so a test can
+    /// prove the entry was actually reclaimed rather than merely unlinked.
     #[cfg(any(test, feature = "test-gauges"))]
     pub(crate) dropped: Arc<AtomicBool>,
 }
@@ -270,23 +177,14 @@ impl FlowEntry {
     }
 }
 
-/// CF-S15-FLOWENTRY-FIELD-AUDIT — destructuring audit. Any new
-/// `FlowEntry` field forces the compiler to surface this pattern as
-/// incomplete, which forces the author to add it AND assign a type
-/// witness. The witness asserts the field's STATIC type is not a
+/// CF-S15-FLOWENTRY-FIELD-AUDIT — destructuring audit. A new `FlowEntry` field
+/// makes the compiler surface this pattern as incomplete, forcing the author to
+/// add it AND assign a type witness asserting the field's STATIC type is not a
 /// key-shaped type from `ring`/`boring`/`quiche`.
-///
-/// Verifier code-reads on every change. Owner ruling §9.5 primary
-/// item 2: "FlowEntry MUST hold no key material — passthrough never
-/// decrypts."
-// Compiled + dead-code-allowed in ALL profiles (S34): release builds compile
-// out the `#[cfg(test)]` caller, so when this audit was `#[cfg(debug_assertions)]`
-// the `backend` field was read nowhere in release -> `field is never read` under
-// `-D warnings` broke `cargo build --release` (surfaced once the Release Build CI
-// job stopped being skipped). Making the audit unconditional keeps the
-// no-key-material + field-enumeration invariant enforced in release too and makes
-// every FlowEntry field count as read in every profile. `#[allow(dead_code)]`
-// covers the audit being uncalled outside `#[cfg(test)]`.
+// Unconditional, NOT `#[cfg(debug_assertions)]`: release builds compile out the
+// `#[cfg(test)]` caller, so `backend` was then read nowhere and `field is never
+// read` under `-D warnings` broke `cargo build --release` (S34). The
+// `allow(dead_code)` covers the audit being uncalled outside `cfg(test)`.
 #[allow(dead_code)]
 fn _flow_entry_field_audit(e: &FlowEntry) {
     let FlowEntry {
@@ -300,8 +198,7 @@ fn _flow_entry_field_audit(e: &FlowEntry) {
         #[cfg(any(test, feature = "test-gauges"))]
         dropped,
     } = e;
-    // Type-witnesses: each field's static type is enumerated here.
-    // ANY change to FlowEntry → compile error here.
+    // Type-witnesses: ANY change to FlowEntry is a compile error here.
     let _: &SocketAddr = backend;
     let _: &AtomicUsize = short_dcid_len;
     let _: &AtomicU64 = last_seen_ms;
@@ -311,23 +208,15 @@ fn _flow_entry_field_audit(e: &FlowEntry) {
     let _: &CancellationToken = closed;
     #[cfg(any(test, feature = "test-gauges"))]
     let _: &Arc<AtomicBool> = dropped;
-    // None of the above types are key material (AEAD::Key,
-    // ring::aead::*Key, boring::Aead, quiche::Connection, ...).
+    // None of the above types are key material (AEAD keys, quiche::Connection…).
 }
 
-// ============================================================
-// Hand-rolled Retry packet writer (CF-S15-RETRY-NO-QUICHE)
-// ============================================================
-
-/// CF-S15-DCID-HASH: SipHash-style multiply-shift over the client DCID
-/// to feed `Maglev::pick_with_key`. We don't need a cryptographic hash
-/// (Maglev's permutation is the consistency layer); a fast non-zero
-/// mixing function is enough. Deterministic across runs of the same
-/// binary (same seed).
+/// CF-S15-DCID-HASH: fast non-cryptographic mixing over the client DCID to feed
+/// `Maglev::pick_with_key`. A cryptographic hash is not needed — Maglev's
+/// permutation is the consistency layer — only determinism across runs.
 fn hash_dcid_for_maglev(dcid: &[u8]) -> u64 {
-    // FxHash-shaped multiply-add. Same finalizer as
-    // lb_balancer::maglev::hash_str so the distribution behaves
-    // identically to the L7-affinity path.
+    // Same finalizer as `lb_balancer::maglev::hash_str`, so the distribution
+    // behaves identically to the L7-affinity path.
     let mut h: u64 = 0xcbf2_9ce4_8422_2325; // FNV offset basis
     for &b in dcid {
         h = h
@@ -342,36 +231,23 @@ fn hash_dcid_for_maglev(dcid: &[u8]) -> u64 {
     h
 }
 
-/// Build a QUIC v1 Retry packet per RFC 9000 §17.2.5 and compute its
-/// 16-byte AEAD-AES-128-GCM Retry Integrity Tag per RFC 9001 §5.8.
+/// Build a QUIC v1 Retry packet per RFC 9000 §17.2.5 and compute its 16-byte
+/// AEAD-AES-128-GCM Retry Integrity Tag per RFC 9001 §5.8.
 ///
-/// The output layout (on-wire bytes) is:
-///   `byte0 | version | DCID_len | DCID | SCID_len | SCID | token | integrity_tag(16)`
+/// Wire bytes:
+///   `byte0 | version | DCID_len | DCID | SCID_len | SCID | token | tag(16)`
 ///
-/// The Retry Pseudo-Packet (RFC 9001 §5.8) is constructed as:
-///   `ODCID_len(1) | ODCID | byte0 | version | DCID_len | DCID | SCID_len | SCID | token`
+/// The Retry Pseudo-Packet sealed as AAD (§5.8) prepends the ODCID:
+///   `ODCID_len(1) | ODCID | <the wire bytes above, without the tag>`
 ///
-/// and AAD-only sealed under the fixed v1 Retry key + nonce.
-///
-/// # Arguments
-///
-/// * `odcid` — Original Destination Connection ID (the DCID the
-///   client used in its first Initial; goes into the pseudo-packet
-///   ONLY, not the wire bytes).
-/// * `client_scid` — Client's first-Initial SCID, becomes the on-wire
-///   DCID (per RFC 9000 §17.2.5).
-/// * `new_scid` — LB-chosen 16-byte SCID; becomes the routing DCID
-///   for the client's second Initial.
-/// * `version` — Wire version field; echo client's first-Initial
-///   version.
-/// * `token` — Retry token bytes (signed by `RetryTokenSigner`).
-/// * `out` — Output buffer; cleared and written into.
+/// `odcid` is the DCID from the client's FIRST Initial and goes into the
+/// pseudo-packet ONLY, never the wire bytes; `client_scid` becomes the on-wire
+/// DCID; `new_scid` is the LB-chosen SCID that becomes the routing DCID for the
+/// client's second Initial.
 ///
 /// # Errors
 ///
-/// Returns `Err` if `ring::aead` rejects the inputs (sealing an
-/// empty plaintext under AES-128-GCM is infallible in practice; this
-/// covers ring's API surface).
+/// Returns `Err` if `ring::aead` rejects the inputs.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn build_retry_packet(
     odcid: &[u8],
@@ -391,12 +267,7 @@ pub(crate) fn build_retry_packet(
         ));
     }
 
-    // RFC 9000 §17.2 byte0 for Retry:
-    //   bit7 = 1 (Long header)
-    //   bit6 = 1 (Fixed Bit)
-    //   bits5-4 = 0b11 (Type=Retry)
-    //   bits3-0 = unused on wire (zero is fine; HP doesn't apply to
-    //             Retry — it has no PN).
+    // RFC 9000 §17.2 byte0 for Retry: long-header form, fixed bit, type 0b11.
     let byte0 = 0b1111_0000u8;
 
     // Build the Retry Pseudo-Packet for AAD.
@@ -420,7 +291,7 @@ pub(crate) fn build_retry_packet(
     let nonce = aead::Nonce::assume_unique_for_key(RETRY_NONCE_V1);
     let aad = aead::Aad::from(pseudo.as_ref());
 
-    // ring requires a mutable in-place buffer even for AAD-only.
+    // ring requires a mutable in-place buffer even for an AAD-only seal.
     let mut empty: [u8; 0] = [];
     let tag = key
         .seal_in_place_separate_tag(nonce, aad, &mut empty)
@@ -448,21 +319,13 @@ pub(crate) fn build_retry_packet(
     Ok(())
 }
 
-/// Test-only re-export of [`build_retry_packet`] for integration tests
-/// (verify gate A2-2: 1000-case byte-equality differential vs
-/// `quiche::retry`).
+/// Test-only re-export of [`build_retry_packet`] for the byte-equality
+/// differential against `quiche::retry`.
 ///
-/// CF-S15-TESTGAUGES-EXPORT-NARROW: previously gated behind
-/// `#[cfg(any(test, feature = "test-gauges"))]`, but `cfg(test)` is
-/// false during downstream integration-test compile (only true on the
-/// crate's OWN tests), so the gate forced every consumer to enable
-/// `test-gauges` even when only this one symbol was needed. Owner
-/// ruling §9.5 "construction over observation" doctrine for verify-
-/// gate artefacts: keep `build_retry_packet` private; expose this
-/// underscore-prefixed `#[doc(hidden)]` wrapper unconditionally so
-/// the cfg shape matches its consumer pattern. Production-surface
-/// impact: zero (still doc-hidden, underscore-prefixed, doc-typed
-/// "Test-only").
+/// CF-S15-TESTGAUGES-EXPORT-NARROW: `cfg(test)` is FALSE while a downstream
+/// integration test compiles, so gating this on it forced every consumer to
+/// enable `test-gauges` for one symbol. Keep `build_retry_packet` private and
+/// expose this doc-hidden wrapper unconditionally instead.
 #[doc(hidden)]
 pub fn _test_build_retry_packet(
     odcid: &[u8],
@@ -475,64 +338,42 @@ pub fn _test_build_retry_packet(
     build_retry_packet(odcid, client_scid, new_scid, version, token, out)
 }
 
-// ============================================================
-// Shared router context — held inside an Arc by spawn() and cloned
-// into the per-packet callback closures and per-flow forward/reverse
-// tasks.
-// ============================================================
-
-/// Routing-table entries: one per known DCID. A flow has up to 2 keys
-/// (client-chosen DCID at Initial-time; LB-chosen SCID after Retry).
+/// Routing-table entries: one per known DCID; a flow may hold up to 2 keys.
 type FlowTable = DashMap<Vec<u8>, Arc<FlowEntry>>;
 
 struct RouterCtx {
     params: PassthroughParams,
-    /// Resolved Maglev table over the backend set. Held in an Arc so
-    /// future backend-set reloads can hot-swap; v1 is static post-spawn.
+    /// Maglev table over the backend set, in an `Arc` for cheap clones.
     maglev: Maglev,
-    /// `Backend` view of `params.backends` matching the index order in
-    /// the Maglev table. Built once at spawn.
+    /// `Backend` view of `params.backends`, index-aligned with the Maglev table.
     backends: Vec<Backend>,
     retry_signer: Arc<RetryTokenSigner>,
     table: Arc<FlowTable>,
-    /// Listener-side UDP socket (write half of the recv loop), used to
-    /// send Retry packets back to clients and reverse-direction
-    /// backend→client traffic.
+    /// Listener-side UDP socket (the recv loop's write half).
     listener_sock: Arc<dyn UdpDataplane>,
-    /// Process-relative monotonic epoch for `last_seen_ms` (kept small
-    /// vs absolute timestamps).
+    /// Process-relative monotonic epoch for `last_seen_ms`.
     epoch: Instant,
-    /// Audit-log throttle state (S15 A3, design §A3). One slot per audit
-    /// category holding the epoch-relative millis at which that
-    /// category last emitted a `warn!` audit line. Initialised to
-    /// [`AUDIT_NEVER`] so the FIRST event in every category always
-    /// emits; thereafter [`audit_allow`] gates to one line per
-    /// `params.audit_throttle_window`. The verifier's saturation test
-    /// asserts ONE line per window, not one per event.
+    /// Audit-log throttle state — one slot per audit category, so a flood in
+    /// one category cannot suppress another's first line.
     audit_last_source_binding_ms: AtomicU64,
     audit_last_cap_hit_ms: AtomicU64,
 }
 
-/// Sentinel for "no audit line emitted yet" — chosen so the first event
-/// (any `now_ms`) clears the window check in [`audit_allow`]. Distinct
-/// from a real `0` epoch-millis reading.
+/// Sentinel for "no audit line emitted yet", distinct from a real `0` reading
+/// so the first event always clears the window check.
 const AUDIT_NEVER: u64 = u64::MAX;
 
-/// Audit-throttle gate. Returns `true` (and records `now_ms`) if an
-/// audit line for the category backed by `last_emit` may be emitted now —
-/// i.e. the slot is [`AUDIT_NEVER`] (first event) or `now_ms` is at least
-/// `window` past the last emit. Returns `false` otherwise. Uses
-/// `fetch_update` so two threads racing the same window emit exactly once.
+/// Audit-throttle gate: `true` (recording `now_ms`) iff the slot is
+/// [`AUDIT_NEVER`] or `now_ms` is at least `window` past the last emit. Uses
+/// `fetch_update`, so two threads racing the same window emit exactly once.
 fn audit_allow(last_emit: &AtomicU64, now_ms: u64, window: Duration) -> bool {
     let window_ms = u64::try_from(window.as_millis()).unwrap_or(u64::MAX);
-    // TOOLCHAIN SHIM: nightly (>= the 2026-07 toolchains) deprecates
-    // `fetch_update` in favour of `try_update`, which does NOT exist on our
-    // MSRV (1.88, pinned in rust-toolchain.toml). The fuzz-smoke job is the
-    // only lane on nightly and it builds with `-D warnings`, so the
-    // deprecation is a hard error there while stable still requires the old
-    // name. Silence it narrowly — not crate-wide — so any *other* deprecation
-    // still turns the lane red. Drop this and switch to `try_update` when the
-    // MSRV moves past its stabilisation.
+    // TOOLCHAIN SHIM: nightly deprecates `fetch_update` in favour of
+    // `try_update`, which does NOT exist on our MSRV (1.88). The fuzz-smoke
+    // lane is the only nightly one and builds with `-D warnings`, so the
+    // deprecation is a hard error there while stable still needs the old name.
+    // Silenced narrowly — not crate-wide — so other deprecations still turn the
+    // lane red. Drop this when the MSRV passes `try_update`'s stabilisation.
     #[allow(deprecated)]
     let won_window = last_emit.fetch_update(Ordering::AcqRel, Ordering::Acquire, |prev| {
         if prev == AUDIT_NEVER || now_ms.saturating_sub(prev) >= window_ms {
@@ -551,12 +392,8 @@ fn pick_backend(ctx: &RouterCtx, dcid: &[u8]) -> Option<SocketAddr> {
     ctx.params.backends.get(idx).copied()
 }
 
-/// Set `quic_passthrough_flows` to the current dispatch-table size.
-/// Called after each table insert/eviction. The gauge counts
-/// dispatch-table entries (≈ flows; a migrated flow may briefly hold 2
-/// CID keys) per owner ruling Q2. Reading `table.len()` after the
-/// mutation makes the gauge self-correct: under concurrent dispatch the
-/// last writer's reading wins and converges to the live count.
+/// Set `quic_passthrough_flows` to the current dispatch-table size — a
+/// self-correcting gauge, re-read rather than incremented.
 fn set_flows_gauge(ctx: &RouterCtx) {
     if let Some(m) = &ctx.params.metrics {
         m.flows
@@ -564,10 +401,8 @@ fn set_flows_gauge(ctx: &RouterCtx) {
     }
 }
 
-/// LRU eviction at cap. Walks the flow table and drops the entry with
-/// the oldest `last_seen_ms`. v1 is single-evict per cap-hit; bulk
-/// eviction lives in A3. Returns the number of dispatch-table entries
-/// removed (typically 1 or 2 — flow may have two keys).
+/// LRU eviction at cap: drop the entry with the oldest `last_seen_ms`. LRU, not
+/// FIFO — a long-lived active flow must not be evicted ahead of an idle one.
 fn evict_oldest(ctx: &RouterCtx) -> usize {
     let mut oldest_last = u64::MAX;
     let mut victim: Option<Arc<FlowEntry>> = None;
@@ -584,32 +419,26 @@ fn evict_oldest(ctx: &RouterCtx) -> usize {
     }
 }
 
-/// F-S20-2 — reclaim a set of flows. SINGLE-SOURCED reclamation (R12) for
-/// both LRU eviction ([`evict_oldest`]) and the periodic idle sweep
-/// ([`sweep_idle_flows`]). For each victim:
+/// F-S20-2 — reclaim a set of flows. SINGLE-SOURCED (R12) for both LRU
+/// eviction and the periodic idle sweep. For each victim:
 ///
-/// 1. **Cancel its `closed` token** so the per-flow reverse pump exits its
-///    otherwise-indefinite blocking `backend_sock.recv()` and releases its
-///    `Arc<FlowEntry>`. This is the load-bearing step — without it, removing
-///    the dispatch keys alone cannot reclaim a flow whose backend is
-///    alive-but-silent (no recv error to break the loop), so the fd + tasks
-///    would leak (the F-S20-2 mechanism).
-/// 2. **Remove every dispatch-table key** pointing at the victim (Arc
-///    identity; a migrated flow may hold 2 keys). Borrow-and-collect to
-///    avoid an iterator/remove deadlock in DashMap.
+/// 1. **Cancel its `closed` token** so the reverse pump exits its otherwise
+///    indefinite blocking `backend_sock.recv()` and releases its
+///    `Arc<FlowEntry>`. This is the load-bearing step — removing the dispatch
+///    keys alone cannot reclaim a flow whose backend is alive-but-silent, so
+///    the fd + tasks would leak (the F-S20-2 mechanism).
+/// 2. **Remove every dispatch key** pointing at the victim (by Arc identity; a
+///    migrated flow may hold 2). Borrow-and-collect, to avoid an
+///    iterator/remove deadlock in DashMap.
 ///
-/// Once the reverse task exits and the keys are gone the entry's strong
-/// count reaches zero: its `Drop` closes the backend UDP socket fd and the
-/// forward task's channel (or the forward task's own `closed` select fires).
-/// Bumps `flows_evicted_total` ONCE per flow actually reclaimed (owner ruling
-/// Q1 — not per removed CID key, which would double-count 2-key flows).
-/// Returns the number of dispatch-table entries removed (so the LRU caller
-/// can detect "nothing evicted" and avoid spinning).
+/// `flows_evicted_total` is bumped ONCE per flow reclaimed, NOT per removed CID
+/// key, which would double-count 2-key flows. Returns the number of entries
+/// removed, so the LRU caller can detect "nothing evicted" and avoid spinning.
 fn reclaim_flows(ctx: &RouterCtx, victims: &[Arc<FlowEntry>]) -> usize {
     if victims.is_empty() {
         return 0;
     }
-    // Signal each victim's pumps to stop (idempotent; `CancellationToken`).
+    // Signal each victim's pumps to stop (idempotent).
     for v in victims {
         v.closed.cancel();
     }
@@ -645,13 +474,10 @@ fn reclaim_flows(ctx: &RouterCtx, victims: &[Arc<FlowEntry>]) -> usize {
     removed
 }
 
-/// F-S20-2 — periodic idle-flow reaper. Reclaims every flow whose
-/// `last_seen_ms` is older than `idle_ms`, bounding the table by the LIVE
-/// connection count instead of the LRU cap at `2 * max_quic_connections`.
-/// Passthrough cannot observe the encrypted CONNECTION_CLOSE, so a flow for
-/// a closed connection would otherwise persist (pinning a backend UDP socket
-/// fd + 2 pump tasks) until the cap — the S20 leak. Returns the number of
-/// flows reclaimed this sweep.
+/// F-S20-2 — reclaim every flow idler than `idle_ms`, bounding the table by the
+/// LIVE connection count instead of by the LRU cap. Passthrough cannot observe
+/// the encrypted CONNECTION_CLOSE, so a closed connection's flow would
+/// otherwise pin a backend fd + 2 pump tasks until the cap — the S20 leak.
 fn sweep_idle_flows(ctx: &RouterCtx, idle_ms: u64) -> usize {
     let now_ms = elapsed_ms(Instant::now(), ctx.epoch);
     let mut victims: Vec<Arc<FlowEntry>> = Vec::new();
@@ -668,12 +494,11 @@ fn sweep_idle_flows(ctx: &RouterCtx, idle_ms: u64) -> usize {
     n
 }
 
-/// F-S20-2 — the periodic idle-flow reaper task body. Ticks every `period`
-/// and reclaims flows idle past `idle_ms` via [`sweep_idle_flows`], until
-/// `shutdown` fires. Extracted from [`PassthroughListener::spawn`] so the loop
-/// is directly testable (a `tokio::spawn`'d closure is invisible to unit-test
-/// coverage). The first `interval` tick fires immediately; `Skip` missed-tick
-/// behaviour avoids a burst if a sweep ran long.
+/// F-S20-2 — the periodic reaper task body, extracted from
+/// [`PassthroughListener::spawn`] so the loop is directly testable (a
+/// `tokio::spawn`'d closure is invisible to unit-test coverage). The first tick
+/// fires immediately; `Skip` missed-tick behaviour avoids a burst after a long
+/// sweep.
 async fn run_idle_sweeper(
     ctx: Arc<RouterCtx>,
     idle_ms: u64,
@@ -726,33 +551,30 @@ async fn handle_inbound(ctx: Arc<RouterCtx>, data: Vec<u8>, from: SocketAddr) {
                 handle_initial(ctx, data.clone(), from, version, dcid, scid, token).await;
             }
             LongType::ZeroRtt | LongType::Handshake => {
-                // Either retransmit of an Initial whose handshake is
-                // mid-flight, or genuine post-handshake long packet.
-                // Either way: look up by DCID; if present, forward; if
-                // not, drop (no token, can't mint Retry off this).
+                // Either a retransmit of an Initial whose handshake finished,
+                // or an unknown DCID — drop.
                 forward_long_existing(&ctx, &data, dcid).await;
             }
             LongType::Retry | LongType::VersionNegotiation => {
-                // Client-origin Retry / VN are not legal on the LB-
-                // facing leg. Drop.
+                // Client-origin Retry / Version Negotiation are not legal
+                // toward the LB.
                 tracing::trace!(peer = %from, ?ty, "dropped client-origin Retry/VN");
             }
         },
         PublicHeader::Short { dcid } => {
-            // The parser returned a Short with the default-length DCID;
-            // try multi-length fallback if the default missed.
+            // The parser returned a Short with the default-length DCID; the
+            // multi-length fallback runs inside `forward_short`.
             forward_short(&ctx, &data, dcid, from).await;
         }
     }
 }
 
-/// Pick the default short-header DCID length. v1 uses
-/// `params.max_dcid_len_routed` as the single-len fast-path.
+/// Default short-header DCID length to try first.
 fn default_short_dcid_len(ctx: &RouterCtx) -> usize {
     ctx.params.max_dcid_len_routed
 }
 
-/// Initial-packet handler. §3.2a in the design.
+/// Initial-packet handler.
 async fn handle_initial(
     ctx: Arc<RouterCtx>,
     pkt: Vec<u8>,
@@ -762,8 +584,7 @@ async fn handle_initial(
     scid: &[u8],
     token: Option<&[u8]>,
 ) {
-    // Cap-violation defence: drop initials with DCIDs shorter than the
-    // floor (§6.8).
+    // Cap-violation defence: drop Initials with DCIDs below the floor.
     if dcid.len() < ctx.params.min_client_dcid_len {
         tracing::debug!(
             peer = %from,
@@ -786,24 +607,15 @@ async fn handle_initial(
 
     // New connection.
     //
-    // CF-S15-PASSTHROUGH-RETRY-ODCID: the §6.5 Initial-flood defence
-    // mints a Retry on no-token Initials, but the LB-chosen new_scid
-    // in that Retry then becomes the second-Initial wire DCID — the
-    // backend cannot recover the client's ORIGINAL DCID without a
-    // side channel, so a real-quiche backend rejects the resulting
-    // `original_destination_connection_id` transport param. RFC 9000
-    // §17.2.5 anticipates this via the "Retry Service" pattern
-    // (token-embedded ODCID + backend extracts on verify); deferred
-    // to S15.x / S16.
-    //
-    // The `mint_retry` knob (default `true`) is the production-vs-
-    // dev/trusted-network escape: when `false`, no-token Initials
-    // are forwarded verbatim and the BACKEND handles Initial-flood
-    // defence (either it `accept`s directly or initiates its own
-    // backend-side Retry, which the LB just forwards).
+    // CF-S15-PASSTHROUGH-RETRY-ODCID: minting a Retry makes the LB-chosen
+    // new_scid the second-Initial wire DCID, so the backend cannot recover the
+    // client's ORIGINAL DCID without a side channel and a real-quiche backend
+    // rejects the resulting `original_destination_connection_id`. RFC 9000
+    // §17.2.5 anticipates this via the "Retry Service" pattern. The
+    // `mint_retry` knob is the production-vs-trusted-network escape.
     let tok = token.unwrap_or(&[]);
     if tok.is_empty() && ctx.params.mint_retry {
-        // Mint Retry (no state allocation; just send and forget).
+        // Mint Retry: stateless, so no flow is allocated.
         let new_scid = sample_lb_scid();
         let retry_token = ctx.retry_signer.mint(from, dcid);
         let mut out = Vec::with_capacity(128);
@@ -820,8 +632,8 @@ async fn handle_initial(
         return;
     }
 
-    // Token present → verify. When mint_retry=false AND no token,
-    // we skip verify entirely (the BACKEND is the §6.5 defender).
+    // Token present ⇒ verify. With mint_retry=false and no token we forward
+    // verbatim and let the backend decide.
     let now = Instant::now();
     if !tok.is_empty() {
         if let Err(e) = ctx.retry_signer.verify(tok, from, now) {
@@ -833,9 +645,8 @@ async fn handle_initial(
         }
     }
 
-    // Cap-check; evict oldest on hit (§5 LRU). Cap is on UNIQUE flows;
-    // dispatch table has up to 2 keys per flow, so the table-size
-    // bound is 2× cap.
+    // Cap-check, evicting the oldest on hit. The cap is on UNIQUE flows, while
+    // the dispatch table holds up to 2 keys per flow.
     let cap = ctx.params.max_quic_connections;
     if ctx.table.len() >= cap.saturating_mul(2) {
         // Cap-hit audit line (design §A3, throttled one-per-window).
@@ -907,13 +718,9 @@ async fn handle_initial(
         dropped: Arc::clone(&dropped),
     });
 
-    // Register routing key for the client-chosen DCID. The LB-chosen
-    // new_scid is NOT in the wire packet on this branch (this branch
-    // is the second Initial, where the client has already received our
-    // Retry and is now sending DCID = our new_scid). Per §3.6 the
-    // routing DCID *is* our LB-chosen SCID, but it's already present
-    // as the wire DCID — so the existing key insertion does the right
-    // thing.
+    // Register the routing key for the wire DCID. On this branch the client has
+    // already received our Retry, so the wire DCID IS our LB-chosen new_scid —
+    // the single insertion below is already the §3.6 routing key.
     ctx.table.insert(dcid.to_vec(), Arc::clone(&flow));
     // Self-correcting gauge: re-read the post-insert table size.
     set_flows_gauge(&ctx);
@@ -921,10 +728,8 @@ async fn handle_initial(
     // Forward the inbound packet first.
     let _ = backlog_tx.try_send(pkt);
 
-    // Spawn per-flow forward pump (client→backend). Exits when the backlog
-    // channel closes (all `backlog_tx` senders dropped — i.e. the FlowEntry
-    // dropped) OR the flow's `closed` token fires (F-S20-2 reclaim), so a
-    // reaped flow's forward task tears down promptly rather than lingering.
+    // Per-flow forward pump (client→backend); exits when the backlog sender
+    // drops or `closed` fires.
     let backend_sock_fwd = Arc::clone(&backend_sock);
     let ctx_fwd = Arc::clone(&ctx);
     let closed_fwd = flow.closed.clone();
@@ -959,11 +764,8 @@ async fn handle_initial(
 async fn reverse_pump(ctx: Arc<RouterCtx>, flow: Arc<FlowEntry>) {
     let mut buf = vec![0u8; MAX_UDP_DATAGRAM_SIZE];
     loop {
-        // F-S20-2: race the blocking backend recv against the per-flow
-        // `closed` signal so an LRU-evicted / idle-reaped flow exits here,
-        // releasing this task's `Arc<FlowEntry>` (→ fd + forward task freed).
-        // Without this, a flow whose backend is alive-but-silent would block
-        // on `recv()` forever and never be reclaimed.
+        // F-S20-2: race the blocking backend recv against the per-flow `closed`
+        // token, so an alive-but-silent backend cannot pin this task forever.
         let n = tokio::select! {
             biased;
             () = flow.closed.cancelled() => break,
@@ -981,17 +783,12 @@ async fn reverse_pump(ctx: Arc<RouterCtx>, flow: Arc<FlowEntry>) {
         let slice = buf.get(..n).unwrap_or(&[]);
 
         // Peek the long-header server-side SCID to discover the flow's
-        // routing DCID (the server's SCID becomes the client's next
-        // DCID; we register it so subsequent client packets routed by
-        // that DCID land on this flow). Short-header reverse packets
-        // have no CIDs the LB can see — pass through.
+        // short-header DCID length before short-header packets start.
         if let Ok(PublicHeader::Long { scid, .. }) = parse_public_header(slice, 0) {
             if !scid.is_empty() {
                 let key = scid.to_vec();
-                // Avoid clobbering an existing entry (e.g. a different
-                // flow already keyed by this SCID, which would be a
-                // backend collision; in practice we trust the backend's
-                // SCID is unique).
+                // Avoid clobbering an existing entry (a different flow could
+                // legitimately own this key).
                 ctx.table.entry(key).or_insert_with(|| Arc::clone(&flow));
                 flow.short_dcid_len.store(scid.len(), Ordering::Relaxed);
             }
@@ -1000,8 +797,7 @@ async fn reverse_pump(ctx: Arc<RouterCtx>, flow: Arc<FlowEntry>) {
         let peer = flow.get_peer();
         if let Err(e) = ctx.listener_sock.send_to(slice, peer).await {
             tracing::trace!(error = %e, "reverse send failed");
-            // Don't break on transient send errors — UDP is best-
-            // effort and the next packet may go through.
+            // Don't break on transient send errors — UDP is best-effort.
         }
     }
 }
@@ -1016,8 +812,8 @@ async fn forward_long_existing(ctx: &RouterCtx, pkt: &[u8], dcid: &[u8]) {
     }
 }
 
-/// Short-header inbound: try single-len fast path, then walk the set of
-/// known short-DCID lengths.
+/// Short-header inbound: try the single-length fast path, then walk the set of
+/// known per-flow DCID lengths.
 async fn forward_short(ctx: &RouterCtx, pkt: &[u8], default_dcid: &[u8], from: SocketAddr) {
     // Fast path: default-length DCID (already parsed for us).
     if let Some(entry) = ctx.table.get(default_dcid) {
@@ -1058,12 +854,11 @@ async fn forward_short(ctx: &RouterCtx, pkt: &[u8], default_dcid: &[u8], from: S
             return;
         }
     }
-    // Miss → drop. §3.3 documents this as expected; client retransmit
-    // will hit when a long header refreshes the dispatch.
+    // Miss ⇒ drop; the client retransmit covers a genuine race.
 }
 
-/// Strict source-binding gate (§6.3, owner ruling §9.1'). Returns
-/// `true` if the packet should be forwarded; `false` to drop.
+/// Strict source-binding gate: with the knob on, a peer-IP mismatch DROPS the
+/// packet (off-path injection guard) instead of accepting it as a NAT rebind.
 fn forward_short_via(ctx: &RouterCtx, flow: &FlowEntry, _pkt: &[u8], from: SocketAddr) -> bool {
     if !ctx.params.strict_source_binding {
         return true;
@@ -1076,9 +871,8 @@ fn forward_short_via(ctx: &RouterCtx, flow: &FlowEntry, _pkt: &[u8], from: Socke
             observed = %from,
             "strict_source_binding drop"
         );
-        // Throttled audit record (design §A3): one `warn!` per
-        // `audit_throttle_window`, NOT one per dropped packet — a
-        // spoofing flood must not flood the audit log.
+        // Throttled audit record: one `warn!` per window, so an injection
+        // flood cannot drown the log.
         let now_ms = elapsed_ms(Instant::now(), ctx.epoch);
         if audit_allow(
             &ctx.audit_last_source_binding_ms,
@@ -1100,8 +894,8 @@ fn forward_short_via(ctx: &RouterCtx, flow: &FlowEntry, _pkt: &[u8], from: Socke
 fn sample_lb_scid() -> [u8; LB_SCID_LEN] {
     let mut scid = [0u8; LB_SCID_LEN];
     if ring::rand::SecureRandom::fill(&ring::rand::SystemRandom::new(), &mut scid).is_err() {
-        // RNG failure on a supported platform is effectively impossible;
-        // fall back to a process-unique counter rather than panicking.
+        // RNG failure on a supported platform is effectively impossible; fail
+        // closed rather than emit a predictable SCID.
         use std::sync::atomic::AtomicU64;
         static FALLBACK: AtomicU64 = AtomicU64::new(0);
         let n = FALLBACK.fetch_add(1, Ordering::Relaxed);
@@ -1113,10 +907,6 @@ fn sample_lb_scid() -> [u8; LB_SCID_LEN] {
 fn elapsed_ms(now: Instant, epoch: Instant) -> u64 {
     u64::try_from(now.saturating_duration_since(epoch).as_millis()).unwrap_or(u64::MAX)
 }
-
-// ============================================================
-// PassthroughListener
-// ============================================================
 
 /// A running Mode A passthrough listener.
 pub struct PassthroughListener {
@@ -1131,13 +921,12 @@ pub struct PassthroughListener {
 }
 
 impl PassthroughListener {
-    /// Bind a UDP socket, load (or generate) the retry secret, build
-    /// the Maglev table over the backend set, and spawn the recv loop.
+    /// Bind a UDP socket, load (or generate) the retry secret, build the Maglev
+    /// table, and spawn the recv loop + idle reaper.
     ///
     /// # Errors
     ///
-    /// Returns the OS bind error or a backend-set rejection
-    /// (empty-backends → `InvalidInput`).
+    /// Bind failure, or a retry-secret load/generate failure.
     pub async fn spawn(
         params: PassthroughParams,
         shutdown: CancellationToken,
@@ -1192,19 +981,14 @@ impl PassthroughListener {
             "QUIC passthrough listener bound"
         );
 
-        // F-S20-2: periodic idle-flow reaper. Bounds the flow table by the
-        // LIVE connection count (a flow idle past `flow_idle_timeout` is
-        // reclaimed — backend UDP socket fd + both pump tasks freed) rather
-        // than waiting for the LRU cap at `2 * max_quic_connections`.
-        // `Duration::ZERO` disables it (LRU-only, pre-S21 behaviour).
+        // F-S20-2: periodic idle-flow reaper — bounds the flow table by the
+        // LIVE connection count rather than the LRU cap.
         let idle = ctx.params.flow_idle_timeout;
         if !idle.is_zero() {
             let sweep_ctx = Arc::clone(&ctx);
             let sweep_shutdown = shutdown.clone();
             let idle_ms = u64::try_from(idle.as_millis()).unwrap_or(u64::MAX);
-            // Sweep cadence = a quarter of the idle window, clamped to
-            // [1s, 10s], so a reaped flow is freed within ~1.25× the idle
-            // timeout without busy-spinning on a tiny table.
+            // Sweep cadence = a quarter of the idle window, clamped.
             let period = Duration::from_millis((idle_ms / 4).max(1))
                 .clamp(Duration::from_secs(1), Duration::from_secs(10));
             tokio::spawn(run_idle_sweeper(sweep_ctx, idle_ms, period, sweep_shutdown));
@@ -1246,17 +1030,14 @@ impl PassthroughListener {
         self.local_addr
     }
 
-    /// Number of dispatch-table entries (test gauge). Each flow may
-    /// hold up to 2 entries (client-DCID + LB-chosen SCID). The
-    /// verify-gate (iv) bound is `2 * max_quic_connections`.
+    /// Number of dispatch-table entries (test gauge); a flow may hold 2.
     #[cfg(any(test, feature = "test-gauges"))]
     #[must_use]
     pub fn flows_len(&self) -> usize {
         self.table.len()
     }
 
-    /// Trigger graceful shutdown. Returns the listener task's
-    /// `JoinHandle`.
+    /// Trigger graceful shutdown, returning the listener task's join result.
     #[must_use]
     pub fn shutdown(self) -> tokio::task::JoinHandle<()> {
         self.shutdown.cancel();
@@ -1264,17 +1045,12 @@ impl PassthroughListener {
     }
 }
 
-// ============================================================
-// Retry-secret loader (mirrors listener.rs pattern; 32-byte secret).
-// ============================================================
-
 const RETRY_SECRET_LEN: usize = 32;
 
-/// F-INFRA-01 (S38): perm-gate the retry-secret LOAD path. Sibling of
-/// `lb_quic::listener::check_retry_secret_perms` (the two retry-secret
-/// loaders are deliberate cross-path duplicates — keep them in sync).
-/// Strict on release, warn-only (lax) on debug builds, mirroring the
-/// TLS-key advisory. Closes the asymmetry vs the 0600 generate path.
+/// F-INFRA-01 — perm-gate the retry-secret LOAD path. A deliberate cross-path
+/// duplicate of `lb_quic::listener::check_retry_secret_perms`; keep them in
+/// sync. Strict on release, warn-only on debug, closing the asymmetry against
+/// the 0600 generate path.
 #[cfg(unix)]
 fn check_retry_secret_perms(path: &std::path::Path, strict: bool) -> std::io::Result<()> {
     match lb_security::assert_owner_only(path, strict) {
@@ -1363,9 +1139,8 @@ mod tests {
 
     #[test]
     fn flow_entry_audit_compiles() {
-        // Just constructing a FlowEntry + invoking the audit fn proves
-        // the destructuring pattern stays in sync with the struct
-        // definition. Compile-time enforcement.
+        // Constructing a FlowEntry and invoking the audit proves the
+        // destructuring pattern is exhaustive and the witnesses type-check.
         let (tx, _rx) = mpsc::channel::<Vec<u8>>(32);
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -1405,11 +1180,9 @@ mod tests {
 
     #[test]
     fn retry_packet_byte_layout() {
-        // Smoke-test the hand-rolled Retry writer. RFC 9001 §A.4 has
-        // a worked Retry example with known inputs/outputs — for the
-        // gate-1 build we just check the layout invariants here; the
-        // 1000-case differential vs quiche::retry lands in
-        // tests/passthrough_retry_differential.rs in the next edit.
+        // Smoke-test the hand-rolled Retry writer: layout + determinism. The
+        // byte-equality differential against `quiche::retry` is the integration
+        // test.
         let odcid = [0x83, 0x94, 0xc8, 0xf0, 0x3e, 0x51, 0x57, 0x08];
         let client_scid: [u8; 0] = [];
         let new_scid = [0xaau8; LB_SCID_LEN];
@@ -1418,9 +1191,8 @@ mod tests {
         let mut out = Vec::new();
         build_retry_packet(&odcid, &client_scid, &new_scid, version, token, &mut out)
             .expect("build_retry_packet OK");
-        // Layout: byte0(1) + version(4) + dcid_len(1) + dcid(0) +
-        // scid_len(1) + scid(16) + token(18) + tag(16).
-        // (dcid len = 0 bytes here so no DCID-bytes term.)
+        // Layout: byte0 | version | dcid_len | dcid | scid_len | scid | token
+        // | tag(16).
         assert_eq!(out.len(), 1 + 4 + 1 + 1 + 16 + 18 + 16);
         assert_eq!(*out.first().unwrap_or(&0), 0b1111_0000);
         assert_eq!(out.get(1..5).unwrap_or(&[]), &version.to_be_bytes());
@@ -1461,16 +1233,10 @@ mod tests {
         assert_eq!(p.max_dcid_len_routed, MAX_CID_LEN);
     }
 
-    // ========================================================
-    // S15 A3 — threat-defence + observability coverage tests.
-    //
-    // These drive handle_initial / forward_short / evict_oldest /
-    // load_or_generate_retry_secret / audit_allow directly through an
-    // in-crate RouterCtx so the private branches (mint_retry true/false,
-    // verify reject, DCID floor, multi-length fallback, error/eviction
-    // edges at the lcov-uncovered 599-674 / 787-848 / 994-1037 clusters)
-    // are exercised. Lifts passthrough.rs cov 75.91% -> >=80%.
-    // ========================================================
+    // Threat-defence + observability coverage: drive handle_initial /
+    // forward_short / evict_oldest / load_or_generate_retry_secret /
+    // audit_allow directly through an in-crate RouterCtx so the private
+    // branches are exercised.
 
     use lb_observability::{MetricsRegistry, PassthroughMetrics};
 
@@ -1480,15 +1246,12 @@ mod tests {
         SocketAddr::new(std::net::IpAddr::V4(Ipv4Addr::LOCALHOST), port)
     }
 
-    /// Build an in-crate [`RouterCtx`] for unit tests: a real loopback
-    /// `TokioUdp` dataplane (so `send_to` works), one bound-but-idle
-    /// backend, fresh metrics, and a deterministic retry signer. Returns
-    /// the ctx plus the backend's bound addr.
+    /// Build an in-crate [`RouterCtx`] for unit tests over real loopback
+    /// sockets.
     async fn test_ctx(
         mut mutate: impl FnMut(&mut PassthroughParams),
     ) -> (Arc<RouterCtx>, PassthroughMetrics, SocketAddr) {
-        // A bound backend socket so the per-flow forward task has a
-        // reachable destination (it just discards what it receives).
+        // A bound backend socket so the per-flow forward task has a target.
         let backend = UdpSocket::bind(loopback(0)).await.expect("backend bind");
         let backend_addr = backend.local_addr().expect("backend addr");
 
@@ -1553,9 +1316,8 @@ mod tests {
         ];
         rt().block_on(async {
             for (dcid_len, floor, expect_inserted) in cases {
-                // mint_retry=false so an at/above-floor no-token Initial
-                // builds a flow (the verbatim-forward branch) rather than
-                // returning early on the Retry-mint branch.
+                // mint_retry=false so an at/above-floor no-token Initial is
+                // forwarded and a flow IS created — isolating the floor.
                 let (ctx, _m, _b) = test_ctx(|p| {
                     p.min_client_dcid_len = floor;
                     p.mint_retry = false;
@@ -1586,8 +1348,7 @@ mod tests {
     #[test]
     fn mint_retry_true_mints_and_does_not_insert() {
         rt().block_on(async {
-            // A sibling socket plays the "client": handle_initial sends the
-            // Retry back to `from`, which is this socket's addr.
+            // A sibling socket plays the "client" and receives the Retry.
             let client = UdpSocket::bind(loopback(0)).await.expect("client bind");
             let from = client.local_addr().expect("client addr");
 
@@ -1698,9 +1459,8 @@ mod tests {
     #[test]
     fn evict_oldest_at_cap_and_negative_control() {
         rt().block_on(async {
-            // cap=1 → dispatch-table bound = 2 (2*cap). Insert 2 distinct
-            // flows via mint_retry=false (one client-DCID key each); the
-            // 3rd triggers a cap-hit eviction.
+            // cap=1 ⇒ dispatch-table bound = 2. Insert 2 distinct flows and the
+            // older must be evicted.
             let (ctx, m, _b) = test_ctx(|p| {
                 p.max_quic_connections = 1;
                 p.mint_retry = false;
@@ -1730,7 +1490,7 @@ mod tests {
                 "gauge == table size"
             );
 
-            // Negative control: cap=4, only 3 opens → no eviction.
+            // Negative control: cap=4 with only 3 opens ⇒ no eviction.
             let (ctx2, m2, _b2) = test_ctx(|p| {
                 p.max_quic_connections = 4;
                 p.mint_retry = false;
@@ -1760,8 +1520,7 @@ mod tests {
     fn idle_sweep_reclaims_idle_flows_and_frees_them() {
         rt().block_on(async {
             let (ctx, m, _b) = test_ctx(|p| p.mint_retry = false).await;
-            // Open 3 flows (one client-DCID key each). Each spawns a forward
-            // + reverse pump and pins a backend UDP socket fd.
+            // Open 3 flows, one client-DCID key each.
             for i in 0u8..3 {
                 let dcid = vec![0x80 + i; 8];
                 handle_initial(
@@ -1777,17 +1536,15 @@ mod tests {
             }
             assert_eq!(ctx.table.len(), 3, "3 flows resident");
 
-            // Capture each flow's Drop-gauge WITHOUT holding the FlowEntry Arc
-            // (holding it would prevent reclamation), so we can prove the
-            // entries are actually freed (fd + tasks) after the sweep.
+            // Capture each flow's Drop-gauge WITHOUT holding the Arc, or the
+            // strong count never reaches zero and Drop never runs.
             let dropped_flags: Vec<Arc<AtomicBool>> = ctx
                 .table
                 .iter()
                 .map(|kv| Arc::clone(&kv.value().dropped))
                 .collect();
 
-            // Negative control: a generous idle window leaves freshly-touched
-            // flows resident (their last_seen is ~now).
+            // Negative control: a generous idle window reaps nothing.
             assert_eq!(
                 sweep_idle_flows(&ctx, 10_000),
                 0,
@@ -1796,9 +1553,7 @@ mod tests {
             assert_eq!(ctx.table.len(), 3, "negative control: all resident");
             assert_eq!(m.flows_evicted_total.get(), 0, "no eviction yet");
 
-            // Make every flow look idle (last_seen far in the past), let a
-            // couple ms elapse so the epoch-relative now is non-zero, then
-            // sweep with a 1ms idle window.
+            // Make every flow look idle, then sweep.
             for kv in ctx.table.iter() {
                 kv.value().last_seen_ms.store(0, Ordering::Relaxed);
             }
@@ -1813,10 +1568,9 @@ mod tests {
             );
             assert_eq!(m.flows.get(), 0, "gauge reflects empty table");
 
-            // Reclamation proof (the load-bearing part of F-S20-2): the
-            // per-flow reverse pump must EXIT on the cancel so the FlowEntry's
-            // strong count reaches zero — its Drop fires (closing the backend
-            // UDP socket fd + the forward task's channel). Poll the Drop gauge.
+            // Reclamation proof (the load-bearing part of F-S20-2): each
+            // entry's Drop actually ran, so the fd + tasks were released — not
+            // merely unlinked from the table.
             let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
             loop {
                 let all = dropped_flags.iter().all(|d| d.load(Ordering::Acquire));
@@ -1882,8 +1636,7 @@ mod tests {
                 "periodic sweep bumped the eviction counter"
             );
 
-            // Shutdown arm: the task must EXIT promptly on cancel (no leak of
-            // the reaper task itself).
+            // Shutdown arm: the task must EXIT promptly on cancel.
             shutdown.cancel();
             tokio::time::timeout(Duration::from_secs(2), task)
                 .await
@@ -1935,9 +1688,8 @@ mod tests {
     #[test]
     fn forward_short_multi_length_fallback_hits() {
         rt().block_on(async {
-            // Register a flow keyed by a 10-byte DCID with short_dcid_len=10,
-            // then send a short-header packet whose default-len parse misses
-            // but whose 10-byte prefix hits the multi-length fallback loop.
+            // A flow keyed by a 10-byte DCID with short_dcid_len=10, so only
+            // the multi-length fallback can route it.
             let (ctx, _m, backend) = test_ctx(|p| p.max_dcid_len_routed = 8).await;
             let dcid10 = vec![0x80u8; 10];
             let (tx, mut rx) = mpsc::channel::<Vec<u8>>(8);
@@ -1957,8 +1709,7 @@ mod tests {
             let mut pkt = vec![0b0100_0000u8];
             pkt.extend_from_slice(&dcid10);
             pkt.extend_from_slice(&[0xEE, 0xEE]);
-            // default_dcid is the 8-byte prefix (max_dcid_len_routed=8) which
-            // is NOT a table key → forces the multi-length fallback.
+            // default_dcid is the 8-byte prefix, which must NOT match.
             let default_dcid = pkt.get(1..9).expect("8-byte prefix").to_vec();
             forward_short(&ctx, &pkt, &default_dcid, loopback(44001)).await;
 
@@ -1969,7 +1720,7 @@ mod tests {
         });
     }
 
-    // --- (7) retry-secret loader edges (994-1037) -------------------
+    // --- (7) retry-secret loader edges ------------------------------
 
     #[test]
     fn retry_secret_loader_edges() {

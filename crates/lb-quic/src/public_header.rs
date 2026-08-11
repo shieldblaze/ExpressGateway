@@ -1,32 +1,19 @@
-//! SHARED-1: QUIC public-header parser. Quiche-free, no_alloc on the
-//! parse path, no panics, no decryption.
+//! SHARED-1: QUIC public-header parser. Quiche-free, no_alloc on the parse
+//! path, no panics, no decryption.
 //!
-//! INVARIANT: this parser reads ONLY the cleartext public-header
-//! bytes (form, version, DCID-len/DCID, SCID-len/SCID, token-len/
-//! token for Initial, length-varint where present). It NEVER touches
-//! encrypted payload, packet-number bytes, or header-protected
-//! reserved bits. The Mode A no-decrypt property is LAYERED on top
-//! of this guarantee — verifier code-read will check this is upheld.
+//! INVARIANT: this parser reads ONLY cleartext public-header bytes (form,
+//! version, DCID/SCID, Initial token, length varint). It NEVER touches
+//! encrypted payload, packet-number bytes, or header-protected reserved bits —
+//! the Mode A no-decrypt property is layered on top of that guarantee.
 //!
-//! Wire format:
-//! * Long header: RFC 9000 §17.2 — `1|1|TT|RR|PP` byte0, then version
-//!   (4 bytes BE), DCID-len (1 byte) + DCID, SCID-len (1 byte) + SCID,
-//!   then per-type tail (Initial: token-len varint + token + length
-//!   varint; 0-RTT/Handshake: length varint; Retry: token + 16-byte
-//!   integrity tag — parser surfaces Retry but does not decode its
-//!   tail; Version Negotiation: version-list — also not decoded).
-//! * Short header: RFC 9000 §17.3 — `0|1|S|RR|K|PP` byte0, then DCID
-//!   for a caller-supplied length (NOT encoded on the wire; see
-//!   `audit/quic/s15-design.md` §2.3).
+//! Why that holds (RFC 9001 §5.4): header protection masks byte0's low 4 bits
+//! and the encrypted packet-number bytes. Every field this parser reads is
+//! wire-cleartext, so it behaves identically on protected wire packets and on
+//! the cleartext pseudo-packets in RFC 9001's worked examples.
 //!
-//! Note on header protection (RFC 9001 §5.4): HP masks byte0's low 4
-//! bits (Long: reserved + PN-len; Short: reserved + key-phase + PN-len)
-//! plus the encrypted packet-number bytes. The fields this parser
-//! reads (form bit, fixed bit, type bits 4-5 on Long, version, DCID
-//! length+bytes, SCID length+bytes, token, length-varint) are NOT
-//! header-protected — they are wire-cleartext. So this parser works
-//! identically on protected wire packets and on the cleartext
-//! pseudo-packets used in RFC 9001's worked examples.
+//! Wire format: long header RFC 9000 §17.2, short header §17.3. A short
+//! header's DCID length is NOT on the wire — the caller supplies the per-flow
+//! length (see `audit/quic/s15-design.md` §2.3).
 
 use thiserror::Error;
 
@@ -34,9 +21,6 @@ use thiserror::Error;
 pub const MAX_CID_LEN: usize = 20;
 
 /// Long-header type classification.
-///
-/// `VersionNegotiation` is reported when the version field is
-/// `0x00000000` regardless of the type bits, per RFC 9000 §17.2.1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LongType {
     /// RFC 9000 §17.2.2 — Initial (carries token + length).
@@ -45,8 +29,7 @@ pub enum LongType {
     ZeroRtt,
     /// RFC 9000 §17.2.4 — Handshake (carries length).
     Handshake,
-    /// RFC 9000 §17.2.5 — Retry (server-origin; tail is opaque to
-    /// this parser).
+    /// RFC 9000 §17.2.5 — Retry (server-origin; the tail is opaque here).
     Retry,
     /// RFC 9000 §17.2.1 — Version Negotiation (`version == 0`).
     VersionNegotiation,
@@ -59,8 +42,7 @@ pub enum PublicHeader<'a> {
     Long {
         /// Long-header type (see [`LongType`]).
         ty: LongType,
-        /// Wire `Version` field. `0x00000000` indicates Version
-        /// Negotiation (already reflected in `ty`).
+        /// Wire `Version`; `0x00000000` means Version Negotiation.
         version: u32,
         /// Destination Connection ID bytes (0..=20).
         dcid: &'a [u8],
@@ -68,12 +50,10 @@ pub enum PublicHeader<'a> {
         scid: &'a [u8],
         /// Initial-only token. `None` for non-Initial.
         token: Option<&'a [u8]>,
-        /// Length-varint covering PN + payload (Initial, 0-RTT,
-        /// Handshake). `None` for Retry and Version Negotiation.
+        /// Length-varint covering PN + payload; `None` for Retry / VN.
         length: Option<u64>,
     },
-    /// Short-header (1-RTT) packet. The DCID length is recovered
-    /// out-of-band per `audit/quic/s15-design.md` §2.3.
+    /// Short-header (1-RTT) packet; the DCID length comes from the caller.
     Short {
         /// Destination Connection ID bytes.
         dcid: &'a [u8],
@@ -126,11 +106,8 @@ pub enum VarintError {
     },
 }
 
-// SHARED-V — RFC 9000 §16 varint, used by the QUIC public-header parser.
-//
-// Returns `(value, bytes_consumed)`. The 2-bit prefix of the first
-// byte encodes a length of 1/2/4/8; the remaining 6 bits are the
-// high-order bits of the value, big-endian.
+// RFC 9000 §16 varint. The 2-bit prefix of the first byte encodes a length of
+// 1/2/4/8; the remaining 6 bits are the value's high-order bits, big-endian.
 fn decode_varint(buf: &[u8]) -> Result<(u64, usize), VarintError> {
     let first = *buf
         .first()
@@ -153,15 +130,13 @@ fn decode_varint(buf: &[u8]) -> Result<(u64, usize), VarintError> {
     Ok((val, len))
 }
 
-/// Parse the public header of `pkt`. For short headers the caller
-/// MUST pass the per-flow `short_dcid_len` recovered as
-/// `audit/quic/s15-design.md` §2.3 describes.
+/// Parse the public header of `pkt`. For a short header the caller MUST pass
+/// the per-flow `short_dcid_len` — it is not on the wire.
 ///
 /// # Errors
 ///
-/// Returns [`HeaderError`] on any malformed or truncated wire packet.
-/// Never panics on arbitrary input (regression-tested in the proptest
-/// no-panic harness).
+/// [`HeaderError`] on any malformed or truncated packet. Never panics on
+/// arbitrary input (regression-tested by the proptest no-panic harness).
 pub fn parse_public_header(
     pkt: &[u8],
     short_dcid_len: usize,
@@ -314,13 +289,10 @@ fn parse_long(pkt: &[u8]) -> Result<PublicHeader<'_>, HeaderError> {
             }
             (None, Some(len_val))
         }
-        // Retry (and the structurally-unreachable VN — VN is short-
-        // circuited above the match because the `version == 0` check
-        // overrides the type-bits classification, and `ty` is derived
-        // only from the 4 type-bit values 0b00/01/10/11; we map them
-        // to Initial/0RTT/Handshake/Retry). Folding VN onto the Retry
-        // arm keeps the match exhaustive without `unreachable!` (the
-        // crate denies `clippy::unreachable`).
+        // Retry, plus the structurally-unreachable VN (short-circuited above,
+        // since `version == 0` overrides the type-bit classification). Folding
+        // VN onto this arm keeps the match exhaustive without `unreachable!`,
+        // which the crate denies.
         LongType::Retry | LongType::VersionNegotiation => (None, None),
     };
 
@@ -336,11 +308,9 @@ fn parse_long(pkt: &[u8]) -> Result<PublicHeader<'_>, HeaderError> {
 
 fn parse_short(pkt: &[u8], short_dcid_len: usize) -> Result<PublicHeader<'_>, HeaderError> {
     if short_dcid_len == 0 || short_dcid_len > MAX_CID_LEN {
-        // 0 is a valid CID length on the wire in principle, but Mode A
-        // requires a non-empty DCID to route — collapse 0 onto the
-        // DcidTooLong error so the router has a single rejection branch.
-        // Treat 0 as "caller passed a bogus length"; out-of-range as the
-        // explicit cap-violation.
+        // 0 is a legal wire CID length, but Mode A needs a non-empty DCID to
+        // route — collapse it onto DcidTooLong so the router has ONE rejection
+        // branch.
         let len_byte = u8::try_from(short_dcid_len).unwrap_or(u8::MAX);
         return Err(HeaderError::DcidTooLong(len_byte));
     }
@@ -359,39 +329,22 @@ fn parse_short(pkt: &[u8], short_dcid_len: usize) -> Result<PublicHeader<'_>, He
 
 #[cfg(test)]
 mod tests {
-    //! Unit tests for the SHARED-1 public-header parser.
+    //! Fixture provenance: the parser reads wire bytes, and for long headers
+    //! header protection masks only byte0's low 4 bits and the encrypted PN, so
+    //! the public-header fields are IDENTICAL between RFC 9001 §A.2
+    //! (unprotected) and §A.3 (protected). The §A.2 sequence is used because
+    //! every byte is independently verifiable from the RFC's worked-example
+    //! tables without re-running header protection.
     //!
-    //! Fixture provenance: RFC 9001 §A.3 ("Client Initial") provides
-    //! the on-wire bytes of a real protected client Initial. The
-    //! parser operates on wire bytes; for Long headers, header
-    //! protection masks ONLY byte0's low 4 bits and the encrypted PN
-    //! bytes, so the wire-cleartext public-header fields the parser
-    //! reads are identical between RFC §A.2 (unprotected) and §A.3
-    //! (protected). We use the §A.2 unprotected byte sequence for the
-    //! fixture because every byte is independently verifiable from
-    //! the RFC's worked-example tables without re-running header
-    //! protection — addendum-4 requirement: "Add a comment in the
-    //! fixture pointing to the exact RFC section so a future reader
-    //! can re-verify."
-    //!
-    //! RFC 9001 has no §A.x Handshake worked example; the Handshake
-    //! fixture is hand-built from RFC 9000 §17.2.4.
+    //! RFC 9001 has no §A.x Handshake example, so that fixture is hand-built
+    //! from RFC 9000 §17.2.4.
     use super::*;
 
-    // RFC 9001 §A.2 ("Client Initial" cleartext header):
-    //   byte0      = 0xc3 (Long + Fixed + Initial + reserved=0 + PN-len=2)
-    //   version    = 0x00000001 (QUIC v1)
-    //   dcid_len   = 0x08
-    //   dcid       = 0x8394c8f03e515708
-    //   scid_len   = 0x00
-    //   token_len  = varint 0x00 (1 byte)
-    //   length     = varint 0x449e (2 bytes; declared 1182)
-    //   PN         = 2 bytes (0x0000_0002 packed) — encrypted payload follows
-    //
-    // We hand-build the public-header prefix verbatim, then pad the
-    // remainder so the declared `length` of 1182 lines up with the
-    // remaining buffer. The parser does NOT decode the encrypted
-    // payload — it only checks `remaining >= declared`.
+    // RFC 9001 §A.2 "Client Initial" cleartext header: byte0 0xc3, version 1,
+    // dcid_len 8 / dcid 0x8394c8f03e515708, scid_len 0, token_len varint 0,
+    // length varint 0x449e (1182). The public-header prefix is hand-built
+    // verbatim and the remainder padded so the declared length lines up; the
+    // parser only checks `remaining >= declared`.
     fn rfc9001_a2_initial() -> Vec<u8> {
         let mut pkt = Vec::with_capacity(1200);
         pkt.push(0xc3);
@@ -431,14 +384,9 @@ mod tests {
         }
     }
 
-    // Hand-built Handshake per RFC 9000 §17.2.4. There's no RFC 9001
-    // §A.x Handshake worked example to copy from; we synthesize a
-    // minimal valid packet:
-    //   byte0      = 0xe3 (Long=1, Fixed=1, Type=10 Handshake, PN-len=2)
-    //   version    = 0x00000001
-    //   dcid_len   = 0x04, dcid = 0xdeadbeef
-    //   scid_len   = 0x04, scid = 0xcafef00d
-    //   length     = varint 0x0010 (16 bytes) — then 16 bytes of pad.
+    // Hand-built Handshake per RFC 9000 §17.2.4 (no RFC 9001 worked example to
+    // copy): byte0 0xe3, version 1, dcid 0xdeadbeef, scid 0xcafef00d, length
+    // varint 16, then 16 bytes of pad.
     fn handcrafted_handshake() -> Vec<u8> {
         let mut pkt = Vec::new();
         pkt.push(0xe3);
@@ -531,8 +479,8 @@ mod tests {
 
     #[test]
     fn initial_truncated_in_token_len_varint() {
-        // Long Initial with dcid_len=0, scid_len=0, then EOF where the
-        // token-length varint should be.
+        // Long Initial with dcid_len=0, scid_len=0, then EOF where the token
+        // varint should be.
         let pkt = [0xc3u8, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00];
         match parse_public_header(&pkt, 0) {
             Err(HeaderError::Varint(VarintError::Incomplete { .. })) => {}
@@ -542,8 +490,7 @@ mod tests {
 
     #[test]
     fn initial_declared_length_overruns() {
-        // Token len = 0, length varint declares 1000 but only 4 bytes
-        // remain.
+        // Token len 0; the length varint declares 1000 but only 4 bytes remain.
         let mut pkt = vec![0xc3];
         pkt.extend_from_slice(&[0x00, 0x00, 0x00, 0x01]);
         pkt.push(0); // dcid_len
@@ -586,8 +533,7 @@ mod tests {
 
     #[test]
     fn short_header_too_short_for_dcid() {
-        // Declare 8-byte DCID but only have 4 bytes in the buffer
-        // (byte0 + 3 DCID bytes).
+        // Declare an 8-byte DCID with only 4 bytes in the buffer.
         let pkt = [0x40u8, 1, 2, 3];
         match parse_public_header(&pkt, 8) {
             Err(HeaderError::TooShort { needed: 9, got: 4 }) => {}
@@ -643,8 +589,7 @@ mod tests {
         }
     }
 
-    // SHARED-V — RFC 9000 §16 varint sanity. Locks the encode boundary
-    // between 1/2/4/8-byte forms.
+    // RFC 9000 §16 varint sanity — locks the 1/2/4/8-byte encode boundaries.
     #[test]
     fn varint_one_byte() {
         let (v, n) = decode_varint(&[0x00]).unwrap();

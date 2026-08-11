@@ -1,21 +1,11 @@
-//! Binary-side QUIC listener (Pillar 3b.3c-1 seam / Pillar 3b.3c-2 router).
+//! Binary-side QUIC listener: bind a `UdpSocket`, load (or generate) the
+//! 32-byte retry-token secret, build the [`lb_security::RetryTokenSigner`] +
+//! [`lb_security::ZeroRttReplayGuard`] and a `quiche::Config` factory, then
+//! spawn the [`crate::router::InboundPacketRouter`].
 //!
-//! `QuicListener::spawn` binds a `UdpSocket`, loads (or generates) the
-//! 32-byte retry-token secret, constructs a
-//! [`lb_security::RetryTokenSigner`] and
-//! [`lb_security::ZeroRttReplayGuard`], builds a `quiche::Config`
-//! factory, and spawns the Pillar 3b.3c-2
-//! [`crate::router::InboundPacketRouter`] which handles per-CID
-//! dispatch, RETRY wire handling, 0-RTT replay checks, and per-actor
-//! H3 termination.
-//!
-//! The 3b.3c-1 [`QuicListenerParams::new`] constructor still builds a
-//! listener with no backends — useful for transport-only smoke tests.
-//! Once backends are supplied via
-//! [`QuicListenerParams::with_backends`], the listener becomes a real
-//! reverse proxy: established connections flow through the router →
-//! actor → [`crate::h3_bridge`] → [`lb_io::pool::TcpPool`] → H1
-//! backend, with the response streamed back.
+//! [`QuicListenerParams::new`] builds a listener with no backends (useful for
+//! transport-only smoke tests); [`QuicListenerParams::with_backends`] makes it
+//! a real reverse proxy.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -37,9 +27,7 @@ use crate::router::{self, RouterParams};
 /// 32-byte retry-secret file size on disk.
 const RETRY_SECRET_LEN: usize = 32;
 
-/// Inputs to [`QuicListener::spawn`]. Mirrors the shape of
-/// `lb_config::QuicListenerConfig` but flattened into owned values so
-/// `lb-quic` does not depend on `lb-config`.
+/// Inputs to [`QuicListener::spawn`].
 #[derive(Clone)]
 pub struct QuicListenerParams {
     /// Bind address, e.g. `127.0.0.1:0`.
@@ -48,92 +36,42 @@ pub struct QuicListenerParams {
     pub cert_pem_path: PathBuf,
     /// PEM-encoded private-key path.
     pub key_pem_path: PathBuf,
-    /// Path to a 32-byte retry-secret file. Generated with mode 0600
-    /// if missing.
+    /// Path to a 32-byte retry-secret file, generated 0600 if absent.
     pub retry_secret_path: PathBuf,
     /// Connection idle timeout advertised to peers.
     pub max_idle_timeout: Duration,
-    /// Maximum UDP payload the endpoint will accept; clamped to
-    /// `>= 1200` (RFC 9000 §14) by the caller's validator.
+    /// Maximum UDP payload accepted, clamped to the QUIC packet ceiling.
     pub max_recv_udp_payload_size: u64,
     /// Replay-guard capacity. Defaults to 1024 recent tokens.
     pub replay_capacity: usize,
-    /// Resolved backend addresses. When empty, the listener still
-    /// accepts connections and completes handshakes but H3 requests
-    /// that reach established state are answered with 502 (no
-    /// backends available). 3b.3c-1 smoke tests deliberately leave
-    /// this empty; 3b.3c-2 e2e tests populate it.
+    /// Resolved backend addresses. Empty ⇒ the listener still terminates QUIC
+    /// but forwards nothing (the transport-only smoke-test shape).
     pub backends: Vec<SocketAddr>,
     /// Shared TCP pool for H1 backend dials.
     pub pool: Option<TcpPool>,
-    /// Optional upstream H3 backend `(pool, addr, sni)` — when set,
-    /// H3 requests on this listener route via the QUIC upstream pool
-    /// instead of the H1/TcpPool path (Pillar 3b.3c-3).
+    /// Optional upstream H3 backend `(pool, addr, sni)` — takes precedence
+    /// over the H1 list.
     pub h3_backend: Option<(QuicUpstreamPool, SocketAddr, String)>,
-    /// Optional upstream H2 backend `(pool, addr)` — when set,
-    /// H3 requests on this listener route via the HTTP/2 upstream pool
-    /// (PROTO-001 H3→H2 path). Takes precedence over `h3_backend` when
-    /// both are configured; mixed-protocol routing is not supported in
-    /// v1.
+    /// Optional upstream H2 backend `(pool, addr)`.
     pub h2_backend: Option<(Http2Pool, SocketAddr)>,
-    /// SESSION 19 / Mode B (B6): optional raw-QUIC re-origination backend.
-    /// When `Some`, this listener runs Mode B (terminate-and-re-originate)
-    /// — every accepted connection is handed to the raw-proxy actor — and
-    /// the client-facing `quiche::Config` enables QUIC DATAGRAM support
-    /// (`enable_datagrams = true`). When `None` (every existing caller) the
-    /// listener runs H3-termination EXACTLY as today and DATAGRAM support
-    /// is NOT advertised, so the transport parameters are byte-identical
-    /// (R3). Threaded into [`RouterParams::raw_quic_backend`].
+    /// Mode B: optional raw-QUIC re-origination backend. `Some` switches the
+    /// listener from H3 termination to terminate-and-re-originate.
     pub raw_quic_backend: Option<crate::raw_proxy::RawBackend>,
-    /// SESSION 19 / Mode B (B6): DATAGRAM recv/send queue length to
-    /// advertise to peers via `enable_dgram(true, cap, cap)` on a Mode-B
-    /// listener. Only consulted when `raw_quic_backend` is `Some`; ignored
-    /// (DATAGRAM disabled) on the H3 path. Mirrors the backend-leg
-    /// `dgram_queue_cap`.
+    /// Mode B: DATAGRAM queue length advertised to peers, single-sourced with
+    /// the relay's own queue cap.
     pub dgram_queue_cap: usize,
-    /// SESSION 19 / Mode B (B6): `quic_modeb_*` metric handles, threaded to
-    /// [`RouterParams::quic_modeb_metrics`]. `None` ⇒ no Mode-B metrics
-    /// (and always `None` on the H3 path).
+    /// Mode B `quic_modeb_*` metric handles.
     pub quic_modeb_metrics: Option<lb_observability::QuicModeBMetrics>,
-    /// SESSION 27 / WS-over-H3 (RFC 9220) Stage A: whether this listener
-    /// opted into WebSocket (the binary sets this from a present
-    /// `[listeners.websocket]` block). Threaded to
-    /// [`crate::router::RouterParams::ws_enabled`] → each actor. Gates the
-    /// `SETTINGS_ENABLE_CONNECT_PROTOCOL` advertisement + the `:protocol`
-    /// Extended-CONNECT accept path. `false` by default (set via
-    /// [`Self::with_websocket`]) keeps the H3 front byte-identical (R3).
+    /// WS-over-H3 Stage A: whether this listener accepts extended CONNECT.
+    /// `false` ⇒ `:protocol` is rejected byte-identically to a pre-WS listener.
     pub ws_enabled: bool,
-    /// SESSION 28 / WS-over-H3 (RFC 9220) Stage C: the injected WebSocket
-    /// relay launcher (dependency inversion — the `lb` binary builds it
-    /// because `lb-quic` cannot import `lb_l7::ws_proxy::proxy_frames`).
-    /// Set via [`Self::with_ws_relay_launcher`] alongside
-    /// [`Self::with_websocket`]; threaded into
-    /// [`crate::router::RouterParams::ws_relay_launcher`] → each actor.
-    /// `None` (every non-WS listener) keeps the H3 front byte-identical
-    /// (R3). Mirrors how the `config_factory` closure is threaded.
+    /// WS-over-H3 Stage C: the injected WebSocket relay launcher (see
+    /// [`crate::ws_tunnel::WsRelayLauncher`] for why it is injected).
     pub ws_relay_launcher: Option<crate::ws_tunnel::WsRelayLauncher>,
-    /// S36-A: per-connection H3 request cap. When non-zero, the H3 actor
-    /// sends an H3 GOAWAY once `max_requests_per_h3_connection` request
-    /// streams have been seen on a single connection, drains the in-flight
-    /// requests, then gracefully closes — so the connection recycles and
-    /// quiche's per-connection `StreamMap::collected` set is freed (the
-    /// S32 CF-GRPC-H3-CHURN-RSS leak / DoS vector). `0` (set via
-    /// [`Self::new`]) disables the cap — byte-identical to the pre-S36 H3
-    /// front (no GOAWAY, no recycle, R3). The binary sets it from
-    /// `[runtime].max_requests_per_h3_connection` via
-    /// [`Self::with_h3_request_cap`]. Threaded to
-    /// [`crate::router::RouterParams::max_requests_per_h3_connection`] →
-    /// each actor. Ignored on Mode B (`run_raw_proxy_actor` returns before
-    /// any H3 state is built).
+    /// S36-A: per-connection H3 request cap. Non-zero ⇒ the actor GOAWAYs and
+    /// recycles after this many requests; `0` disables recycling entirely.
     pub max_requests_per_h3_connection: u32,
-    /// S36-A: the `h3_*` recycle metric handles, threaded verbatim into
-    /// [`crate::router::RouterParams::h3_recycle_metrics`] → each actor.
-    /// `Some` once a non-Mode-B QUIC listener is spawned with a metrics
-    /// registry; the actor bumps `goaway_sent_total` at the cap and
-    /// `connections_recycled_total` after the drain-close. `None` (the
-    /// smoke / transport-only path with no registry) ⇒ the actor still
-    /// recycles, it just does not record (R3-neutral). Cheap to clone (an
-    /// `Arc`-backed `prometheus` bundle).
+    /// S36-A: the `h3_*` recycle metric handles.
     pub h3_recycle_metrics: Option<lb_observability::QuicH3RecycleMetrics>,
 }
 
@@ -166,8 +104,7 @@ impl std::fmt::Debug for QuicListenerParams {
 }
 
 impl QuicListenerParams {
-    /// Build a parameter bundle with reasonable defaults for the
-    /// non-tunable knobs. No backends, no pool — 3b.3c-1 smoke shape.
+    /// Build a parameter bundle with defaults for the optional fields.
     #[must_use]
     pub const fn new(
         bind_addr: SocketAddr,
@@ -187,35 +124,20 @@ impl QuicListenerParams {
             pool: None,
             h3_backend: None,
             h2_backend: None,
-            // SESSION 19 / Mode B (B6): H3-terminate by default — Mode B
-            // is opted in via `with_raw_backend`. DATAGRAM stays disabled
-            // (R3) until then.
+            // H3-terminate by default; Mode B is opt-in.
             raw_quic_backend: None,
             dgram_queue_cap: 1_024,
             quic_modeb_metrics: None,
-            // SESSION 27 / WS-over-H3: WebSocket opt-in is OFF by default
-            // — enabled via `with_websocket`. R3: the H3 settings frame +
-            // pseudo-header acceptance stay byte-identical until then.
+            // WebSocket opt-in is OFF by default (R3).
             ws_enabled: false,
-            // SESSION 28 / WS-over-H3 Stage C: no relay launcher by default
-            // — injected via `with_ws_relay_launcher` on a WS listener.
             ws_relay_launcher: None,
-            // S36-A: H3 request cap DISABLED by default — the binary opts
-            // in via `with_h3_request_cap` from
-            // `[runtime].max_requests_per_h3_connection`. `0` keeps the H3
-            // front byte-identical (no GOAWAY, no recycle, R3) for every
-            // smoke / transport-only caller.
+            // S36-A: H3 request cap DISABLED by default — the binary opts in.
             max_requests_per_h3_connection: 0,
             h3_recycle_metrics: None,
         }
     }
 
-    /// S36-A: set the per-connection H3 request cap (+ the recycle metric
-    /// handles). The binary calls this from
-    /// `[runtime].max_requests_per_h3_connection`; `cap == 0` disables the
-    /// cap (the field stays at its `new()` default, byte-identical to the
-    /// pre-S36 H3 front, R3). `metrics` is the registered `h3_*` recycle
-    /// family, threaded into [`crate::router::RouterParams`] → each actor.
+    /// S36-A: set the per-connection H3 request cap and recycle metrics.
     #[must_use]
     pub fn with_h3_request_cap(
         mut self,
@@ -227,8 +149,7 @@ impl QuicListenerParams {
         self
     }
 
-    /// Attach a backend list + TCP pool for H3→H1 forwarding
-    /// (Pillar 3b.3c-2).
+    /// Attach a backend list + TCP pool for H3→H1 forwarding.
     #[must_use]
     pub fn with_backends(mut self, backends: Vec<SocketAddr>, pool: TcpPool) -> Self {
         self.backends = backends;
@@ -236,9 +157,7 @@ impl QuicListenerParams {
         self
     }
 
-    /// Attach an upstream H3 backend for H3→H3 forwarding
-    /// (Pillar 3b.3c-3). `addr` is the backend's UDP address; `sni`
-    /// is the TLS name presented on the upstream handshake.
+    /// Attach an upstream H3 backend for H3→H3 forwarding.
     #[must_use]
     pub fn with_h3_backend(
         mut self,
@@ -250,23 +169,14 @@ impl QuicListenerParams {
         self
     }
 
-    /// Attach an upstream H2 backend for H3→H2 forwarding
-    /// (PROTO-001). `addr` is the backend's TCP address. Takes
-    /// precedence over `h3_backend`.
+    /// Attach an upstream H2 backend for H3→H2 forwarding.
     #[must_use]
     pub fn with_h2_backend(mut self, pool: Http2Pool, addr: SocketAddr) -> Self {
         self.h2_backend = Some((pool, addr));
         self
     }
 
-    /// SESSION 19 / Mode B (B6): switch this listener to
-    /// terminate-and-re-originate Mode B. Sets the raw-QUIC re-origination
-    /// `backend`, the DATAGRAM queue cap to advertise to peers
-    /// (`enable_dgram(true, cap, cap)`), and the optional `quic_modeb_*`
-    /// metric handles. Calling this is the ONLY thing that flips the
-    /// client-facing config's `enable_datagrams` to `true` and sets
-    /// [`RouterParams::raw_quic_backend`]; without it the listener is
-    /// byte-identical H3-terminate (R3).
+    /// Mode B: switch this listener to terminate-and-re-originate raw QUIC.
     #[must_use]
     pub fn with_raw_backend(
         mut self,
@@ -280,31 +190,14 @@ impl QuicListenerParams {
         self
     }
 
-    /// SESSION 27 / WS-over-H3 (RFC 9220) Stage A: opt this listener into
-    /// WebSocket. Sets `ws_enabled`, which the listener threads into
-    /// [`crate::router::RouterParams::ws_enabled`] → each per-connection
-    /// actor. With it set, the H3 server advertises
-    /// `SETTINGS_ENABLE_CONNECT_PROTOCOL` and
-    /// [`crate::h3_bridge::validate_request_pseudo_headers`] accepts an
-    /// RFC 8441/9220 Extended CONNECT (`:method=CONNECT` + `:protocol`).
-    /// Without it the H3 front is byte-identical to a non-WS listener
-    /// (R3). The actual frame relay is wired in a later stage; this knob
-    /// only governs the handshake-acceptance surface.
+    /// WS-over-H3 Stage A: opt this listener into extended CONNECT.
     #[must_use]
     pub const fn with_websocket(mut self, enabled: bool) -> Self {
         self.ws_enabled = enabled;
         self
     }
 
-    /// SESSION 28 / WS-over-H3 (RFC 9220) Stage C: inject the WebSocket
-    /// relay launcher. The `lb` binary builds it (it sees both `lb-quic`
-    /// and `lb-l7`, the latter holding the single-sourced
-    /// `proxy_frames`); the listener threads it into
-    /// [`crate::router::RouterParams::ws_relay_launcher`] → each actor.
-    /// Set this alongside [`Self::with_websocket(true)`] on a
-    /// WebSocket-opted-in listener; without it a validated extended
-    /// CONNECT has no relay to run (the actor answers `502`). `None`
-    /// listeners are byte-identical to the pre-S28 H3 front (R3).
+    /// WS-over-H3 Stage C: inject the WebSocket relay launcher.
     #[must_use]
     pub fn with_ws_relay_launcher(mut self, launcher: crate::ws_tunnel::WsRelayLauncher) -> Self {
         self.ws_relay_launcher = Some(launcher);
@@ -324,14 +217,12 @@ pub struct QuicListener {
 }
 
 impl QuicListener {
-    /// Bind a UDP socket to `params.bind_addr`, load (or generate) the
-    /// retry secret, build the `quiche::Config` factory, and spawn
-    /// the [`crate::router::InboundPacketRouter`].
+    /// Bind to `params.bind_addr`, load (or generate) the retry secret, and
+    /// spawn the router.
     ///
     /// # Errors
     ///
-    /// * `std::io::ErrorKind::AddrInUse` on bind failure.
-    /// * `std::io::ErrorKind::Other` wrapping other failures.
+    /// Bind failure, or a retry-secret load/generate/permission failure.
     pub async fn spawn(
         params: QuicListenerParams,
         shutdown: CancellationToken,
@@ -354,20 +245,14 @@ impl QuicListener {
             "QUIC listener bound"
         );
 
-        // Build a config factory that produces a fresh `quiche::Config`
-        // per accepted connection. quiche::Config holds non-Send
-        // internal state after cert loading, so cloning is not an
-        // option; cert+key paths + the other knobs are Send+Sync and
-        // cheap to re-load.
+        // A config factory, not a shared config: quiche::Config is not `Sync`
+        // and each accepted connection needs its own.
         let cert = params.cert_pem_path.clone();
         let key = params.key_pem_path.clone();
         let idle_ms = u64::try_from(params.max_idle_timeout.as_millis()).unwrap_or(u64::MAX);
         let recv_payload = usize::try_from(params.max_recv_udp_payload_size).unwrap_or(1_350);
-        // SESSION 19 / Mode B (B6): enable QUIC DATAGRAM support on the
-        // client-facing config ONLY for a Mode-B listener. On the H3 path
-        // (`raw_quic_backend` is `None`) `enable_datagrams` is `false`, so
-        // `build_server_config` does NOT call `enable_dgram` and the
-        // advertised transport parameters are byte-identical to today (R3).
+        // Mode B: enable QUIC DATAGRAM only for a raw-QUIC listener, so the
+        // H3 path's advertised transport params are unchanged (R3).
         let enable_datagrams = params.raw_quic_backend.is_some();
         let dgram_queue_cap = params.dgram_queue_cap;
         let config_factory: Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> =
@@ -382,9 +267,8 @@ impl QuicListener {
                 )
             });
 
-        // Pool is required for real traffic; if the caller did not
-        // supply one (3b.3c-1 smoke path), build a transient in-memory
-        // pool so the router's actor can be constructed.
+        // A pool is required for real traffic; without one the listener
+        // terminates QUIC but forwards nothing.
         let pool = params.pool.clone().unwrap_or_else(|| {
             let runtime = lb_io::Runtime::new();
             TcpPool::new(
@@ -410,28 +294,14 @@ impl QuicListener {
             backends: Arc::new(params.backends.clone()),
             h3_backend: params.h3_backend.clone(),
             h2_backend: params.h2_backend.clone(),
-            // PROMPT.md §6 target conntrack scale. Auditor-suggested
-            // bound (2026-04-23) — finite-memory defence against Initial
-            // flooding behind legitimate source-address retry tokens.
+            // Auditor-suggested default matching the conntrack scale target.
             max_connections: 100_000,
             cancel: shutdown.clone(),
-            // SESSION 16 / Mode B + SESSION 19 (B6): thread the configured
-            // raw-QUIC backend through. `None` keeps this listener on the
-            // H3-termination path byte-for-byte (R3); `Some` (set via
-            // `QuicListenerParams::with_raw_backend`) hands every accepted
-            // connection to the raw-proxy actor.
+            // Mode B: thread the configured raw-QUIC backend through.
             raw_quic_backend: params.raw_quic_backend.clone(),
-            // SESSION 19 / Mode B (B6): the `quic_modeb_*` handles (always
-            // `None` on the H3 path — no metric churn, R3).
             quic_modeb_metrics: params.quic_modeb_metrics.clone(),
-            // SESSION 27 / WS-over-H3 Stage A: the WebSocket opt-in.
             ws_enabled: params.ws_enabled,
-            // SESSION 28 / WS-over-H3 Stage C: the injected relay launcher
-            // (cloned so the `QuicListenerParams` — which is `Clone` — can
-            // outlive `spawn`). `None` ⇒ byte-identical H3 front (R3).
             ws_relay_launcher: params.ws_relay_launcher.clone(),
-            // S36-A: the per-connection H3 request cap + recycle metrics,
-            // threaded verbatim into each actor. `0` ⇒ no cap (R3).
             max_requests_per_h3_connection: params.max_requests_per_h3_connection,
             h3_recycle_metrics: params.h3_recycle_metrics.clone(),
         };
@@ -478,14 +348,12 @@ impl QuicListener {
     }
 }
 
-/// F-INFRA-01 (S38): on the LOAD path, refuse (strict) or warn (lax) when an
-/// existing retry-secret file is group/world-accessible. The secret is the
-/// HMAC key behind Retry-token address validation; a world-readable secret
-/// lets any local reader forge tokens and bypass the QUIC source-address
-/// check. This MIRRORS the TLS-key advisory (`assert_key_perm_advisory` in
-/// `lb/src/main.rs`): strict on release, lax (warn-only) on debug builds. The
-/// generate path already writes mode 0600 via `write_secret_file`; this
-/// closes the asymmetry on the read path.
+/// F-INFRA-01 — on the LOAD path, refuse (strict) or warn (lax) when an
+/// existing retry-secret file is group/world-accessible. The secret is the HMAC
+/// key behind Retry-token address validation, so a world-readable one lets any
+/// local reader forge tokens and bypass the QUIC source-address check. Mirrors
+/// the TLS-key advisory: strict on release, warn-only on debug. The generate
+/// path already writes 0600; this closes the read-path asymmetry.
 #[cfg(unix)]
 fn check_retry_secret_perms(path: &Path, strict: bool) -> std::io::Result<()> {
     match lb_security::assert_owner_only(path, strict) {
@@ -568,14 +436,10 @@ fn write_secret_file(path: &Path, secret: &[u8]) -> std::io::Result<()> {
 
 /// Build the client-facing `quiche::Config`.
 ///
-/// SESSION 19 / Mode B (B6): `enable_datagrams` is `true` ONLY for a
-/// Mode-B listener — it calls `cfg.enable_dgram(true, dgram_queue_cap,
-/// dgram_queue_cap)` so QUIC DATAGRAM (RFC 9221) is advertised to clients
-/// (the B4 relay needs it negotiated). When `false` (the H3-termination
-/// path) `enable_dgram` is NOT called, so the advertised transport
-/// parameters — and therefore the wire-visible config — are byte-identical
-/// to before B6 (R3 no-regression). `dgram_queue_cap` is ignored when
-/// `enable_datagrams` is `false`.
+/// `enable_datagrams` is `true` ONLY for a Mode-B listener, which needs
+/// RFC 9221 DATAGRAM negotiated for the B4 relay. When `false` `enable_dgram`
+/// is NOT called at all, so the H3 path's advertised transport parameters stay
+/// byte-identical (R3); `dgram_queue_cap` is then ignored.
 fn build_server_config(
     cert: &Path,
     key: &Path,
@@ -596,8 +460,7 @@ fn build_server_config(
     cfg.set_initial_max_streams_bidi(16);
     cfg.set_initial_max_streams_uni(16);
     cfg.set_disable_active_migration(true);
-    // R3: only a Mode-B listener advertises DATAGRAM support. The H3 path
-    // skips this branch entirely ⇒ unchanged transport params.
+    // R3: only a Mode-B listener advertises DATAGRAM support.
     if enable_datagrams {
         cfg.enable_dgram(true, dgram_queue_cap, dgram_queue_cap);
     }
@@ -611,9 +474,8 @@ fn build_server_config(
 #[cfg(test)]
 #[cfg(unix)]
 mod retry_secret_perm_tests {
-    //! F-INFRA-01 (S38) regression — the retry-secret LOAD path must
-    //! perm-check an existing file (strict=reject, lax=warn), closing the
-    //! asymmetry vs the generate path (which already writes 0600).
+    //! F-INFRA-01 regression — the retry-secret LOAD path must perm-check an
+    //! existing file, closing the asymmetry against the 0600 generate path.
     use super::{RETRY_SECRET_LEN, check_retry_secret_perms, load_or_generate_retry_secret};
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
@@ -631,8 +493,8 @@ mod retry_secret_perm_tests {
         p
     }
 
-    // NEGATIVE CONTROL: a world-readable (0644) existing secret is REJECTED
-    // in strict mode. Pre-fix this loaded silently; post-fix it errors.
+    // NEGATIVE CONTROL: a world-readable (0644) existing secret is REJECTED in
+    // strict mode. Pre-fix this loaded silently.
     #[test]
     fn world_readable_secret_rejected_strict() {
         let p = temp_secret("0644-strict", 0o644);
@@ -644,8 +506,7 @@ mod retry_secret_perm_tests {
         );
     }
 
-    // A world-readable secret is WARNED (not rejected) in lax mode — load
-    // still succeeds (debug-build / operator-convenience parity with TLS key).
+    // Lax mode WARNS but still loads (debug-build parity with the TLS key).
     #[test]
     fn world_readable_secret_warns_lax() {
         let p = temp_secret("0644-lax", 0o644);
@@ -654,9 +515,8 @@ mod retry_secret_perm_tests {
         assert!(res.is_ok(), "lax mode must warn-and-continue, not error");
     }
 
-    // A correctly-permissioned (0600) secret passes in strict mode AND the
-    // full load path returns a signer (proves the gate doesn't block the
-    // legitimate case).
+    // A 0600 secret passes strict AND the full load path returns a signer,
+    // proving the gate does not block the legitimate case.
     #[test]
     fn owner_only_secret_passes_strict_and_loads() {
         let p = temp_secret("0600-strict", 0o600);
