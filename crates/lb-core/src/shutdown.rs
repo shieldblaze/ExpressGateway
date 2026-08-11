@@ -1,13 +1,7 @@
-//! Process-wide graceful drain: a [`CancellationToken`] plus a [`TaskTracker`] of every spawn
-//! site that opted in.
-//!
-//! `TaskTracker` NOT `JoinSet`: per-connection handlers spawn their own helper futures
-//! (read/write halves, idle reapers) that must be tracked alongside the parent, and `JoinSet`
-//! would require plumbing each handle back to an accept loop with nowhere to store it.
-//!
-//! [`Shutdown::run_drain`] is the coordinator; it is IDEMPOTENT, so a second SIGTERM or an
-//! admin-drain-then-SIGTERM returns the first call's report rather than re-running phases
-//! (cases C-10 / C-11). [`Shutdown::drain`] is a legacy shim over it.
+//! Process-wide graceful drain: a [`CancellationToken`] plus a [`TaskTracker`] of every opted-in
+//! spawn site. `TaskTracker` NOT `JoinSet`: per-connection handlers spawn their own helper futures
+//! that must be tracked alongside the parent, with no accept loop to hold the handles.
+//! [`Shutdown::run_drain`] is the IDEMPOTENT coordinator (C-10 / C-11); `drain` is a legacy shim.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -19,14 +13,12 @@ use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-/// Cloneable graceful-drain handle. One instance per process; every
-/// long-lived spawn site clones and runs `tracker().spawn(...)`.
+/// Cloneable graceful-drain handle; every long-lived spawn site clones it and uses `tracker()`.
 #[derive(Clone, Debug)]
 pub struct Shutdown {
     token: CancellationToken,
     tracker: TaskTracker,
-    /// Listener-cancel token, a CHILD of `token`: listeners can be stopped first without
-    /// cancelling per-connection tasks, while a parent cancel still tears listeners down.
+    /// Listener-cancel token, a CHILD of `token`, so listeners stop without cancelling per-conn tasks.
     listener_token: CancellationToken,
     /// Idempotency latch + first-call report cache; only the first caller runs the phases.
     drain_state: Arc<DrainState>,
@@ -59,8 +51,8 @@ impl Shutdown {
         &self.token
     }
 
-    /// Listener-cancel token. Accept loops MUST select on this, not [`Self::token`], or phase 4
-    /// cannot stop accepts without also cancelling in-flight connections.
+    /// Listener-cancel token. Accept loops MUST select on this, not [`Self::token`], or stopping
+    /// accepts also cancels in-flight connections.
     #[must_use]
     pub const fn listener_token(&self) -> &CancellationToken {
         &self.listener_token
@@ -72,8 +64,7 @@ impl Shutdown {
         &self.tracker
     }
 
-    /// Per-subsystem child handle: its own per-conn token, but a SHARED tracker, listener token
-    /// and drain state.
+    /// Per-subsystem child handle: own per-conn token, SHARED tracker, listener token and state.
     #[must_use]
     pub fn child(&self) -> Self {
         Self {
@@ -84,8 +75,7 @@ impl Shutdown {
         }
     }
 
-    /// Legacy drain: close the tracker, cancel, wait up to `deadline`. A shim over
-    /// [`Self::run_drain`] with NO readiness settle, listener-cancel or XDP detach phase.
+    /// Legacy drain shim over [`Self::run_drain`]: NO readiness settle, listener-cancel or XDP phase.
     pub async fn drain(self, deadline: Duration) -> DrainOutcome {
         let spec = DrainSpec {
             readiness_settle: Duration::ZERO,
@@ -106,10 +96,8 @@ impl Shutdown {
         }
     }
 
-    /// The drain coordinator; returns per-phase durations and listener/XDP outcomes.
-    ///
-    /// IDEMPOTENT — a second call returns the cached report without re-running any phase, which
-    /// is what makes two quick SIGTERMs (C-10) and admin-drain-then-SIGTERM (C-11) safe.
+    /// The drain coordinator; returns per-phase durations and listener/XDP outcomes. IDEMPOTENT —
+    /// a second call returns the cached report (C-10 two SIGTERMs, C-11 admin-drain-then-SIGTERM).
     pub async fn run_drain(&self, mut spec: DrainSpec) -> DrainReport {
         // CAS + sleep-loop rather than a notifier: expected concurrency here is at most 2.
         if self
@@ -121,9 +109,8 @@ impl Shutdown {
             while !self.drain_state.completed.load(Ordering::Acquire) {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
-            // `completed` is set only AFTER `report` is populated, so the None arm is
-            // structurally unreachable; it stubs rather than panicking because the crate denies
-            // `expect_used`.
+            // `completed` is set only AFTER `report` is populated, so the None arm is unreachable;
+            // it stubs rather than panics because the crate denies `expect_used`.
             if let Some(r) = self.drain_state.report.lock().clone() {
                 return r;
             }
@@ -167,12 +154,9 @@ impl Shutdown {
             in_flight_remaining: 0,
         };
 
-        // C-12 CONTRACT: a panic mid-drain must still detach XDP or the kernel program is
-        // stranded. The closure cannot cross the panic boundary here, so the CALL SITE must
-        // scopeguard `run_drain` with its own detach. `panic_in_phase_still_detaches_xdp`
-        // enforces it.
+        // C-12 CONTRACT: a panic mid-drain must still detach XDP. The closure cannot cross the
+        // panic boundary, so the CALL SITE must scopeguard `run_drain` with its own detach.
 
-        // Phase 2 — MarkDraining: flip /readyz to 503.
         let t = Instant::now();
         if let Some(mark) = spec.mark_draining.take() {
             (mark)();
@@ -182,7 +166,6 @@ impl Shutdown {
             obs.observe(&report.mark_draining, None);
         }
 
-        // Phase 3 — ReadinessSettle: let upstream LBs observe the 503 before tearing down.
         let t = Instant::now();
         if spec.readiness_settle > Duration::ZERO {
             tokio::time::sleep(spec.readiness_settle).await;
@@ -192,13 +175,11 @@ impl Shutdown {
             obs.observe(&report.readiness_settle, None);
         }
 
-        // Phase 4 — ListenerCancel: signal only; the bounded wait happens in phase 5. A
-        // `Duration::ZERO` deadline disables the signal entirely (the legacy path).
+        // Signal only; the bounded wait is phase 5. A `Duration::ZERO` deadline disables it.
         let t = Instant::now();
         let listener_outcome = if spec.listener_cancel_deadline > Duration::ZERO {
             self.listener_token.cancel();
-            // The budget is an OBSERVATION, not a forced abort — this coordinator owns no
-            // JoinHandles. Any abort fallback belongs at the call site.
+            // An OBSERVATION, not a forced abort — this coordinator owns no JoinHandles.
             ListenerOutcome::Clean
         } else {
             ListenerOutcome::Clean
@@ -215,8 +196,7 @@ impl Shutdown {
             obs.observe(&report.listener_cancel.timing, None);
         }
 
-        // Phase 5 — InFlightDrain. Jitter BEFORE cancelling, or every replica in the statefulset
-        // cancels at the same wall-clock instant.
+        // Jitter BEFORE cancelling, or every replica cancels at the same wall-clock instant.
         if spec.jitter_max > Duration::ZERO {
             let jitter_ms = jitter_millis(spec.jitter_max);
             if jitter_ms > 0 {
@@ -253,8 +233,7 @@ impl Shutdown {
             obs.observe(&report.in_flight_drain.timing, None);
         }
 
-        // Phase 6 — XdpDetach, under its own timeout. A timeout PROCEEDS: the stale-self
-        // recovery path picks the lingering program up on next startup.
+        // A detach timeout PROCEEDS: stale-self recovery picks the lingering program up next boot.
         let t = Instant::now();
         let xdp_outcome = if let (Some(detach), Some(deadline)) =
             (spec.xdp_detach.take(), spec.xdp_detach_deadline)
@@ -550,8 +529,7 @@ impl std::fmt::Debug for DrainSpec {
     }
 }
 
-/// Random jitter in `0..max` ms. Uses `RandomState` rather than `rand` to keep lb-core
-/// near-zero-dep; ~32 bits of entropy is ample for millisecond buckets.
+/// Random jitter in `0..max` ms; `RandomState` not `rand` keeps lb-core near-zero-dep.
 fn jitter_millis(max: Duration) -> u64 {
     use std::collections::hash_map::RandomState;
     use std::hash::{BuildHasher, Hasher};

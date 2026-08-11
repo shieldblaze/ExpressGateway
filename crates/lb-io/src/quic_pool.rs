@@ -1,9 +1,7 @@
 //! QUIC upstream connection pool for backend `protocol = "h3"` — the QUIC shape of
 //! [`crate::pool::TcpPool`], with a PING-ACK liveness probe before reuse (Pingora EC-16).
-//!
-//! CERT VERIFICATION IS THE CALLER'S: the pool dials with whatever `quiche::Config` the
-//! `config_factory` returns and never sets `verify_peer` itself. A factory that omits the trust
-//! anchor produces an unverified upstream leg.
+//! CERT VERIFICATION IS THE CALLER'S: the pool never sets `verify_peer`, so a `config_factory`
+//! that omits the trust anchor produces an unverified upstream leg.
 
 use std::collections::VecDeque;
 use std::io;
@@ -17,8 +15,7 @@ use parking_lot::Mutex;
 use ring::rand::SecureRandom;
 use tokio::net::UdpSocket;
 
-/// ALPN tokens advertised when dialing a backend. DUPLICATED from `lb_quic::H3_ALPN_PROTOS`
-/// because `lb-io` has no dependency edge to `lb-quic` — keep the two in sync by hand.
+/// ALPN tokens for backend dials. DUPLICATED from `lb_quic::H3_ALPN_PROTOS` (no dep edge) — keep in sync.
 pub const UPSTREAM_H3_ALPN_PROTOS: &[&[u8]] = &[b"h3", b"h3-29"];
 
 /// Default upper bound on idle QUIC connections per peer.
@@ -154,8 +151,7 @@ impl std::fmt::Debug for QuicUpstreamPool {
 }
 
 impl QuicUpstreamPool {
-    /// Construct a pool. `config_factory` MUST mint a fresh [`quiche::Config`] per dial —
-    /// `quiche::Config` holds interior mutable state that cannot be reused across `connect()`.
+    /// Construct a pool; `config_factory` MUST mint a FRESH [`quiche::Config`] per dial (interior state).
     #[must_use]
     pub fn new(
         config: QuicPoolConfig,
@@ -233,8 +229,7 @@ impl QuicUpstreamPool {
         idle
     }
 
-    /// PING the peer and await an ACK within `probe_timeout`. A failed probe drops the
-    /// connection by move.
+    /// PING the peer and await an ACK within `probe_timeout`; a failed probe drops the connection.
     async fn probe_liveness(&self, mut conn: UpstreamQuicConn) -> Result<UpstreamQuicConn, ()> {
         let Some(qconn) = conn.conn.as_mut() else {
             return Err(());
@@ -311,12 +306,9 @@ impl QuicUpstreamPool {
         })
     }
 
-    /// Dial a DEDICATED (never-pooled) connection for Mode B re-origination — 1:1 with a client
-    /// connection. The CALLER owns it: no `Drop` re-park, no liveness probe, and the caller must
-    /// drive the pump and `close` it itself.
-    ///
-    /// A non-empty `alpn` overrides the factory's tokens so the upstream advertises exactly what
-    /// the client negotiated; an empty slice keeps the factory's.
+    /// Dial a DEDICATED (never-pooled) connection for Mode B re-origination. The CALLER owns it:
+    /// no `Drop` re-park, no probe, and it drives the pump and `close` itself. A non-empty `alpn`
+    /// overrides the factory's tokens; an empty slice keeps them.
     pub async fn dial_dedicated(
         &self,
         addr: SocketAddr,
@@ -353,8 +345,7 @@ struct DialedUpstream {
     scid: [u8; quiche::MAX_CONN_ID_LEN],
 }
 
-/// THE single source of the upstream-dial handshake loop — both pooled and dedicated dials call
-/// it, so a fix here cannot miss one of them. `alpn_override` of `None` keeps the factory's ALPN.
+/// THE single source of the upstream-dial handshake loop — both pooled and dedicated dials call it.
 async fn connect_and_drive(
     addr: SocketAddr,
     sni: &str,
@@ -436,8 +427,7 @@ async fn connect_and_drive(
     })
 }
 
-/// A dedicated upstream connection owned entirely by the caller — NO pool `Drop`, no reusable
-/// flag, no liveness probe. The caller drives the pump and closes it.
+/// A dedicated upstream connection owned entirely by the caller — NO pool `Drop`, no probe.
 pub struct DedicatedQuic {
     /// The established upstream connection.
     pub conn: quiche::Connection,
@@ -504,8 +494,7 @@ impl PooledQuic {
 }
 
 impl Drop for PooledQuic {
-    // The DashMap Ref and the MutexGuard must co-exist for the push_back; clippy's suggested
-    // tightening triggers E0716.
+    // The DashMap Ref and MutexGuard must co-exist for the push_back; clippy's tightening is E0716.
     #[allow(clippy::significant_drop_tightening)]
     fn drop(&mut self) {
         let Some(pool) = self.pool.take() else {
@@ -557,7 +546,6 @@ mod tests {
     {
         Arc::new(|| {
             let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
-            // These bytes reach the wire verbatim in the ClientHello.
             cfg.set_application_protos(UPSTREAM_H3_ALPN_PROTOS)?;
             cfg.verify_peer(false);
             cfg.set_max_idle_timeout(5_000);
@@ -575,8 +563,7 @@ mod tests {
     }
 
     async fn make_synthetic_conn(pool: &QuicUpstreamPool, peer: SocketAddr) -> UpstreamQuicConn {
-        // Synthetic: `quiche::connect` on an unconnected socket, so the conn NEVER becomes
-        // established. Fine for idle-queue state, useless for anything gated on is_established().
+        // Synthetic: NEVER becomes established. Fine for idle-queue state, useless for is_established().
         let socket = UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(
             Ipv4Addr::new(0, 0, 0, 0),
             0,
@@ -637,11 +624,9 @@ mod tests {
             // `push_into_pool` bypasses bounds — this is raw state seeding.
             push_into_pool(&pool, peer, conn);
         }
-        // HONEST LIMITATION: this test does NOT exercise per_peer_max. Bounds live in
-        // `PooledQuic::drop`, which returns early unless `is_established()`, and synthetic conns
-        // never establish — so the Drop bound path is unreachable here. What is actually asserted
-        // is the raw queue state `push_into_pool` wrote. Fixing this needs a real handshake, not
-        // a comment.
+        // HONEST LIMITATION: does NOT exercise per_peer_max. The bound lives in `PooledQuic::drop`,
+        // which returns early unless `is_established()`, and synthetic conns never establish — what
+        // is asserted is the raw queue state. The fix is a real handshake, not a comment.
         let conn = make_synthetic_conn(&pool, peer).await;
         drop(conn);
 
@@ -663,8 +648,7 @@ mod tests {
         push_into_pool(&pool, peer2, make_synthetic_conn(&pool, peer2).await);
         assert_eq!(pool.idle_count(), 2);
 
-        // Same synthetic-conn limitation as above: only the counter reaching the cap is
-        // observable here, not the `Drop` guard that reads it.
+        // Same synthetic-conn limit: only the counter is observable, not the `Drop` guard reading it.
         assert_eq!(pool.idle_count(), cfg.total_max);
     }
 
@@ -719,8 +703,7 @@ mod tests {
         assert_eq!(pool.idle_count(), 0);
     }
 
-    /// Locks the dial path to the production `h3` / `h3-29` tokens, never the in-tree loopback
-    /// rig's pre-RFC token.
+    /// Locks the dial path to the production `h3` / `h3-29` tokens, not the rig's pre-RFC token.
     #[test]
     fn test_pool_dialer_uses_h3() {
         assert_eq!(
