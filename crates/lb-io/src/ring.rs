@@ -1,19 +1,9 @@
 //! `io_uring` operations used by the lb-io runtime.
 //!
-//! This module exposes a small, single-shot API around the raw
-//! [`io_uring`] opcodes we care about: [`nop_roundtrip`] (used by
-//! [`super::detect_backend`] to probe the kernel), [`accept_one`],
-//! [`recv`], [`send`], and [`splice`]. Each helper constructs a fresh
-//! ring, pushes one SQE, submits, waits for the corresponding CQE,
-//! inspects the result, and tears the ring down.
-//!
-//! These primitives are **deliberately synchronous**. Wiring them into
-//! tokio's reactor (so they can drive `AsyncRead`/`AsyncWrite` without
-//! blocking the executor) is a much larger undertaking tracked as a
-//! future optimisation pass. Likewise, fixed file descriptors
-//! (`IORING_REGISTER_FILES`) and registered buffer pools
-//! (`IORING_REGISTER_BUFFERS`) are scoped for a later pass — this module
-//! only does unregistered, one-op-per-ring work.
+//! Every helper builds a fresh ring for ONE op and tears it down — deliberately synchronous, with
+//! no registered files or buffer pools. That synchronicity is what makes the `unsafe` pushes below
+//! sound: the caller's stack storage outlives `submit_and_wait`. Do NOT make these async without
+//! rewriting the buffer ownership.
 
 use std::io;
 use std::mem::MaybeUninit;
@@ -22,8 +12,7 @@ use std::os::fd::RawFd;
 
 use io_uring::{IoUring, cqueue, opcode, squeue, types};
 
-/// Sentinel value stamped into the NOP submission queue entry so the probe
-/// can confirm the CQE it receives is the one it submitted.
+/// Sentinel tag proving the reaped CQE is the one we submitted.
 const NOP_USER_DATA: u64 = 0xDEAD_BEEF_u64;
 
 /// Result of a successful [`nop_roundtrip`].
@@ -33,13 +22,11 @@ pub struct UringNopResult {
     pub user_data: u64,
 }
 
-/// Submit a single `NOP` operation and reap the completion.
+/// Submit a single `NOP` and reap the completion.
 ///
 /// # Errors
-/// Any failure during ring construction, SQE submission, or CQE reaping is
-/// converted into an [`io::Error`]. Failure is expected on kernels older
-/// than 5.1, on systems with `kernel.io_uring_disabled=1`, or under a
-/// seccomp filter that rejects `io_uring_setup(2)`.
+/// [`io::Error`] from any stage. Failure is EXPECTED pre-5.1, under
+/// `kernel.io_uring_disabled=1`, or behind a seccomp filter — callers treat it as "use epoll".
 pub fn nop_roundtrip() -> io::Result<UringNopResult> {
     let mut ring = IoUring::new(8)?;
     let nop = opcode::Nop::new().build().user_data(NOP_USER_DATA);
@@ -58,23 +45,15 @@ pub fn nop_roundtrip() -> io::Result<UringNopResult> {
     })
 }
 
-/// Accept exactly one inbound connection on `listener_fd` via
-/// `IORING_OP_ACCEPT` and return the accepted fd along with the remote
-/// socket address.
-///
-/// This is a single-shot accept: multishot accept
-/// (`IORING_FEAT_ACCEPT_MULTI`) and `file_index` fixed-slot installation
-/// are explicitly out of scope for this pass.
+/// Single-shot `IORING_OP_ACCEPT` — not multishot, no fixed-slot installation.
 ///
 /// # Errors
-/// Returns any `io::Error` the kernel reports via `CQE.result()`, plus
-/// any ring-construction failure. Callers should treat `EOPNOTSUPP` or
-/// `EPERM` here as "fall back to epoll / `accept(2)`".
+/// `io::Error` from the CQE or ring construction. `EOPNOTSUPP` / `EPERM` mean "fall back to
+/// `accept(2)`".
 pub fn accept_one(listener_fd: RawFd) -> io::Result<(RawFd, SocketAddr)> {
     let mut ring = IoUring::new(8)?;
 
-    // The kernel fills these two out; start with a generous buffer that
-    // holds either an `sockaddr_in` or `sockaddr_in6`.
+    // Sized for the larger of `sockaddr_in` / `sockaddr_in6`; the kernel fills both out.
     let mut addr_storage = MaybeUninit::<libc::sockaddr_storage>::zeroed();
     let mut addr_len: libc::socklen_t =
         core::mem::size_of::<libc::sockaddr_storage>()
@@ -111,9 +90,7 @@ pub fn accept_one(listener_fd: RawFd) -> io::Result<(RawFd, SocketAddr)> {
 /// Receive from `fd` into `buf` via `IORING_OP_RECV`.
 ///
 /// # Errors
-/// Ring-construction errors and any negative result from the kernel are
-/// surfaced as `io::Error`. A zero-length return (orderly close) is
-/// returned as `Ok(0)`.
+/// `io::Error` from the ring or a negative CQE. An orderly close is `Ok(0)`, not an error.
 pub fn recv(fd: RawFd, buf: &mut [u8]) -> io::Result<usize> {
     let len_u32 = u32::try_from(buf.len()).unwrap_or(u32::MAX);
     let mut ring = IoUring::new(8)?;
@@ -137,8 +114,7 @@ pub fn recv(fd: RawFd, buf: &mut [u8]) -> io::Result<usize> {
 /// Send from `buf` on `fd` via `IORING_OP_SEND`.
 ///
 /// # Errors
-/// Ring-construction errors and any negative result from the kernel are
-/// surfaced as `io::Error`.
+/// `io::Error` from the ring or a negative CQE.
 pub fn send(fd: RawFd, buf: &[u8]) -> io::Result<usize> {
     let len_u32 = u32::try_from(buf.len()).unwrap_or(u32::MAX);
     let mut ring = IoUring::new(8)?;
@@ -158,13 +134,10 @@ pub fn send(fd: RawFd, buf: &[u8]) -> io::Result<usize> {
     Ok(usize_from_nonneg_i32(n))
 }
 
-/// Splice up to `len` bytes from `from` to `to` with `IORING_OP_SPLICE`.
-/// Both descriptors must satisfy `splice(2)`'s pipe constraint — typically
-/// one side must be a pipe.
+/// `IORING_OP_SPLICE` up to `len` bytes. One side MUST be a pipe, per `splice(2)`.
 ///
 /// # Errors
-/// Ring-construction errors and any negative result from the kernel are
-/// surfaced as `io::Error`.
+/// `io::Error` from the ring or a negative CQE.
 pub fn splice(from: RawFd, to: RawFd, len: u32) -> io::Result<u32> {
     let mut ring = IoUring::new(8)?;
 
@@ -182,8 +155,6 @@ pub fn splice(from: RawFd, to: RawFd, len: u32) -> io::Result<u32> {
     let n = check_cqe(&cqe)?;
     Ok(u32_from_nonneg_i32(n))
 }
-
-// ── helpers ─────────────────────────────────────────────────────────────
 
 /// Push a single SQE.
 ///
@@ -209,8 +180,7 @@ fn reap_cqe(ring: &mut IoUring) -> io::Result<cqueue::Entry> {
         .ok_or_else(|| io::Error::other("io_uring completion queue empty after submit_and_wait"))
 }
 
-/// Decode the CQE result: negative values are errno, non-negative values
-/// are the op's success return.
+/// Decode a CQE: negative is errno, non-negative is the op's return value.
 fn check_cqe(cqe: &cqueue::Entry) -> io::Result<i32> {
     let code = cqe.result();
     if code < 0 {
@@ -220,16 +190,14 @@ fn check_cqe(cqe: &cqueue::Entry) -> io::Result<i32> {
     }
 }
 
-/// Widen a non-negative `i32` (validated upstream by [`check_cqe`]) to
-/// `usize` without a lossy cast.
+/// Widen a [`check_cqe`]-validated non-negative `i32` to `usize` without a lossy cast.
 #[inline]
 fn usize_from_nonneg_i32(n: i32) -> usize {
     // `n >= 0` is an invariant of our callers; fall back to 0 otherwise.
     usize::try_from(n).unwrap_or(0)
 }
 
-/// Widen a non-negative `i32` (validated upstream by [`check_cqe`]) to
-/// `u32` without a lossy cast.
+/// Widen a [`check_cqe`]-validated non-negative `i32` to `u32` without a lossy cast.
 #[inline]
 fn u32_from_nonneg_i32(n: i32) -> u32 {
     u32::try_from(n).unwrap_or(0)

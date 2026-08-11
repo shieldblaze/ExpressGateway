@@ -1,23 +1,12 @@
-//! Socket option helpers matching PROMPT.md §7 "Socket Options".
-//!
-//! Three typed configuration structs carry the desired options for listener
-//! sockets, backend (client) sockets, and UDP sockets. The corresponding
-//! `apply_*` functions push those options into the kernel using [`socket2`]
-//! for the portable subset and raw `libc::setsockopt` for Linux-only knobs
-//! (`TCP_QUICKACK`, `TCP_FASTOPEN`, `TCP_FASTOPEN_CONNECT`, `UDP_GRO`).
-//!
-//! Wiring these helpers into protocol-specific listeners is deferred to
-//! Pillar 1b; the helpers here stand alone and are covered by unit tests.
+//! Socket option helpers. Portable options go through [`socket2`]; the Linux-only knobs
+//! (`TCP_QUICKACK`, `TCP_FASTOPEN`, `TCP_FASTOPEN_CONNECT`, `UDP_GRO`) need raw `setsockopt`.
 
 use std::io;
 use std::net::{TcpListener, TcpStream, UdpSocket};
 
 use socket2::SockRef;
 
-/// Options for listener (server) sockets.
-///
-/// Field defaults are zero / `false` / `None`; callers should explicitly
-/// populate the fields they want the kernel to see.
+/// Options for listener sockets; everything defaults to off, so callers must opt in.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[allow(clippy::struct_excessive_bools)] // each bool is a distinct kernel knob
 pub struct ListenerSockOpts {
@@ -37,8 +26,7 @@ pub struct ListenerSockOpts {
     pub keepalive: bool,
     /// `TCP_FASTOPEN` queue length, if set. Linux only.
     pub tcp_fastopen: Option<u32>,
-    /// Listen backlog passed to `listen(2)`, if set. Linux only; on other
-    /// platforms this field is accepted but ignored.
+    /// `listen(2)` backlog. Accepted but IGNORED off Linux.
     pub backlog: Option<i32>,
 }
 
@@ -73,11 +61,10 @@ pub struct UdpSockOpts {
     pub udp_gro: bool,
 }
 
-/// Apply [`ListenerSockOpts`] to an already-bound [`TcpListener`].
+/// Apply [`ListenerSockOpts`] to a bound listener; the FIRST failure aborts the rest.
 ///
 /// # Errors
-/// Returns any `io::Error` reported by `setsockopt` (or `listen(2)` when
-/// `backlog` is set). The first failure aborts the remaining options.
+/// `io::Error` from `setsockopt` or `listen(2)`.
 pub fn apply_listener(socket: &TcpListener, cfg: &ListenerSockOpts) -> io::Result<()> {
     let sock = SockRef::from(socket);
     if cfg.reuseaddr {
@@ -128,7 +115,6 @@ pub fn apply_listener(socket: &TcpListener, cfg: &ListenerSockOpts) -> io::Resul
         }
     }
 
-    // Silence unused-warning on non-linux.
     #[cfg(not(target_os = "linux"))]
     {
         let _ = cfg.quickack;
@@ -139,11 +125,10 @@ pub fn apply_listener(socket: &TcpListener, cfg: &ListenerSockOpts) -> io::Resul
     Ok(())
 }
 
-/// Apply [`BackendSockOpts`] to a connected [`TcpStream`].
+/// Apply [`BackendSockOpts`] to a connected stream; the FIRST failure aborts the rest.
 ///
 /// # Errors
-/// Returns any `io::Error` reported by `setsockopt`. The first failure
-/// aborts the remaining options.
+/// `io::Error` from `setsockopt`.
 pub fn apply_connected(socket: &TcpStream, cfg: &BackendSockOpts) -> io::Result<()> {
     let sock = SockRef::from(socket);
     if cfg.nodelay {
@@ -167,8 +152,7 @@ pub fn apply_connected(socket: &TcpStream, cfg: &BackendSockOpts) -> io::Result<
             set_int(fd, libc::IPPROTO_TCP, libc::TCP_QUICKACK, 1)?;
         }
         if cfg.tcp_fastopen_connect {
-            // TCP_FASTOPEN_CONNECT = 30. Not exported by all `libc` versions
-            // we may pick up transitively, so reference by numeric value.
+            // TCP_FASTOPEN_CONNECT — numeric because not every `libc` version exports it.
             const TCP_FASTOPEN_CONNECT: libc::c_int = 30;
             set_int(fd, libc::IPPROTO_TCP, TCP_FASTOPEN_CONNECT, 1)?;
         }
@@ -183,20 +167,11 @@ pub fn apply_connected(socket: &TcpStream, cfg: &BackendSockOpts) -> io::Result<
     Ok(())
 }
 
-/// Apply [`BackendSockOpts`] to a connected [`tokio::net::TcpStream`].
-///
-/// Identical to [`apply_connected`], but works directly on a tokio
-/// socket so the async dial path in [`crate::pool::TcpPool::acquire_async`]
-/// can keep the kernel fd registered with the tokio reactor instead of
-/// converting via [`tokio::net::TcpStream::from_std`].
-///
-/// `tokio::net::TcpStream` implements [`std::os::fd::AsFd`], which is
-/// what [`socket2::SockRef::from`] consumes; the option-setting code is
-/// shared with the blocking path via the underlying `SockRef`.
+/// [`apply_connected`] for a tokio stream, so the async dial path never has to unregister the fd
+/// from the reactor and back.
 ///
 /// # Errors
-/// Returns any `io::Error` reported by `setsockopt`. The first failure
-/// aborts the remaining options.
+/// `io::Error` from `setsockopt`.
 pub fn apply_connected_tokio(
     socket: &tokio::net::TcpStream,
     cfg: &BackendSockOpts,
@@ -237,11 +212,10 @@ pub fn apply_connected_tokio(
     Ok(())
 }
 
-/// Apply [`UdpSockOpts`] to a bound [`UdpSocket`].
+/// Apply [`UdpSockOpts`] to a bound socket; the FIRST failure aborts the rest.
 ///
 /// # Errors
-/// Returns any `io::Error` reported by `setsockopt`. The first failure
-/// aborts the remaining options.
+/// `io::Error` from `setsockopt`.
 pub fn apply_udp(socket: &UdpSocket, cfg: &UdpSockOpts) -> io::Result<()> {
     let sock = SockRef::from(socket);
     #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "netbsd"))]
@@ -260,7 +234,7 @@ pub fn apply_udp(socket: &UdpSocket, cfg: &UdpSockOpts) -> io::Result<()> {
         use std::os::fd::AsRawFd;
         let fd = socket.as_raw_fd();
         if cfg.udp_gro {
-            // UDP_GRO = 104, see <netinet/udp.h> on Linux 5.0+.
+            // UDP_GRO = 104, per <netinet/udp.h> on Linux 5.0+.
             const UDP_GRO: libc::c_int = 104;
             set_int(fd, libc::IPPROTO_UDP, UDP_GRO, 1)?;
         }

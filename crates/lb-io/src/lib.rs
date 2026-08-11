@@ -1,13 +1,8 @@
 //! I/O abstraction layer with `io_uring` and epoll fallback.
 //!
-//! Provides an [`IoBackend`] enum for selecting the kernel I/O mechanism, a
-//! [`detect_backend`] function that performs a live capability probe, a
-//! [`Runtime`] facade that records the chosen backend along with buffer
-//! watermarks, and a [`sockopts`] helper module that applies the socket
-//! options listed in PROMPT.md §7 to listener, backend, and UDP sockets.
-//!
-//! Full ACCEPT / RECV / SEND / SPLICE support and tokio integration are
-//! explicitly out of scope for this crate today and are tracked as Pillar 1b.
+//! The backend selection is a live capability PROBE, not a version check. Full io_uring
+//! ACCEPT/RECV/SEND/SPLICE is not implemented — the enum selects the probe result, not the
+//! datapath.
 #![deny(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -65,16 +60,9 @@ pub enum IoError {
     NotAvailable(String),
 }
 
-/// Detect the best available I/O backend for the current platform.
-///
-/// On Linux this attempts to construct an `io_uring::IoUring` instance,
-/// submit a single `NOP` SQE, and reap the matching CQE. If every step
-/// succeeds the kernel supports `io_uring` well enough for our purposes
-/// and [`IoBackend::IoUring`] is returned. On any failure (kernel too old,
-/// `kernel.io_uring_disabled=1`, seccomp filter, or permission denied) and
-/// on every non-Linux platform the function returns [`IoBackend::Epoll`].
-///
-/// The function is intentionally not `const`: it performs real syscalls.
+/// Probe for `io_uring` by actually submitting and reaping a `NOP` SQE — a version check would
+/// miss `kernel.io_uring_disabled=1`, seccomp filters and permission denials. Anything short of
+/// full success falls back to [`IoBackend::Epoll`].
 #[must_use]
 pub fn detect_backend() -> IoBackend {
     #[cfg(target_os = "linux")]
@@ -98,11 +86,7 @@ pub fn detect_backend() -> IoBackend {
     }
 }
 
-/// Facade that records the selected I/O backend and exposes the buffer
-/// watermarks used for bidirectional backpressure across the data path.
-///
-/// Wiring the runtime into individual protocol crates (`lb-h1`, `lb-h2`,
-/// `lb-l7`, …) is deferred to Pillar 1b.
+/// Records the selected backend and the buffer watermarks used for bidirectional backpressure.
 #[derive(Debug, Clone, Copy)]
 pub struct Runtime {
     backend: IoBackend,
@@ -117,8 +101,7 @@ impl Runtime {
         }
     }
 
-    /// Create a new runtime bound to a specific backend, bypassing
-    /// auto-detection.
+    /// Runtime bound to a specific backend, bypassing detection.
     #[must_use]
     pub const fn with_backend(backend: IoBackend) -> Self {
         Self { backend }
@@ -130,26 +113,23 @@ impl Runtime {
         self.backend
     }
 
-    /// Pause reads once the per-connection write buffer exceeds this many
-    /// bytes (64 KiB, matching the Java implementation).
+    /// High watermark: pause reads once the write buffer exceeds this.
     #[must_use]
     pub const fn high_water_mark() -> usize {
         65_536
     }
 
-    /// Resume reads once the per-connection write buffer drains below this
-    /// many bytes (32 KiB, matching the Java implementation).
+    /// Low watermark: resume reads once the write buffer drains below this.
     #[must_use]
     pub const fn low_water_mark() -> usize {
         32_768
     }
 
-    /// Bind a TCP listener to `addr` and apply the caller-supplied socket
-    /// options. Returns the live listener on success.
+    /// Bind a TCP listener and apply `opts`.
     ///
     /// # Errors
-    /// Propagates any `io::Error` from `bind(2)` or from any failing
-    /// `setsockopt` call inside [`sockopts::apply_listener`].
+    ///
+    /// `io::Error` from `bind(2)` or any `setsockopt`.
     pub fn listener_socket(
         &self,
         addr: std::net::SocketAddr,
@@ -160,12 +140,11 @@ impl Runtime {
         Ok(listener)
     }
 
-    /// Connect a TCP socket to `addr` and apply the caller-supplied socket
-    /// options on the connected stream. Returns the live stream on success.
+    /// Connect a TCP socket and apply `opts`.
     ///
     /// # Errors
-    /// Propagates any `io::Error` from `connect(2)` or from any failing
-    /// `setsockopt` call inside [`sockopts::apply_connected`].
+    ///
+    /// `io::Error` from `connect(2)` or any `setsockopt`.
     pub fn connect_socket(
         &self,
         addr: std::net::SocketAddr,
@@ -176,14 +155,12 @@ impl Runtime {
         Ok(stream)
     }
 
-    /// Bind a TCP listener, apply [`sockopts::ListenerSockOpts`], and hand
-    /// back a blocking-mode [`std::net::TcpListener`]. Callers wiring this
-    /// into tokio should `set_nonblocking(true)` on the returned listener
-    /// and convert with `tokio::net::TcpListener::from_std`.
+    /// Bind a listener and return it in BLOCKING mode — a tokio caller must `set_nonblocking`
+    /// before `from_std`.
     ///
     /// # Errors
-    /// Propagates any `io::Error` from `bind(2)` or from any failing
-    /// `setsockopt` call.
+    ///
+    /// `io::Error` from `bind(2)` or any `setsockopt`.
     pub fn listen(
         &self,
         addr: std::net::SocketAddr,
@@ -192,14 +169,12 @@ impl Runtime {
         self.listener_socket(addr, cfg)
     }
 
-    /// Connect a TCP socket, apply [`sockopts::BackendSockOpts`], and hand
-    /// back a blocking-mode [`std::net::TcpStream`]. Callers wiring this
-    /// into tokio should `set_nonblocking(true)` on the returned stream
-    /// and convert with `tokio::net::TcpStream::from_std`.
+    /// Connect and return the stream in BLOCKING mode — a tokio caller must `set_nonblocking`
+    /// before `from_std`.
     ///
     /// # Errors
-    /// Propagates any `io::Error` from `connect(2)` or from any failing
-    /// `setsockopt` call.
+    ///
+    /// `io::Error` from `connect(2)` or any `setsockopt`.
     pub fn connect(
         &self,
         addr: std::net::SocketAddr,
@@ -235,7 +210,6 @@ mod tests {
         assert_eq!(rt.backend(), IoBackend::IoUring);
         let rt = Runtime::with_backend(IoBackend::Epoll);
         assert_eq!(rt.backend(), IoBackend::Epoll);
-        // Default/new must not panic.
         let _ = Runtime::default();
         let _ = Runtime::new();
     }
@@ -272,8 +246,7 @@ mod tests {
 
     #[test]
     fn detect_backend_returns_real_choice() {
-        // No assertion on the specific value — depends on the kernel.
-        // Only that the function returns without panicking.
+        // The value is kernel-dependent; only the absence of a panic is asserted.
         let b = detect_backend();
         assert!(matches!(b, IoBackend::IoUring | IoBackend::Epoll));
     }
@@ -308,7 +281,6 @@ mod tests {
         };
         apply_listener(&listener, &cfg).unwrap();
 
-        // Verify SO_REUSEADDR and SO_KEEPALIVE are set via getsockopt.
         let fd = listener.as_raw_fd();
         assert!(getsockopt_bool(fd, libc::SOL_SOCKET, libc::SO_REUSEADDR));
         assert!(getsockopt_bool(fd, libc::SOL_SOCKET, libc::SO_KEEPALIVE));
@@ -317,7 +289,6 @@ mod tests {
     #[cfg(not(target_os = "linux"))]
     #[test]
     fn socket_options_listener_non_linux() {
-        // Portable subset: reuseaddr / nodelay / keepalive only.
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let cfg = ListenerSockOpts {
             reuseaddr: true,
