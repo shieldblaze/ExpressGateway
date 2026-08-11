@@ -23,8 +23,7 @@ pub enum HandshakeError {
         budget_ms: u64,
     },
 
-    /// rustls handshake error — kept distinct from a timeout because it usually means client
-    /// mis-configuration rather than an attack.
+    /// rustls handshake error — distinct from a timeout: usually mis-configuration, not an attack.
     #[error("TLS handshake failed: {0}")]
     Handshake(#[source] std::io::Error),
 }

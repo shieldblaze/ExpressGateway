@@ -23,8 +23,7 @@ pub struct PassthroughMetrics {
 }
 
 impl PassthroughMetrics {
-    /// Register every family. Idempotent, so a second listener spawn reuses the same handles;
-    /// all read 0 from registration so `/metrics` shows the rows immediately.
+    /// Register every family. Idempotent, and all handles read 0 so `/metrics` shows the rows at once.
     pub fn register(registry: &MetricsRegistry) -> Result<Self, MetricsError> {
         let flows = registry.gauge(
             "quic_passthrough_flows",

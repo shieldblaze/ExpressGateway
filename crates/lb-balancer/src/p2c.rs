@@ -4,8 +4,7 @@ use rand::{Rng, RngExt};
 
 use crate::{Backend, BalancerError, LoadBalancer};
 
-/// Power-of-two-choices: two random backends, fewer connections wins. Exponentially better
-/// distribution than pure random (Mitzenmacher, 2001).
+/// Power-of-two-choices: two random backends, fewer connections wins (Mitzenmacher, 2001).
 #[derive(Debug)]
 pub struct PowerOfTwoChoices<R: Rng> {
     rng: R,

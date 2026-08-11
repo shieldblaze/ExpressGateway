@@ -557,8 +557,7 @@ pub struct TlsConfig {
     /// Session-ticket key rotation interval, in seconds.
     #[serde(default = "default_ticket_interval")]
     pub ticket_rotation_interval_seconds: u64,
-    /// Grace period during which the previous ticket key still decrypts; interval + overlap is the
-    /// true ticket lifetime.
+    /// Grace period where the previous ticket key still decrypts; interval + overlap = true lifetime.
     #[serde(default = "default_ticket_overlap")]
     pub ticket_rotation_overlap_seconds: u64,
 }
@@ -617,8 +616,7 @@ pub struct RawQuicProxyConfig {
     /// Per-direction DATAGRAM relay queue depth; over-cap is drop-newest, bounding a flooding peer.
     #[serde(default = "default_raw_proxy_dgram_queue_cap")]
     pub dgram_queue_cap: usize,
-    /// Relay stream-table ceiling; above the negotiated grant so relay memory is a hard constant
-    /// even if `max_streams` is mis-set.
+    /// Relay stream-table ceiling, above the negotiated grant so relay memory is a hard constant.
     #[serde(default = "default_raw_proxy_max_relay_streams")]
     pub max_relay_streams: usize,
 }
@@ -2903,8 +2901,7 @@ max_requests_per_h3_connection = 250
             .join("config")
     }
 
-    /// Parse + validate one shipped config; `assert!` not `expect` because the crate denies
-    /// `clippy::panic` even in tests.
+    /// Parse + validate one shipped config; `assert!` not `expect` — the crate denies `clippy::panic`.
     fn assert_config_file_ok(path: &std::path::Path) {
         let label = path.display().to_string();
         let read = std::fs::read_to_string(path);

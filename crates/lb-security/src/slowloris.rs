@@ -2,8 +2,7 @@
 
 use crate::SecurityError;
 
-/// Two independent thresholds against slow-header attacks: a wall-clock header-phase cap and a
-/// bytes-per-second floor over a recent window.
+/// Two slow-header thresholds: a wall-clock header-phase cap and a bytes/s floor over a window.
 pub struct SlowlorisDetector {
     header_timeout_ms: u64,
     min_rate_bytes_per_sec: u64,

@@ -39,8 +39,7 @@ pub struct PoolConfig {
     pub idle_timeout: Duration,
     /// Connections older than this (since original dial) are discarded.
     pub max_age: Duration,
-    /// Dial deadline for [`TcpPool::acquire_async`]. IGNORED by the blocking [`TcpPool::acquire`],
-    /// which inherits the kernel's minute-plus `connect(2)` default.
+    /// Dial deadline for `acquire_async`; IGNORED by blocking `acquire`, which gets the kernel default.
     pub connect_timeout: Duration,
 }
 
