@@ -1,32 +1,17 @@
-//! S29 — gRPC-over-HTTP/3 conformance e2e (real wire).
+//! gRPC-over-HTTP/3 conformance e2e, on the real wire: a real quiche H3 client
+//! speaking the gRPC wire format (5-byte length-prefixed messages +
+//! `grpc-status` trailers) → production [`QuicListener`] → router →
+//! `conn_actor::poll_h3` (H2 branch) → a real hyper H2 gRPC backend.
 //!
-//! Path under test: a real quiche H3 client speaking the **gRPC wire
-//! format** (5-byte length-prefixed messages + `grpc-status` trailers) →
-//! production [`QuicListener`] (H3-terminate, `quiche::h3`) → `router` →
-//! `conn_actor::poll_h3` (H2 branch) → `h3_to_h2_stream` → real hyper H2
-//! gRPC backend.
+//! The gateway is an **opaque proxy**: it forwards the length-prefixed messages
+//! and the trailing `grpc-status`/`grpc-message` HEADERS without interpreting
+//! gRPC. These tests assert the gRPC-critical invariants survive the relay —
+//! the always-present trailing `grpc-status` (dropping it breaks gRPC
+//! silently), the "Trailers-Only" immediate-error shape, `content-type`
+//! preservation, opaque relay across DATA boundaries, and all four call types.
 //!
-//! The gateway is an **opaque proxy**: it forwards the length-prefixed
-//! gRPC messages + the trailing `grpc-status`/`grpc-message` HEADERS
-//! end-to-end without interpreting gRPC (S29 R7 model). These tests are
-//! the CONFORMANCE characterization — they assert the gRPC-critical
-//! invariants survive the H3→H2 relay:
-//!
-//!  * **A4/A5** — every response ends with a trailing HEADERS carrying
-//!    `grpc-status` (+ `grpc-message`); dropping it breaks gRPC silently.
-//!  * **A6** — a "Trailers-Only" response (single HEADERS+FIN carrying
-//!    `:status` AND `grpc-status`, no DATA, no separate trailing HEADERS,
-//!    the immediate-error shape) is preserved.
-//!  * **A2/A3** — `content-type: application/grpc*` preserved; the
-//!    length-prefixed messages relayed opaquely across DATA boundaries.
-//!  * **4 call types** — unary, server-streaming, client-streaming, and
-//!    bidi all relay correctly (they differ only in message count/timing;
-//!    for an opaque proxy it is uniform DATA relay + trailer delivery).
-//!
-//! gRPC framing/codec is reused from `lb_grpc` (no `tonic`/`prost`
-//! dev-dep); the H3 client + hyper H2 backend harnesses are adapted from
-//! `h3_h2_stream_e2e.rs` (hand-rolled hyper IO + executor, no
-//! `hyper-util`). No `#[ignore]` anywhere.
+//! Framing is reused from `lb_grpc` (no tonic/prost dev-dep); the harnesses are
+//! adapted from `h3_h2_stream_e2e.rs`. No `#[ignore]` anywhere.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::too_many_lines)]
 
@@ -60,15 +45,12 @@ const TEST_SNI: &str = "expressgateway.test";
 const H3_ALPN: &[u8] = b"h3";
 const MAX_UDP: usize = 65_535;
 
-/// Serialize EVERY test in this binary: each test spawns an in-process
-/// H3-terminate gateway + backend + a real-wire QUIC client; running 16 of
-/// those concurrently over-saturates an 8-core box under the full-workspace
-/// `--all-features` gate, and the heavy real-wire relays then time out the
-/// upstream dial → a 502 (the CF-SATURATION-1 502 flake class). One gateway
-/// at a time keeps this binary's footprint like the single-gateway H3-cell
-/// e2e binaries (which do not flake) and also serializes the
-/// `MAX_RETAINED_RESP_BYTES` process-global gauge read (R8). The async guard
-/// is released on unwind, so a panicking test never deadlocks the rest.
+/// Serialize EVERY test in this binary. Each spawns an in-process gateway +
+/// backend + real-wire client, and 16 of those concurrently over-saturate the
+/// box under the full `--all-features` gate, timing out the upstream dial into
+/// a 502 (the CF-SATURATION-1 flake class). One gateway at a time also
+/// serializes the process-global `MAX_RETAINED_RESP_BYTES` gauge read. The
+/// async guard is released on unwind, so a panicking test never deadlocks.
 static SUITE_SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 /// Acquire the suite-wide serial lock; held for the test's duration.
@@ -78,16 +60,12 @@ macro_rules! serial_guard {
     };
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// §0  Hand-rolled hyper IO adapter + executor (no hyper-util dep), and
-//     a quiche-Huffman-capable QPACK response decoder. Copied verbatim
-//     from h3_h2_stream_e2e.rs (test harnesses are separate binaries and
-//     cannot share a module).
-// ─────────────────────────────────────────────────────────────────────
+// §0  Hand-rolled hyper IO adapter + executor (no hyper-util dep) and a
+//     Huffman-capable QPACK response decoder — copied verbatim from
+//     h3_h2_stream_e2e.rs, since test binaries cannot share a module.
 
-/// Decode a RESPONSE QPACK field block emitted by the migrated egress
-/// (`quiche::h3`, which Huffman-encodes). The hand-rolled
-/// `lb_h3_testcodec::QpackDecoder` is raw-only, so we use quiche's.
+/// Decode a RESPONSE QPACK field block with quiche's Huffman-capable decoder;
+/// the hand-rolled `lb_h3_testcodec::QpackDecoder` is raw-only.
 fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, String> {
     use quiche::h3::NameValue;
     let hdrs = quiche::h3::qpack::Decoder::new()
@@ -158,9 +136,7 @@ where
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// §1  Cert + listener + client harness (mirrors h3_h2_stream_e2e).
-// ─────────────────────────────────────────────────────────────────────
+// §1  Cert + listener + client harness.
 
 static DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -272,9 +248,7 @@ async fn start_h3_listener_h2(
     (listener, addr, shutdown)
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// §2  gRPC framing helpers (lb_grpc) + the H3 client driver.
-// ─────────────────────────────────────────────────────────────────────
+// §2  gRPC framing helpers + the H3 client driver.
 
 /// Concatenate `msgs` as length-prefixed gRPC frames (5-byte header each).
 fn frame_messages(msgs: &[Bytes]) -> Vec<u8> {
@@ -323,9 +297,8 @@ struct GrpcClientOut {
 }
 
 impl GrpcClientOut {
-    /// Look up a field by (lowercase) name across head + trailers — gRPC
-    /// `grpc-status` lives in the trailer normally, but in a Trailers-Only
-    /// response it rides the single head HEADERS frame.
+    /// Look up a field across head + trailers: `grpc-status` normally lives in
+    /// the trailer, but in a Trailers-Only response it rides the head frame.
     fn field(&self, name: &str) -> Option<&str> {
         self.trailer_pairs
             .iter()
@@ -350,9 +323,8 @@ struct GrpcDriveCfg {
     content_type: Option<&'static str>,
 }
 
-/// Drive ONE gRPC request on stream 0: POST + content-type + `te:
-/// trailers` + length-prefixed body, then read the response
-/// HEADERS/DATA/trailers.
+/// Drive ONE gRPC request on stream 0: POST + content-type + `te: trailers` +
+/// length-prefixed body, then read the response HEADERS/DATA/trailers.
 async fn drive_grpc_h3(
     gateway: SocketAddr,
     ca: &std::path::Path,
@@ -553,9 +525,7 @@ async fn drive_grpc_h3_core(
     out
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // §3  Real hyper H2 gRPC backend.
-// ─────────────────────────────────────────────────────────────────────
 
 /// How the mock gRPC backend behaves.
 #[derive(Clone)]
@@ -566,13 +536,12 @@ enum GrpcBackendMode {
     ServerStream { per_request: usize },
     /// Concatenate all inbound messages into one response message.
     ClientStream,
-    /// Like `Echo`, but emit the response bytes as many small (≤32 KiB)
-    /// hyper body frames instead of one giant frame — localizer for the
-    /// large-response trailer behavior (single-huge-frame vs total-size).
+    /// Like `Echo` but emits many small (≤32 KiB) hyper body frames instead of
+    /// one giant frame — the localizer for single-huge-frame vs total-size.
     EchoSmallFrames,
-    /// "Trailers-Only": a single HEADERS frame with `:status:200` +
-    /// `content-type` + `grpc-status` (+ message) and END_STREAM, NO DATA
-    /// and NO separate trailing HEADERS (the gRPC immediate-error shape).
+    /// "Trailers-Only": one HEADERS frame with `:status` + `content-type` +
+    /// `grpc-status` and END_STREAM, no DATA and no separate trailing HEADERS
+    /// (the gRPC immediate-error shape).
     TrailersOnly { status: u32, message: &'static str },
 }
 
@@ -796,11 +765,9 @@ async fn grpc_backend_handle(
         .unwrap()
 }
 
-/// H2 gRPC backend that emits response HEADERS + one partial DATA frame
-/// then RST_STREAMs (the response body yields an `Err`, which hyper maps
-/// to a stream reset) — a mid-response abnormal termination with NO
-/// `grpc-status` trailer. Used to prove the gateway does not launder a
-/// mid-stream reset into a clean `grpc-status: 0` (B2).
+/// H2 gRPC backend that emits HEADERS + one partial DATA frame then
+/// RST_STREAMs, with NO `grpc-status` trailer — used to prove the gateway does
+/// not launder a mid-stream reset into a clean `grpc-status: 0`.
 async fn spawn_h2_grpc_reset_backend() -> (SocketAddr, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let local = listener.local_addr().unwrap();
@@ -854,13 +821,11 @@ async fn spawn_h2_grpc_reset_backend() -> (SocketAddr, tokio::task::JoinHandle<(
     (local, h)
 }
 
-/// Hand-rolled raw HTTP/1.1 gRPC backend (mirrors the
-/// `h3_h1_trailers_resp_e2e.rs` raw-H1 pattern — no hyper http1 dep). It
-/// reads the framed gRPC request body and responds `200` +
+/// Hand-rolled raw HTTP/1.1 gRPC backend (no hyper http1 dep): responds 200 +
 /// `content-type: application/grpc` + the echoed framed body with a
-/// `Content-Length` and **no trailer** — the realistic H1 case, since an
-/// H1 origin cannot reliably carry the always-present `grpc-status`
-/// trailing-HEADERS. Used to characterize the H3→H1 gRPC break (B5).
+/// `Content-Length` and **no trailer** — the realistic H1 case, since an H1
+/// origin cannot reliably carry the always-present `grpc-status` trailing
+/// HEADERS.
 async fn spawn_h1_grpc_backend() -> (SocketAddr, tokio::task::JoinHandle<()>) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
@@ -953,9 +918,7 @@ async fn start_h3_listener_h1(
     (listener, addr, shutdown)
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // §4  Conformance tests — the 4 call types + trailers + Trailers-Only.
-// ─────────────────────────────────────────────────────────────────────
 
 const OVERALL: Duration = Duration::from_secs(20);
 
@@ -1081,9 +1044,8 @@ async fn grpc_h3_client_stream_relays_all_request_messages() {
     assert_eq!(out.field("grpc-status"), Some("0"));
 }
 
-/// Bidi-streaming (sequential drive): 8 request messages echoed back as 8
-/// response messages, order-preserved, then `grpc-status: 0`. For an
-/// opaque proxy this is the same relay path as the other call types.
+/// Bidi-streaming (sequential drive): 8 request messages echoed back in order,
+/// then `grpc-status: 0`. For an opaque proxy this is the same relay path.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn grpc_h3_bidi_stream_echoes_in_order() {
     serial_guard!();
@@ -1115,10 +1077,9 @@ async fn grpc_h3_bidi_stream_echoes_in_order() {
     assert_eq!(out.field("grpc-status"), Some("0"));
 }
 
-/// A6 — Trailers-Only: an immediate-error response carried as a single
-/// HEADERS frame (`:status:200` + `content-type` + `grpc-status:9`) with
-/// END_STREAM, no DATA. The proxy must preserve the single-field-section
-/// shape; the client observes grpc-status on the head, no body.
+/// A6 — Trailers-Only: an immediate error as a single HEADERS frame with
+/// END_STREAM and no DATA. The proxy must preserve the single-field-section
+/// shape, so the client sees grpc-status on the head and no body.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn grpc_h3_trailers_only_immediate_error_preserved() {
     serial_guard!();
@@ -1158,14 +1119,10 @@ async fn grpc_h3_trailers_only_immediate_error_preserved() {
     assert!(out.fin, "clean FIN");
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// §5  Phase 1b — the conformance EDGES (Tier B + the Tier D divergence).
-// ─────────────────────────────────────────────────────────────────────
+// §5  Conformance EDGES (Tier B + the Tier D divergence).
 
-/// A3 under volume — a single large gRPC message (512 KiB) that spans
-/// MANY H3 DATA frames must round-trip byte-identical: the proxy relays
-/// the length-prefixed stream opaquely, making no DATA-boundary
-/// assumptions.
+/// A3 under volume — a single 512 KiB gRPC message spanning MANY H3 DATA frames
+/// must round-trip byte-identical: the proxy makes no DATA-boundary assumptions.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn grpc_h3_large_message_roundtrips_byte_identical() {
     serial_guard!();
@@ -1213,10 +1170,9 @@ async fn grpc_h3_large_message_roundtrips_byte_identical() {
 }
 
 /// F-S29-1 regression — the trailing `grpc-status` HEADERS must survive a
-/// response of ANY size (the large-response trailer-drop was the stale-
-/// receiver respawn → spurious RESET that discarded the still-buffered
-/// trailer+FIN above ~448 KiB). Sweeps up to 1 MiB; every size must
-/// deliver `grpc-status: 0` with a clean FIN.
+/// response of ANY size. The trailer-drop was a stale-receiver respawn firing a
+/// spurious RESET that discarded the still-buffered trailer+FIN above ~448 KiB.
+/// Sweeps to 1 MiB; every size must deliver `grpc-status: 0` with a clean FIN.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn grpc_h3_trailer_survives_all_response_sizes() {
     serial_guard!();
@@ -1254,9 +1210,9 @@ async fn grpc_h3_trailer_survives_all_response_sizes() {
     }
 }
 
-/// F-S29-1 regression — the trailer must survive regardless of the
-/// backend's body FRAME GRANULARITY: a single giant hyper frame (`Echo`)
-/// and many small frames (`EchoSmallFrames`) both, at 512 KiB and 1 MiB.
+/// F-S29-1 regression — the trailer must survive regardless of the backend's
+/// body FRAME GRANULARITY: one giant hyper frame and many small ones, at both
+/// 512 KiB and 1 MiB.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn grpc_h3_trailer_survives_any_frame_granularity() {
     serial_guard!();
@@ -1292,10 +1248,8 @@ async fn grpc_h3_trailer_survives_any_frame_granularity() {
     }
 }
 
-/// C1 / D1 — `grpc-timeout` is forwarded to the backend UNCHANGED (the
-/// opaque H3 path does NOT clamp it, unlike the H2 gRPC-aware proxy which
-/// clamps at `max_deadline`). This documents the deliberate H2-vs-H3
-/// divergence (Tier D1) and the opaque pass-through (Tier C1).
+/// C1 / D1 — `grpc-timeout` is forwarded UNCHANGED: the opaque H3 path does NOT
+/// clamp it, unlike the gRPC-aware H2 proxy. A deliberate H2-vs-H3 divergence.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn grpc_h3_grpc_timeout_forwarded_unclamped() {
     serial_guard!();
@@ -1328,10 +1282,9 @@ async fn grpc_h3_grpc_timeout_forwarded_unclamped() {
     );
 }
 
-/// D2 — `/grpc.health.v1.Health/Check` over H3 is FORWARDED to the
-/// backend (the opaque path does NOT synthesize health locally, unlike
-/// the H2 gRPC-aware proxy which answers SERVING without dialing). The
-/// backend is hit ⇒ no synthesis. Deliberate H2-vs-H3 divergence (D2).
+/// D2 — a Health/Check over H3 is FORWARDED to the backend; the opaque path
+/// does NOT synthesize health locally as the gRPC-aware H2 proxy does. The
+/// backend being hit is the proof. A deliberate H2-vs-H3 divergence.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn grpc_h3_health_check_forwarded_not_synthesized() {
     serial_guard!();
@@ -1366,9 +1319,9 @@ async fn grpc_h3_health_check_forwarded_not_synthesized() {
     );
 }
 
-/// B3 — a gRPC request WITHOUT `te: trailers` still succeeds over H3 (the
-/// H2-path requirement does not apply; H3 trailers are native per
-/// RFC 9114 §4.1). The response trailer is still delivered.
+/// B3 — a gRPC request WITHOUT `te: trailers` still succeeds over H3: the
+/// H2-path requirement does not apply, since H3 trailers are native
+/// (RFC 9114 §4.1). The response trailer is still delivered.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn grpc_h3_without_te_header_still_delivers_trailer() {
     serial_guard!();
@@ -1378,9 +1331,7 @@ async fn grpc_h3_without_te_header_still_delivers_trailer() {
 
     let payload = Bytes::from_static(b"no-te");
     let body = frame_messages(std::slice::from_ref(&payload));
-    // drive_grpc_h3 sends te:trailers by default; build the request inline
-    // WITHOUT it by using a content_type-only header set is not enough —
-    // we instead rely on the no_te variant of the driver.
+    // The default driver sends te:trailers, so use its no-te variant.
     let out = drive_grpc_h3_no_te(gw, &certs.ca, "/echo.Echo/NoTe", vec![body], OVERALL).await;
 
     assert_eq!(out.status, Some(200));
@@ -1394,13 +1345,11 @@ async fn grpc_h3_without_te_header_still_delivers_trailer() {
     );
 }
 
-/// ATTRIBUTION — call `stream_h2_response` (the gateway's H2-upstream
-/// response producer) DIRECTLY against the gRPC backend, draining into a
-/// large channel (no backpressure). If the producer + hyper H2 client
-/// deliver `RespEvent::Trailers` + `End` for the large responses, the
-/// trailer is received correctly at the gateway and any drop is
-/// downstream (the actor H3-egress). If NOT, the trailer is lost in the
-/// hyper H2 read itself (outside the gateway proxy logic).
+/// ATTRIBUTION — call `stream_h2_response` DIRECTLY against the gRPC backend,
+/// draining into a large channel so there is no backpressure. If the producer +
+/// hyper H2 client deliver `Trailers` + `End` for the large responses, the
+/// trailer arrives correctly at the gateway and any drop is downstream in the
+/// H3 egress; if not, it is lost in the hyper H2 read, outside the proxy logic.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn grpc_h3_producer_trailer_attribution() {
     serial_guard!();
@@ -1467,12 +1416,11 @@ async fn grpc_h3_producer_trailer_attribution() {
     }
 }
 
-/// B2 (HIGHEST severity) — a backend that RST_STREAMs MID-response (after
-/// emitting partial DATA, before any grpc-status trailer) must NOT be
-/// laundered into a clean finish: the H3 client must observe an abnormal
-/// termination (stream reset / no `grpc-status: 0`), never a clean FIN
-/// carrying a synthesized `grpc-status: 0`. This is the gRPC analog of
-/// the migration's "Finished-on-reset" guard.
+/// B2 (HIGHEST severity) — a backend that RST_STREAMs MID-response, after
+/// partial DATA and before any grpc-status trailer, must NOT be laundered into
+/// a clean finish: the client must observe an abnormal termination, never a
+/// clean FIN carrying a synthesized `grpc-status: 0`. The gRPC analog of the
+/// migration's Finished-on-reset guard.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn grpc_h3_backend_reset_midresponse_not_laundered_to_clean_status() {
     serial_guard!();
@@ -1494,10 +1442,9 @@ async fn grpc_h3_backend_reset_midresponse_not_laundered_to_clean_status() {
     )
     .await;
 
-    // The reset MUST NOT be presented as a clean grpc-status:0. Acceptable
-    // conformant outcomes: the client sees a stream reset, OR a finish
-    // with NO grpc-status:0 trailer. A clean grpc-status:0 here would mean
-    // the gateway laundered a mid-stream reset into a successful RPC.
+    // Conformant outcomes: a stream reset, OR a finish with NO grpc-status:0.
+    // A clean grpc-status:0 would mean the gateway laundered the reset into a
+    // successful RPC.
     eprintln!(
         "GRPC_H3_RESET reset={} fin={} status={:?} grpc_status={:?} body_len={}",
         out.reset,
@@ -1517,12 +1464,10 @@ async fn grpc_h3_backend_reset_midresponse_not_laundered_to_clean_status() {
     );
 }
 
-/// B5 — gRPC routed to an HTTP/1.1 backend (trailer-incompatible
-/// transport). gRPC mandates HTTP/2+; H1 cannot reliably carry the
-/// always-present `grpc-status` trailing-HEADERS. This test
-/// CHARACTERIZES what the H3-front → H1-backend path actually does with a
-/// gRPC response that ends in a `grpc-status` trailer: whether the
-/// trailer survives or is dropped (a silent-gRPC-break finding).
+/// B5 — gRPC routed to an HTTP/1.1 backend (a trailer-incompatible transport).
+/// gRPC mandates HTTP/2+, and H1 cannot reliably carry the always-present
+/// `grpc-status` trailing HEADERS; this CHARACTERIZES what the H3→H1 path
+/// actually does with such a response.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn grpc_h3_to_h1_backend_trailer_characterization() {
     serial_guard!();
@@ -1556,13 +1501,10 @@ async fn grpc_h3_to_h1_backend_trailer_characterization() {
         out.trailer_pairs,
     );
     // The conformance finding (F-S29-2): an H1 backend cannot deliver the
-    // gRPC `grpc-status` trailer to the client — true whether the relay
-    // succeeds (200 with the trailer dropped, since H1 cannot carry the
-    // post-body trailing-HEADERS) or fails (502, the H1-incompatibility/
-    // relay error). Either way NO `grpc-status` reaches the client, which is
-    // the documented "gRPC requires an H2/H3 backend" constraint. Assert the
-    // finding itself (status-agnostic — so it is robust under gate
-    // saturation, where the H1 relay may 502 instead of 200).
+    // `grpc-status` trailer — true whether the relay succeeds (200, trailer
+    // dropped) or fails (502). Either way NO `grpc-status` reaches the client,
+    // which is the documented "gRPC requires an H2/H3 backend" constraint. The
+    // assertion is status-agnostic so it holds under gate saturation.
     assert_eq!(
         out.field("grpc-status"),
         None,
@@ -1573,18 +1515,12 @@ async fn grpc_h3_to_h1_backend_trailer_characterization() {
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────
 // §6  R8 (bounded streaming) + R13 (burst) — the streaming-relay proofs.
-// ─────────────────────────────────────────────────────────────────────
 
-/// R8 — a high-volume gRPC server-stream (~1 MiB across 512 messages)
-/// must keep the H3 response egress BOUNDED: the process-global
-/// `MAX_RETAINED_RESP_BYTES` peak gauge stays within the
-/// `4 × depth × (chunk + frame-hdr)` ceiling, INDEPENDENT of total
-/// response size (the relay streams, it does not buffer the stream). The
-/// response total far exceeds the ceiling, so the bound is genuinely
-/// exercised (non-vacuous), and the gauge must be > 0 (the pump recorded
-/// in-flight bytes).
+/// R8 — a ~1 MiB gRPC server-stream across 512 messages must keep the H3 egress
+/// BOUNDED: the process-global `MAX_RETAINED_RESP_BYTES` peak stays within the
+/// `4 × depth × (chunk + frame-hdr)` ceiling INDEPENDENT of total response size.
+/// The total far exceeds the ceiling (non-vacuous), and the gauge must be > 0.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn grpc_h3_server_stream_bounded_memory_r8() {
     serial_guard!();
@@ -1646,13 +1582,10 @@ async fn grpc_h3_server_stream_bounded_memory_r8() {
     );
 }
 
-/// R13 (b) — burst: 50 sequential gRPC unary call cycles (each a fresh H3
-/// connection), every one delivering the echoed message + a clean
-/// `grpc-status: 0` trailer + FIN. Exercises the streaming relay +
-/// connection churn repeatedly (the timing-sensitive layer). The
-/// load-bearing negative control is
-/// `grpc_h3_backend_reset_midresponse_not_laundered_to_clean_status` (a
-/// mid-response reset must NOT be laundered into a clean status).
+/// R13 (b) — burst: 50 sequential unary cycles, each on a fresh H3 connection,
+/// every one delivering the echoed message + a clean `grpc-status: 0` + FIN.
+/// The load-bearing negative control is the mid-response-reset test, which must
+/// NOT be laundered into a clean status.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn grpc_h3_burst_50_unary_cycles() {
     serial_guard!();
