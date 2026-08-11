@@ -25,10 +25,6 @@ impl SlowPostDetector {
 
     /// Record cumulative body bytes and check the rate SINCE THE LAST CHECK — a lifetime average
     /// would let an attacker bank an early burst and then trickle.
-    ///
-    /// # Errors
-    ///
-    /// [`SecurityError::SlowPost`] on a sub-floor windowed rate or an elapsed body timeout.
     pub fn record_body_bytes(
         &mut self,
         total_body_bytes: u64,

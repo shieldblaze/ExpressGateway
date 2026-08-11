@@ -145,10 +145,6 @@ impl Watchdog {
     }
 
     /// Record cumulative bytes read and evaluate the eviction rules.
-    ///
-    /// # Errors
-    ///
-    /// [`WatchdogError`] — deadline elapsed, rate below floor, or unregistered id.
     pub fn progress(&self, id: ConnId, bytes_read: u64) -> Result<(), WatchdogError> {
         let now = Instant::now();
         // Decide under the bucket lock, mutate the table only after releasing it.

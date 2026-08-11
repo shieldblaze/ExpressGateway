@@ -157,10 +157,6 @@ fn fallback_500() -> Response<Full<Bytes>> {
 /// Serve the admin endpoints until `shutdown` fires. The caller keeps a `probes` clone to flip
 /// state on bind/drain. Per-connection failures are logged at debug and never take the listener
 /// down.
-///
-/// # Errors
-///
-/// [`io::Error`] on bind failure only.
 pub async fn serve_with_probes(
     registry: Arc<MetricsRegistry>,
     probes: Arc<ProbeRegistry>,
@@ -173,10 +169,6 @@ pub async fn serve_with_probes(
 /// [`serve_with_probes`] with optional bearer-token enforcement on information-bearing endpoints;
 /// probes stay anonymous. This function does NOT check the bind address — the caller must have
 /// run [`AdminAuthGate::validate_bind`] first.
-///
-/// # Errors
-///
-/// As [`serve_with_probes`].
 pub async fn serve_with_auth(
     registry: Arc<MetricsRegistry>,
     probes: Arc<ProbeRegistry>,
@@ -234,10 +226,6 @@ pub async fn serve_with_auth(
 
 /// Back-compat wrapper that synthesises its own [`ProbeRegistry`]. Readiness can never be flipped
 /// through this entry point — use [`serve_with_probes`] and hold the registry.
-///
-/// # Errors
-///
-/// As [`serve_with_probes`].
 pub async fn serve(
     registry: Arc<MetricsRegistry>,
     addr: SocketAddr,

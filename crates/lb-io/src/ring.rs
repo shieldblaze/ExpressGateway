@@ -46,10 +46,6 @@ pub fn nop_roundtrip() -> io::Result<UringNopResult> {
 }
 
 /// Single-shot `IORING_OP_ACCEPT` — not multishot, no fixed-slot installation.
-///
-/// # Errors
-/// `io::Error` from the CQE or ring construction. `EOPNOTSUPP` / `EPERM` mean "fall back to
-/// `accept(2)`".
 pub fn accept_one(listener_fd: RawFd) -> io::Result<(RawFd, SocketAddr)> {
     let mut ring = IoUring::new(8)?;
 
@@ -88,9 +84,6 @@ pub fn accept_one(listener_fd: RawFd) -> io::Result<(RawFd, SocketAddr)> {
 }
 
 /// Receive from `fd` into `buf` via `IORING_OP_RECV`.
-///
-/// # Errors
-/// `io::Error` from the ring or a negative CQE. An orderly close is `Ok(0)`, not an error.
 pub fn recv(fd: RawFd, buf: &mut [u8]) -> io::Result<usize> {
     let len_u32 = u32::try_from(buf.len()).unwrap_or(u32::MAX);
     let mut ring = IoUring::new(8)?;
@@ -112,9 +105,6 @@ pub fn recv(fd: RawFd, buf: &mut [u8]) -> io::Result<usize> {
 }
 
 /// Send from `buf` on `fd` via `IORING_OP_SEND`.
-///
-/// # Errors
-/// `io::Error` from the ring or a negative CQE.
 pub fn send(fd: RawFd, buf: &[u8]) -> io::Result<usize> {
     let len_u32 = u32::try_from(buf.len()).unwrap_or(u32::MAX);
     let mut ring = IoUring::new(8)?;
@@ -135,9 +125,6 @@ pub fn send(fd: RawFd, buf: &[u8]) -> io::Result<usize> {
 }
 
 /// `IORING_OP_SPLICE` up to `len` bytes. One side MUST be a pipe, per `splice(2)`.
-///
-/// # Errors
-/// `io::Error` from the ring or a negative CQE.
 pub fn splice(from: RawFd, to: RawFd, len: u32) -> io::Result<u32> {
     let mut ring = IoUring::new(8)?;
 

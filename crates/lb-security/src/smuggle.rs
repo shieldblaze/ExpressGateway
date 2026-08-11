@@ -25,10 +25,6 @@ pub struct SmuggleDetector;
 
 impl SmuggleDetector {
     /// Reject differing duplicate `Content-Length` headers (RFC 9110 §8.6 MUST).
-    ///
-    /// # Errors
-    ///
-    /// [`SecurityError::SmuggleDuplicateCL`].
     pub fn check_duplicate_cl(headers: &[(String, String)]) -> Result<(), SecurityError> {
         let mut first_value: Option<&str> = None;
         for (name, value) in headers {
@@ -48,10 +44,6 @@ impl SmuggleDetector {
 
     /// Reject CL-TE smuggling — both `Content-Length` and `Transfer-Encoding` present (RFC 9112
     /// §6.1 ambiguity).
-    ///
-    /// # Errors
-    ///
-    /// [`SecurityError::SmuggleCLTE`].
     pub fn check_cl_te(headers: &[(String, String)]) -> Result<(), SecurityError> {
         let has_cl = headers
             .iter()
@@ -68,10 +60,6 @@ impl SmuggleDetector {
 
     /// Reject TE-CL smuggling — `Transfer-Encoding` whose FINAL codec is not `chunked` (RFC 9112
     /// §6.1 MUST).
-    ///
-    /// # Errors
-    ///
-    /// [`SecurityError::SmuggleTECL`].
     pub fn check_te_cl(headers: &[(String, String)]) -> Result<(), SecurityError> {
         for (name, value) in headers {
             if name.eq_ignore_ascii_case("transfer-encoding") {
@@ -85,11 +73,8 @@ impl SmuggleDetector {
         Ok(())
     }
 
-    /// Run every applicable smuggling check; `is_h2_origin` adds the H2 downgrade check.
-    ///
-    /// # Errors
-    ///
-    /// The first `SecurityError` encountered.
+    /// Run every applicable smuggling check, SHORT-CIRCUITING on the first failure;
+    /// `is_h2_origin` adds the H2 downgrade check.
     pub fn check_all(
         headers: &[(String, String)],
         is_h2_origin: bool,
@@ -103,11 +88,7 @@ impl SmuggleDetector {
         Ok(())
     }
 
-    /// Mode-aware [`check_all`](Self::check_all).
-    ///
-    /// # Errors
-    ///
-    /// The first `SecurityError` encountered.
+    /// Mode-aware [`check_all`](Self::check_all); short-circuits on the first failure.
     pub fn check_all_mode(
         headers: &[(String, String)],
         mode: SmuggleMode,
@@ -158,10 +139,6 @@ impl SmuggleDetector {
 
     /// Reject H2→H1 downgrade smuggling per RFC 9113 §8.2.2: hop-by-hop headers, a `te` that is
     /// not exactly `trailers`, and pseudo-headers leaking into the translated H1 message.
-    ///
-    /// # Errors
-    ///
-    /// [`SecurityError::SmuggleH2Downgrade`].
     pub fn check_h2_downgrade(
         headers: &[(String, String)],
         is_from_h2: bool,

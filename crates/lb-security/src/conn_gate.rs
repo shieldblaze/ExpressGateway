@@ -126,10 +126,6 @@ impl ConnGate {
     ///
     /// The per-IP overflow path MUST roll the per-listener counter back (it was already bumped);
     /// without the rollback a sustained over-cap stream silently erodes the listener cap.
-    ///
-    /// # Errors
-    ///
-    /// [`OverCap::Listener`] or [`OverCap::PerIp`].
     pub fn admit(&self, peer: IpAddr) -> Result<ConnPermit, OverCap> {
         let mut cur = self.inner.per_listener.load(Ordering::Acquire);
         loop {

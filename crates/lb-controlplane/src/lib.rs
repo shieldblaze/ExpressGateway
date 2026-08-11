@@ -39,17 +39,9 @@ pub enum ControlPlaneError {
 /// Trait for configuration storage backends.
 pub trait ConfigBackend: Send + Sync + std::fmt::Debug {
     /// Load the current configuration.
-    ///
-    /// # Errors
-    ///
-    /// `ControlPlaneError` on a read failure.
     fn load(&self) -> Result<String, ControlPlaneError>;
 
     /// Store a configuration.
-    ///
-    /// # Errors
-    ///
-    /// `ControlPlaneError` on a write failure.
     fn store(&self, config: &str) -> Result<(), ControlPlaneError>;
 }
 
@@ -106,10 +98,6 @@ impl InMemoryBackend {
     }
 
     /// Update the stored config, simulating an external write.
-    ///
-    /// # Errors
-    ///
-    /// `ControlPlaneError::LockPoisoned`.
     pub fn set(&self, config: &str) -> Result<(), ControlPlaneError> {
         let mut guard = self
             .data
@@ -152,10 +140,6 @@ pub struct ConfigManager {
 
 impl ConfigManager {
     /// Create a manager, loading the initial config.
-    ///
-    /// # Errors
-    ///
-    /// `ControlPlaneError` on a load failure.
     pub fn new(backend: Box<dyn ConfigBackend>) -> Result<Self, ControlPlaneError> {
         let config = backend.load()?;
         Self::validate(&config)?;
@@ -169,10 +153,6 @@ impl ConfigManager {
 
     /// Reload from the backend; `true` if the config changed. A successful change saves the old
     /// config for [`Self::rollback_to_previous`].
-    ///
-    /// # Errors
-    ///
-    /// `ControlPlaneError` on a load or validation failure.
     pub fn reload(&mut self) -> Result<bool, ControlPlaneError> {
         let new_config = self.backend.load()?;
         if new_config == self.current_config {
@@ -204,10 +184,6 @@ impl ConfigManager {
     }
 
     /// Validate a config: non-empty and parseable as TOML.
-    ///
-    /// # Errors
-    ///
-    /// `ControlPlaneError::InvalidConfig`.
     pub fn validate(config: &str) -> Result<(), ControlPlaneError> {
         if config.trim().is_empty() {
             return Err(ControlPlaneError::InvalidConfig(
@@ -221,10 +197,6 @@ impl ConfigManager {
     }
 
     /// Store `config` and reload from it.
-    ///
-    /// # Errors
-    ///
-    /// `ControlPlaneError` on a store or reload failure.
     pub fn rollback(&mut self, previous: &str) -> Result<(), ControlPlaneError> {
         Self::validate(previous)?;
         self.backend.store(previous)?;
@@ -235,10 +207,6 @@ impl ConfigManager {
     }
 
     /// Roll back to the config saved by the last [`Self::reload`]; `Ok(false)` if there is none.
-    ///
-    /// # Errors
-    ///
-    /// `ControlPlaneError` on a store failure.
     pub fn rollback_to_previous(&mut self) -> Result<bool, ControlPlaneError> {
         let Some(prev) = self.previous_config.take() else {
             return Ok(false);
@@ -271,10 +239,6 @@ impl HaPoller {
     }
 
     /// Poll the primary; `Some` only when the config changed since the last poll.
-    ///
-    /// # Errors
-    ///
-    /// `ControlPlaneError` on a load failure.
     pub fn poll(&mut self) -> Result<Option<String>, ControlPlaneError> {
         self.poll_count += 1;
         let config = self.primary.load()?;

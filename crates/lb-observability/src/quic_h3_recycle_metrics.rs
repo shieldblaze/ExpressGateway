@@ -18,10 +18,6 @@ pub struct QuicH3RecycleMetrics {
 impl QuicH3RecycleMetrics {
     /// Register every family. Idempotent; all handles read 0 from registration so the soak and
     /// recycle-count e2e can assert against the rows immediately.
-    ///
-    /// # Errors
-    ///
-    /// The `prometheus` registration error, or [`MetricsError::TypeMismatch`].
     pub fn register(registry: &MetricsRegistry) -> Result<Self, MetricsError> {
         let goaway_sent_total = registry.counter(
             "h3_goaway_sent_total",

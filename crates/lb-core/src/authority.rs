@@ -28,10 +28,6 @@ pub enum AuthorityError {
 
 /// Validate an authority value. MUST run before any agreement comparison (Host vs `:authority`,
 /// SNI vs Host) and before upstream selection.
-///
-/// # Errors
-///
-/// [`AuthorityError`].
 pub fn validate(value: &str) -> Result<(), AuthorityError> {
     if value.is_empty() {
         return Err(AuthorityError::Empty);

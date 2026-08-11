@@ -40,10 +40,6 @@ pub struct TicketKey {
 
 impl TicketKey {
     /// Fresh ChaCha20-Poly1305 key with a random `key_name`, from the OS RNG.
-    ///
-    /// # Errors
-    ///
-    /// [`TicketError::KeyGen`] if the RNG fails.
     pub fn generate() -> Result<Self, TicketError> {
         let inner = rustls::crypto::ring::Ticketer::new()
             .map_err(|e| TicketError::KeyGen(e.to_string()))?;
@@ -82,10 +78,6 @@ pub struct TicketRotator {
 
 impl TicketRotator {
     /// Build a rotator, minting the first current key immediately.
-    ///
-    /// # Errors
-    ///
-    /// [`TicketError::KeyGen`] if the RNG fails.
     pub fn new(rotation_interval: Duration, overlap: Duration) -> Result<Self, TicketError> {
         let current = Arc::new(TicketKey::generate()?);
         Ok(Self {
@@ -127,13 +119,10 @@ impl TicketRotator {
         self.rotated_at
     }
 
-    /// Drive the rotator to `now`. Both the rotate check and the previous-key expiry run on every
-    /// call, so an infrequently polled rotator still erases stale key material on its next poll.
-    /// `Ok(true)` only for an actual rotation — expiring the previous key alone does not count.
-    ///
-    /// # Errors
-    ///
-    /// [`TicketError::KeyGen`]; the rotator is left unchanged on failure.
+    /// Drive the rotator to `now`, leaving it UNCHANGED on error. Both the rotate check and the
+    /// previous-key expiry run on every call, so an infrequently polled rotator still erases
+    /// stale key material on its next poll. `Ok(true)` only for an actual rotation — expiring the
+    /// previous key alone does not count.
     pub fn rotate_if_due(&mut self, now: Instant) -> Result<bool, TicketError> {
         let elapsed = now.saturating_duration_since(self.rotated_at);
         let rotated = if elapsed >= self.rotation_interval {
@@ -238,10 +227,6 @@ impl ProducesTickets for RotatingTicketer {
 /// Terminating [`rustls::ServerConfig`] whose tickets come from the shared [`TicketRotator`].
 /// Empty `alpn_protocols` disables ALPN advertisement. Pins the `ring` provider explicitly so the
 /// result does not depend on whichever provider is installed as the process default.
-///
-/// # Errors
-///
-/// [`TicketError::ServerConfig`] on a cert/key or version/provider disagreement.
 pub fn build_server_config(
     rotator: Arc<Mutex<TicketRotator>>,
     cert_chain: Vec<CertificateDer<'static>>,
@@ -253,10 +238,6 @@ pub fn build_server_config(
 
 /// [`build_server_config`] with an explicit `tls13_only` flag (PROTO-2-14): `true` refuses TLS 1.2
 /// ClientHellos, `false` keeps the rustls default set.
-///
-/// # Errors
-///
-/// Same shape as [`build_server_config`].
 pub fn build_server_config_with_policy(
     rotator: Arc<Mutex<TicketRotator>>,
     cert_chain: Vec<CertificateDer<'static>>,
@@ -385,10 +366,6 @@ pub type SharedTlsBundle = Arc<ArcSwap<TlsConfigBundle>>;
 
 impl TlsConfigBundle {
     /// Load, validate and smoke-build a bundle from disk. Never partially constructed.
-    ///
-    /// # Errors
-    ///
-    /// [`TlsBundleError`] on any I/O, parse or validation failure.
     pub fn load_from_paths(
         cert: &Path,
         key: &Path,
@@ -399,10 +376,6 @@ impl TlsConfigBundle {
 
     /// [`Self::load_from_paths`] with an explicit depth cap and a `ticketer` to carry the
     /// session-ticket rotator across a cert swap (REL-2-03).
-    ///
-    /// # Errors
-    ///
-    /// Same shape as [`Self::load_from_paths`].
     pub fn load_from_paths_with(
         cert: &Path,
         key: &Path,
@@ -491,10 +464,6 @@ impl TlsConfigBundle {
 
 /// Atomically swap in a freshly-loaded bundle. A FAILED reload leaves the old bundle live.
 /// `ticketer` carries the rotator across the swap; `None` forces full handshakes afterwards.
-///
-/// # Errors
-///
-/// Same shape as [`TlsConfigBundle::load_from_paths`].
 pub fn reload_tls_bundle(
     bundle: &SharedTlsBundle,
     cert: &Path,

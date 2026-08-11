@@ -120,11 +120,7 @@ impl LabelBudget {
         }
     }
 
-    /// Refuse to boot if any family exceeds its ceiling.
-    ///
-    /// # Errors
-    ///
-    /// The first offending family.
+    /// Refuse to boot if any family exceeds its ceiling; reports the FIRST offender only.
     pub fn check(&self) -> Result<(), LabelBudgetError> {
         let w = self.worst_case();
         let ceiling = self.max_label_cardinality;
@@ -240,10 +236,6 @@ impl EnforcedLabelBudget {
     }
 
     /// Admit a label tuple.
-    ///
-    /// # Errors
-    ///
-    /// `CardinalityErr::Refused` when the tuple is novel and the ceiling is exhausted.
     pub fn admit(&self, values: &[&str]) -> Result<(), CardinalityErr> {
         let h = Self::hash_tuple(values);
         let mut guard = self.seen.lock().unwrap_or_else(PoisonError::into_inner);

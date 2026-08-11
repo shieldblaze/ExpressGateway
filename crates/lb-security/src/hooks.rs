@@ -35,17 +35,9 @@ pub enum SecurityReject {
 /// Security decisions the proxy hot path calls into.
 pub trait SecurityHooks: Send + Sync + 'static {
     /// Run every admission-time check before the bridge / upstream-acquire path.
-    ///
-    /// # Errors
-    ///
-    /// [`SecurityReject`].
     fn inspect_request<B>(&self, req: &Request<B>, peer: IpAddr) -> Result<(), SecurityReject>;
 
     /// Admit a connection; the [`ConnPermit`] must be held for the connection's whole life.
-    ///
-    /// # Errors
-    ///
-    /// [`SecurityReject::OverCap`] when either counter is saturated.
     fn admit_connection(&self, peer: IpAddr) -> Result<ConnPermit, SecurityReject>;
 }
 

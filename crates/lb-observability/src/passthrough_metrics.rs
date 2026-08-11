@@ -25,10 +25,6 @@ pub struct PassthroughMetrics {
 impl PassthroughMetrics {
     /// Register every family. Idempotent, so a second listener spawn reuses the same handles;
     /// all read 0 from registration so `/metrics` shows the rows immediately.
-    ///
-    /// # Errors
-    ///
-    /// The `prometheus` registration error, or [`MetricsError::TypeMismatch`].
     pub fn register(registry: &MetricsRegistry) -> Result<Self, MetricsError> {
         let flows = registry.gauge(
             "quic_passthrough_flows",

@@ -159,9 +159,7 @@ impl Http2Pool {
     /// multiplexed connection can corrupt every other stream on the same peer. Pingora shipped
     /// this upstream-smuggling bug class in 0.6.0 and again in 0.8.0.
     ///
-    /// # Errors
-    ///
-    /// [`Http2PoolError`]. `Send` and `Timeout` evict the cached entry before returning.
+    /// `Send` and `Timeout` errors evict the cached entry before returning.
     pub async fn send_request(
         &self,
         addr: SocketAddr,
@@ -189,10 +187,6 @@ impl Http2Pool {
     /// Both [`IdleSendError`] variants collapse onto [`Http2PoolError::Timeout`] to keep the enum
     /// stable — the firing phase survives only in the warn log. ROUND8-L7-10 eviction applies to
     /// both error arms.
-    ///
-    /// # Errors
-    ///
-    /// [`Http2PoolError`]. `Send` and `Timeout` evict the cached entry.
     // Over clippy's seven-arg limit, but each argument is load-bearing for the deadline contract
     // and none has a sensible per-pool default.
     #[allow(clippy::too_many_arguments)]
@@ -325,11 +319,7 @@ impl Http2Pool {
     }
 }
 
-/// Collect a response body into one [`Bytes`], bounded against an unbounded upstream response.
-///
-/// # Errors
-///
-/// `InvalidData` past `max_body`, or a wrapped hyper body error.
+/// Collect a response body into one [`Bytes`]; errors with `InvalidData` past `max_body`.
 pub async fn collect_body_bounded(body: Incoming, max_body: usize) -> io::Result<Bytes> {
     let collected = body
         .collect()

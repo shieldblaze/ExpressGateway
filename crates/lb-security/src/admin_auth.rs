@@ -160,10 +160,6 @@ impl AdminAuthGate {
 
     /// Refuse to start an admin listener that would be exposed without authentication. Call once
     /// before binding. Inputs are flat to keep this crate independent of lb-config.
-    ///
-    /// # Errors
-    ///
-    /// [`AdminBindError`].
     pub fn validate_bind(
         bind: SocketAddr,
         allow_non_loopback: bool,

@@ -60,10 +60,6 @@ static INIT: OnceLock<LogFormat> = OnceLock::new();
 
 /// Install the global subscriber. The ENV WINS over `cfg` for both format (`LB_LOG_FORMAT`) and
 /// filter (`RUST_LOG`). Idempotent.
-///
-/// # Errors
-///
-/// See [`TracingError`].
 pub fn init_tracing(cfg: &TracingConfig) -> Result<(), TracingError> {
     let format = std::env::var("LB_LOG_FORMAT")
         .ok()

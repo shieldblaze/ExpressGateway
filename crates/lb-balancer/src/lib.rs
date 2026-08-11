@@ -117,10 +117,6 @@ impl Backend {
 /// Trait for load balancers that pick a backend by index from a slice.
 pub trait LoadBalancer: Send + Sync {
     /// Pick a backend, returning its index.
-    ///
-    /// # Errors
-    ///
-    /// `BalancerError` on an empty list or a failed selection.
     fn pick(&mut self, backends: &[Backend]) -> Result<usize, BalancerError>;
 }
 
@@ -152,9 +148,5 @@ pub fn backend_identity_hash(backends: &[Backend]) -> u64 {
 /// Trait for load balancers that use a key for consistent hashing / affinity.
 pub trait KeyedLoadBalancer: Send + Sync {
     /// Pick a backend for `key`, returning its index.
-    ///
-    /// # Errors
-    ///
-    /// `BalancerError` on an empty list or a failed selection.
     fn pick_with_key(&self, backends: &[Backend], key: u64) -> Result<usize, BalancerError>;
 }

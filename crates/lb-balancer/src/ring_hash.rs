@@ -23,10 +23,6 @@ pub struct RingHash {
 
 impl RingHash {
     /// Build the ring.
-    ///
-    /// # Errors
-    ///
-    /// `BalancerError::NoBackends` on an empty slice.
     pub fn new(backends: &[Backend]) -> Result<Self, BalancerError> {
         if backends.is_empty() {
             return Err(BalancerError::NoBackends);

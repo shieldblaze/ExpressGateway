@@ -821,20 +821,12 @@ const fn default_weight() -> u32 {
 }
 
 /// Parse a TOML string into an `LbConfig`.
-///
-/// # Errors
-///
-/// `ConfigError::TomlParse`.
 pub fn parse_config(input: &str) -> Result<LbConfig, ConfigError> {
     let config: LbConfig = toml::from_str(input)?;
     Ok(config)
 }
 
 /// Validate a parsed configuration.
-///
-/// # Errors
-///
-/// `ConfigError::Validation`.
 pub fn validate_config(config: &LbConfig) -> Result<(), ConfigError> {
     // Passthrough is an independent datapath, so `[passthrough]` with no `[[listeners]]` is a
     // valid Mode-A-only deployment.

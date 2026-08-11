@@ -47,10 +47,6 @@ pub enum KeyPermError {
 
 /// Inspect `path` (a regular file; symlinks followed) and pass, advise, or — under `strict` —
 /// fail on loose permissions.
-///
-/// # Errors
-///
-/// [`KeyPermError`].
 pub fn assert_owner_only<P: AsRef<Path>>(
     path: P,
     strict: bool,

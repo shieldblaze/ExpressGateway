@@ -28,10 +28,6 @@ pub struct XdpMetrics {
 
 impl XdpMetrics {
     /// Register every XDP family.
-    ///
-    /// # Errors
-    ///
-    /// The `prometheus` registration error.
     pub fn register(registry: &MetricsRegistry) -> Result<Self, MetricsError> {
         let packets_total = registry.counter_vec(
             "xdp_packets_total",

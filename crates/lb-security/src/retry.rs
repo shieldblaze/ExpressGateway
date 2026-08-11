@@ -82,11 +82,8 @@ impl std::fmt::Debug for RetryTokenSigner {
 }
 
 impl RetryTokenSigner {
-    /// Build a signer with a fresh 32-byte secret from [`ring::rand::SystemRandom`].
-    ///
-    /// # Errors
-    ///
-    /// The `ring` error as a string if the OS RNG is unavailable.
+    /// Build a signer with a fresh 32-byte secret from [`ring::rand::SystemRandom`]; errors carry
+    /// the `ring` failure as a string.
     pub fn new_random() -> Result<Self, String> {
         let mut secret = [0u8; RETRY_SECRET_LEN];
         ring::rand::SystemRandom::new()
@@ -149,10 +146,6 @@ impl RetryTokenSigner {
     }
 
     /// Verify the MAC, peer binding and expiry; return the ODCID the token was minted for.
-    ///
-    /// # Errors
-    ///
-    /// See [`RetryError`].
     pub fn verify(
         &self,
         token: &[u8],

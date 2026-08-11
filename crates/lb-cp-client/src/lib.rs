@@ -64,10 +64,6 @@ impl CpClient {
     }
 
     /// Mark the client connected. Performs NO I/O — it only checks that an endpoint is set.
-    ///
-    /// # Errors
-    ///
-    /// `CpClientError::NoEndpoint`.
     pub fn connect(&mut self) -> Result<(), CpClientError> {
         if self.endpoint.is_none() {
             return Err(CpClientError::NoEndpoint);

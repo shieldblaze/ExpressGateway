@@ -24,10 +24,6 @@ pub struct QuicModeBMetrics {
 impl QuicModeBMetrics {
     /// Register every family. Idempotent; all handles read 0 so `/metrics` shows the rows from
     /// spawn.
-    ///
-    /// # Errors
-    ///
-    /// The `prometheus` registration error, or [`MetricsError::TypeMismatch`].
     pub fn register(registry: &MetricsRegistry) -> Result<Self, MetricsError> {
         let connections = registry.gauge(
             "quic_modeb_connections",

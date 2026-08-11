@@ -25,10 +25,6 @@ impl SlowlorisDetector {
 
     /// Record cumulative header bytes and check the rate SINCE THE LAST CHECK — a lifetime
     /// average would let an attacker bank an early burst and then trickle.
-    ///
-    /// # Errors
-    ///
-    /// [`SecurityError::SlowlorisRate`] when the windowed rate is below the floor.
     pub fn record_bytes(
         &mut self,
         bytes_received: u64,
@@ -58,10 +54,6 @@ impl SlowlorisDetector {
     }
 
     /// Check the header phase against its wall-clock cap.
-    ///
-    /// # Errors
-    ///
-    /// [`SecurityError::SlowlorisTimeout`].
     pub const fn check_header_timeout(&self, elapsed_ms: u64) -> Result<(), SecurityError> {
         if elapsed_ms > self.header_timeout_ms {
             return Err(SecurityError::SlowlorisTimeout {

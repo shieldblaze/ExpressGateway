@@ -199,10 +199,6 @@ impl QuicUpstreamPool {
     }
 
     /// Acquire a connection to `addr`: probed idle reuse first, else a fresh dial and handshake.
-    ///
-    /// # Errors
-    ///
-    /// `io::Error::other` wrapping a `quiche::Error`, or a bubbled UDP socket error.
     pub async fn acquire(&self, addr: SocketAddr, sni: &str) -> io::Result<PooledQuic> {
         while let Some(idle) = self.pop_idle(addr) {
             let age_since_created = idle.created_at.elapsed();
@@ -321,10 +317,6 @@ impl QuicUpstreamPool {
     ///
     /// A non-empty `alpn` overrides the factory's tokens so the upstream advertises exactly what
     /// the client negotiated; an empty slice keeps the factory's.
-    ///
-    /// # Errors
-    ///
-    /// `io::Error::other` wrapping a `quiche::Error`, or a bubbled UDP socket error.
     pub async fn dial_dedicated(
         &self,
         addr: SocketAddr,

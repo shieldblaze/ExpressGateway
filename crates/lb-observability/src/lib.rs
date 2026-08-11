@@ -117,10 +117,6 @@ impl MetricsRegistry {
     }
 
     /// Get-or-create an [`IntCounter`]; on a cache hit `help` is IGNORED.
-    ///
-    /// # Errors
-    ///
-    /// [`MetricsError`].
     pub fn counter(&self, name: &str, help: &str) -> Result<IntCounter, MetricsError> {
         // Fast path: a previous registration is visible — return its handle.
         if let Some(entry) = self.handles.get(name) {
@@ -151,10 +147,6 @@ impl MetricsRegistry {
     }
 
     /// Get-or-create a labeled [`IntCounterVec`]. The label set is FIXED at first registration.
-    ///
-    /// # Errors
-    ///
-    /// See [`Self::counter`].
     pub fn counter_vec(
         &self,
         name: &str,
@@ -187,10 +179,6 @@ impl MetricsRegistry {
     }
 
     /// Get-or-create a [`PHistogram`] with the given bucket boundaries.
-    ///
-    /// # Errors
-    ///
-    /// See [`Self::counter`].
     pub fn histogram(
         &self,
         name: &str,
@@ -225,10 +213,6 @@ impl MetricsRegistry {
     }
 
     /// Get-or-create a labeled [`HistogramVec`].
-    ///
-    /// # Errors
-    ///
-    /// See [`Self::counter`].
     pub fn histogram_vec(
         &self,
         name: &str,
@@ -265,10 +249,6 @@ impl MetricsRegistry {
     }
 
     /// Get-or-create a labeled [`IntGaugeVec`]. The label set is FIXED at first registration.
-    ///
-    /// # Errors
-    ///
-    /// See [`Self::counter`].
     pub fn gauge_vec(
         &self,
         name: &str,
@@ -301,10 +281,6 @@ impl MetricsRegistry {
     }
 
     /// Get-or-create an [`IntGauge`].
-    ///
-    /// # Errors
-    ///
-    /// See [`Self::counter`].
     pub fn gauge(&self, name: &str, help: &str) -> Result<IntGauge, MetricsError> {
         if let Some(entry) = self.handles.get(name) {
             if let Handle::Gauge(g) = entry.value() {
@@ -332,10 +308,6 @@ impl MetricsRegistry {
     }
 
     /// Get-or-create the `accept_inflight{listener}` gauge family.
-    ///
-    /// # Errors
-    ///
-    /// The underlying `prometheus` registration error.
     pub fn accept_inflight_gauge(&self) -> Result<IntGaugeVec, MetricsError> {
         self.gauge_vec(
             "accept_inflight",
@@ -366,10 +338,6 @@ impl MetricsRegistry {
     }
 
     /// Get-or-create the `panic_total` counter; the panic hook holds a clone of this handle.
-    ///
-    /// # Errors
-    ///
-    /// The underlying `prometheus` registration error.
     pub fn panic_total_counter(&self) -> Result<IntCounter, MetricsError> {
         self.counter(
             "panic_total",

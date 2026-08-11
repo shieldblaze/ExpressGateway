@@ -62,9 +62,6 @@ pub struct UdpSockOpts {
 }
 
 /// Apply [`ListenerSockOpts`] to a bound listener; the FIRST failure aborts the rest.
-///
-/// # Errors
-/// `io::Error` from `setsockopt` or `listen(2)`.
 pub fn apply_listener(socket: &TcpListener, cfg: &ListenerSockOpts) -> io::Result<()> {
     let sock = SockRef::from(socket);
     if cfg.reuseaddr {
@@ -126,9 +123,6 @@ pub fn apply_listener(socket: &TcpListener, cfg: &ListenerSockOpts) -> io::Resul
 }
 
 /// Apply [`BackendSockOpts`] to a connected stream; the FIRST failure aborts the rest.
-///
-/// # Errors
-/// `io::Error` from `setsockopt`.
 pub fn apply_connected(socket: &TcpStream, cfg: &BackendSockOpts) -> io::Result<()> {
     let sock = SockRef::from(socket);
     if cfg.nodelay {
@@ -169,9 +163,6 @@ pub fn apply_connected(socket: &TcpStream, cfg: &BackendSockOpts) -> io::Result<
 
 /// [`apply_connected`] for a tokio stream, so the async dial path never has to unregister the fd
 /// from the reactor and back.
-///
-/// # Errors
-/// `io::Error` from `setsockopt`.
 pub fn apply_connected_tokio(
     socket: &tokio::net::TcpStream,
     cfg: &BackendSockOpts,
@@ -213,9 +204,6 @@ pub fn apply_connected_tokio(
 }
 
 /// Apply [`UdpSockOpts`] to a bound socket; the FIRST failure aborts the rest.
-///
-/// # Errors
-/// `io::Error` from `setsockopt`.
 pub fn apply_udp(socket: &UdpSocket, cfg: &UdpSockOpts) -> io::Result<()> {
     let sock = SockRef::from(socket);
     #[cfg(any(target_os = "linux", target_os = "freebsd", target_os = "netbsd"))]

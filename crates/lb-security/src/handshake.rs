@@ -34,10 +34,6 @@ pub enum HandshakeError {
 ///
 /// A zero `budget` rejects every connection, so it debug-asserts and is raised to 1 ms in release
 /// rather than taking production down.
-///
-/// # Errors
-///
-/// See [`HandshakeError`].
 pub async fn timeout_accept<IO>(
     acceptor: &TlsAcceptor,
     stream: IO,

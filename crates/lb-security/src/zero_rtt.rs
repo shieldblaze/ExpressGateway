@@ -126,11 +126,8 @@ impl ZeroRttReplayGuard {
         self.max_tokens
     }
 
-    /// Record a 0-RTT token, evicting the LRU entry if the window is full.
-    ///
-    /// # Errors
-    ///
-    /// [`SecurityError::ZeroRttReplay`] if the token is already in the window.
+    /// Record a 0-RTT token, evicting the LRU entry if the window is full. A token already in
+    /// the window is a replay and errors with [`SecurityError::ZeroRttReplay`].
     pub fn check_and_record(&mut self, token: &[u8]) -> Result<(), SecurityError> {
         let digest = hash_token(&self.key, token);
 
@@ -249,10 +246,6 @@ impl ZeroRttReplayGuard {
     }
 
     /// Alias of [`check_and_record`](Self::check_and_record), named for the QUIC accept loop.
-    ///
-    /// # Errors
-    ///
-    /// [`SecurityError::ZeroRttReplay`] on a replay.
     pub fn check_0rtt_token(&mut self, token: &[u8]) -> Result<(), SecurityError> {
         self.check_and_record(token)
     }

@@ -122,10 +122,6 @@ impl TcpPool {
     ///
     /// NOT for production callers (CODE-2-09) — the fresh-dial `connect(2)` blocks inline on the
     /// calling task. Use [`TcpPool::acquire_async`]; this stays for non-tokio embedders and tests.
-    ///
-    /// # Errors
-    ///
-    /// `io::Error` from `connect(2)`, `set_nonblocking`, or `TcpStream::from_std`.
     pub fn acquire(&self, addr: SocketAddr) -> io::Result<PooledTcp> {
         while let Some(idle) = self.pop_idle(addr) {
             match self.validate_and_upgrade(idle, addr) {
@@ -139,10 +135,6 @@ impl TcpPool {
 
     /// [`TcpPool::acquire`] with a cancellable async dial under [`PoolConfig::connect_timeout`].
     /// The production path — reuse, expiry and [`probe_alive`] are identical; only the dial differs.
-    ///
-    /// # Errors
-    ///
-    /// `io::Error` from the dial or sockopt step; [`io::ErrorKind::TimedOut`] past the deadline.
     pub async fn acquire_async(&self, addr: SocketAddr) -> io::Result<PooledTcp> {
         while let Some(idle) = self.pop_idle(addr) {
             match self.validate_and_upgrade(idle, addr) {

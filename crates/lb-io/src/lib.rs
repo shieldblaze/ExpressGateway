@@ -126,10 +126,6 @@ impl Runtime {
     }
 
     /// Bind a TCP listener and apply `opts`.
-    ///
-    /// # Errors
-    ///
-    /// `io::Error` from `bind(2)` or any `setsockopt`.
     pub fn listener_socket(
         &self,
         addr: std::net::SocketAddr,
@@ -141,10 +137,6 @@ impl Runtime {
     }
 
     /// Connect a TCP socket and apply `opts`.
-    ///
-    /// # Errors
-    ///
-    /// `io::Error` from `connect(2)` or any `setsockopt`.
     pub fn connect_socket(
         &self,
         addr: std::net::SocketAddr,
@@ -157,10 +149,6 @@ impl Runtime {
 
     /// Bind a listener and return it in BLOCKING mode — a tokio caller must `set_nonblocking`
     /// before `from_std`.
-    ///
-    /// # Errors
-    ///
-    /// `io::Error` from `bind(2)` or any `setsockopt`.
     pub fn listen(
         &self,
         addr: std::net::SocketAddr,
@@ -171,10 +159,6 @@ impl Runtime {
 
     /// Connect and return the stream in BLOCKING mode — a tokio caller must `set_nonblocking`
     /// before `from_std`.
-    ///
-    /// # Errors
-    ///
-    /// `io::Error` from `connect(2)` or any `setsockopt`.
     pub fn connect(
         &self,
         addr: std::net::SocketAddr,

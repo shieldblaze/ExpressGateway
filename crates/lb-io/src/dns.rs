@@ -189,11 +189,6 @@ impl DnsResolver {
     }
 
     /// Resolve `hostname:port` through the cache; racing callers share one system-resolver call.
-    ///
-    /// # Errors
-    ///
-    /// [`DnsError::NxDomain`] on an empty answer, [`DnsError::Io`] otherwise (a tokio `JoinError`
-    /// surfaces here too).
     pub async fn resolve(&self, hostname: &str, port: u16) -> Result<Vec<SocketAddr>, DnsError> {
         let key = CacheKey::from_ref(hostname, port);
         let entry = self

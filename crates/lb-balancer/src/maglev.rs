@@ -18,10 +18,6 @@ pub struct Maglev {
 
 impl Maglev {
     /// Build the lookup table.
-    ///
-    /// # Errors
-    ///
-    /// `BalancerError::NoBackends` on an empty slice.
     pub fn new(backends: &[Backend]) -> Result<Self, BalancerError> {
         if backends.is_empty() {
             return Err(BalancerError::NoBackends);
