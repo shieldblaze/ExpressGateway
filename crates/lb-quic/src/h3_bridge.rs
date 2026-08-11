@@ -1,6 +1,5 @@
-//! H3 → {H1, H2, H3} request/response bridge: relays a `quiche::h3`-decoded
-//! request to the chosen upstream and streams the response back under the R8
-//! bounded-channel backpressure gate.
+//! H3 → {H1, H2, H3} request/response bridge: relays a `quiche::h3`-decoded request to the
+//! chosen upstream and streams the response back under the R8 bounded-channel backpressure gate.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -17,37 +16,32 @@ use lb_io::http2_pool::Http2Pool;
 use lb_io::pool::TcpPool;
 use lb_io::quic_pool::QuicUpstreamPool;
 
-/// Total request-body cap ⇒ H3 `413`. NOT the memory bound — that is the
-/// bounded in-flight body channel (`H3_BODY_CHANNEL_DEPTH` × ≤8 KiB chunks).
+/// Total request-body cap ⇒ H3 `413`. NOT the memory bound — that is the bounded in-flight
+/// body channel (`H3_BODY_CHANNEL_DEPTH` × ≤8 KiB chunks).
 // TODO(s3): wire into listener/actor config.
 pub const MAX_REQUEST_BODY_BYTES: usize = 64 * 1024 * 1024;
 
-/// Total H1-response byte cap ⇒ clean H3 `502`. A DoS threshold, NOT a memory
-/// bound: the response is streamed (see [`H3_RESP_CHANNEL_DEPTH`]).
+/// Total H1-response byte cap ⇒ clean H3 `502`. A DoS threshold, NOT a memory bound.
 // TODO(s3): make configurable.
 pub const MAX_RESPONSE_BODY_BYTES: usize = 64 * 1024 * 1024;
 
-/// Largest single `ReqBodyEvent::Chunk`. With `H3_BODY_CHANNEL_DEPTH` this
-/// bounds in-flight bytes INDEPENDENT of total body size; larger DATA is split.
+/// Largest single `ReqBodyEvent::Chunk`; with `H3_BODY_CHANNEL_DEPTH` this bounds in-flight
+/// bytes INDEPENDENT of total body size.
 pub const H3_BODY_CHUNK_MAX: usize = 8 * 1024;
 
-/// RFC 9114 §8.1 `H3_REQUEST_CANCELLED` — put on the **request** leg when the
-/// H3→H3 connector aborts without FIN. Deliberately NOT the response leg's
-/// [`crate::conn_actor::H3_INTERNAL_ERROR`]: here the proxy is the *client*, so
-/// a client cancel really cancels; there it is the *server*, where this code
-/// would misattribute a gateway failure. Not a consistency bug — do not "fix".
+/// RFC 9114 §8.1 `H3_REQUEST_CANCELLED` — put on the **request** leg when the H3→H3 connector
+/// aborts without FIN. Deliberately NOT the response leg's [`crate::conn_actor::H3_INTERNAL_ERROR`]:
+/// here the proxy is the *client*, so a client cancel really cancels; there it is the *server*,
+/// where this code would misattribute a gateway failure. Not a consistency bug — do not "fix".
 const H3_REQUEST_CANCELLED: u64 = 0x010c;
 
-/// Cap on accumulated partial frame-header bytes: two QUIC varints of ≤ 8 bytes
-/// each (RFC 9000 §16), so a well-formed header is ≤ 16 — larger ⇒ Reset.
+/// Cap on accumulated partial frame-header bytes: two QUIC varints of ≤8 bytes (RFC 9000 §16).
 pub const MAX_FRAME_HEADER_BYTES: usize = 16;
 
-/// Cap on a body-phase trailing HEADERS QPACK block. Unlike DATA the block MUST
-/// be whole-buffered to decode, so it needs an explicit ceiling.
+/// Cap on a body-phase trailing HEADERS QPACK block: unlike DATA it MUST be whole-buffered.
 pub const MAX_TRAILER_BLOCK_BYTES: usize = 64 * 1024;
 
-/// Request-body event forwarded over the per-stream bounded body channel from
-/// `conn_actor::poll_h3` to the egress task.
+/// Request-body event forwarded over the per-stream bounded body channel to the egress task.
 #[derive(Debug, Clone)]
 pub enum ReqBodyEvent {
     /// A bounded request-body chunk.
@@ -57,35 +51,31 @@ pub enum ReqBodyEvent {
         /// Request trailers (post-DATA HEADERS frame); empty if none.
         trailers: Vec<(String, String)>,
     },
-    /// Reset / abort before a clean end — the egress task MUST abort the
-    /// upstream and fail the request.
+    /// Reset / abort before a clean end — the egress task MUST abort the upstream.
     Reset,
 }
 
-/// Depth of the per-stream bounded RESPONSE channel back into the actor.
-/// Retained memory = this × [`H3_RESP_CHUNK_MAX`], response-size independent.
+/// Depth of the per-stream bounded RESPONSE channel; retained memory is this ×
+/// [`H3_RESP_CHUNK_MAX`], response-size independent.
 pub const H3_RESP_CHANNEL_DEPTH: usize = 8;
 
-/// Largest response-body slice per `RespEvent::Body`; larger reads are split so
-/// in-flight memory stays bounded regardless of body size.
+/// Largest response-body slice per `RespEvent::Body`; larger reads are split.
 pub const H3_RESP_CHUNK_MAX: usize = 8 * 1024;
 
-/// H3 frame-header ceiling (two varints, RFC 9000 §16), re-exported under a
-/// response-side name so the memory gauge OVER-estimates, never under.
+/// H3 frame-header ceiling (two varints, RFC 9000 §16), re-exported under a response-side name
+/// so the memory gauge OVER-estimates, never under.
 pub const H3_FRAME_HDR_MAX: usize = MAX_FRAME_HEADER_BYTES;
 
-/// F-S7-6: the H3→H3 connector's NO-FORWARD-PROGRESS **idle** deadline — NOT a
-/// wall-clock cap. Its fixed-5 s wall-clock predecessor truncated a valid,
-/// actively-progressing 8 MiB response at ~4.37 MiB. Reset ONLY on bidirectional
-/// application-data progress; NEVER by keepalive, timers, zero-byte reads or
-/// backpressure parks (R-S76-5).
+/// F-S7-6: the H3→H3 connector's NO-FORWARD-PROGRESS **idle** deadline — NOT a wall-clock cap.
+/// Its fixed-5 s wall-clock predecessor truncated a valid, actively-progressing 8 MiB response at
+/// ~4.37 MiB. Reset ONLY on bidirectional application-data progress; NEVER by keepalive, timers,
+/// zero-byte reads or backpressure parks (R-S76-5).
 pub const H3_RESP_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
-/// One unit of the bounded response pipe from an upstream reader task back to
-/// the actor. DECODED, not wire bytes — the actor's `quiche::h3` owns framing.
-/// Ordering: one [`Head`](Self::Head), then [`Body`](Self::Body) chunks, an
-/// OPTIONAL [`Trailers`](Self::Trailers), then [`End`](Self::End); on ANY abort
-/// a single [`Reset`](Self::Reset) and NEVER `End`.
+/// One unit of the bounded response pipe from an upstream reader task back to the actor —
+/// DECODED, not wire bytes. Ordering: one [`Head`](Self::Head), then [`Body`](Self::Body) chunks,
+/// an OPTIONAL [`Trailers`](Self::Trailers), then [`End`](Self::End); on ANY abort a single
+/// [`Reset`](Self::Reset) and NEVER `End`.
 #[derive(Debug, Clone)]
 pub enum RespEvent {
     /// The response head. Emitted exactly once, before any `Body`.
@@ -97,8 +87,7 @@ pub enum RespEvent {
     },
     /// A decoded response-body chunk (≤ [`H3_RESP_CHUNK_MAX`], producer-split).
     Body(Bytes),
-    /// The RFC 9114 §4.1 trailing field section, hop-by-hop stripped. Emitted
-    /// only when non-empty, after the last `Body` and before `End`.
+    /// The RFC 9114 §4.1 trailing field section, hop-by-hop stripped; emitted only when non-empty.
     Trailers(Vec<(String, String)>),
     /// All response events delivered — the actor FINs the client stream.
     End,
@@ -106,10 +95,9 @@ pub enum RespEvent {
     Reset,
 }
 
-/// A DECODED upstream-H3 response event for an HTTP/1.1 or HTTP/2 *front*, so
-/// an L7 front never re-decodes H3 frames it did not produce (wrong layer;
-/// would re-introduce buffering in `lb-l7`). Same ordering contract as
-/// [`RespEvent`], including a single `Reset` and NEVER `End` on any abort.
+/// A DECODED upstream-H3 response event for an HTTP/1.1 or HTTP/2 *front*, so an L7 front never
+/// re-decodes H3 frames it did not produce (that would re-introduce buffering in `lb-l7`). Same
+/// ordering contract as [`RespEvent`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum H3RespEvent {
     /// The response head; pseudo-headers filtered. Emitted once, before `Body`.
@@ -129,10 +117,9 @@ pub enum H3RespEvent {
     Reset,
 }
 
-/// Why a response producer aborted. EVERY variant emits [`RespEvent::Reset`]
-/// and returns `Err`, so the actor RESET_STREAMs and NEVER FINs — a partial
-/// body is never presentable as complete. The caller MUST mark the pooled
-/// upstream NON-reusable on every variant (C2).
+/// Why a response producer aborted. EVERY variant emits [`RespEvent::Reset`] and returns `Err`,
+/// so a partial body is never presentable as complete, and the caller MUST mark the pooled
+/// upstream NON-reusable (C2).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RespAbort {
     /// Upstream socket reset / read error mid-response.
@@ -149,9 +136,8 @@ pub enum RespAbort {
     ClientGone,
 }
 
-/// Test gauge: peak per-stream request-body memory retained, counting the
-/// buffers UPSTREAM of the chunk split — so it FAILS if the decoder buffers a
-/// whole DATA frame, which [`MAX_INFLIGHT_BODY_BYTES`] cannot detect.
+/// Test gauge: peak per-stream request-body memory retained, counting the buffers UPSTREAM of the
+/// chunk split — so it FAILS if the decoder buffers a whole DATA frame.
 #[cfg(any(test, feature = "test-gauges"))]
 pub static MAX_RETAINED_BODY_BYTES: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
@@ -174,9 +160,8 @@ pub fn record_retained(n: usize) {
     }
 }
 
-/// Test gauge: peak per-stream RESPONSE memory retained (an UPPER bound). A
-/// whole-response buffering implementation would make this grow with response
-/// size; the bounded channel keeps it response-size independent.
+/// Test gauge: peak per-stream RESPONSE memory retained (an UPPER bound). A whole-response
+/// buffering implementation would make this grow with response size.
 #[cfg(any(test, feature = "test-gauges"))]
 pub static MAX_RETAINED_RESP_BYTES: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
@@ -208,8 +193,7 @@ pub struct H3Request {
     pub path: String,
     /// `:authority` pseudo-header.
     pub authority: String,
-    /// Non-pseudo headers. Not emitted on the H1 leg (which only sets `Host` +
-    /// `Content-Length`), hence the `dead_code` allow.
+    /// Non-pseudo headers; not emitted on the H1 leg, hence the `dead_code` allow.
     #[allow(dead_code)]
     pub extra: Vec<(String, String)>,
     /// RFC 9114 §4.1 trailing field section; empty when the request has none.
@@ -217,8 +201,8 @@ pub struct H3Request {
 }
 
 impl Default for H3Request {
-    /// Mirrors [`H3Request::from_headers`]'s missing-pseudo defaults so a
-    /// defaulted value is wire-coherent rather than carrying empty pseudos.
+    /// Mirrors [`H3Request::from_headers`]'s missing-pseudo defaults, so a defaulted value is
+    /// wire-coherent rather than carrying empty pseudos.
     fn default() -> Self {
         Self {
             method: "GET".to_string(),
@@ -231,9 +215,8 @@ impl Default for H3Request {
 }
 
 impl H3Request {
-    /// Extract pseudo-headers from a QPACK-decoded field list. Missing ones are
-    /// DEFAULTED — deliberately NOT validation; see
-    /// [`validate_request_pseudo_headers`], which runs first.
+    /// Extract pseudo-headers from a QPACK-decoded field list. Missing ones are DEFAULTED —
+    /// deliberately NOT validation; [`validate_request_pseudo_headers`] runs first.
     #[must_use]
     pub fn from_headers(headers: Vec<(String, String)>) -> Self {
         let mut method = None;
@@ -246,7 +229,6 @@ impl H3Request {
                 ":path" => path = Some(value),
                 ":authority" => authority = Some(value),
                 ":scheme" => {
-                    // Known-required but not actionable here.
                 }
                 _ => extra.push((name, value)),
             }
@@ -256,27 +238,23 @@ impl H3Request {
             path: path.unwrap_or_else(|| "/".to_string()),
             authority: authority.unwrap_or_default(),
             extra,
-            // RFC 9114 §4.1: request trailers arrive in a SECOND HEADERS
-            // frame after DATA, so they are never present at head-decode time.
+            // RFC 9114 §4.1: request trailers arrive in a SECOND HEADERS frame after DATA, so
+            // they are never present at head-decode time.
             trailers: Vec::new(),
         }
     }
 }
 
-/// RFC 9114 §4.3 / §4.3.1 request pseudo-header validation (h3spec #12–15).
-/// Returns `Err(reason)` on the FIRST violation; the caller resets the stream
-/// with `H3_MESSAGE_ERROR` — a **stream** error (§4.1.3), so the connection
-/// survives. Runs BEFORE [`H3Request::from_headers`] (which silently defaults
-/// missing pseudo-headers) and before any upstream is dialled, so a malformed
-/// request never reaches a backend. A missing `:authority`/`Host` on http/https
-/// is STRICT (owner ruling). `ws_enabled` gates `:protocol`: when ON the request
-/// is an RFC 8441/9220 Extended CONNECT and MUST carry `:scheme` + `:path` +
-/// `:authority` — the OPPOSITE of a classic CONNECT; when OFF it is rejected as
-/// unregistered (#14). quiche does not validate these, so this is the sole
-/// authority.
+/// RFC 9114 §4.3 / §4.3.1 request pseudo-header validation (h3spec #12–15). Runs BEFORE
+/// [`H3Request::from_headers`] (which silently defaults missing pseudo-headers) and before any
+/// upstream is dialled. A missing `:authority`/`Host` on http/https is STRICT (owner ruling).
+/// `ws_enabled` gates `:protocol`: when ON the request is an RFC 8441/9220 Extended CONNECT and
+/// MUST carry `:scheme` + `:path` + `:authority` — the OPPOSITE of a classic CONNECT; when OFF it
+/// is rejected as unregistered (#14). quiche does not validate these, so this is the sole authority.
 ///
 /// # Errors
-/// Returns a static reason string naming the RFC clause violated.
+/// Returns a static reason string naming the RFC clause violated; the caller resets the stream
+/// with `H3_MESSAGE_ERROR`, a **stream** error (§4.1.3), so the connection survives.
 pub fn validate_request_pseudo_headers(
     headers: &[(String, String)],
     ws_enabled: bool,
@@ -319,8 +297,8 @@ pub fn validate_request_pseudo_headers(
                     }
                     seen_authority = true;
                 }
-                // Registered ONLY under `ws_enabled`; otherwise it falls
-                // through to the prohibited arm below (R3 byte-identical).
+                // Registered ONLY under `ws_enabled`; otherwise it falls through to the
+                // prohibited arm below (R3 byte-identical).
                 ":protocol" if ws_enabled => {
                     if seen_protocol {
                         return Err("h3 duplicate :protocol pseudo-header (RFC 9114 §4.3.1)");
@@ -339,8 +317,7 @@ pub fn validate_request_pseudo_headers(
         }
     }
 
-    // #13 — classic CONNECT omits :scheme/:path (§4.4); Extended CONNECT
-    // INVERTS that (RFC 8441 §4).
+    // #13 — classic CONNECT omits :scheme/:path (§4.4); Extended CONNECT INVERTS that (RFC 8441 §4).
     match method {
         None => Err("h3 missing mandatory :method pseudo-header (RFC 9114 §4.3.1)"),
         Some("CONNECT") if seen_protocol => {
@@ -396,10 +373,9 @@ fn parse_status_line(line: &str) -> Result<u16, String> {
         .map_err(|e| format!("status parse {code:?}: {e}"))
 }
 
-/// Response-direction hop-by-hop field names a proxy MUST NOT forward. A
-/// DELIBERATE duplicate of `lb_l7::h2_to_h1::RESPONSE_HOP_BY_HOP` — `lb-quic`
-/// sits BELOW `lb-l7` and cannot depend on it (reverse layering); keep the two
-/// in sync. Stripping is REQUIRED by RFC 9114 §4.2, not tidiness.
+/// Response-direction hop-by-hop field names a proxy MUST NOT forward. A DELIBERATE duplicate of
+/// `lb_l7::h2_to_h1::RESPONSE_HOP_BY_HOP` — `lb-quic` sits BELOW `lb-l7` and cannot depend on it
+/// (reverse layering); keep the two in sync. Stripping is REQUIRED by RFC 9114 §4.2.
 const RESPONSE_HOP_BY_HOP: &[&str] = &[
     "connection",
     "keep-alive",
@@ -427,36 +403,30 @@ enum RespFraming {
     Eof,
 }
 
-/// Incremental HTTP/1.1 chunked-transfer decoder for RESPONSES. EVERY malformed
-/// input ⇒ [`RespAbort::ChunkedDecode`] — never a truncated or forwarded body
-/// presented as complete (C3).
+/// Incremental HTTP/1.1 chunked-transfer decoder for RESPONSES. EVERY malformed input ⇒
+/// [`RespAbort::ChunkedDecode`] — never a truncated or forwarded body presented as complete (C3).
 #[derive(Debug)]
 struct ChunkDecoder {
-    /// Bytes not yet consumed (a partial size line or chunk body straddling
-    /// reads). Payload is drained immediately — never whole-chunk buffered.
+    /// Unconsumed bytes (a partial size line or straddling chunk body); payload is drained
+    /// immediately, never whole-chunk buffered.
     buf: Vec<u8>,
     /// `Some(remaining)` inside a chunk body; `None` awaiting the next size line.
     in_chunk: Option<usize>,
-    /// Zero-size chunk seen — no more payload. The RFC 9112 §7.1.2 trailer
-    /// section and final CRLF may still be pending; see [`Self::complete`].
+    /// Zero-size chunk seen; the RFC 9112 §7.1.2 trailer section may still be pending.
     done: bool,
     /// Zero-size chunk + trailer section + terminating CRLF ALL consumed. The
     /// producer loop exits on THIS, not `done`, which would drop the trailers.
     complete: bool,
-    /// Decoded RFC 9112 §7.1.2 trailer fields; taken once via
-    /// [`Self::take_trailers`] for the post-DATA H3 trailing-HEADERS frame.
+    /// Decoded RFC 9112 §7.1.2 trailer fields, taken once via [`Self::take_trailers`].
     trailers: Vec<(String, String)>,
-    /// Trailer-section bytes read so far, hard-bounded by
-    /// [`MAX_TRAILER_SECTION`] so a hostile trailer block cannot grow memory.
+    /// Trailer bytes so far, hard-bounded by [`MAX_TRAILER_SECTION`] against a hostile block.
     trailer_buf: Vec<u8>,
 }
 
-/// Max bytes a chunk-size line may occupy before it is rejected as
-/// malformed/hostile framing (smuggling guard, C3).
+/// Max bytes a chunk-size line may occupy before it is rejected as hostile framing (C3).
 const MAX_CHUNK_SIZE_LINE: usize = 256;
 
-/// Max bytes the RFC 9112 §7.1.2 chunked trailer section may occupy before it
-/// is rejected ⇒ [`RespAbort::ChunkedDecode`] (hostile-trailer ceiling).
+/// Max bytes the RFC 9112 §7.1.2 trailer section may occupy ⇒ [`RespAbort::ChunkedDecode`].
 const MAX_TRAILER_SECTION: usize = 64 * 1024;
 
 impl ChunkDecoder {
@@ -471,14 +441,12 @@ impl ChunkDecoder {
         }
     }
 
-    /// Take the decoded trailer fields. Only meaningful once
-    /// [`Self::complete`] is set.
+    /// Take the decoded trailer fields; only meaningful once [`Self::complete`] is set.
     fn take_trailers(&mut self) -> Vec<(String, String)> {
         std::mem::take(&mut self.trailers)
     }
 
-    /// Feed `input`, appending decoded payload to `out`. ANY malformed framing
-    /// (including a malformed trailer section) ⇒ `Err(ChunkedDecode)`.
+    /// Feed `input`, appending decoded payload to `out`. ANY malformed framing ⇒ `ChunkedDecode`.
     fn feed(&mut self, input: &[u8], out: &mut Vec<u8>) -> Result<(), RespAbort> {
         self.buf.extend_from_slice(input);
         loop {
@@ -486,13 +454,12 @@ impl ChunkDecoder {
                 return Ok(());
             }
             if self.done {
-                // Only the trailer section is left. PC-2: consumes from
-                // `self.buf`, so one coalesced with the zero-size line parses.
+                // Only the trailer section is left. PC-2: consumes from `self.buf`, so one
+                // coalesced with the zero-size line parses.
                 return self.parse_trailer_section();
             }
             match self.in_chunk {
                 Some(0) => {
-                    // Expect the trailing CRLF after a chunk body.
                     let Some(lead) = self.buf.get(..2) else {
                         return Ok(());
                     };
@@ -539,8 +506,8 @@ impl ChunkDecoder {
                         usize::from_str_radix(hex, 16).map_err(|_| RespAbort::ChunkedDecode)?;
                     self.buf.drain(..nl + 2);
                     if size == 0 {
-                        // Zero-size terminator: do NOT return — loop so a
-                        // trailer section coalesced into THIS read is consumed.
+                        // Zero-size terminator: do NOT return — loop so a trailer section
+                        // coalesced into THIS read is consumed.
                         self.done = true;
                         continue;
                     }
@@ -550,10 +517,9 @@ impl ChunkDecoder {
         }
     }
 
-    /// Parse the RFC 9112 §7.1.2 trailer section after the zero-size chunk. A
-    /// section split across reads or coalesced with the zero-size line parses
-    /// identically (PC-2). ANY malformed input — no `:`, a `:`-prefixed name
-    /// (RFC 9114 §4.3), an empty name, or oversize — ⇒ `ChunkedDecode`.
+    /// Parse the RFC 9112 §7.1.2 trailer section. A section split across reads or coalesced with
+    /// the zero-size line parses identically (PC-2). No `:`, a `:`-prefixed name (RFC 9114 §4.3),
+    /// an empty name, or oversize ⇒ `ChunkedDecode`.
     fn parse_trailer_section(&mut self) -> Result<(), RespAbort> {
         loop {
             if !self.buf.is_empty() {
@@ -563,8 +529,7 @@ impl ChunkDecoder {
                 self.trailer_buf.append(&mut self.buf);
             }
             let Some(nl) = self.trailer_buf.windows(2).position(|w| w == b"\r\n") else {
-                // Bound the partial accumulation — an unterminated section
-                // is hostile.
+                // Bound the partial accumulation — an unterminated section is hostile.
                 if self.trailer_buf.len() > MAX_TRAILER_SECTION {
                     return Err(RespAbort::ChunkedDecode);
                 }
@@ -593,27 +558,21 @@ impl ChunkDecoder {
     }
 }
 
-/// **Incremental, bounded, backpressured** H3 RESPONSE egress for an H1
-/// upstream: read only to the head terminator (64 KiB cap ⇒
-/// [`RespAbort::BadHead`]), emit [`RespEvent::Head`] **before any body byte**,
-/// then stream the body as ≤ [`H3_RESP_CHUNK_MAX`] chunks as they arrive.
-/// `tx.send(..).await` is the backpressure point: a stalled H3 client fills the
-/// channel, this parks, and the upstream socket is not read.
-///
-/// EVERY failure emits [`RespEvent::Reset`] and returns `Err` — never a
-/// truncated body as complete. The caller MUST mark the pooled upstream
-/// NON-reusable on any `Err` (C2).
+/// **Incremental, bounded, backpressured** H3 RESPONSE egress for an H1 upstream: read only to
+/// the head terminator (64 KiB cap ⇒ [`RespAbort::BadHead`]), emit [`RespEvent::Head`] **before
+/// any body byte**, then stream ≤ [`H3_RESP_CHUNK_MAX`] chunks. `tx.send(..).await` is the
+/// backpressure point: a stalled H3 client fills the channel, this parks, and the upstream socket
+/// is not read.
 ///
 /// # Errors
-///
-/// Returns [`RespAbort`] naming the upstream / framing / cap / cancel cause.
+/// [`RespAbort`] naming the cause. EVERY failure emits [`RespEvent::Reset`] — never a truncated
+/// body as complete — and the caller MUST mark the pooled upstream NON-reusable (C2).
 pub async fn stream_h1_response(
     stream: &mut TcpStream,
     tx: &tokio::sync::mpsc::Sender<RespEvent>,
     cap: usize,
 ) -> Result<(), RespAbort> {
-    /// Send a `RespEvent`, mapping a closed channel to `ClientGone` so the
-    /// producer stops reading the upstream.
+    /// Send a `RespEvent`, mapping a closed channel to `ClientGone` so the producer stops reading.
     macro_rules! send {
         ($tx:expr, $ev:expr) => {
             $tx.send($ev).await.map_err(|_| RespAbort::ClientGone)?
@@ -670,9 +629,8 @@ pub async fn stream_h1_response(
     };
     let mut content_length: Option<usize> = None;
     let mut chunked = false;
-    // CF-H3-HEAD: collect the FULL non-hop-by-hop set. `content-length` is
-    // re-added below from the ONE `framing` source; `transfer-encoding` is
-    // hop-by-hop (de-chunked here, the H3 leg is FIN-delimited).
+    // CF-H3-HEAD: collect the FULL non-hop-by-hop set. `content-length` is re-added below from
+    // the ONE `framing` source; `transfer-encoding` is hop-by-hop (the H3 leg is FIN-delimited).
     let mut fwd_headers: Vec<(String, String)> = Vec::new();
     for line in lines {
         let Some((k, v)) = line.split_once(':') else {
@@ -706,8 +664,7 @@ pub async fn stream_h1_response(
         RespFraming::Eof
     };
 
-    // Re-add `content-length` ONLY for ContentLength framing; chunked/EOF are
-    // FIN-delimited on the H3 leg (CF-H3-HEAD).
+    // Re-add `content-length` ONLY for ContentLength framing; chunked/EOF are FIN-delimited.
     if let RespFraming::ContentLength(n) = &framing {
         fwd_headers.push(("content-length".to_string(), n.to_string()));
     }
@@ -786,9 +743,8 @@ pub async fn stream_h1_response(
                     emit_data!(&d);
                 }
             }
-            // C4: loop until `complete` (terminator + trailer section + final
-            // CRLF), NOT merely `done` — that would drop the trailer section.
-            // EOF before `complete` ⇒ ChunkedDecode, never a truncated body.
+            // C4: loop until `complete` (terminator + trailer section + final CRLF), NOT merely
+            // `done` — that would drop the trailer section. EOF before `complete` ⇒ ChunkedDecode.
             while !dec.complete {
                 let nr = match stream.read(&mut rbuf).await {
                     Ok(n) => n,
@@ -810,8 +766,7 @@ pub async fn stream_h1_response(
                     emit_data!(&d);
                 }
             }
-            // C4: the RFC 9112 §7.1.2 trailer section becomes an RFC 9114 §4.1
-            // trailing section — after the last DATA, before `End`, never on abort.
+            // C4: the RFC 9112 §7.1.2 trailer section becomes an RFC 9114 §4.1 trailing section.
             let trailers = dec.take_trailers();
             if !trailers.is_empty() {
                 total = total.saturating_add(trailers.iter().map(|(n, v)| n.len() + v.len()).sum());
@@ -848,18 +803,14 @@ pub async fn stream_h1_response(
     Ok(())
 }
 
-/// H3 RESPONSE egress for a hyper H2 upstream — the H2 cousin of
-/// [`stream_h1_response`], IDENTICAL `RespEvent` / `RespAbort` contract. Pulls
-/// the body ONE frame at a time via [`http_body_util::BodyExt::frame`]; the
-/// bounded `tx.send(..).await` is the backpressure point (a stalled client stops
-/// the actor draining, hyper stops issuing `WINDOW_UPDATE`s, the H2 send window
-/// closes), so retained memory is body-size INDEPENDENT — never `.collect()`.
-/// RFC 9110 §6.5 trailers become one post-DATA `Trailers` before `End`. Any
-/// failure ⇒ [`RespEvent::Reset`] + `Err`, never a clean FIN.
+/// H3 RESPONSE egress for a hyper H2 upstream — the H2 cousin of [`stream_h1_response`], IDENTICAL
+/// `RespEvent` / `RespAbort` contract. Pulls the body ONE frame at a time via
+/// [`http_body_util::BodyExt::frame`]; the bounded `tx.send(..).await` is the backpressure point (a
+/// stalled client stops the actor draining, hyper stops issuing `WINDOW_UPDATE`s, the H2 send
+/// window closes), so retained memory is body-size INDEPENDENT — never `.collect()`.
 ///
 /// # Errors
-///
-/// Returns `Err(RespAbort)` describing why the relay aborted.
+/// `Err(RespAbort)`; any failure ⇒ [`RespEvent::Reset`], never a clean FIN.
 pub async fn stream_h2_response(
     resp: hyper::Response<hyper::body::Incoming>,
     tx: &tokio::sync::mpsc::Sender<RespEvent>,
@@ -873,16 +824,14 @@ pub async fn stream_h2_response(
 
     let (parts, mut body) = resp.into_parts();
 
-    // Forward `content-length` only when the upstream declared a valid one, so
-    // the H3 client gets the same framing decision.
+    // Forward `content-length` only when the upstream declared a valid one.
     let declared_len: Option<usize> = parts
         .headers
         .get(hyper::header::CONTENT_LENGTH)
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.trim().parse::<usize>().ok());
-    // CF-H3-HEAD: forward the FULL non-hop-by-hop set; `content-length` is
-    // re-added from the single `declared_len` source. `iter()` yields repeated
-    // names (set-cookie) individually; a non-UTF-8 value is skipped.
+    // CF-H3-HEAD: forward the FULL non-hop-by-hop set; `content-length` is re-added from the
+    // single `declared_len` source. `iter()` yields repeated names (set-cookie) individually.
     let mut fwd_headers: Vec<(String, String)> = Vec::with_capacity(parts.headers.len());
     for (name, value) in &parts.headers {
         let n = name.as_str();
@@ -965,9 +914,8 @@ pub async fn stream_h2_response(
     Ok(())
 }
 
-/// Build ONLY the HTTP/1.1 request head so the body can be streamed after it.
-/// `framing` picks the entity-body header: `None` ⇒ `Content-Length: 0`,
-/// `ContentLength(n)` ⇒ that length, `Chunked` ⇒ `Transfer-Encoding: chunked`.
+/// Build ONLY the HTTP/1.1 request head so the body can be streamed after it; `framing` picks the
+/// entity-body header (`None` ⇒ `Content-Length: 0`, `Chunked` ⇒ `Transfer-Encoding: chunked`).
 fn build_h1_head(req: &H3Request, framing: &H1BodyFraming) -> Vec<u8> {
     let mut s = String::with_capacity(128);
     s.push_str(&req.method);
@@ -1004,8 +952,8 @@ enum H1BodyFraming {
     Chunked,
 }
 
-/// Test gauge: peak in-flight request-body bytes buffered by the streaming
-/// egress (the single peeked chunk) — proves the whole body is not buffered.
+/// Test gauge: peak in-flight request-body bytes buffered by the streaming egress (the single
+/// peeked chunk) — proves the whole body is not buffered.
 #[cfg(any(test, feature = "test-gauges"))]
 pub static MAX_INFLIGHT_BODY_BYTES: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
@@ -1031,8 +979,8 @@ fn record_inflight(n: usize) {
 #[inline]
 fn record_inflight(_n: usize) {}
 
-/// Write one request-body chunk with the chosen framing. Empty data is a no-op
-/// — a zero-length DATA frame must NOT emit a spurious chunk terminator.
+/// Write one request-body chunk with the chosen framing. Empty data is a no-op — a zero-length
+/// DATA frame must NOT emit a spurious chunk terminator.
 async fn write_body_chunk(stream: &mut TcpStream, data: &[u8], chunked: bool) -> Result<(), ()> {
     if data.is_empty() {
         return Ok(());
@@ -1048,31 +996,24 @@ async fn write_body_chunk(stream: &mut TcpStream, data: &[u8], chunked: bool) ->
     Ok(())
 }
 
-/// Terminal outcome of the request-write half. Every non-`Complete` outcome
-/// means the request was NOT completed on the wire, so the caller MUST mark the
-/// pooled connection non-reusable (request-smuggling guard).
+/// Terminal outcome of the request-write half. Every non-`Complete` outcome means the request was
+/// NOT completed on the wire, so the caller MUST mark the pooled connection non-reusable.
 enum ReqWriteOutcome {
-    /// Head + body fully written and flushed; the caller streams the response
-    /// on the same stream.
+    /// Head + body fully written and flushed; the caller streams the response on the same stream.
     Complete,
-    /// Graceful abort from the body channel: `Reset` ⇒ 413, channel closed
-    /// before `End` ⇒ 502.
+    /// Graceful abort from the body channel: `Reset` ⇒ 413, channel closed before `End` ⇒ 502.
     Aborted(u16, &'static [u8]),
 }
 
-/// The request-write half: peek the first body event to choose framing, write
-/// the H1 head, then forward request DATA incrementally (one event held at a
-/// time ⇒ request-side backpressure). On any abort it returns BEFORE the chunked
-/// terminator / full `Content-Length`, so the upstream never sees a completable
-/// request.
+/// The request-write half: peek the first body event to choose framing, write the H1 head, then
+/// forward request DATA incrementally (one event held at a time ⇒ request-side backpressure). On
+/// any abort it returns BEFORE the chunked terminator / full `Content-Length`, so the upstream
+/// never sees a completable request.
 ///
-/// **C2:** this only borrows `stream` and NEVER calls `set_reusable` — the
-/// CALLER marks the `PooledTcp` non-reusable on `Err(())`, on
-/// [`ReqWriteOutcome::Aborted`], and on any [`RespAbort`] from
-/// [`stream_h1_response`].
+/// **C2:** this only borrows `stream` and NEVER calls `set_reusable` — the CALLER marks the
+/// `PooledTcp` non-reusable on `Err(())`, on [`ReqWriteOutcome::Aborted`], and on any [`RespAbort`].
 ///
 /// # Errors
-///
 /// `Err(())` on any upstream write/flush I/O failure — the caller's 502 path.
 #[allow(clippy::too_many_lines)]
 async fn write_h1_request(
@@ -1119,8 +1060,8 @@ async fn write_h1_request(
         }
     }
 
-    // One event held at a time ⇒ backpressure: a slow upstream stalls this
-    // loop, the channel fills, and poll_h3 stops extending QUIC flow control.
+    // One event held at a time ⇒ backpressure: a slow upstream stalls this loop, the channel
+    // fills, and poll_h3 stops extending QUIC flow control.
     let mut clean_end = matches!(first, Some(ReqBodyEvent::End { .. }) | None);
     while let Some(ev) = body_rx.recv().await {
         match ev {
@@ -1132,21 +1073,17 @@ async fn write_h1_request(
                 }
             }
             ReqBodyEvent::End { trailers: _ } => {
-                // Request trailers are INTENTIONALLY DROPPED on the H3→H1 leg
-                // (still parsed upstream, so a malformed block is rejected).
-                // Forwarding them needs chunked PLUS a `Trailer:` announcement
-                // (RFC 9110 §6.5), and smuggling peer-controlled fields into the
-                // H1 head is a request-smuggling vector. The body is already
-                // correctly framed, so this is an RFC-acceptable downgrade.
+                // Request trailers are INTENTIONALLY DROPPED on the H3→H1 leg (still parsed
+                // upstream, so a malformed block is rejected). Forwarding them needs chunked PLUS
+                // a `Trailer:` announcement (RFC 9110 §6.5), and smuggling peer-controlled fields
+                // into the H1 head is a request-smuggling vector.
                 clean_end = true;
                 break;
             }
             ReqBodyEvent::Reset => {
-                // Mid-body Reset — an oversized cap breach OR a client cancel.
-                // Return IMMEDIATELY, BEFORE the chunked terminator / the full
-                // Content-Length, so the backend never sees a completable
-                // request; the CALLER marks the conn non-reusable. The 413 is
-                // incidental; the load-bearing invariant is the abort.
+                // Mid-body Reset. Return IMMEDIATELY, BEFORE the chunked terminator / the full
+                // Content-Length, so the backend never sees a completable request; the CALLER
+                // marks the conn non-reusable. The 413 is incidental — the abort is load-bearing.
                 tracing::warn!(
                     "SESSION 2 / P1-B: H3→H1 stream body Reset (oversized or \
                      client cancel); aborting upstream without completing the request"
@@ -1174,17 +1111,13 @@ async fn write_h1_request(
     Ok(ReqWriteOutcome::Complete)
 }
 
-/// **Incremental, bounded, backpressured** H3→H1 relay with incremental
-/// response egress — the actor's H1 producer task body. Owns the `PooledTcp`;
-/// the request half is [`write_h1_request`], the response is streamed by
+/// **Incremental, bounded, backpressured** H3→H1 relay — the actor's H1 producer task body. Owns
+/// the `PooledTcp`; the request half is [`write_h1_request`], the response is streamed by
 /// [`stream_h1_response`] into the bounded `resp_tx` (the R8 memory bound).
 ///
-/// **C2:** EVERY outcome marks the pooled connection NON-reusable before it
-/// drops — including the clean path, since the request carries
-/// `Connection: close` — so a partial request can never poison a pooled conn.
-///
-/// Returns `Ok(())` once the response was piped or after an inline `413`/`502`;
-/// `Err(RespAbort)` means the actor already saw the matching `Reset`.
+/// **C2:** EVERY outcome marks the pooled connection NON-reusable before it drops — including the
+/// clean path, since the request carries `Connection: close` — so a partial request can never
+/// poison a pooled conn. `Err(RespAbort)` means the actor already saw the matching `Reset`.
 pub async fn h3_to_h1_stream_resp(
     req: &H3Request,
     backend: SocketAddr,
@@ -1193,8 +1126,7 @@ pub async fn h3_to_h1_stream_resp(
     resp_tx: tokio::sync::mpsc::Sender<RespEvent>,
     cap: usize,
 ) -> Result<(), RespAbort> {
-    /// Emit a complete inline H3 response for the request-write abort paths.
-    /// Best-effort: a closed channel just means nobody is listening.
+    /// Emit a complete inline H3 response for the request-write abort paths; best-effort.
     async fn inline(tx: &tokio::sync::mpsc::Sender<RespEvent>, status: u16, body: &[u8]) {
         let _ = tx
             .send(RespEvent::Head {
@@ -1244,14 +1176,13 @@ pub async fn h3_to_h1_stream_resp(
         }
     };
 
-    // C2: every remaining outcome — `Err` AND the clean path — marks the
-    // pooled connection non-reusable before it drops.
+    // C2: every remaining outcome — `Err` AND the clean path — marks the conn non-reusable.
     pooled.set_reusable(false);
     outcome
 }
 
-/// Error carried by the streaming H2 request body so a mid-body abort is
-/// expressible (`hyper::Error` has no public constructor).
+/// Error carried by the streaming H2 request body so a mid-body abort is expressible
+/// (`hyper::Error` has no public constructor).
 #[derive(Debug)]
 struct H3ReqAbort;
 
@@ -1262,11 +1193,10 @@ impl std::fmt::Display for H3ReqAbort {
 }
 impl std::error::Error for H3ReqAbort {}
 
-/// The streaming H2 request body: one hyper DATA `Frame` per
-/// `ReqBodyEvent::Chunk`, completing on `End`/closed and **erroring**
-/// ([`H3ReqAbort`]) on a mid-body `Reset` so hyper RST_STREAMs the upstream — a
-/// truncated request is never presented as complete (BINDING case 7).
-/// `poll_frame` polls `body_rx` directly, so backpressure is end-to-end.
+/// The streaming H2 request body: one hyper DATA `Frame` per `ReqBodyEvent::Chunk`, completing on
+/// `End`/closed and **erroring** ([`H3ReqAbort`]) on a mid-body `Reset` so hyper RST_STREAMs the
+/// upstream — a truncated request is never presented as complete (BINDING case 7). `poll_frame`
+/// polls `body_rx` directly, so backpressure is end-to-end.
 struct H3ReqStreamBody {
     body_rx: tokio::sync::mpsc::Receiver<ReqBodyEvent>,
     first: Option<Bytes>,
@@ -1295,15 +1225,13 @@ impl hyper::body::Body for H3ReqStreamBody {
                 Poll::Ready(Some(Ok(hyper::body::Frame::data(b))))
             }
             Poll::Ready(Some(ReqBodyEvent::End { trailers: _ })) => {
-                // Request trailers are NOT forwarded on the H2 leg (parity
-                // with H3→H1); this is a clean, fully-framed end-of-stream.
+                // Request trailers are NOT forwarded on the H2 leg (parity with H3→H1).
                 this.done = true;
                 Poll::Ready(None)
             }
             Poll::Ready(Some(ReqBodyEvent::Reset)) | Poll::Ready(None) => {
-                // Mid-body RESET / producer dropped before End: error so hyper
-                // RST_STREAMs — a truncated request is NEVER presented as
-                // complete. H2 multiplexing ⇒ a per-stream RST is not poison.
+                // Mid-body RESET / producer dropped before End: error so hyper RST_STREAMs — a
+                // truncated request is NEVER presented as complete. H2 ⇒ a per-stream RST is not poison.
                 this.done = true;
                 Poll::Ready(Some(Err(Box::new(H3ReqAbort))))
             }
@@ -1311,13 +1239,11 @@ impl hyper::body::Body for H3ReqStreamBody {
     }
 }
 
-/// Build the upstream H2 request with a **streaming, bounded-incremental** body
-/// fed from the inbound H3 request DATA channel. Framing mirrors
-/// [`write_h1_request`], peeking the FIRST `ReqBodyEvent`: `End`/closed ⇒ a
-/// legitimately **bodyless** request (NOT a dropped body); `Reset` ⇒ pre-dial
-/// `Err(413)` so the caller dials NOTHING; `Chunk` ⇒ an [`H3ReqStreamBody`]
-/// that errors on a mid-body `Reset`. Request trailers are DROPPED on this leg
-/// (parity with H3→H1 — a lossless downgrade, not silent body loss).
+/// Build the upstream H2 request with a **streaming, bounded-incremental** body fed from the
+/// inbound H3 request DATA channel. Framing mirrors [`write_h1_request`], peeking the FIRST
+/// `ReqBodyEvent`: `End`/closed ⇒ a legitimately **bodyless** request (NOT a dropped body);
+/// `Reset` ⇒ pre-dial `Err(413)` so the caller dials NOTHING. Request trailers are DROPPED on this
+/// leg (parity with H3→H1 — a lossless downgrade, not silent body loss).
 fn h2_request_body_from_rx(
     req: &H3Request,
     addr: std::net::SocketAddr,
@@ -1346,8 +1272,8 @@ fn h2_request_body_from_rx(
             .boxed(),
         // Reset before any data ⇒ pre-dial abort (413); nothing is dialled.
         Some(ReqBodyEvent::Reset) => return Err(413),
-        // `H3ReqStreamBody` pulls `body_rx` one frame at a time (end-to-end
-        // backpressure) and errors on a mid-body Reset so hyper RST_STREAMs.
+        // `H3ReqStreamBody` pulls `body_rx` one frame at a time (end-to-end backpressure) and
+        // errors on a mid-body Reset so hyper RST_STREAMs.
         Some(ReqBodyEvent::Chunk(b0)) => BoxBody::new(H3ReqStreamBody {
             body_rx,
             first: Some(b0),
@@ -1358,11 +1284,8 @@ fn h2_request_body_from_rx(
     builder.body(body).map_err(|_| 502u16)
 }
 
-/// The streaming H3→H2 orchestrator — the H2 cousin of
-/// [`h3_to_h1_stream_resp`], same channel contract. Peeks the first body event
-/// (a pre-data `Reset` ⇒ inline 413 with NOTHING dialled), does the header
-/// roundtrip, then relays the response via [`stream_h2_response`]. Returns
-/// `Ok(())` after a piped or inline response; `Err(RespAbort)` ⇒ the actor
+/// The streaming H3→H2 orchestrator — the H2 cousin of [`h3_to_h1_stream_resp`], same channel
+/// contract. A pre-data `Reset` ⇒ inline 413 with NOTHING dialled; `Err(RespAbort)` ⇒ the actor
 /// RESET_STREAMs.
 pub async fn h3_to_h2_stream_resp(
     req: &H3Request,
@@ -1372,8 +1295,7 @@ pub async fn h3_to_h2_stream_resp(
     resp_tx: tokio::sync::mpsc::Sender<RespEvent>,
     cap: usize,
 ) -> Result<(), RespAbort> {
-    /// Emit a complete inline H3 response (Head + Body, then `End`).
-    /// Best-effort: a closed channel just means nobody is listening.
+    /// Emit a complete inline H3 response (Head + Body, then `End`); best-effort.
     async fn inline(tx: &tokio::sync::mpsc::Sender<RespEvent>, status: u16, body: &[u8]) {
         let _ = tx
             .send(RespEvent::Head {
@@ -1413,12 +1335,9 @@ pub async fn h3_to_h2_stream_resp(
     stream_h2_response(resp, &resp_tx, cap).await
 }
 
-/// The per-front RESPONSE SINK [`stream_request_to_h3_upstream`] relays
-/// through: its transport driver is front-agnostic and shared, and only the
-/// response *emission* differs per front. [`Wire`](Self::Wire) serves an H3
-/// front; [`Decoded`](Self::Decoded) serves an H1/H2 front whose L7 layer runs
-/// its own head transform without re-decoding H3. `total`/`cap` is a DoS abort
-/// threshold, NOT a memory mechanism.
+/// The per-front RESPONSE SINK [`stream_request_to_h3_upstream`] relays through: its transport
+/// driver is front-agnostic and shared, and only the response *emission* differs per front.
+/// `total`/`cap` is a DoS abort threshold, NOT a memory mechanism.
 pub enum H3RespOut {
     /// H3 front: emit decoded [`RespEvent`]s that the actor re-encodes.
     Wire {
@@ -1441,8 +1360,7 @@ pub enum H3RespOut {
 }
 
 impl H3RespOut {
-    /// Emit a complete inline response (head + body, then `End`). Best-effort:
-    /// a closed channel just means nobody is listening.
+    /// Emit a complete inline response (head + body, then `End`); best-effort.
     async fn inline(&mut self, status: u16, body: &[u8]) {
         match self {
             Self::Wire { tx, .. } => {
@@ -1474,14 +1392,12 @@ impl H3RespOut {
         }
     }
 
-    /// Relay the response HEAD; both arms parse `:status` out and forward the
-    /// full non-pseudo set with `content-length` kept as a regular header.
+    /// Relay the response HEAD; both arms parse `:status` out and forward the full non-pseudo set.
     async fn on_head(&mut self, fields: &[(String, String)]) -> Result<(), RespAbort> {
         match self {
             Self::Wire { tx, total, cap } => {
-                // CF-H3-HEAD: the hop-by-hop strip is REQUIRED, not tidiness —
-                // RFC 9114 §4.2 forbids connection-specific fields in an H3
-                // field section, so an upstream's `connection` must not relay.
+                // CF-H3-HEAD: the hop-by-hop strip is REQUIRED, not tidiness — RFC 9114 §4.2
+                // forbids connection-specific fields in an H3 field section.
                 let mut status: u16 = 502;
                 let mut headers: Vec<(String, String)> = Vec::with_capacity(fields.len());
                 for (n, v) in fields {
@@ -1582,8 +1498,7 @@ impl H3RespOut {
         }
     }
 
-    /// Best-effort abort signal — the client is RESET and never FIN'd. A
-    /// closed channel is ignored.
+    /// Best-effort abort signal — the client is RESET and never FIN'd.
     async fn on_reset(&mut self) {
         match self {
             Self::Wire { tx, .. } => {
@@ -1597,8 +1512,7 @@ impl H3RespOut {
 }
 
 /// The H3→H3 cell's streaming response producer: a thin front for
-/// [`stream_request_to_h3_upstream`] with an [`H3RespOut::Wire`] sink and
-/// `forward_req_trailers = false` (the H3→H3 request-trailer drop).
+/// [`stream_request_to_h3_upstream`] with an [`H3RespOut::Wire`] sink and `forward_req_trailers = false`.
 #[allow(clippy::large_futures)]
 pub async fn h3_to_h3_stream_resp(
     req: &H3Request,
@@ -1628,29 +1542,22 @@ pub async fn h3_to_h3_stream_resp(
     stream_request_to_h3_upstream(headers, false, addr, sni, pool, body_rx, sink).await
 }
 
-/// Bounded streaming H3-upstream connector, shared by all three `→H3` cells
-/// (H3→H3 via [`h3_to_h3_stream_resp`]; H1→H3 / H2→H3 via the `lb-l7` bridge,
-/// which own building `headers`). Wraps the pooled, established upstream
-/// `quiche::Connection` as a `quiche::h3` CLIENT and drives its
-/// send/recv/timeout loop, relaying through the per-front [`H3RespOut`] sink.
+/// Bounded streaming H3-upstream connector, shared by all three `→H3` cells (H3→H3 via
+/// [`h3_to_h3_stream_resp`]; H1→H3 / H2→H3 via the `lb-l7` bridge, which own building `headers`).
 ///
-/// The response body is NEVER whole-buffered — it is read into a FIXED scratch
-/// and streamed in ≤ [`H3_RESP_CHUNK_MAX`] slices, so retained memory is
-/// response-size INDEPENDENT and `cap` is only a DoS abort threshold. The
-/// sink's `send(..).await` is the backpressure gate: a stalled client parks
-/// this fn, `stream_recv` stops, and quiche withholds `MAX_STREAM_DATA`.
+/// The response body is NEVER whole-buffered — it is read into a FIXED scratch and streamed in
+/// ≤ [`H3_RESP_CHUNK_MAX`] slices, so retained memory is response-size INDEPENDENT and `cap` is
+/// only a DoS abort threshold. The sink's `send(..).await` is the backpressure gate: a stalled
+/// client parks this fn, `stream_recv` stops, and quiche withholds `MAX_STREAM_DATA`.
 ///
-/// A leading `Reset` ⇒ inline `413` with NOTHING dialled. A mid-body `Reset`,
-/// or a producer dropped before `End`, ⇒ NO FIN plus
-/// `stream_shutdown(Write, H3_REQUEST_CANCELLED)`, so the upstream never sees a
-/// truncated-as-complete request (BINDING case-7). The pooled conn is marked
+/// A leading `Reset` ⇒ inline `413` with NOTHING dialled. A mid-body `Reset`, or a producer
+/// dropped before `End`, ⇒ NO FIN plus `stream_shutdown(Write, H3_REQUEST_CANCELLED)`, so the
+/// upstream never sees a truncated-as-complete request (BINDING case-7). The pooled conn is marked
 /// non-reusable on EVERY exit.
 ///
 /// # Errors
-///
-/// Returns `Err(RespAbort)`: a partial / premature-FIN / decode-error / reset
-/// response is NEVER given a clean end — only a best-effort sink `Reset`, so the
-/// caller RESETs the client and never FINs (response-splitting guard).
+/// `Err(RespAbort)`: a partial / premature-FIN / decode-error / reset response is NEVER given a
+/// clean end — only a best-effort sink `Reset` (response-splitting guard).
 #[allow(clippy::too_many_lines, clippy::large_futures)]
 pub async fn stream_request_to_h3_upstream(
     headers: Vec<(String, String)>,
@@ -1715,8 +1622,7 @@ pub async fn stream_request_to_h3_upstream(
         }
     };
 
-    // `with_transport` sends SETTINGS and opens the client control + QPACK
-    // uni streams. The conn is used once (non-reusable on every exit).
+    // `with_transport` sends SETTINGS and opens the client control + QPACK uni streams.
     let mut h3 = match crate::h3_config::build_client_h3_config()
         .and_then(|cfg| quiche::h3::Connection::with_transport(qconn, &cfg))
     {
@@ -1746,8 +1652,8 @@ pub async fn stream_request_to_h3_upstream(
     };
     drop(h3_headers);
 
-    // Bodyless WITH forwarded trailers (L7 fronts): a trailing field section +
-    // FIN, no DATA (RFC 9114 §4.1). On error abort WITHOUT FIN (case-7).
+    // Bodyless WITH forwarded trailers (L7 fronts): a trailing field section + FIN, no DATA
+    // (RFC 9114 §4.1). On error abort WITHOUT FIN (case-7).
     let ship_bodyless_trailers = !req_streaming && !bodyless_trailers.is_empty();
     if ship_bodyless_trailers {
         let tr: Vec<quiche::h3::Header> = bodyless_trailers
@@ -1763,8 +1669,8 @@ pub async fn stream_request_to_h3_upstream(
         }
     }
 
-    // --- request-DATA send state. `send_body` frames the DATA, so `InHand`
-    // holds RAW bytes; the memory bound is the depth-8 `body_rx`. ---
+    // request-DATA send state. `send_body` frames the DATA, so `InHand` holds RAW bytes; the
+    // memory bound is the depth-8 `body_rx`.
     enum ReqSend {
         /// Raw chunk bytes; `sent` already written via send_body (partial retry).
         InHand { bytes: Bytes, sent: usize },
@@ -1789,11 +1695,10 @@ pub async fn stream_request_to_h3_upstream(
     let mut response_complete = false;
     let mut outcome: Result<(), RespAbort> = Ok(());
 
-    // Content-length truncation guard (defense-in-depth, owner-ruled): quiche
-    // does NOT enforce RFC 9114 §7.1 DATA-frame completeness at FIN, so a
-    // backend declaring N bytes and cleanly FINing after M<N arrives as
-    // `Event::Finished` with no error (CF-QUICHE-FRAME-COMPLETENESS). Residual
-    // gap: a no-content-length mid-frame FIN. Skipped for bodiless responses.
+    // Content-length truncation guard (defense-in-depth, owner-ruled): quiche does NOT enforce
+    // RFC 9114 §7.1 DATA-frame completeness at FIN, so a backend declaring N bytes and cleanly
+    // FINing after M<N arrives as `Event::Finished` with no error (CF-QUICHE-FRAME-COMPLETENESS).
+    // Residual gap: a no-content-length mid-frame FIN. Skipped for bodiless responses.
     let req_is_head = headers
         .iter()
         .any(|(n, v)| n == ":method" && v.eq_ignore_ascii_case("HEAD"));
@@ -1801,15 +1706,12 @@ pub async fn stream_request_to_h3_upstream(
     let mut resp_status: Option<u16> = None;
     let mut body_relayed: u64 = 0;
 
-    // Drain the response body into the bounded sink, ≤`H3_RESP_CHUNK_MAX` per
-    // slice; the scratch is fixed and the body is NEVER whole-buffered.
-    // `sink.on_data().await` is the R8 backpressure point. A mid-body
-    // `recv_body` error (F-MD-4) maps to an upstream reset, never a clean EOF.
-    // Used on a `Data` event AND unconditionally after the poll loop (PASS-3):
-    // quiche does not re-arm `Data` after a 0-length DATA frame while the stream
-    // stays readable, so `poll` can advance the NEXT frame without a fresh
-    // event. The outer label is passed in — macro-hygienic labels cannot break
-    // a label defined at the call site.
+    // Drain the response body into the bounded sink, ≤`H3_RESP_CHUNK_MAX` per slice; the scratch
+    // is fixed and the body is NEVER whole-buffered. `sink.on_data().await` is the R8 backpressure
+    // point, and a mid-body `recv_body` error (F-MD-4) maps to an upstream reset, never a clean
+    // EOF. Used on a `Data` event AND unconditionally after the poll loop (PASS-3): quiche does
+    // not re-arm `Data` after a 0-length DATA frame while the stream stays readable. The outer
+    // label is passed in — macro-hygienic labels cannot break a label defined at the call site.
     macro_rules! drain_resp_body {
         ($evloop:lifetime, $progressed:ident, $relayed:ident) => {{
             loop {
@@ -1844,8 +1746,8 @@ pub async fn stream_request_to_h3_upstream(
     'evloop: while tokio::time::Instant::now() < idle_deadline {
         // Set by `drain_resp_body!`; drives the re-poll-instead-of-park below.
         let mut progressed = false;
-        // (a) request-DATA egress. `send_body` is flow-control-gated: Done ⇒
-        // keep the chunk in hand and do NOT pull `body_rx`, pausing the upload.
+        // (a) request-DATA egress. `send_body` is flow-control-gated: Done ⇒ keep the chunk in
+        // hand and do NOT pull `body_rx`, pausing the upload.
         if let ReqSend::InHand { bytes, sent } = &mut req_send {
             let rest = bytes.get(*sent..).unwrap_or(&[]);
             match h3.send_body(qconn, stream_id, rest, false) {
@@ -1893,8 +1795,8 @@ pub async fn stream_request_to_h3_upstream(
                         })
                         .collect();
                     if !sent_head {
-                        // Capture `:status` + `content-length` for the
-                        // truncation guard before the sink consumes `fields`.
+                        // Capture `:status` + `content-length` for the truncation guard before
+                        // the sink consumes `fields`.
                         for (n, v) in &fields {
                             if n == ":status" {
                                 resp_status = v.parse::<u16>().ok();
@@ -1905,17 +1807,15 @@ pub async fn stream_request_to_h3_upstream(
                         send_progress!(sink.on_head(&fields).await);
                         sent_head = true;
                     } else {
-                        // RFC 9114 §4.3: a pseudo-header in a trailing section
-                        // is malformed ⇒ Reset, never forwarded.
+                        // RFC 9114 §4.3: a pseudo-header in a trailing section is malformed.
                         if fields.iter().any(|(n, _)| n.starts_with(':')) {
                             sink.on_reset().await;
                             outcome = Err(RespAbort::BadHead);
                             break 'evloop;
                         }
                         if !fields.is_empty() {
-                            // Explicit match→break (not `?`) so the post-loop
-                            // `on_reset` still runs; `on_head` can use `?`
-                            // because the sink already Reset on its error paths.
+                            // Explicit match→break (not `?`) so the post-loop `on_reset` still
+                            // runs; `on_head` can use `?` because the sink already Reset on error.
                             match sink.on_trailers(fields).await {
                                 Ok(()) => {
                                     idle_deadline =
@@ -1933,20 +1833,17 @@ pub async fn stream_request_to_h3_upstream(
                     drain_resp_body!('evloop, progressed, body_relayed);
                 }
                 Ok((sid, quiche::h3::Event::Finished)) if sid == stream_id => {
-                    // F-MD-4 MIRROR. quiche delivers `Finished` (NOT `Reset`)
-                    // for a response stream the BACKEND RESET *after* its last
-                    // DATA frame: its first `finished_streams` pop lacks the
-                    // reset re-check the second pop performs. A clean end here
-                    // would response-split the downstream client. Probe as
-                    // quiche does — a zero-length `stream_recv` returns
-                    // `StreamReset` — and map to `on_reset`, never `on_end`.
+                    // F-MD-4 MIRROR. quiche delivers `Finished` (NOT `Reset`) for a response
+                    // stream the BACKEND RESET *after* its last DATA frame: its first
+                    // `finished_streams` pop lacks the reset re-check the second pop performs.
+                    // Probe as quiche does — a zero-length `stream_recv` returns `StreamReset` —
+                    // and map to `on_reset`, never `on_end`, or the client is response-split.
                     let was_reset = matches!(
                         qconn.stream_recv(stream_id, &mut []),
                         Err(quiche::Error::StreamReset(_))
                     );
-                    // Truncation guard: a clean FIN with fewer body bytes than
-                    // the declared `content-length` ⇒ RESET downstream, never a
-                    // clean End. Skipped for bodiless (HEAD / 1xx / 204 / 304).
+                    // Truncation guard: a clean FIN with fewer body bytes than the declared
+                    // `content-length` ⇒ RESET downstream. Skipped for bodiless (HEAD/1xx/204/304).
                     let bodiless_status = req_is_head
                         || matches!(
                             resp_status,
@@ -1986,13 +1883,11 @@ pub async fn stream_request_to_h3_upstream(
                     outcome = Err(RespAbort::UpstreamReset);
                     break 'evloop;
                 }
-                // Other streams / GoAway / PriorityUpdate — nothing to do.
                 Ok(_) => {}
                 Err(quiche::h3::Error::Done) => break 'poll,
                 Err(e) => {
-                    // quiche enforces the control / QPACK / frame-sequence
-                    // rules itself and has already closed the conn — never a
-                    // forwarded or false-complete response.
+                    // quiche enforces the control / QPACK / frame-sequence rules itself and has
+                    // already closed the conn — never a forwarded or false-complete response.
                     tracing::warn!(error = %e, "INC-4: h3 poll (upstream protocol error)");
                     outcome = Err(RespAbort::UpstreamReset);
                     break 'evloop;
@@ -2000,9 +1895,8 @@ pub async fn stream_request_to_h3_upstream(
             }
         }
 
-        // PASS-3 (edge-trigger safety): `poll` may have advanced the next DATA
-        // frame WITHOUT emitting a `Data` event (the 0-length re-arm gap above);
-        // relay it every tick so it is never stranded.
+        // PASS-3 (edge-trigger safety): `poll` may have advanced the next DATA frame WITHOUT
+        // emitting a `Data` event (the 0-length re-arm gap above), so relay it every tick.
         if sent_head && !response_complete {
             drain_resp_body!('evloop, progressed, body_relayed);
         }
@@ -2011,9 +1905,9 @@ pub async fn stream_request_to_h3_upstream(
             break 'evloop;
         }
 
-        // The next events are ALREADY queued in quiche and need no socket I/O,
-        // so re-poll rather than park — parking would wait out the full quiche
-        // timeout. Bounded: `progressed` needs ≥1 relayed byte, so no spin.
+        // The next events are ALREADY queued in quiche and need no socket I/O, so re-poll rather
+        // than park — parking would wait out the full quiche timeout. `progressed` needs ≥1
+        // relayed byte, so this cannot spin.
         if progressed {
             continue 'evloop;
         }
@@ -2087,8 +1981,8 @@ pub async fn stream_request_to_h3_upstream(
                         req_send = ReqSend::Ended;
                     }
                     J2ReqAction::AbortNoFin => {
-                        // Mid-body RESET / producer dropped before End ⇒ the
-                        // upstream must NEVER see a completable request (case-7).
+                        // Mid-body RESET / producer dropped before End ⇒ the upstream must NEVER
+                        // see a completable request (case-7).
                         let _ = qconn.stream_shutdown(
                             stream_id,
                             quiche::Shutdown::Write,
@@ -2119,27 +2013,23 @@ pub async fn stream_request_to_h3_upstream(
     outcome
 }
 
-/// The request-send action taken for the next `ReqBodyEvent`, factored out
-/// so `s7_j2_request_send_decision` exercises the REAL decision.
+/// The request-send action taken for the next `ReqBodyEvent`, factored out so
+/// `s7_j2_request_send_decision` exercises the REAL decision.
 #[derive(Debug, PartialEq, Eq)]
 enum J2ReqAction {
-    /// `Chunk` ⇒ forward the RAW chunk bytes as one bounded request-body chunk
-    /// (`quiche::h3::send_body` frames the DATA, so there is no encode step).
+    /// `Chunk` ⇒ forward the RAW chunk bytes (`quiche::h3::send_body` frames the DATA).
     SendData(Bytes),
-    /// `End` ⇒ clean end-of-request: FIN the upstream request stream, request
-    /// trailers DROPPED (H3→H3 leg, and the no-trailer case generally).
+    /// `End` ⇒ clean end-of-request: FIN the upstream stream, request trailers DROPPED.
     FinNoTrailers,
-    /// `End { trailers }` + `forward_req_trailers` ⇒ post-DATA HEADERS then FIN
-    /// (RFC 9114 §4.1). L7 fronts only; never produced for H3→H3.
+    /// `End { trailers }` + `forward_req_trailers` ⇒ post-DATA HEADERS then FIN (RFC 9114 §4.1).
     FinWithTrailers(Vec<(String, String)>),
     /// `Reset` / channel-closed-before-`End` ⇒ mid-body abort: NO FIN,
     /// `stream_shutdown(Write, H3_REQUEST_CANCELLED)` (case-7 parity).
     AbortNoFin,
 }
 
-/// Classify the next request-body event into its send action. `None` (producer
-/// dropped before a clean `End`) is treated identically to a mid-body `Reset` —
-/// never a truncated-as-complete request. `forward_req_trailers = false`
+/// Classify the next request-body event into its send action. `None` (producer dropped before a
+/// clean `End`) is treated identically to a mid-body `Reset`; `forward_req_trailers = false`
 /// (H3→H3) always maps `End { trailers }` to `FinNoTrailers`.
 fn j2_req_event_action(ev: Option<ReqBodyEvent>, forward_req_trailers: bool) -> J2ReqAction {
     match ev {
@@ -2293,8 +2183,7 @@ mod tests {
         );
     }
 
-    /// R3 control: the SAME Extended CONNECT is rejected via the unchanged #14
-    /// path when WS is off.
+    /// R3 control: the SAME Extended CONNECT is rejected via the unchanged #14 path when WS is off.
     #[test]
     fn pseudo_ws_extended_connect_rejected_when_disabled() {
         let ext = h(&[
@@ -2411,8 +2300,8 @@ mod tests {
         assert!(validate_request_pseudo_headers(&ok, false).is_ok());
     }
 
-    /// `H3ReqStreamBody` frame + abort contract: a mid-body `Reset` and a
-    /// premature close MUST error so hyper RST_STREAMs (BINDING case 7).
+    /// `H3ReqStreamBody` frame + abort contract: a mid-body `Reset` and a premature close MUST
+    /// error so hyper RST_STREAMs (BINDING case 7).
     #[tokio::test]
     async fn s6_i2_h3_req_stream_body_frame_and_abort_contract() {
         use http_body_util::BodyExt as _;
@@ -2512,8 +2401,8 @@ mod tests {
     /// `h2_request_body_from_rx` head-construction arms not otherwise reached.
     #[tokio::test]
     async fn g5_h2_request_body_from_rx_head_construction_arms() {
-        // (a) empty authority ⇒ addr fallback; a `:`-pseudo header is SKIPPED
-        // while a regular header is copied. Bodyless, so nothing is dialled.
+        // (a) empty authority ⇒ addr fallback; a `:`-pseudo header is SKIPPED while a regular
+        // header is copied. Bodyless, so nothing is dialled.
         let req = H3Request {
             method: "GET".to_string(),
             path: "/x".to_string(),
@@ -2566,8 +2455,8 @@ mod tests {
         );
     }
 
-    /// `h3_to_h2_stream_resp`'s pre-dial inline arms: a pre-data `Reset` ⇒ 413
-    /// and a builder failure ⇒ 502, both returning before the pool is dialled.
+    /// `h3_to_h2_stream_resp`'s pre-dial inline arms: a pre-data `Reset` ⇒ 413 and a builder
+    /// failure ⇒ 502, both returning before the pool is dialled.
     #[tokio::test]
     async fn g5_h3_to_h2_stream_resp_inline_413_and_502_no_dial() {
         let pool = lb_io::http2_pool::Http2Pool::new(
@@ -2650,8 +2539,7 @@ mod tests {
         assert_eq!(out, b"Wikipedia");
     }
 
-    /// C3: every malformed chunked framing ⇒ `ChunkedDecode`, never a truncated
-    /// or forwarded body presented as complete.
+    /// C3: every malformed chunked framing ⇒ `ChunkedDecode`, never a truncated or forwarded body.
     #[test]
     fn chunk_decoder_rejects_malformed_framing_c3() {
         // (a) non-hex chunk size.
@@ -2679,8 +2567,7 @@ mod tests {
         );
     }
 
-    /// A chunk extension is tolerated; mis-parsing the size past `;` would
-    /// frame the body wrong (smuggling-relevant).
+    /// A chunk extension is tolerated; mis-parsing the size past `;` would frame the body wrong.
     #[test]
     fn chunk_decoder_tolerates_chunk_extension() {
         let mut dec = ChunkDecoder::new();
@@ -2691,8 +2578,8 @@ mod tests {
         assert_eq!(out, b"body");
     }
 
-    /// C4: `done` (zero-size chunk) is distinct from `complete` (trailer section
-    /// + CRLF consumed). PC-2: coalesced and split sections must parse alike.
+    /// C4: `done` (zero-size chunk) is distinct from `complete` (trailer section + CRLF consumed).
+    /// PC-2: coalesced and split sections must parse alike.
     #[test]
     fn chunk_decoder_parses_trailer_section_c4() {
         let mut d = ChunkDecoder::new();
@@ -2759,8 +2646,8 @@ mod tests {
         );
     }
 
-    /// Pure unit proof of the request send-half decision table, driving the
-    /// REAL `j2_req_event_action` the park arm calls.
+    /// Pure unit proof of the request send-half decision table, driving the REAL
+    /// `j2_req_event_action` the park arm calls.
     #[test]
     fn s7_j2_request_send_decision() {
         // (a) Chunk ⇒ SendData carrying the RAW bytes verbatim. (a)-(d) use
@@ -2812,8 +2699,8 @@ mod tests {
             "premature channel close MUST abort with NO FIN (truncation guard)"
         );
 
-        // (e) forward_req_trailers=true (L7 fronts): non-empty ⇒ FinWithTrailers,
-        // empty ⇒ bare FIN. The abort guards are UNAFFECTED by the flag.
+        // (e) forward_req_trailers=true (L7 fronts): non-empty ⇒ FinWithTrailers, empty ⇒ bare
+        // FIN. The abort guards are UNAFFECTED by the flag.
         assert_eq!(
             j2_req_event_action(
                 Some(ReqBodyEvent::End {
@@ -2842,7 +2729,7 @@ mod tests {
     }
 
     /// The `Decoded` sink MUST surface an upstream trailing field section as
-    /// `H3RespEvent::Trailers` — a connector trailer-DROP would otherwise slip.
+    /// `H3RespEvent::Trailers` — a connector trailer-DROP would otherwise slip through.
     #[tokio::test]
     async fn s12_decoded_sink_on_trailers_emits_h3respevent_trailers() {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<H3RespEvent>(4);
@@ -2867,8 +2754,8 @@ mod tests {
         }
     }
 
-    /// The `Decoded` sink's `on_head` MUST forward the FULL non-pseudo set
-    /// (pseudo-headers filtered, `content-length` kept as a regular header).
+    /// The `Decoded` sink's `on_head` MUST forward the FULL non-pseudo set (pseudo-headers
+    /// filtered, `content-length` kept as a regular header).
     #[tokio::test]
     async fn s12_decoded_sink_on_head_forwards_full_nonpseudo_set() {
         let (tx, mut rx) = tokio::sync::mpsc::channel::<H3RespEvent>(4);
