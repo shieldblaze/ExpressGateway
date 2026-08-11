@@ -1,10 +1,7 @@
-//! Per-connection actor driving one [`quiche::Connection`] to established, then
-//! pumping H3 requests through the [`crate::h3_bridge`] to a backend.
-//!
-//! H3 ownership sits inside this actor rather than in a separate driver because
-//! every `stream_recv`/`stream_send` needs `&mut quiche::Connection`: splitting
-//! the actor in two would put a mutex on the hot path. Per-stream state
-//! (read buffers, response queues) therefore lives in `HashMap`s inline.
+//! Per-connection actor driving one [`quiche::Connection`] to established, then pumping H3
+//! requests through the [`crate::h3_bridge`] to a backend. H3 ownership sits inside this actor
+//! rather than in a separate driver because every `stream_recv`/`stream_send` needs
+//! `&mut quiche::Connection`: splitting the actor in two would put a mutex on the hot path.
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
@@ -35,65 +32,49 @@ use crate::ws_tunnel::{
     WsUpstreamOutcome,
 };
 
-/// Depth of the per-stream bounded request-body channel. With
-/// `h3_bridge::H3_BODY_CHUNK_MAX` this caps in-flight body memory INDEPENDENT
-/// of total body size — the memory-safety mechanism. When the channel is full
-/// `poll_h3` stops calling `stream_recv`, so quiche does not extend the stream
-/// flow-control window and the client is paused (end-to-end backpressure).
+/// Depth of the per-stream bounded request-body channel. With `h3_bridge::H3_BODY_CHUNK_MAX` this
+/// caps in-flight body memory INDEPENDENT of total body size: when the channel is full `poll_h3`
+/// stops calling `stream_recv`, so quiche does not extend the stream flow-control window.
 pub const H3_BODY_CHANNEL_DEPTH: usize = 8;
 
-/// Application error code in the `CONNECTION_CLOSE` sent when the
-/// listener-wide cancel token fires. RFC 9114 §8.1's "graceful drain" signal —
-/// a conformant peer reads it as an orderly shutdown, not an abort.
+/// Application error code in the `CONNECTION_CLOSE` sent when the listener-wide cancel token
+/// fires — RFC 9114 §8.1's "graceful drain", read by a conformant peer as an orderly shutdown.
 pub const H3_NO_ERROR: u64 = 0x0100;
 
-/// The code the actor puts on a `RESET_STREAM` when an upstream response is
-/// aborted mid-flight (every [`crate::h3_bridge::RespAbort`] variant).
-///
-/// RFC 9114 §8.1 `H3_INTERNAL_ERROR` is the proxy-side "could not produce a
-/// faithful complete response" code. Deliberately NOT [`H3_NO_ERROR`]
-/// (`0x0100`): the graceful-drain code on an abort would let a client or cache
-/// treat the partial body as complete (truncated-as-complete / cache
-/// poisoning). Deliberately NOT `H3_REQUEST_CANCELLED` (`0x010c`), which
-/// implies the *requester* cancelled — a distinct path where the proxy does
-/// not RESET but stops reading the upstream.
+/// The code the actor puts on a `RESET_STREAM` when an upstream response is aborted mid-flight
+/// (every [`crate::h3_bridge::RespAbort`] variant). Deliberately NOT [`H3_NO_ERROR`] (`0x0100`):
+/// the graceful-drain code on an abort would let a client or cache treat the partial body as
+/// complete (truncated-as-complete / cache poisoning). Deliberately NOT `H3_REQUEST_CANCELLED`
+/// (`0x010c`), which implies the *requester* cancelled — a distinct path where the proxy does not
+/// RESET but stops reading the upstream.
 pub const H3_INTERNAL_ERROR: u64 = 0x0102;
 
-/// RFC 9114 §8.1 `H3_MESSAGE_ERROR` — a malformed request. Resets the request
-/// stream when inbound HEADERS fail
-/// [`crate::h3_bridge::validate_request_pseudo_headers`]. §4.1.3 classifies a
-/// malformed message as a *stream* error, so this goes via `stream_shutdown`,
-/// not a connection close: the connection survives and other streams proceed.
+/// RFC 9114 §8.1 `H3_MESSAGE_ERROR` — a malformed request, reset onto the request stream when
+/// inbound HEADERS fail [`crate::h3_bridge::validate_request_pseudo_headers`]. §4.1.3 classifies a
+/// malformed message as a *stream* error, so this goes via `stream_shutdown`, not a conn close.
 pub const H3_MESSAGE_ERROR: u64 = 0x010e;
 
-/// RFC 9114 §8.1 `H3_FRAME_UNEXPECTED` — a frame in a context where it is not
-/// permitted (DATA before HEADERS; a control-stream-only frame on a request
-/// stream). Emitted as a **connection** close: §7.2 classifies these as
-/// connection errors.
+/// RFC 9114 §8.1 `H3_FRAME_UNEXPECTED` — a frame where it is not permitted (DATA before HEADERS;
+/// a control-stream-only frame on a request stream). §7.2 classifies these as CONNECTION errors.
 pub const H3_FRAME_UNEXPECTED: u64 = 0x0105;
 
-/// RFC 9204 §8.3 `QPACK_DECOMPRESSION_FAILED` — the decoder could not
-/// interpret an encoded field section. §2.2 mandates a **connection** error.
+/// RFC 9204 §8.3 `QPACK_DECOMPRESSION_FAILED`; §2.2 mandates a **connection** error.
 pub const QPACK_DECOMPRESSION_FAILED: u64 = 0x0200;
 
-/// Budget for pumping the connection after `close()`. Quiche drains for
-/// `3 * PTO` (RFC 9000 §10.1), comfortably under this.
+/// Budget for pumping after `close()`; quiche drains for `3 * PTO` (RFC 9000 §10.1).
 const GRACEFUL_SHUTDOWN_BUDGET: Duration = Duration::from_millis(500);
 
-/// RFC 9114 §8.1 `H3_REQUEST_CANCELLED`, emitted on the `RESET_STREAM` when a
-/// WebSocket tunnel stream is torn down abnormally (RFC 9220 §3 mapping).
+/// RFC 9114 §8.1 `H3_REQUEST_CANCELLED`, put on the `RESET_STREAM` when a WebSocket tunnel stream
+/// is torn down abnormally (RFC 9220 §3 mapping).
 const H3_REQUEST_CANCELLED: u64 = 0x010c;
 
-/// RFC 9114 §8.1 `H3_REQUEST_REJECTED` — "rejected by the server without
-/// processing". Reset onto a request stream arriving AFTER the cap-triggered
-/// GOAWAY: §5.2 lets the client retry such a stream on a fresh connection,
-/// which is exactly the recycle semantics.
+/// RFC 9114 §8.1 `H3_REQUEST_REJECTED` — reset onto a request stream arriving AFTER the
+/// cap-triggered GOAWAY; §5.2 lets the client retry it on a fresh connection (the recycle semantics).
 const H3_REQUEST_REJECTED: u64 = 0x010b;
 
-/// Per-stream WebSocket tunnel state for a sid carrying a validated
-/// `:protocol=websocket` extended CONNECT. The actor shuttles bytes between the
-/// H3 stream and the injected relay over two bounded channels using only
-/// non-blocking `try_send`/`try_recv`, so the sync poll loop never awaits.
+/// Per-stream WebSocket tunnel state. The actor shuttles bytes between the H3 stream and the
+/// injected relay over two bounded channels using only non-blocking `try_send`/`try_recv`, so the
+/// sync poll loop never awaits.
 struct WsTunnelState {
     /// Actor→relay (inbound: H3 stream DATA → `proxy_frames` reader).
     to_reader: Option<mpsc::Sender<TunnelInbound>>,
@@ -105,8 +86,7 @@ struct WsTunnelState {
     pending_ok: Option<WsPendingOk>,
     /// `true` once the `200` is on the wire — the tunnel-mode pump runs.
     activated: bool,
-    /// Unsent tail of the chunk currently being written outbound (the R8
-    /// retain-and-retry buffer).
+    /// Unsent tail of the chunk currently being written outbound (the R8 retain-and-retry buffer).
     out_pending: Option<Bytes>,
     /// Set once we FIN the H3 stream outbound (the relay finished).
     fin_sent: bool,
@@ -116,8 +96,7 @@ struct WsTunnelState {
     task: tokio::task::JoinHandle<()>,
 }
 
-/// The success (`200`) response head queued for a WS extended CONNECT, held
-/// until the upstream handshake resolves.
+/// The `200` head queued for a WS extended CONNECT, held until the upstream handshake resolves.
 struct WsPendingOk {
     /// Extra response fields (e.g. the upstream-selected subprotocol).
     headers: Vec<(String, String)>,
@@ -152,54 +131,44 @@ pub struct ActorParams {
     pub h3_backend: Option<(QuicUpstreamPool, SocketAddr, String)>,
     /// Optional upstream H2 pool + backend `(addr)`.
     pub h2_backend: Option<(Http2Pool, SocketAddr)>,
-    /// Mode B (terminate-and-re-originate) seam. When `Some`, [`run_actor`]
-    /// dispatches to [`crate::raw_proxy`] BEFORE any H3 state is built, so the
-    /// H3 path is byte-identical when it is `None`.
+    /// Mode B (terminate-and-re-originate) seam. When `Some`, [`run_actor`] dispatches to
+    /// [`crate::raw_proxy`] BEFORE any H3 state is built, so the H3 path is byte-identical on `None`.
     pub raw_quic_backend: Option<RawBackend>,
-    /// Mode B `quic_modeb_*` observability handles; `None` ⇒ every update is
-    /// a no-op.
+    /// Mode B `quic_modeb_*` observability handles; `None` ⇒ every update is a no-op.
     pub quic_modeb_metrics: Option<lb_observability::QuicModeBMetrics>,
-    /// WS-over-H3 (RFC 9220) Stage A: whether this listener accepts extended
-    /// CONNECT. When `false` `:protocol` is rejected as an unregistered
+    /// WS-over-H3 (RFC 9220) Stage A. When `false`, `:protocol` is rejected as an unregistered
     /// pseudo-header, byte-identically to a pre-WS listener.
     pub ws_enabled: bool,
-    /// WS-over-H3 Stage C: the injected relay launcher. `lb-quic` cannot
-    /// depend on the L7 relay (dependency cycle), so the binary injects the
-    /// closure — the same seam as `config_factory`. `None` ⇒ no WS relay.
+    /// WS-over-H3 Stage C: the injected relay launcher. `lb-quic` cannot depend on the L7 relay
+    /// (dependency cycle), so the binary injects the closure — the same seam as `config_factory`.
     pub ws_relay_launcher: Option<crate::ws_tunnel::WsRelayLauncher>,
-    /// S36-A: per-connection H3 request cap. Non-zero ⇒ after this many
-    /// request streams the connection emits a GOAWAY and recycles. `0`
-    /// disables recycling entirely (byte-identical to the pre-S36 front).
+    /// S36-A: per-connection H3 request cap. Non-zero ⇒ after this many request streams the
+    /// connection emits a GOAWAY and recycles; `0` is byte-identical to the pre-S36 front.
     pub max_requests_per_h3_connection: u32,
     /// S36-A: the `h3_*` recycle metric handles; `None` ⇒ no-op.
     pub h3_recycle_metrics: Option<lb_observability::QuicH3RecycleMetrics>,
 }
 
-/// Drive one `quiche::Connection` to completion, terminating H3 and forwarding
-/// to a backend.
+/// Drive one `quiche::Connection` to completion, terminating H3 and forwarding to a backend.
 ///
 /// # Errors
-///
-/// Never — all errors are logged and swallowed. The `io::Result<()>` shape
-/// exists so callers can chain.
+/// Never — all errors are logged and swallowed; the `io::Result<()>` shape exists for chaining.
 pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
-    // Mode B splice point: dispatch BEFORE any H3-specific local state is
-    // built, so the H3 path below stays byte-identical when this is `None`.
+    // Mode B splice point: dispatch BEFORE any H3-specific local state is built, so the H3 path
+    // below stays byte-identical when this is `None`.
     if params.raw_quic_backend.is_some() {
         return run_raw_proxy_actor(params).await;
     }
 
     let mut out_buf = vec![0u8; 65_535];
-    // H3 ingress rides `quiche::h3::Connection`, built lazily once the
-    // connection is established.
+    // H3 ingress rides `quiche::h3::Connection`, built lazily once the connection is established.
     let mut h3: Option<quiche::h3::Connection> = None;
     let mut stream_response: HashMap<u64, StreamTx> = HashMap::new();
     // Per-stream bounded request-body channels — the R8 memory bound.
     let mut body_tx_by_stream: HashMap<u64, mpsc::Sender<ReqBodyEvent>> = HashMap::new();
     // Cumulative request-body bytes per stream, for the F-CAP-1 413 cap.
     let mut body_seen: HashMap<u64, usize> = HashMap::new();
-    // Request trailers (RFC 9114 §4.1) arrive as a second HEADERS event, so
-    // they are staged here until the stream's clean end.
+    // Request trailers (RFC 9114 §4.1) arrive as a second HEADERS event, so they are staged here.
     let mut pending_trailers: HashMap<u64, Vec<(String, String)>> = HashMap::new();
     // Per-stream bounded RESPONSE channels — the R8 response-side bound.
     let mut resp_rx_by_stream: HashMap<u64, mpsc::Receiver<RespEvent>> = HashMap::new();
@@ -208,11 +177,10 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
     // Per-stream WebSocket tunnel state; empty ⇒ every WS branch is inert.
     let mut ws_tunnels: HashMap<u64, WsTunnelState> = HashMap::new();
 
-    // S36-A connection-recycling state. `cap == 0` disables the whole block.
-    // `goaway_pending` and `goaway_sent` are DELIBERATELY separate:
-    // admission must stop the instant the cap trips, but the recycle must wait
-    // until the GOAWAY frame is actually queued. Collapsing them re-opens the
-    // window in which a request is admitted past the boundary.
+    // S36-A connection-recycling state; `cap == 0` disables the whole block. `goaway_pending` and
+    // `goaway_sent` are DELIBERATELY separate: admission must stop the instant the cap trips, but
+    // the recycle must wait until the GOAWAY frame is actually queued. Collapsing them re-opens
+    // the window in which a request is admitted past the boundary.
     let cap = params.max_requests_per_h3_connection;
     let mut requests_served: u64 = 0;
     let mut goaway_pending = false;
@@ -229,10 +197,8 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
         }
 
         let mut next_wait = params.conn.timeout().unwrap_or(Duration::from_millis(100));
-        // While a request body is actively streaming, cap the wait at a short
-        // tick: quiche's idle timeout can be hundreds of ms and would throttle
-        // the body relay. This does not defeat backpressure — the bounded
-        // channel still caps in-flight bytes; we only poll the gate more often.
+        // While a request body is actively streaming, cap the wait at a short tick: quiche's idle
+        // timeout would throttle the body relay. The bounded channel still caps in-flight bytes.
         if !body_tx_by_stream.is_empty() || !resp_rx_by_stream.is_empty() || !ws_tunnels.is_empty()
         {
             next_wait = next_wait.min(Duration::from_millis(2));
@@ -259,7 +225,6 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
             }
         }
 
-        // Post-event: poll H3 streams if established.
         if params.conn.is_established() {
             // Build the `quiche::h3::Connection` once, post-establishment.
             if h3.is_none() {
@@ -302,9 +267,8 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
                     &mut goaway_last_id,
                     params.h3_recycle_metrics.as_ref(),
                 );
-                // S36-A: retry a cap GOAWAY whose first send hit a full
-                // control-stream window — the triggering client may send
-                // nothing more, so the retry cannot live only in `poll_h3`.
+                // S36-A: retry a cap GOAWAY whose first send hit a full control-stream window —
+                // the triggering client may send nothing more, so the retry cannot live in `poll_h3`.
                 try_send_pending_goaway(
                     &mut params.conn,
                     h3c,
@@ -316,24 +280,21 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
             }
         }
 
-        // DEFECT-CLIENTGONE: detect a client cancel of the response stream and
-        // stop the upstream read.
+        // DEFECT-CLIENTGONE: detect a client cancel of the response stream and stop the upstream read.
         reap_client_cancelled_responses(
             &mut params.conn,
             &mut resp_rx_by_stream,
             &mut stream_response,
         );
 
-        // §1.4.3: the response backpressure gate — refill each `StreamTx`
-        // ONLY while its queue is empty.
+        // §1.4.3: the response backpressure gate — refill each `StreamTx` ONLY while empty.
         drain_resp_channels(&mut resp_rx_by_stream, &mut stream_response);
 
         // Reap finished response producers (liveness only).
         resp_tasks.retain(|h| !h.is_finished());
 
-        // S36-A DRAIN-THEN-RECYCLE: once the cap GOAWAY is out, close the
-        // connection only after every in-flight response has drained, so a
-        // recycle never truncates a response already being served.
+        // S36-A DRAIN-THEN-RECYCLE: once the cap GOAWAY is out, close only after every in-flight
+        // response has drained, so a recycle never truncates a response already being served.
         if goaway_sent
             && body_tx_by_stream.is_empty()
             && resp_rx_by_stream.is_empty()
@@ -359,15 +320,12 @@ pub async fn run_actor(mut params: ActorParams) -> std::io::Result<()> {
     Ok(())
 }
 
-/// DEFECT-CLIENTGONE: a client that STOP_SENDINGs (or RESET_STREAMs) the H3
-/// RESPONSE stream must stop the upstream read. quiche surfaces a peer
-/// STOP_SENDING on a stream we are *writing* as `Err(StreamStopped)` from
-/// `stream_capacity`, and a peer reset as `Err(StreamReset)`. On either, drop
-/// the receiver — the producer's next `tx.send().await` returns
-/// `Err(RespAbort::ClientGone)`, so the cell marks the pooled upstream
-/// NON-reusable — and drop the `StreamTx`. The proxy does NOT emit
-/// RESET_STREAM here: the client already cancelled (distinct from the
-/// `H3_INTERNAL_ERROR` abort path).
+/// DEFECT-CLIENTGONE: a client that STOP_SENDINGs (or RESET_STREAMs) the H3 RESPONSE stream must
+/// stop the upstream read. quiche surfaces a peer STOP_SENDING on a stream we are *writing* as
+/// `Err(StreamStopped)` from `stream_capacity`, and a peer reset as `Err(StreamReset)`. On either,
+/// drop the receiver — the producer's next `tx.send().await` returns `Err(RespAbort::ClientGone)`,
+/// so the cell marks the pooled upstream NON-reusable — and drop the `StreamTx`. The proxy does
+/// NOT emit RESET_STREAM here: the client already cancelled.
 fn reap_client_cancelled_responses(
     conn: &mut quiche::Connection,
     resp_rx_by_stream: &mut HashMap<u64, mpsc::Receiver<RespEvent>>,
@@ -396,32 +354,24 @@ fn reap_client_cancelled_responses(
     }
 }
 
-/// §1.4.3 — the response-side backpressure gate.
+/// §1.4.3 — the response-side backpressure gate: refill each stream's `StreamTx` from its bounded
+/// channel **only while that StreamTx's queue is empty**. Refusing to pull while bytes are still
+/// queued is the memory bound — the channel fills, the producer's `tx.send().await` blocks, and
+/// the upstream read pauses, so in-flight bytes ≈ channel depth, body-size independent.
 ///
-/// Refill each stream's `StreamTx` from its bounded channel **only while that
-/// StreamTx's queue is empty**. Refusing to pull while bytes are still queued
-/// (quiche's send window full, `drain_streams_to_conn` has not shipped them) is
-/// the memory bound: the channel fills, the producer's `tx.send().await`
-/// blocks, and the upstream read pauses — in-flight bytes ≈ channel depth,
-/// body-size independent.
-///
-/// `End` ⇒ set `ended`; `Reset`, or the channel closing with no prior `End`, ⇒
-/// set `reset`, so a partial body is never presented as complete.
+/// `End` ⇒ set `ended`; `Reset`, or the channel closing with no prior `End`, ⇒ set `reset`, so a
+/// partial body is never presented as complete.
 fn drain_resp_channels(
     resp_rx_by_stream: &mut HashMap<u64, mpsc::Receiver<RespEvent>>,
     stream_response: &mut HashMap<u64, StreamTx>,
 ) {
     let sids: Vec<u64> = resp_rx_by_stream.keys().copied().collect();
     for sid in sids {
-        // F-S29-1 (gRPC-over-H3 large-response trailer drop): the spawn site
-        // inserts the `Progressive` StreamTx alongside the receiver, but
-        // `drain_streams_to_conn`'s `retain` REMOVES it the instant the stream
-        // goes terminal, and a stale receiver can outlive it. Use `get_mut`,
-        // NOT `entry().or_insert_with()`: a fresh StreamTx would replay the
-        // leftover `End`, fire a spurious FIN + RESET, and `stream_shutdown`
-        // would DISCARD a large response's still-buffered trailer+FIN (small
-        // responses raced clear; large ones silently lost the trailing
-        // `grpc-status` HEADERS — gRPC-fatal). A missing StreamTx means the
+        // F-S29-1 (gRPC-over-H3 large-response trailer drop): `drain_streams_to_conn`'s `retain`
+        // REMOVES the `Progressive` StreamTx the instant the stream goes terminal, and a stale
+        // receiver can outlive it. Use `get_mut`, NOT `entry().or_insert_with()`: a fresh StreamTx
+        // replays the leftover `End`, fires a spurious FIN + RESET, and `stream_shutdown` DISCARDS
+        // a large response's still-buffered trailer+FIN (gRPC-fatal). A missing StreamTx means the
         // stream already terminated correctly: drop the stale receiver, skip.
         let Some(StreamTx::Progressive {
             queue,
@@ -462,10 +412,8 @@ fn drain_resp_channels(
         }
     }
 
-    // §1.5 test gauge: recorded at the largest instant (StreamTx just refilled,
-    // before `drain_streams_to_conn` ships bytes). It sums queued `Body` bytes
-    // plus `Head`/`Trailers` field bytes plus an UPPER bound on channel
-    // occupancy — the gauge must over-, never under-count.
+    // §1.5 test gauge, recorded at the largest instant (StreamTx just refilled, before
+    // `drain_streams_to_conn` ships bytes); it must over-, never under-count.
     #[cfg(any(test, feature = "test-gauges"))]
     {
         let mut total: usize = 0;
@@ -491,8 +439,8 @@ fn drain_resp_channels(
     }
 }
 
-/// One DECODED response item queued for a stream, encoded onto the
-/// `quiche::h3::Connection` as flow control allows.
+/// One DECODED response item queued for a stream, encoded onto the `quiche::h3::Connection` as
+/// flow control allows.
 enum RespItem {
     /// The response head — encoded via `h3.send_response` (once).
     Head {
@@ -507,15 +455,13 @@ enum RespItem {
     Trailers(Vec<(String, String)>),
 }
 
-/// Per-stream outbound cursor: progressive response egress. A bounded queue of
-/// DECODED response items fed over a bounded channel and encoded onto the
-/// `quiche::h3::Connection` as flow control allows. The queue plus the channel
-/// are the memory bound, independent of total response size.
+/// Per-stream outbound cursor: a bounded queue of DECODED response items fed over a bounded
+/// channel and encoded onto the `quiche::h3::Connection` as flow control allows. The queue plus
+/// the channel are the memory bound, independent of total response size.
 enum StreamTx {
-    /// `queue` holds DECODED items not yet encoded. `head_sent` guards the
-    /// one-shot `send_response`; `ended` ⇒ FIN once `queue` drains; `reset` ⇒
-    /// `RESET_STREAM` and NEVER a FIN, so a partial body is never presented as
-    /// complete; `fin_sent` guards the one-shot FIN/shutdown.
+    /// `queue` holds DECODED items not yet encoded. `head_sent` guards the one-shot
+    /// `send_response`; `ended` ⇒ FIN once `queue` drains; `reset` ⇒ `RESET_STREAM` and NEVER a
+    /// FIN, so a partial body is never presented as complete; `fin_sent` guards the one-shot FIN.
     Progressive {
         queue: VecDeque<RespItem>,
         head_sent: bool,
@@ -538,12 +484,10 @@ impl StreamTx {
     }
 }
 
-/// Pump per-stream responses out: encode queued DECODED items onto the
-/// `quiche::h3::Connection` via
-/// `send_response`/`send_body`/`send_additional_headers`, incrementally,
-/// because those calls refuse bytes (`Done` / `StreamBlocked`) when the send
-/// window is saturated. `h3` is `None` until `with_transport` runs
-/// post-establishment; while `None` this does nothing.
+/// Pump per-stream responses out, encoding queued DECODED items onto the `quiche::h3::Connection`
+/// incrementally, because `send_response`/`send_body`/`send_additional_headers` refuse bytes
+/// (`Done` / `StreamBlocked`) when the send window is saturated. `h3` is `None` until
+/// `with_transport` runs post-establishment; while `None` this does nothing.
 fn drain_streams_to_conn(
     conn: &mut quiche::Connection,
     mut h3: Option<&mut quiche::h3::Connection>,
@@ -566,8 +510,7 @@ fn drain_streams_to_conn(
                 let Some(h3c) = h3.as_deref_mut() else {
                     continue;
                 };
-                // Encode queued items front-to-back; a blocked send leaves
-                // the rest queued for the next tick.
+                // Encode queued items front-to-back; a blocked send leaves the rest queued.
                 while let Some(front) = queue.front_mut() {
                     match front {
                         RespItem::Head { status, headers } => {
@@ -624,9 +567,8 @@ fn drain_streams_to_conn(
                                 .iter()
                                 .map(|(n, v)| quiche::h3::Header::new(n.as_bytes(), v.as_bytes()))
                                 .collect();
-                            // The trailing field section is ALWAYS the last
-                            // item, so it carries the FIN itself — a separate
-                            // zero-length FIN would be a second terminal write.
+                            // The trailing field section is ALWAYS the last item, so it carries
+                            // the FIN itself — a separate zero-length FIN would be a second write.
                             match h3c.send_additional_headers(conn, sid, &h3_trailers, true, true) {
                                 Ok(()) => {
                                     queue.pop_front();
@@ -646,8 +588,7 @@ fn drain_streams_to_conn(
                     }
                 }
                 if *reset {
-                    // Abort: RESET_STREAM, NEVER FIN — a partial body must
-                    // never be presentable as a complete response.
+                    // Abort: RESET_STREAM, NEVER FIN — a partial body must never be presentable.
                     match conn.stream_shutdown(sid, quiche::Shutdown::Write, H3_INTERNAL_ERROR) {
                         Ok(()) | Err(quiche::Error::Done) => {}
                         Err(e) => {
@@ -682,10 +623,8 @@ fn drain_streams_to_conn(
     });
 }
 
-/// Emit an H3 `CONNECTION_CLOSE` (application-layer, carrying
-/// [`H3_NO_ERROR`]) and pump `send`/`on_timeout` until quiche reports closed or
-/// [`GRACEFUL_SHUTDOWN_BUDGET`] elapses. Idempotent: `close()` on an
-/// already-closed connection returns `Done`, treated as a no-op.
+/// Emit an H3 `CONNECTION_CLOSE` (application-layer, carrying [`H3_NO_ERROR`]) and pump until
+/// quiche reports closed or [`GRACEFUL_SHUTDOWN_BUDGET`] elapses. Idempotent.
 pub async fn graceful_h3_shutdown(
     conn: &mut quiche::Connection,
     socket: &UdpSocket,
@@ -718,11 +657,9 @@ pub async fn graceful_h3_shutdown(
     }
 }
 
-/// Repeatedly call `quiche::Connection::send` and push the resulting packets
-/// onto the UDP socket until quiche reports `Done`.
-///
-/// `pub(crate)` (R12 single-source) so [`crate::raw_proxy`] drives both of its
-/// legs through the SAME pump rather than a byte-identical private copy.
+/// Repeatedly call `quiche::Connection::send` and push the resulting packets onto the UDP socket
+/// until quiche reports `Done`. `pub(crate)` (R12 single-source) so [`crate::raw_proxy`] drives
+/// both of its legs through the SAME pump rather than a byte-identical private copy.
 fn reset_h3_stream(conn: &mut quiche::Connection, sid: u64, code: u64) {
     match conn.stream_shutdown(sid, quiche::Shutdown::Write, code) {
         Ok(()) | Err(quiche::Error::Done) => {}
@@ -734,20 +671,15 @@ fn reset_h3_stream(conn: &mut quiche::Connection, sid: u64, code: u64) {
     }
 }
 
-/// S36-A — attempt to emit the cap-triggered H3 GOAWAY (RFC 9114 §5.2).
+/// S36-A — attempt to emit the cap-triggered H3 GOAWAY (RFC 9114 §5.2). Called when the cap trips
+/// and again each tick while `*goaway_pending && !*goaway_sent`: the triggering client may send
+/// nothing more, so the retry on a momentarily-full control-stream window CANNOT live only in
+/// `poll_h3`. `goaway_last_id` is the highest admitted request stream id — a client-initiated bidi
+/// stream, hence a multiple of 4, satisfying `send_goaway`'s server-id precondition.
 ///
-/// Called when the cap trips and again each tick while
-/// `*goaway_pending && !*goaway_sent`: the triggering client may send nothing
-/// more, so the retry on a momentarily-full control-stream window CANNOT live
-/// only in `poll_h3`. `goaway_last_id` is the highest admitted request stream
-/// id — a client-initiated bidi stream, hence a multiple of 4, satisfying
-/// `send_goaway`'s server-id precondition; calling only while `!*goaway_sent`
-/// means its "id must not increase across calls" rule cannot bite.
-///
-/// `Err(StreamBlocked)`/`Err(Done)` leaves `goaway_sent` false so the caller
-/// retries (admission is already stopped via `goaway_pending`). Any other error
-/// flips `goaway_sent` so we do not spin on a doomed send — the subsequent
-/// CONNECTION_CLOSE is the hard recycle signal the client always sees.
+/// `Err(StreamBlocked)`/`Err(Done)` leaves `goaway_sent` false so the caller retries (admission is
+/// already stopped via `goaway_pending`). Any other error flips `goaway_sent` so we do not spin on
+/// a doomed send — the subsequent CONNECTION_CLOSE is the hard recycle signal.
 fn try_send_pending_goaway(
     conn: &mut quiche::Connection,
     h3: &mut quiche::h3::Connection,
@@ -810,22 +742,17 @@ pub(crate) async fn drain_conn_send(
     }
 }
 
-/// Drain request-body bytes for ONE stream off the `quiche::h3::Connection`
-/// into its bounded body channel.
+/// Drain request-body bytes for ONE stream off the `quiche::h3::Connection` into its bounded body
+/// channel.
 ///
-/// **R8 backpressure:** `recv_body` runs only while the bounded channel has
-/// spare capacity. When full we STOP reading, so quiche does not extend the
-/// stream flow-control window and the client is paused; in-flight memory stays
-/// ≈ `H3_BODY_CHANNEL_DEPTH * H3_BODY_CHUNK_MAX`, INDEPENDENT of body size
-/// (quiche holds the remainder in its own flow-control-bounded buffer).
+/// **R8 backpressure:** `recv_body` runs only while the bounded channel has spare capacity. When
+/// full we STOP reading, so quiche does not extend the stream flow-control window and the client
+/// is paused; in-flight memory stays ≈ `H3_BODY_CHANNEL_DEPTH * H3_BODY_CHUNK_MAX`.
 ///
-/// **F-CAP-1:** the cumulative `MAX_REQUEST_BODY_BYTES` cap is enforced here
-/// via `body_seen`; on overflow emit `ReqBodyEvent::Reset` (⇒ 413).
+/// **F-CAP-1:** the cumulative `MAX_REQUEST_BODY_BYTES` cap is enforced here via `body_seen`.
 ///
-/// **F-MD-4:** ANY `recv_body` error (a peer RESET_STREAM / STOP_SENDING
-/// surfaces here) maps to `Reset`, NEVER a clean end — a truncated request must
-/// never reach the backend as complete. The clean end comes from the `Finished`
-/// event in [`poll_h3`], not here.
+/// **F-MD-4:** ANY `recv_body` error (a peer RESET_STREAM / STOP_SENDING surfaces here) maps to
+/// `Reset`, NEVER a clean end — the clean end comes from the `Finished` event in [`poll_h3`].
 fn drain_request_body(
     conn: &mut quiche::Connection,
     h3: &mut quiche::h3::Connection,
@@ -855,8 +782,7 @@ fn drain_request_body(
                     pending_trailers.remove(&sid);
                     return;
                 }
-                // capacity > 0 was checked above and the actor is the sole
-                // producer, so this send cannot fail.
+                // capacity > 0 was checked above and the actor is the sole producer.
                 if let Some(tx) = body_tx_by_stream.get(&sid) {
                     let _ = tx.try_send(ReqBodyEvent::Chunk(Bytes::copy_from_slice(
                         scratch.get(..n).unwrap_or(&[]),
@@ -884,16 +810,13 @@ fn drain_request_body(
     }
 }
 
-/// Drive the `quiche::h3::Connection` ingress: poll events, decode request
-/// HEADERS, run the pseudo-header + authority validation, and spawn the
-/// H3→H1/H2/H3 cell task per request, streaming the body through the bounded
-/// channel with R8 backpressure.
+/// Drive the `quiche::h3::Connection` ingress: poll events, decode request HEADERS, run the
+/// pseudo-header + authority validation, and spawn the H3→H1/H2/H3 cell task per request.
 ///
-/// quiche `poll` is **edge-triggered**: `Data` fires once and re-arms only
-/// after the stream drains to `Done`. Because the R8 gate stops `recv_body`
-/// while the channel is full, `Data` will NOT re-fire — so PASS 1 re-attempts
-/// the capacity-gated drain for every body-phase stream every tick,
-/// independent of the poll events.
+/// quiche `poll` is **edge-triggered**: `Data` fires once and re-arms only after the stream drains
+/// to `Done`. Because the R8 gate stops `recv_body` while the channel is full, `Data` will NOT
+/// re-fire — so PASS 1 re-attempts the capacity-gated drain for every body-phase stream every
+/// tick, independent of the poll events.
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn poll_h3(
     conn: &mut quiche::Connection,
@@ -949,11 +872,9 @@ fn poll_h3(
                     })
                     .collect();
 
-                // A SECOND HEADERS frame on a body-phase stream is the
-                // trailing field section, not a new request.
+                // A SECOND HEADERS frame on a body-phase stream is the trailing field section.
                 if body_tx_by_stream.contains_key(&sid) {
-                    // RFC 9114 §4.3: a pseudo-header in a trailing field
-                    // section is malformed.
+                    // RFC 9114 §4.3: a pseudo-header in a trailing field section is malformed.
                     if headers.iter().any(|(n, _)| n.starts_with(':')) {
                         tracing::warn!(
                             stream_id = sid,
@@ -970,17 +891,13 @@ fn poll_h3(
                     continue;
                 }
 
-                // S36-A CONNECTION RECYCLING — runs ONCE per NEW request
-                // stream. `cap == 0` short-circuits the whole block, so the
-                // disabled path is byte-identical to the pre-S36 front.
+                // S36-A CONNECTION RECYCLING — runs ONCE per NEW request stream; `cap == 0`
+                // short-circuits, so the disabled path is byte-identical to the pre-S36 front.
                 if cap != 0 {
-                    // 1) Already recycling: reject any stream opened AFTER the
-                    //    GOAWAY's last-processed id. The gate is
-                    //    `goaway_pending`, NOT `goaway_sent`: admission stops
-                    //    the moment the cap trips, even while the GOAWAY frame
-                    //    waits on a full control-stream window, so nothing is
-                    //    admitted past the boundary during the retry. RFC 9114
-                    //    §5.2 lets the client retry it on a new connection.
+                    // 1) Already recycling: reject any stream opened AFTER the GOAWAY's
+                    //    last-processed id. The gate is `goaway_pending`, NOT `goaway_sent`:
+                    //    admission stops the moment the cap trips, even while the GOAWAY frame
+                    //    waits on a full control-stream window. RFC 9114 §5.2 lets the client retry.
                     if *goaway_pending && sid > *goaway_last_id {
                         tracing::debug!(
                             stream_id = sid,
@@ -990,20 +907,15 @@ fn poll_h3(
                         reset_h3_stream(conn, sid, H3_REQUEST_REJECTED);
                         continue;
                     }
-                    // 2) Count this stream. Counting BEFORE validation bounds
-                    //    quiche's per-connection `collected` set against
-                    //    malformed-request spam too: every new stream lands in
-                    //    `collected`, so the cap must count rejects as well.
+                    // 2) Count BEFORE validation: every new stream lands in quiche's
+                    //    per-connection `collected` set, so the cap must count rejects too.
                     *requests_served = requests_served.saturating_add(1);
-                    // This stream WILL be processed, so it is the new
-                    // highest-processed id for any GOAWAY below. Set ONLY here,
-                    // on an admitted request bidi stream — never from a uni /
-                    // control stream — so `send_goaway`'s multiple-of-4
-                    // precondition holds by construction.
+                    // Set ONLY here, on an admitted request bidi stream — never from a uni /
+                    // control stream — so `send_goaway`'s multiple-of-4 precondition holds by
+                    // construction.
                     *goaway_last_id = sid;
-                    // 3) At the cap, flip `goaway_pending` (stop admitting
-                    //    immediately) and try to emit the GOAWAY now; the outer
-                    //    loop retries if the window is full.
+                    // 3) At the cap, flip `goaway_pending` (stop admitting immediately) and try
+                    //    to emit the GOAWAY now; the outer loop retries if the window is full.
                     if *requests_served >= u64::from(cap) {
                         *goaway_pending = true;
                         try_send_pending_goaway(
@@ -1017,8 +929,7 @@ fn poll_h3(
                     }
                 }
 
-                // Initial request HEADERS: pseudo-header validation runs
-                // BEFORE any upstream is dialled.
+                // Pseudo-header validation runs BEFORE any upstream is dialled.
                 if let Err(reason) = validate_request_pseudo_headers(&headers, ws_enabled) {
                     tracing::warn!(
                         stream_id = sid,
@@ -1029,8 +940,8 @@ fn poll_h3(
                     continue;
                 }
                 let req = H3Request::from_headers(headers);
-                // ROUND8-L7-16: :authority sanitisation — reject (H3 400)
-                // before the value can reach a backend.
+                // ROUND8-L7-16: :authority sanitisation — reject (H3 400) before the value can
+                // reach a backend.
                 if !req.authority.is_empty() {
                     if let Err(e) = lb_core::authority::validate(&req.authority) {
                         tracing::warn!(
@@ -1052,9 +963,8 @@ fn poll_h3(
                     }
                 }
 
-                // WS Stage C: intercept a validated `:protocol=websocket`
-                // extended CONNECT before the normal cell dispatch — the
-                // tunnel takes over this stream entirely.
+                // WS Stage C: intercept a validated `:protocol=websocket` extended CONNECT before
+                // the normal cell dispatch — the tunnel takes over this stream entirely.
                 if ws_enabled {
                     let ws_protocol = req
                         .extra
@@ -1077,8 +987,7 @@ fn poll_h3(
                 }
 
                 let bodyless = !more_frames;
-                // Build the bounded request-body + response channels and spawn
-                // the per-cell producer task.
+                // Build the bounded request-body + response channels and spawn the producer task.
                 let (btx, brx) = mpsc::channel::<ReqBodyEvent>(H3_BODY_CHANNEL_DEPTH);
                 let (resp_tx, resp_rx) = mpsc::channel::<RespEvent>(H3_RESP_CHANNEL_DEPTH);
 
@@ -1145,15 +1054,13 @@ fn poll_h3(
                 stream_response.insert(sid, StreamTx::progressive());
 
                 if bodyless {
-                    // Bodyless (HEADERS + FIN): the consumer's first event must
-                    // be `End`, so send it now rather than registering a
-                    // body-phase channel.
+                    // Bodyless (HEADERS + FIN): the consumer's first event must be `End`, so send
+                    // it now rather than registering a body-phase channel.
                     let _ = btx.try_send(ReqBodyEvent::End {
                         trailers: Vec::new(),
                     });
                 } else {
-                    // Body to follow: register the body-phase channel and take
-                    // the first capacity-gated drain now.
+                    // Body to follow: register the body-phase channel and take the first drain now.
                     body_tx_by_stream.insert(sid, btx);
                     body_seen.insert(sid, 0);
                     drain_request_body(
@@ -1177,24 +1084,18 @@ fn poll_h3(
                 );
             }
             Ok((sid, quiche::h3::Event::Finished)) => {
-                // WS Stage C: a tunnel-stream FIN is the client closing its
-                // send half, not a request end.
+                // WS Stage C: a tunnel-stream FIN is the client closing its send half.
                 if let Some(st) = ws_tunnels.get_mut(&sid) {
                     ws_handle_client_fin(conn, h3, sid, st);
                     continue;
                 }
-                // F-MD-4 SMUGGLING GUARD. quiche's `poll` can return
-                // `Event::Finished` for a request stream that was actually
-                // RESET *after* its last DATA frame: `recv_body` on a reset
-                // stream queues it as finished, and `poll`'s FIRST
-                // `finished_streams` pop returns `Finished` WITHOUT the reset
-                // re-check that only its SECOND pop performs. Treating that as
-                // a clean end would present a truncated request to the backend
-                // as complete. Probe the transport exactly as quiche's own
-                // guard does — a zero-length `stream_recv` returns
-                // `StreamReset` for a reset stream — and map that to `Reset`,
-                // never `End`. A genuinely FIN'd stream returns `Ok((0, true))`
-                // and takes the clean path.
+                // F-MD-4 SMUGGLING GUARD. quiche's `poll` can return `Event::Finished` for a
+                // request stream that was actually RESET *after* its last DATA frame: `recv_body`
+                // on a reset stream queues it as finished, and `poll`'s FIRST `finished_streams`
+                // pop returns `Finished` WITHOUT the reset re-check that only its SECOND pop
+                // performs. Probe the transport exactly as quiche's own guard does — a zero-length
+                // `stream_recv` returns `StreamReset` — and map that to `Reset`, never `End`, or a
+                // truncated request reaches the backend as complete.
                 let was_reset = matches!(
                     conn.stream_recv(sid, &mut []),
                     Err(quiche::Error::StreamReset(_))
@@ -1237,8 +1138,7 @@ fn poll_h3(
             Ok((_sid, _)) => {}
             Err(quiche::h3::Error::Done) => break,
             Err(e) => {
-                // quiche enforces the control / QPACK / frame-sequence rules
-                // itself and has already closed the conn.
+                // quiche enforces the control / QPACK / frame-sequence rules and has closed the conn.
                 tracing::debug!(error = %e, "INC-2: h3.poll error (quiche closed the connection)");
                 break;
             }
@@ -1256,8 +1156,8 @@ fn poll_h3(
     );
 }
 
-/// Test gauge — record the per-stream retained request-body bytes at the
-/// point the buffers are largest, so a whole-frame buffering regression fails.
+/// Test gauge — per-stream retained request-body bytes at their largest, so a whole-frame
+/// buffering regression fails.
 #[cfg(any(test, feature = "test-gauges"))]
 fn record_req_retained(
     sid: u64,
@@ -1276,9 +1176,8 @@ fn select_backend(backends: &Arc<Vec<SocketAddr>>) -> Option<SocketAddr> {
     backends.first().copied()
 }
 
-/// Spawn an inline H3 response (`status` + a short plain body) on `sid`
-/// through the normal decoded response channel, so the WS error paths reuse
-/// the same egress as every other response.
+/// Spawn an inline H3 response through the normal decoded response channel, so the WS error paths
+/// reuse the same egress as every other response.
 fn spawn_inline_h3_response(
     resp_tasks: &mut Vec<tokio::task::JoinHandle<()>>,
     resp_rx_by_stream: &mut HashMap<u64, mpsc::Receiver<RespEvent>>,
@@ -1304,10 +1203,9 @@ fn spawn_inline_h3_response(
     stream_response.insert(sid, StreamTx::progressive());
 }
 
-/// Set up a WebSocket-over-H3 tunnel for a validated extended CONNECT: build
-/// the bounded relay channels, launch the injected relay, and queue the `200`
-/// head so it is sent only AFTER the upstream handshake succeeds
-/// (upstream-before-200 — never a `200` the upstream never agreed to).
+/// Set up a WebSocket-over-H3 tunnel for a validated extended CONNECT: build the bounded relay
+/// channels, launch the injected relay, and queue the `200` head so it is sent only AFTER the
+/// upstream handshake succeeds — never a `200` the upstream never agreed to.
 #[allow(clippy::too_many_arguments)]
 fn setup_ws_tunnel(
     sid: u64,
@@ -1319,8 +1217,7 @@ fn setup_ws_tunnel(
     resp_rx_by_stream: &mut HashMap<u64, mpsc::Receiver<RespEvent>>,
     stream_response: &mut HashMap<u64, StreamTx>,
 ) {
-    // RFC 8441/9220: `websocket` is the only `:protocol` value supported;
-    // anything else draws a 501.
+    // RFC 8441/9220: `websocket` is the only `:protocol` value supported; anything else draws 501.
     if !protocol.eq_ignore_ascii_case("websocket") {
         tracing::debug!(
             stream_id = sid,
@@ -1390,9 +1287,8 @@ fn setup_ws_tunnel(
     );
 }
 
-/// Inbound pump (H3 stream DATA → `proxy_frames` reader), capacity-gated the
-/// same way as [`drain_request_body`]: a full reader channel stops the read,
-/// so quiche pauses the client (R8).
+/// Inbound pump (H3 stream DATA → `proxy_frames` reader), capacity-gated like
+/// [`drain_request_body`]: a full reader channel stops the read, so quiche pauses the client (R8).
 fn ws_drain_inbound(
     conn: &mut quiche::Connection,
     h3: &mut quiche::h3::Connection,
@@ -1402,8 +1298,7 @@ fn ws_drain_inbound(
     if !st.activated {
         return;
     }
-    // Clone the sender so the error arm can drop the original and signal the
-    // reader's terminal.
+    // Clone the sender so the error arm can drop the original and signal the reader's terminal.
     let Some(tx) = st.to_reader.as_ref().cloned() else {
         return;
     };
@@ -1431,9 +1326,8 @@ fn ws_drain_inbound(
     }
 }
 
-/// The client FIN'd its WS send half: drain any coalesced DATA first (so no
-/// inbound bytes are lost), then drop the sender so the reader sees the
-/// terminal.
+/// The client FIN'd its WS send half: drain any coalesced DATA first (so no inbound bytes are
+/// lost), then drop the sender so the reader sees the terminal.
 fn ws_handle_client_fin(
     conn: &mut quiche::Connection,
     h3: &mut quiche::h3::Connection,
@@ -1461,8 +1355,7 @@ fn ws_handle_client_fin(
     // `tx` dropped here ⇒ the reader observes the terminal.
 }
 
-/// The client RESET the WS tunnel stream — surface an abnormal drop to the
-/// relay rather than a clean close.
+/// The client RESET the WS tunnel stream — surface an abnormal drop, not a clean close.
 fn ws_handle_client_reset(sid: u64, st: &mut WsTunnelState) {
     if let Some(tx) = st.to_reader.take() {
         tracing::debug!(
@@ -1473,8 +1366,7 @@ fn ws_handle_client_reset(sid: u64, st: &mut WsTunnelState) {
     }
 }
 
-/// Abort a tunnel stream abnormally: `RESET_STREAM` + `STOP_SENDING` with
-/// [`H3_REQUEST_CANCELLED`], then drop the tunnel state.
+/// Abort a tunnel stream abnormally: `RESET_STREAM` + `STOP_SENDING` with [`H3_REQUEST_CANCELLED`].
 fn ws_teardown(conn: &mut quiche::Connection, sid: u64, st: &mut WsTunnelState) {
     st.to_reader = None;
     if !st.fin_sent {
@@ -1490,14 +1382,11 @@ fn ws_teardown(conn: &mut quiche::Connection, sid: u64, st: &mut WsTunnelState) 
     }
 }
 
-/// Per-tick WebSocket tunnel pump: resolve upstream readiness (`Ready` queues
-/// the 200, `Failed` emits the inline error and tears down), send the queued
-/// 200 (retrying under a full send window), then pump inbound (re-arming each
-/// tick because `Data` is edge-triggered) and outbound (R8: retain the unsent
-/// tail; a full send window stops us pulling from `from_writer`, which parks
-/// the relay's `PollSender`). When the relay finishes, FIN the stream.
-///
-/// Inert when `ws_tunnels` is empty.
+/// Per-tick WebSocket tunnel pump: resolve upstream readiness (`Ready` queues the 200, `Failed`
+/// emits the inline error and tears down), send the queued 200 (retrying under a full send
+/// window), then pump inbound (re-arming each tick because `Data` is edge-triggered) and outbound
+/// (R8: retain the unsent tail; a full send window stops us pulling from `from_writer`, which
+/// parks the relay's `PollSender`). Inert when `ws_tunnels` is empty.
 fn pump_ws_tunnels(
     conn: &mut quiche::Connection,
     h3: &mut quiche::h3::Connection,
@@ -1540,8 +1429,7 @@ fn pump_ws_tunnels(
                     continue;
                 }
                 Err(oneshot::error::TryRecvError::Closed) => {
-                    // Launcher dropped the sender without a verdict — treat
-                    // as a failure, never a silent 200.
+                    // Launcher dropped the sender without a verdict — never a silent 200.
                     st.ready = None;
                     spawn_inline_h3_response(
                         resp_tasks,
