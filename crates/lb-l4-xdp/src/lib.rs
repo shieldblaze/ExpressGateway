@@ -1,8 +1,6 @@
 //! L4 XDP/eBPF data plane for TCP and UDP load balancing.
 //!
-//! Ships the real aya-based loader plus the bpffs / netlink / NIC-compat helpers and the
-//! telemetry surface, alongside a CI-safe userspace simulation ([`sim`]) of the in-kernel
-//! routines that cannot be exercised without a privileged host.
+//! Ships the real aya-based loader plus the bpffs / netlink / NIC-compat helpers and the telemetry surface, alongside a CI-safe userspace simulation ([`sim`]) of the in-kernel routines that cannot be exercised without a privileged host.
 #![deny(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -21,37 +19,26 @@
 
 use std::collections::{HashMap, VecDeque};
 
-// The standalone BPF program this loads lives in crates/lb-l4-xdp/ebpf/ and is compiled
-// out-of-workspace via scripts/build-xdp.sh.
+// The standalone BPF program this loads lives in crates/lb-l4-xdp/ebpf/ and is compiled out-of-workspace via scripts/build-xdp.sh.
 #[cfg(target_os = "linux")]
 pub mod loader;
 
-/// ROUND8-L4-11: bpffs mount-type runtime check, so a non-bpffs pin directory is an
-/// actionable startup error instead of a deep-aya EINVAL.
+/// ROUND8-L4-11: bpffs mount-type runtime check, so a non-bpffs pin directory is an actionable startup error instead of a deep-aya EINVAL.
 pub mod bpffs;
 
-/// ROUND8-L4-05: known-bad NIC + firmware blocklist for native (`Drv`) XDP and the
-/// post-attach silent-drop probe scaffold (aya #1193 / Cilium lesson 8).
+/// ROUND8-L4-05: known-bad NIC + firmware blocklist for native (`Drv`) XDP and the post-attach silent-drop probe scaffold (aya #1193 / Cilium lesson 8).
 pub mod nic_compat;
 
-/// ROUND8-L4-12: real RTM_GETLINK XDP prog-id query over a raw `AF_NETLINK` socket (closes
-/// the EBUSY-on-redeploy hazard). Its byte-parser is `pub` for the CI proof test.
+/// ROUND8-L4-12: real RTM_GETLINK XDP prog-id query over a raw `AF_NETLINK` socket (closes the EBUSY-on-redeploy hazard). Its byte-parser is `pub` for the CI proof test.
 pub mod netlink_xdp;
 
-/// EBPF-2-04 / EBPF-2-05 / EBPF-2-08: lock-step telemetry surface between the eBPF data plane
-/// and userspace observability.
+/// EBPF-2-04 / EBPF-2-05 / EBPF-2-08: lock-step telemetry surface between the eBPF data plane and userspace observability.
 pub mod stats_export;
 
-/// Pillar 4b-2 userspace simulation of the BPF extensions (VLAN stripping, IPv6 conntrack,
-/// LPM-trie ACL, RFC 1624 checksums). The real in-kernel code is `ebpf/src/main.rs`; this is
-/// the CI-safe functional spec those routines must satisfy.
+/// Pillar 4b-2 userspace simulation of the BPF extensions (VLAN stripping, IPv6 conntrack, LPM-trie ACL, RFC 1624 checksums). The real in-kernel code is `ebpf/src/main.rs`; this is the CI-safe functional spec those routines must satisfy.
 pub mod sim;
 
-/// The compiled BPF ELF produced by `scripts/build-xdp.sh`; exists only when `build.rs` sees
-/// `src/lb_xdp.bin` and emits `cfg(lb_xdp_elf)`.
-///
-/// Emitted with 8-byte alignment so `object`-crate parsers that cast ELF headers through
-/// alignment-checked `from_bytes` do not reject them.
+/// The compiled BPF ELF produced by `scripts/build-xdp.sh`; exists only when `build.rs` sees `src/lb_xdp.bin` and emits `cfg(lb_xdp_elf)`. Emitted with 8-byte alignment so `object`-crate parsers that cast ELF headers through alignment-checked `from_bytes` do not reject them.
 #[cfg(lb_xdp_elf)]
 pub const LB_XDP_ELF: &[u8] = {
     #[repr(C, align(8))]
@@ -99,8 +86,7 @@ pub struct FlowKey {
     pub protocol: u8,
 }
 
-/// Simulated conntrack table mapping flow 5-tuples to backend indices, with FIFO eviction of
-/// the oldest entry once `max_capacity` is reached.
+/// Simulated conntrack table mapping flow 5-tuples to backend indices, with FIFO eviction of the oldest entry once `max_capacity` is reached.
 #[derive(Debug)]
 pub struct ConntrackTable {
     entries: HashMap<FlowKey, usize>,
@@ -326,9 +312,7 @@ impl MaglevTable {
     }
 }
 
-/// Atomic backend table swap manager. Old flows keep their pinned backend via conntrack; new
-/// flows use the new Maglev table, and conntrack entries pointing out of range after a shrink
-/// are evicted on the next lookup.
+/// Atomic backend table swap manager. Old flows keep their pinned backend via conntrack; new flows use the new Maglev table, and conntrack entries pointing out of range after a shrink are evicted on the next lookup.
 #[derive(Debug)]
 pub struct HotSwapManager {
     conntrack: ConntrackTable,
@@ -345,8 +329,7 @@ impl HotSwapManager {
         })
     }
 
-    /// Swap to a new backend set. Existing conntrack entries are preserved, so in-flight flows
-    /// keep reaching their original backend.
+    /// Swap to a new backend set. Existing conntrack entries are preserved, so in-flight flows keep reaching their original backend.
     pub fn swap_backends(
         &mut self,
         new_backends: &[String],
@@ -357,11 +340,7 @@ impl HotSwapManager {
         Ok(())
     }
 
-    /// Route a flow: conntrack first, else Maglev (whose result is then memoised into
-    /// conntrack).
-    ///
-    /// A conntrack entry pointing to a backend index out of range for the current table (e.g.
-    /// after a swap to fewer backends) is removed and the flow re-routed.
+    /// Route a flow: conntrack first, else Maglev (whose result is memoised into conntrack). A conntrack entry pointing to a backend index out of range for the current table (e.g. after a swap to fewer backends) is removed and the flow re-routed.
     pub fn route_flow(&mut self, flow: FlowKey, hash_key: u64) -> Result<usize, XdpError> {
         if let Some(idx) = self.conntrack.lookup(&flow) {
             if idx < self.current_table.backend_count() {
