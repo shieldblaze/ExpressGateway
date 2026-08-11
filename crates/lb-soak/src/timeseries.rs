@@ -308,6 +308,8 @@ pub fn analyze_column(
             // A constant-rate counter has first/second-half slopes ~equal; 1.8x cleanly
             // separates linear (1.0x) from quadratic (~2.4x) growth, so only an
             // accelerating counter is DRIFT.
+            let first_half = slope(&trimmed[..tn / 2]);
+            let second_half = slope(&trimmed[tn / 2..]);
             if second_half > first_half * 1.8 + eps && second_half > 0.0 {
                 (
                     Verdict::Drift,
