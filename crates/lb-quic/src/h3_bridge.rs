@@ -229,7 +229,9 @@ impl H3Request {
                 ":method" => method = Some(value),
                 ":path" => path = Some(value),
                 ":authority" => authority = Some(value),
-                ":scheme" => {}
+                ":scheme" => {
+                    // Known-required but not actionable here.
+                }
                 _ => extra.push((name, value)),
             }
         }
