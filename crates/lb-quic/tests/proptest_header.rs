@@ -1,13 +1,9 @@
-//! CODE-2-11 — QUIC header parse no-panic harness. Single invariant:
-//! `quiche::Header::from_slice` never panics on any random byte slice up to
-//! MAX_UDP. The router calls it on EVERY inbound datagram before any further
-//! validation, so a panic in the header decoder would brick the router — hence
-//! the catch-unwind safety net.
+//! CODE-2-11 — `quiche::Header::from_slice` never panics on any random byte slice up to MAX_UDP.
+//! The router calls it on EVERY inbound datagram before any further validation, so a panic in the
+//! header decoder would brick the router.
 //!
-//! The `#![cfg(feature = "proptest")]` gate was removed so this sanity net runs
-//! under the default `cargo test -p lb-quic` instead of being silent dead
-//! coverage; `proptest` is an unconditional dev-dependency. CI still scales the
-//! budget via `PROPTEST_CASES`, which proptest reads at runtime.
+//! The `#![cfg(feature = "proptest")]` gate was removed so this sanity net runs under the default
+//! `cargo test -p lb-quic` instead of being silent dead coverage.
 
 use proptest::collection::vec;
 use proptest::prelude::*;

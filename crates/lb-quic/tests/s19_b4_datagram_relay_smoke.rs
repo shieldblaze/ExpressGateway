@@ -1,13 +1,7 @@
-//! Mode B — B4 minimal datagram-relay smoke: the bidirectional raw-DATAGRAM
-//! (RFC 9221) relay carries a handful of binary payloads byte-identically
-//! through the full wire path, BOTH directions (client → LB → dgram-echo
-//! backend → LB → client). Deliberately narrow: the flood / drop-newest /
-//! bounded-queue proofs are the verifier's.
-//!
-//! The client sends varied shapes — zero-length, all-zero, non-UTF8 high-bit,
-//! and a near-UDP-payload-max one — and must receive a byte-identical multiset.
-//!
-//! Driven with `--features test-gauges` so the test hook is reachable.
+//! Mode B — B4 minimal datagram-relay smoke: the bidirectional raw-DATAGRAM (RFC 9221) relay
+//! carries varied binary payloads (zero-length, all-zero, non-UTF8 high-bit, near-UDP-max)
+//! byte-identically BOTH directions. Narrow by design — the flood / drop-newest / bounded-queue
+//! proofs are the verifier's.
 
 #![cfg(feature = "test-gauges")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -36,9 +30,6 @@ const MAX_UDP: usize = 65_535;
 const HANDSHAKE_BUDGET: Duration = Duration::from_secs(5);
 const RELAY_BUDGET: Duration = Duration::from_secs(10);
 
-// ─────────────────────────────────────────────────────────────────────
-// Cert plumbing (mirrors s16_b2_stream_relay_smoke.rs).
-// ─────────────────────────────────────────────────────────────────────
 
 static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -95,8 +86,7 @@ fn random_scid() -> [u8; quiche::MAX_CONN_ID_LEN] {
     scid
 }
 
-/// CLIENT-facing SERVER config (the LB-as-server leg). Serves the
-/// loopback cert; advertises `h3`; negotiates DATAGRAM (RFC 9221).
+/// CLIENT-facing SERVER config: serves the loopback cert, advertises `h3`, negotiates DATAGRAM.
 fn lb_server_config(certs: &TestCerts) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
     cfg.set_application_protos(&[H3_ALPN]).unwrap();
@@ -118,7 +108,6 @@ fn lb_server_config(certs: &TestCerts) -> quiche::Config {
     cfg
 }
 
-/// The real downstream CLIENT config — verifies the LB's cert.
 fn client_config(certs: &TestCerts) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
     cfg.set_application_protos(&[H3_ALPN]).unwrap();
@@ -139,7 +128,6 @@ fn client_config(certs: &TestCerts) -> quiche::Config {
     cfg
 }
 
-/// The pool's per-dial CLIENT config factory (LB → backend leg).
 fn upstream_config_factory(
     ca: PathBuf,
 ) -> Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> {
@@ -164,8 +152,7 @@ fn upstream_config_factory(
     })
 }
 
-/// A throwaway BACKEND that accepts ONE connection and ECHOes any received
-/// DATAGRAM straight back — the far end of the relay.
+/// Accepts ONE connection and ECHOes any received DATAGRAM straight back.
 fn spawn_dgram_echo_backend(certs: &TestCerts) -> SocketAddr {
     let std_sock = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     std_sock.set_nonblocking(true).unwrap();
@@ -177,8 +164,7 @@ fn spawn_dgram_echo_backend(certs: &TestCerts) -> SocketAddr {
         let mut in_buf = vec![0u8; MAX_UDP];
         let mut out_buf = vec![0u8; MAX_UDP];
         let mut rd = vec![0u8; MAX_UDP];
-        // Datagrams the backend received and still owes back to the peer
-        // (echoed FIFO; a full send queue retries next turn).
+        // Datagrams received and still owed back (echoed FIFO; a full send queue retries next turn).
         let mut echo_q: std::collections::VecDeque<Vec<u8>> = std::collections::VecDeque::new();
         let mut conn: Option<quiche::Connection> = None;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
@@ -195,8 +181,7 @@ fn spawn_dgram_echo_backend(certs: &TestCerts) -> SocketAddr {
                         Err(_) => break,
                     }
                 }
-                // 2) Echo them back, front-first; a full send queue (Done)
-                //    stops this turn and retries next.
+                // 2) Echo back front-first; a full send queue (Done) stops this turn and retries.
                 while let Some(front) = echo_q.front() {
                     match c.dgram_send(front) {
                         Ok(()) => {
@@ -204,8 +189,7 @@ fn spawn_dgram_echo_backend(certs: &TestCerts) -> SocketAddr {
                         }
                         Err(quiche::Error::Done) => break,
                         Err(_) => {
-                            // Drop an un-forwardable datagram (e.g. too
-                            // large for the peer) and keep going.
+                            // Drop an un-forwardable datagram (e.g. too large for the peer).
                             let _ = echo_q.pop_front();
                         }
                     }
@@ -280,9 +264,8 @@ async fn try_recv_one(
     }
 }
 
-/// The datagrams the client sends: varied shapes proving verbatim, binary-safe,
-/// zero-length-preserving relay. Each is sized to fit the negotiated writable
-/// length, so even the large one is never refused with `BufferTooShort`.
+/// Varied shapes proving verbatim, binary-safe, zero-length-preserving relay. Each is sized to
+/// fit the negotiated writable length, so even the large one is never refused `BufferTooShort`.
 fn datagram_set() -> Vec<Vec<u8>> {
     vec![
         Vec::new(),                                           // zero-length
@@ -296,9 +279,8 @@ fn datagram_set() -> Vec<Vec<u8>> {
     ]
 }
 
-/// THE B4 self-check: a varied set of binary datagrams survives
-/// client→LB→backend(dgram-echo)→LB→client byte-identically (as a
-/// multiset — datagrams are unordered).
+/// THE B4 self-check: a varied set of binary datagrams survives the full path byte-identically
+/// as a MULTISET — datagrams are unordered.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn s19_b4_datagrams_round_trip_byte_identical() {
     let certs = generate_loopback_certs();
@@ -366,8 +348,6 @@ async fn s19_b4_datagrams_round_trip_byte_identical() {
     }
     assert_eq!(client_conn.application_proto(), H3_ALPN);
 
-    // 5) Queue the datagrams on the client BEFORE handing off, so they are
-    //    buffered in quiche; the client driver below keeps flushing.
     let sent = datagram_set();
     for d in &sent {
         client_conn
@@ -401,8 +381,6 @@ async fn s19_b4_datagrams_round_trip_byte_identical() {
         }
     });
 
-    // 7) Client driver: keep the client live (flush + recv) and collect
-    //    echoed datagrams until it has received `expected_count` of them.
     let expected_count = sent.len();
     let (done_tx, done_rx) = tokio::sync::oneshot::channel::<Vec<Vec<u8>>>();
     let client_cancel = cancel.clone();
@@ -449,8 +427,6 @@ async fn s19_b4_datagrams_round_trip_byte_identical() {
         pool,
         addr: backend_addr,
         sni: TEST_SNI.to_string(),
-        // B6 (R14/R12): caps now carried on RawBackend; the const
-        // defaults keep these tests byte-identical in behaviour.
         dgram_queue_cap: lb_quic::DGRAM_QUEUE_CAP,
         max_relay_streams: lb_quic::MAX_RELAY_STREAMS,
     };
@@ -480,8 +456,7 @@ async fn s19_b4_datagrams_round_trip_byte_identical() {
         .expect("client must receive the echoed datagrams before the budget")
         .expect("client driver must deliver the received datagrams");
 
-    // ── THE ASSERTION: every sent datagram came back byte-identical.
-    // Datagrams are unordered, so compare as a multiset.
+    // Every sent datagram came back byte-identical; datagrams are unordered, so compare multisets.
     assert_eq!(
         received.len(),
         sent.len(),
@@ -504,8 +479,7 @@ async fn s19_b4_datagrams_round_trip_byte_identical() {
         "no unexpected/extra datagrams should remain"
     );
 
-    // Sanity: the zero-length datagram in particular round-tripped (it is
-    // the one most likely to be silently dropped by a naive relay).
+    // Sanity: the zero-length datagram round-tripped — the one a naive relay silently drops.
     let lens: HashSet<usize> = sent.iter().map(Vec::len).collect();
     assert!(
         lens.contains(&0),

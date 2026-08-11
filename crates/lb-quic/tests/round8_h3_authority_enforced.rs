@@ -1,17 +1,9 @@
-//! ROUND8-L7-16 proof — the protocol-neutral authority validator is ON THE
-//! H3/QUIC REQUEST PATH, not just H1/H2. (Reference: the HAProxy
-//! comma-in-authority bugs.) L7-09 closed H1/H2 with a single
-//! `lb_l7::authority::validate_request` choke point, but the H3 datapath lives
-//! in `lb-quic` and never reaches it, so `lb_core::authority::validate` — the
-//! EXACT same predicate — is wired into the H3 ingress BEFORE any upstream
-//! branch.
-//!
-//! Drives a REAL loopback QUIC handshake through the REAL
-//! [`lb_quic::run_actor`] against a REAL accept-counting probe backend, and
-//! asserts: a comma in `:authority` ⇒ H3 400 AND ZERO backend connections (the
-//! validator tripped BEFORE upstream selection — the HAProxy lesson); and a
-//! well-formed `:authority` is NOT rejected, so the gate is value-sanitisation
-//! only and does not over-reject.
+//! ROUND8-L7-16 proof — the protocol-neutral authority validator is ON THE H3/QUIC REQUEST PATH,
+//! not just H1/H2 (reference: the HAProxy comma-in-authority bugs). L7-09 closed H1/H2 via
+//! `lb_l7::authority::validate_request`, which the H3 datapath never reaches, so the EXACT same
+//! predicate `lb_core::authority::validate` is wired into the H3 ingress BEFORE any upstream
+//! branch. Asserts a comma in `:authority` ⇒ H3 400 AND ZERO backend connections, and that a
+//! well-formed `:authority` is not over-rejected.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -54,11 +46,9 @@ fn write_test_cert() -> (CertTempFile, CertTempFile) {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
-    // The prior nonce was `pid * K + subsec_nanos`, and `std::process::id()` is
-    // constant across every `#[test]` in this binary — so two parallel tests
-    // could land on the same cert path and one's `CertTempFile::drop` would
-    // `remove_file` a cert another was still loading. A process-global
-    // monotonic counter makes every path unique by construction.
+    // F-COR-8: `std::process::id()` is constant across every test in this binary, so a
+    // pid-based nonce let two parallel tests share a cert path and one's drop `remove_file` a
+    // cert another was still loading. A process-global counter makes every path unique.
     static CERT_SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = CERT_SEQ.fetch_add(1, Ordering::Relaxed);
     let nonce = std::process::id()
@@ -112,9 +102,8 @@ fn scid_bytes(salt: u32) -> [u8; quiche::MAX_CONN_ID_LEN] {
     b
 }
 
-/// A real listening backend that counts inbound TCP connections. If
-/// the H3 authority gate is bypassed, the actor's picker dials this
-/// address and `count` goes non-zero.
+/// Counts inbound TCP connections: if the H3 authority gate is bypassed, the actor's picker
+/// dials this address and `count` goes non-zero.
 async fn spawn_probe_backend() -> (SocketAddr, Arc<AtomicU32>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -124,8 +113,8 @@ async fn spawn_probe_backend() -> (SocketAddr, Arc<AtomicU32>) {
         loop {
             if let Ok((sock, _)) = listener.accept().await {
                 c.fetch_add(1, Ordering::SeqCst);
-                // Minimal well-formed H1 reply so the valid-authority
-                // case completes cleanly rather than 502-ing on read.
+                // Minimal well-formed H1 reply so the valid-authority case completes cleanly
+                // rather than 502-ing on read.
                 use tokio::io::AsyncWriteExt;
                 let mut s = sock;
                 let _ = s
@@ -195,9 +184,7 @@ async fn try_recv_one(
     }
 }
 
-/// Drive one case: handshake against a server actor, send an H3 HEADERS frame
-/// with `authority`, and return the decoded `:status` plus the probe-backend
-/// connection count.
+/// Drive one case → (decoded `:status`, probe-backend connection count).
 async fn run_case(authority: &str) -> (Option<u16>, u32) {
     let (cert_file, key_file) = write_test_cert();
     let cert_path = cert_file.0.to_str().unwrap().to_string();
@@ -264,18 +251,16 @@ async fn run_case(authority: &str) -> (Option<u16>, u32) {
         .await;
     }
 
-    // Send the request HEADERS on client bidi stream 0 BEFORE handing
-    // the server conn to the actor (the actor's poll_h3 picks it up
-    // once it observes the readable stream).
+    // Send the request HEADERS BEFORE handing the server conn to the actor; poll_h3 picks it up
+    // once it observes the readable stream.
     let frame = h3_headers_frame(authority);
     client_conn
         .stream_send(0, &frame, true)
         .expect("stream_send");
     flush(&mut client_conn, &client_socket, &mut out).await;
 
-    // Hand the established server conn to the real actor. The router
-    // is simulated by a forwarder task draining the server UDP socket
-    // into the actor's inbound channel.
+    // The router is simulated by a forwarder task draining the server UDP socket into the
+    // actor's inbound channel; the actor is real.
     let (tx, rx) = mpsc::channel::<InboundPacket>(64);
     let cancel = CancellationToken::new();
     let fwd_socket = Arc::clone(&server_socket);
@@ -319,8 +304,6 @@ async fn run_case(authority: &str) -> (Option<u16>, u32) {
     };
     let actor = tokio::spawn(run_actor(params));
 
-    // Drive the client until a response HEADERS frame is decoded or
-    // the budget expires.
     let mut rx_tail: Vec<u8> = Vec::new();
     let mut status: Option<u16> = None;
     let resp_deadline = tokio::time::Instant::now() + RESPONSE_BUDGET;
@@ -400,23 +383,17 @@ async fn h3_whitespace_in_authority_rejected_before_upstream() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn h3_valid_authority_passes_validator() {
-    // A well-formed authority must NOT be rejected: the request
-    // reaches the probe backend (proving the gate is value-
-    // sanitisation only and does not over-reject the H3 path).
     let (status, hits) = run_case("example.test:8080").await;
-    // The load-bearing proof: a well-formed `:authority` is NOT rejected — the
-    // actor's picker dials the probe backend. The H3 mirror of the H1/H2
-    // "valid authority reaches upstream" assertion.
+    // The load-bearing proof: a well-formed `:authority` is NOT rejected — the actor's picker
+    // dials the probe backend. The H3 mirror of the H1/H2 assertion.
     assert!(
         hits >= 1,
         "H3: a valid :authority must pass the validator and reach the \
          probe backend; got hits={hits} status={status:?}"
     );
-    // The upstream status is secondary: reaching the real probe backend yields
-    // 200, or 502 when the minimal single-shot harness's read races the
-    // backend's `Connection: close`. EITHER proves the request got PAST the
-    // validator, since a reject would be a 400 — the same inference the H1/H2
-    // proof uses.
+    // The upstream status is secondary: reaching the probe backend yields 200, or 502 when this
+    // single-shot harness's read races the backend's `Connection: close`. EITHER proves the
+    // request got PAST the validator, since a reject would be a 400.
     assert!(
         matches!(status, Some(200) | Some(502)),
         "H3: a valid :authority must NOT be rejected — expected the \

@@ -1,13 +1,7 @@
-//! Crate-local H3→H1 bridge end-to-end proof. The H3→H1 path was proven only by
-//! `round8_h3_authority_enforced.rs`, which asserts a backend probe-hit COUNT
-//! and bypasses `QuicListener`; it never asserts the response status/body
-//! verbatim, nor that `:authority` reached the H1 upstream as `Host`.
-//!
-//! This drives the REAL [`lb_quic::QuicListener`] front-to-back and asserts,
-//! strictly beyond round8: the response `:status` is the upstream's EXACT code
-//! (a non-default value the bridge must echo, not a hardcoded 200); the body is
-//! the upstream's EXACT bytes; and the H1 upstream received
-//! `Host: <:authority>`, proving the translation lands on the wire.
+//! Crate-local H3→H1 bridge e2e through the REAL [`lb_quic::QuicListener`]. Strictly beyond
+//! `round8_h3_authority_enforced.rs` (which asserts only a backend probe-hit COUNT and bypasses
+//! the listener): the response `:status` is the upstream's EXACT non-default code, the body is
+//! the upstream's EXACT bytes, and the H1 upstream received `Host: <:authority>`.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -30,9 +24,7 @@ const H3_ALPN: &[u8] = b"h3";
 const TEST_SNI: &str = "expressgateway.test";
 const MAX_UDP: usize = 65_535;
 
-/// Distinctive, non-default response so the assertions cannot pass on a
-/// hardcoded 200 / canned body. `build_h1_request` is bodyless today so
-/// the upstream must reply with a `Content-Length`-delimited body.
+/// Distinctive and non-default, so the assertions cannot pass on a hardcoded 200 / canned body.
 const UPSTREAM_STATUS: u16 = 201;
 const UPSTREAM_BODY: &[u8] = b"s1b2-verbatim-body-payload";
 const REQUEST_AUTHORITY: &str = "h3-bridge.test:4433";
@@ -133,11 +125,8 @@ fn build_tcp_pool() -> TcpPool {
     )
 }
 
-/// Minimal HTTP/1.1 upstream that *captures the raw request head* of
-/// the first connection (so the test can assert the `Host` header the
-/// bridge synthesised from `:authority`) and replies with a
-/// distinctive status + body. Returns the bound addr plus a receiver
-/// that yields the captured request-head string.
+/// Captures the raw request head of the first connection (so the test can assert the `Host` the
+/// bridge synthesised from `:authority`) and replies with a distinctive status + body.
 async fn spawn_capturing_h1_backend() -> (
     SocketAddr,
     oneshot::Receiver<String>,
@@ -193,10 +182,8 @@ async fn spawn_capturing_h1_backend() -> (
     (addr, rx, handle)
 }
 
-/// Drive a client connection through handshake, send a single H3 GET on bidi
-/// stream 0, and collect the response status + body. The response field section
-/// is decoded with quiche's Huffman-capable QPACK decoder, since the migrated
-/// egress Huffman-encodes values and the hand-rolled decoder is raw-only.
+/// Handshake, send a single H3 GET on bidi stream 0, collect status + body. The response field
+/// section needs quiche's Huffman-capable QPACK decoder — the hand-rolled one is raw-only.
 fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, String> {
     use quiche::h3::NameValue;
     let hdrs = quiche::h3::qpack::Decoder::new()
@@ -292,9 +279,6 @@ async fn drive_h3_get(
                 match decode_frame(&rx_tail, 1 << 20) {
                     Ok((H3Frame::Headers { header_block }, consumed)) => {
                         rx_tail.drain(..consumed);
-                        // The actor encodes the response field section with
-                        // quiche's QPACK, which Huffman-encodes values, so this
-                        // client must use quiche's decoder.
                         let hdrs = decode_resp_qpack(&header_block)?;
                         for (n, v) in hdrs {
                             if n == ":status" {
@@ -361,9 +345,8 @@ async fn drive_h3_get(
     }
 }
 
-/// REAL front-to-back e2e: a quiche H3 client dials the production listener,
-/// which proxies through the H3→H1 bridge to a real TCP HTTP/1.1 upstream.
-/// Asserts status + body verbatim AND that `:authority` arrived as `Host`.
+/// REAL front-to-back e2e through the H3→H1 bridge to a real TCP HTTP/1.1 upstream: status +
+/// body verbatim, and `:authority` arriving as `Host`.
 #[tokio::test]
 async fn h3_h1_bridge_status_body_and_host_verbatim_through_quic_listener() {
     let certs = generate_loopback_certs();
@@ -400,8 +383,6 @@ async fn h3_h1_bridge_status_body_and_host_verbatim_through_quic_listener() {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     let result = drive_h3_get(conn, &client_sock, deadline).await;
 
-    // Capture the request head the bridge sent to the H1 upstream
-    // before tearing anything down.
     let captured_head = tokio::time::timeout(Duration::from_secs(2), head_rx)
         .await
         .ok()
@@ -413,9 +394,8 @@ async fn h3_h1_bridge_status_body_and_host_verbatim_through_quic_listener() {
 
     let (status, body) = result.expect("H3→H1 bridge e2e failed");
 
-    // (1) Response STATUS verbatim — the upstream's exact non-default
-    // code, not a hardcoded 200. Beyond round8 (which never checks
-    // status on the valid path; it accepts 200 OR 502).
+    // (1) Response STATUS verbatim — the upstream's exact non-default code, not a hardcoded 200.
+    // Beyond round8, which accepts 200 OR 502 on the valid path.
     assert_eq!(
         status, UPSTREAM_STATUS,
         "H3→H1 bridge must echo the H1 upstream's exact status; got {status}"
