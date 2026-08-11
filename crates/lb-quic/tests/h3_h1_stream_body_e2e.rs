@@ -1,31 +1,14 @@
-//! SESSION 2 / P1-A — INCREMENTAL H3→H1 request-body streaming e2e.
+//! Incremental H3→H1 request-body streaming e2e, driving the REAL
+//! [`lb_quic::QuicListener`] with a real quiche H3 client that sends HEADERS
+//! WITHOUT fin followed by DATA frames and a final fin.
 //!
-//! These tests drive the **REAL** [`lb_quic::QuicListener`] (UDP bind
-//! → router per-CID dispatch → `conn_actor::poll_h3` →
-//! `h3_bridge::h3_to_h1_stream`) with a real quiche H3 client that
-//! sends a HEADERS frame WITHOUT fin followed by one or more DATA
-//! frames and a final fin — exactly the shape S1's bodyless harness
-//! did NOT exercise.
-//!
-//! Coverage:
-//!   * T1 — multi-DATA-frame binary body (≥3 frames, ≥100 KB),
-//!     chunked egress, reassembled byte-identical at the backend.
-//!   * T2 — empty body (HEADERS + FIN) ⇒ backend bytes byte-identical
-//!     to the S1 bodyless head (`Content-Length: 0`).
-//!   * T3 — zero-length DATA frame then FIN ⇒ no spurious chunk.
-//!   * T4 — oversized vs a tiny `max_body` ⇒ client gets H3 413 and
-//!     the upstream is NOT left with a completed request.
-//!   * T5 — slow-upstream backpressure / REAL memory-bound proof: a
-//!     body sent as ONE LARGE DATA frame (>= 512 KiB, >= 8x the
-//!     ~64 KiB in-flight window) is driven through a STALLED
-//!     upstream. A gauge measuring the ACTUAL retained per-stream
-//!     memory (StreamRxBuf internal buffer + bytes queued in
-//!     body_pending + bounded-channel occupancy) must stay below a
-//!     tight bound (a small multiple of channel-depth*chunk-max,
-//!     and `<<` the total body) — proving the whole frame is NOT
-//!     buffered. Once the upstream resumes the full body arrives
-//!     byte-identical (liveness + correctness, incl. 0xFF/0x00/
-//!     0x80). FAILS on the pre-fix whole-frame-buffering decoder.
+//! Coverage: multi-DATA-frame binary body reassembled byte-identical; empty
+//! body; a zero-length DATA frame producing no spurious chunk; oversized vs a
+//! tiny `max_body` ⇒ H3 413 with the upstream NOT left holding a completed
+//! request; and T5, the memory-bound proof — a body sent as ONE LARGE DATA
+//! frame (≥ 8× the in-flight window) through a STALLED upstream must keep the
+//! retained-per-stream gauge far below the body size, which FAILS on the
+//! pre-fix whole-frame-buffering decoder, then arrive byte-identical on resume.
 //!
 //! Every body carries the non-UTF-8 bytes 0xFF 0x00 0x80.
 
@@ -53,9 +36,8 @@ const MAX_UDP: usize = 65_535;
 const REQUEST_AUTHORITY: &str = "h3-stream.test:4433";
 const REQUEST_PATH: &str = "/p1a/echo";
 
-/// SESSION 24 / INC-3: decode a RESPONSE QPACK field block emitted by
-/// the migrated wire egress (quiche::h3 encoder Huffman-encodes values);
-/// the hand-rolled `lb_h3_testcodec::QpackDecoder` is raw-only.
+/// Decode a RESPONSE QPACK field block with a Huffman-capable decoder; the
+/// hand-rolled `lb_h3_testcodec::QpackDecoder` is raw-only.
 #[allow(dead_code)]
 fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, String> {
     use quiche::h3::NameValue;
@@ -171,9 +153,8 @@ fn build_tcp_pool() -> TcpPool {
     )
 }
 
-/// Read a full HTTP/1.1 request (head + body) from the backend socket,
-/// de-chunking `Transfer-Encoding: chunked` if present. Returns the
-/// raw head string and the reassembled body bytes.
+/// Read a full HTTP/1.1 request from the backend socket, de-chunking if
+/// present. Returns the raw head string and the reassembled body.
 async fn read_h1_request(sock: &mut TcpStream) -> (String, Vec<u8>) {
     let mut all = Vec::with_capacity(4096);
     let mut tmp = [0u8; 8192];
@@ -254,10 +235,8 @@ fn dechunk(buf: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Capturing backend. Captures (head, body) of the first request,
-/// optionally stalls before reading the body until `resume` is
-/// notified (for the backpressure test), and replies with a fixed
-/// response.
+/// Capturing backend: captures (head, body) of the first request, optionally
+/// stalling before reading the body until `resume` is notified.
 async fn spawn_backend(
     stall: Option<Arc<Notify>>,
 ) -> (
@@ -279,21 +258,12 @@ async fn spawn_backend(
             let stall = stall.clone();
             tokio::spawn(async move {
                 if let Some(n) = &stall {
-                    // Read just the head + whatever the proxy managed
-                    // to push before its bounded in-flight window
-                    // filled, then STALL (do not drain) so the window
-                    // stays full — this is what makes the proxy stop
-                    // extending QUIC flow control. The memory-bound
-                    // proof is the in-flight gauge, asserted by the
-                    // caller. After `notified()` we fully drain the
-                    // remaining chunked body to completion (so the
-                    // request can finish → liveness) then reply.
-                    // Do NOT read anything yet: the proxy writes the
-                    // head + as many body chunks as its bounded
-                    // in-flight window allows into the kernel socket
-                    // buffer, then blocks on `write_all` — its body
-                    // channel fills → poll_h3 stops `stream_recv` →
-                    // QUIC flow control not extended. Stall here.
+                    // Do NOT read anything yet. The proxy writes the head plus
+                    // as many body chunks as its bounded in-flight window
+                    // allows into the socket buffer, then blocks on `write_all`
+                    // — its body channel fills, poll_h3 stops `stream_recv`,
+                    // and QUIC flow control is not extended. Stall here; after
+                    // `notified()` drain fully so the request can finish.
                     n.notified().await;
                     // From a clean socket (nothing consumed), read the
                     // entire chunked request to completion.
@@ -324,9 +294,8 @@ async fn spawn_backend(
     (addr, rx, handle)
 }
 
-/// Drive a quiche H3 client: handshake, send HEADERS (no fin) +
-/// `data_frames` DATA frames + fin, collect the response status+body.
-/// `extra_headers` lets a test add e.g. a client `content-length`.
+/// Drive a quiche H3 client: handshake, send HEADERS (no fin) + DATA frames +
+/// fin, collect the response status and body.
 #[allow(clippy::too_many_lines)]
 async fn drive_h3_body_request(
     mut conn: quiche::Connection,
@@ -340,9 +309,7 @@ async fn drive_h3_body_request(
     let stream_id: u64 = 0;
     let local = socket.local_addr().map_err(|e| e.to_string())?;
 
-    // Build the full request wire bytes: HEADERS frame then DATA
-    // frames. We send HEADERS first WITHOUT fin, then DATA, fin on the
-    // last byte.
+    // HEADERS first WITHOUT fin, then DATA, with fin on the last byte.
     let encoder = QpackEncoder::new();
     let mut headers = vec![
         (":method".to_string(), "POST".to_string()),
@@ -434,11 +401,9 @@ async fn drive_h3_body_request(
                 match decode_frame(&rx_tail, 1 << 20) {
                     Ok((H3Frame::Headers { header_block }, c)) => {
                         rx_tail.drain(..c);
-                        // SESSION 24 / INC-3: the wire client decodes the
-                        // quiche-encoded response head with a
-                        // Huffman-capable QPACK decoder (see helper). The
-                        // buffered `h3_to_h1_stream` 413 path below still
-                        // uses the raw lb_h3_testcodec decoder (hand-rolled encode).
+                        // The wire client decodes the quiche-encoded response
+                        // head with a Huffman-capable decoder; the 413 path
+                        // below still uses the raw hand-rolled decoder.
                         let hdrs = decode_resp_qpack(&header_block)?;
                         for (n, v) in hdrs {
                             if n == ":status" {
@@ -485,12 +450,10 @@ async fn drive_h3_body_request(
             }
         }
 
-        // Cap the recv wait hard: quiche's `timeout()` can be the full
-        // idle timeout (tens of seconds) when nothing is pending, which
-        // would block the client driver between RTTs and starve the
-        // request. A small ceiling keeps the loop spinning so it always
-        // drives handshake + send/recv promptly (the proxy is what is
-        // under test, not the client's pacing).
+        // Cap the recv wait hard: quiche's `timeout()` can be the full idle
+        // timeout when nothing is pending, which would block the driver between
+        // RTTs and starve the request. The proxy is under test, not the
+        // client's pacing.
         let qto = conn.timeout().unwrap_or(Duration::from_millis(20));
         let wait = qto.clamp(Duration::from_millis(2), Duration::from_millis(20));
         match tokio::time::timeout(wait, socket.recv_from(&mut in_buf)).await {
@@ -538,9 +501,7 @@ fn client_conn(server: SocketAddr, ca: &std::path::Path) -> (quiche::Connection,
     (conn, sock)
 }
 
-// ---------------------------------------------------------------------
 // T1 — multi-DATA-frame binary body, reassembled byte-identical.
-// ---------------------------------------------------------------------
 #[tokio::test]
 async fn t1_multi_data_frame_binary_body_forwarded_byte_identical() {
     let certs = generate_loopback_certs();
@@ -564,10 +525,9 @@ async fn t1_multi_data_frame_binary_body_forwarded_byte_identical() {
     assert!(expected.len() >= 100 * 1024, "body must be ≥100 KB");
 
     let (conn, sock) = client_conn(server, &certs.ca);
-    // Generous deadline: this real-QUIC e2e suite is CPU-heavy; under
-    // the default parallel test runner on a 2-CPU box tasks are
-    // starved, so allow ample wall time (logic correctness, not
-    // latency, is what's under test here).
+    // Generous deadline: this real-QUIC suite is CPU-heavy and tasks are
+    // starved under the parallel runner on a 2-CPU box. Correctness, not
+    // latency, is under test.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     let res = drive_h3_body_request(conn, &sock, frames, vec![], deadline).await;
 
@@ -594,9 +554,7 @@ async fn t1_multi_data_frame_binary_body_forwarded_byte_identical() {
     assert_eq!(body, expected, "reassembled body must be byte-identical");
 }
 
-// ---------------------------------------------------------------------
-// T2 — empty body (HEADERS + FIN) ⇒ byte-identical S1 bodyless head.
-// ---------------------------------------------------------------------
+// T2 — empty body (HEADERS + FIN) ⇒ byte-identical bodyless head.
 #[tokio::test]
 async fn t2_empty_body_is_byte_identical_to_s1_bodyless_head() {
     let certs = generate_loopback_certs();
@@ -628,9 +586,7 @@ async fn t2_empty_body_is_byte_identical_to_s1_bodyless_head() {
     assert!(body.is_empty(), "bodyless request must have empty body");
 }
 
-// ---------------------------------------------------------------------
 // T3 — zero-length DATA frame then FIN ⇒ no spurious chunk.
-// ---------------------------------------------------------------------
 #[tokio::test]
 async fn t3_zero_length_data_frame_then_fin_no_spurious_chunk() {
     let certs = generate_loopback_certs();
@@ -659,11 +615,7 @@ async fn t3_zero_length_data_frame_then_fin_no_spurious_chunk() {
     );
 }
 
-// ---------------------------------------------------------------------
-// T5 — slow-upstream backpressure / memory-bounded.
-//
-// Requires the `test-gauges` feature for the in-flight gauge.
-// ---------------------------------------------------------------------
+// T5 — slow-upstream backpressure / memory-bounded. Requires `test-gauges`.
 #[cfg(feature = "test-gauges")]
 #[tokio::test]
 async fn t5_single_large_data_frame_is_memory_bounded_through_stalled_upstream() {
@@ -677,13 +629,10 @@ async fn t5_single_large_data_frame_is_memory_bounded_through_stalled_upstream()
     let (backend_addr, _rx, backend_h) = spawn_backend(Some(resume.clone())).await;
     let (listener, server, _sd) = start_listener(&certs, backend_addr).await;
 
-    // THE point of the rewrite: the body is sent as ONE SINGLE LARGE
-    // DATA frame — 1 MiB — which is >= 16x the ~64 KiB QUIC in-flight
-    // window. The pre-fix decoder (`decode_frame` on the whole buffer)
-    // requires the ENTIRE DATA-frame payload buffered before yielding
-    // any item, so `StreamRxBuf.buf` would grow to ~1 MiB while the
-    // upstream is stalled. The streaming parser must instead emit +
-    // drain payload incrementally so retained memory stays tiny.
+    // THE point: the body is ONE SINGLE LARGE DATA frame, ≥16× the in-flight
+    // window. The pre-fix decoder required the ENTIRE frame payload buffered
+    // before yielding anything, so its buffer would grow to the full body while
+    // the upstream stalls. The streaming parser must drain incrementally.
     let total_body = 1024 * 1024usize;
     let mut single = vec![0u8; total_body];
     for (i, b) in single.iter_mut().enumerate() {
@@ -700,10 +649,8 @@ async fn t5_single_large_data_frame_is_memory_bounded_through_stalled_upstream()
     let frames = vec![single]; // exactly ONE DATA frame.
 
     let (conn, sock) = client_conn(server, &certs.ca);
-    // Resume the backend after a grace period so the request can
-    // eventually complete (proving liveness too). The grace period is
-    // long enough that, were the proxy buffering the whole frame, it
-    // would have done so (and tripped the gauge) before resume.
+    // Resume after a grace period long enough that a whole-frame-buffering
+    // proxy would already have tripped the gauge.
     let resume_c = resume.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(1200)).await;
@@ -717,12 +664,9 @@ async fn t5_single_large_data_frame_is_memory_bounded_through_stalled_upstream()
     backend_h.abort();
 
     let max_retained = MAX_RETAINED_BODY_BYTES.load(Ordering::SeqCst);
-    // (a) Tight bound: the TOTAL retained per-stream body memory
-    // (StreamRxBuf buffer + body_pending bytes + channel occupancy)
-    // must stay within a small multiple of the bounded in-flight
-    // window (depth * chunk-max) and UNCONDITIONALLY `<<` the 512 KiB
-    // body. A whole-DATA-frame-buffering decoder makes StreamRxBuf.buf
-    // ~= 512 KiB and blows this.
+    // (a) Tight bound: TOTAL retained per-stream body memory must stay within a
+    // small multiple of the in-flight window and UNCONDITIONALLY ≪ the body. A
+    // whole-frame-buffering decoder blows this.
     let window = H3_BODY_CHANNEL_DEPTH * H3_BODY_CHUNK_MAX; // 64 KiB
     let bound = 4 * window; // 256 KiB — small multiple of the window
     assert!(
@@ -741,16 +685,14 @@ async fn t5_single_large_data_frame_is_memory_bounded_through_stalled_upstream()
          (pre-fix whole-buffer decoder would retain ~{total_body})"
     );
 
-    // (b) Liveness + correctness: once the backend resumed, the request
-    // completed AND the full body arrived byte-identical at the
-    // backend (incl. the 0xFF/0x00/0x80 markers).
+    // (b) Liveness + correctness: after resume the request completed AND the
+    // full body arrived byte-identical, markers included.
     let (status, _) = res.expect("backpressured request never completed after resume");
     assert_eq!(status, UPSTREAM_STATUS);
 
-    // The stalled backend captured nothing on its oneshot (it drains
-    // post-resume locally), so re-verify correctness through a SECOND
-    // request on a non-stalled backend with the identical single large
-    // DATA frame: the reassembled body must be byte-identical.
+    // The stalled backend drains post-resume locally, so re-verify correctness
+    // through a SECOND request on a non-stalled backend with the identical
+    // single large DATA frame.
     let (backend2, body_rx2, backend_h2) = spawn_backend(None).await;
     let (listener2, server2, _sd2) = start_listener(&certs, backend2).await;
     let (conn2, sock2) = client_conn(server2, &certs.ca);
