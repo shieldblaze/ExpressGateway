@@ -62,20 +62,11 @@ use lb_security::{
 
 mod xdp;
 
-/// CODE-2-02: cell holding the registry-backed `panic_total` counter.
-///
-/// A second fallback `AtomicU64` counts panics that fire BEFORE the registry exists (e.g.
-/// during config parsing); the delta is drained into the registry counter once it is bound, so
-/// no panic is lost.
+/// CODE-2-02: registry-backed `panic_total`; the fallback atomic counts panics fired before the registry exists and is drained into it on bind.
 static PANIC_TOTAL_COUNTER: OnceLock<IntCounter> = OnceLock::new();
 static PANIC_TOTAL_FALLBACK: AtomicU64 = AtomicU64::new(0);
 
-/// CODE-2-02: install a process-wide panic hook that logs location/payload/backtrace, bumps
-/// `panic_total`, then aborts.
-///
-/// Installed before any tokio task is spawned so a panic during runtime construction is caught.
-/// Release builds use `panic = "abort"`; dev/test keep `unwind` (for proptest/loom), so the
-/// explicit `abort()` keeps the failure mode identical and stops tests drifting from prod.
+/// CODE-2-02: log + count + abort on panic. Dev/test builds unwind (proptest/loom), so the explicit `abort()` keeps the release failure mode.
 fn init_panic_hook() {
     use std::backtrace::Backtrace;
     std::panic::set_hook(Box::new(|info| {
@@ -108,8 +99,6 @@ fn init_panic_hook() {
     }));
 }
 
-/// CODE-2-02: bind the registry-backed counter to the panic hook and drain any pre-registry
-/// panics counted in the atomic fallback.
 fn bind_panic_counter(metrics: &MetricsRegistry) {
     match metrics.panic_total_counter() {
         Ok(c) => {
@@ -125,8 +114,6 @@ fn bind_panic_counter(metrics: &MetricsRegistry) {
     }
 }
 
-/// Read-only accessor summing the registry counter with the fallback atomic, so callers see the
-/// total regardless of when init happened.
 #[allow(dead_code)]
 fn panic_total() -> u64 {
     let from_registry = PANIC_TOTAL_COUNTER.get().map_or(0, IntCounter::get);
@@ -134,48 +121,35 @@ fn panic_total() -> u64 {
     from_registry.saturating_add(from_fallback)
 }
 
-/// One entry per TLS-terminating listener. The SIGUSR1 handler swaps the `SharedTlsBundle`
-/// under in-flight handshakes without disturbing them.
 #[derive(Clone)]
 struct TlsReloadEntry {
-    /// Listener address (`127.0.0.1:8443`); labels the per-listener gauges and the log line on reload.
     listener: String,
-    /// Cert path on disk.
     cert_path: PathBuf,
-    /// Key path on disk.
     key_path: PathBuf,
-    /// Wire-format ALPN tokens preserved across reloads (empty for raw TLS, `[b"h2", b"http/1.1"]` for H1s).
     alpn: Vec<Vec<u8>>,
-    /// Shared TLS config bundle the listener reads at accept time.
     bundle: lb_security::SharedTlsBundle,
-    /// Session-ticket rotator handle so the reload re-installs the same ticketer (preserving session-ticket resumption across rotations).
+    /// Held so a reload re-installs the SAME ticketer — session-ticket resumption survives a cert swap.
     rotator: Arc<PlMutex<TicketRotator>>,
 }
 
-/// S37-C: the swappable L7 proxy handle(s) for one reloadable listener, so a SIGHUP config
-/// reload can `.store()` a freshly-built proxy under in-flight connections.
 #[derive(Clone)]
 enum ReloadableProxies {
-    /// Plain HTTP/1.1 listener — a single `H1Proxy`.
-    H1 { proxy: SharedH1Proxy },
-    /// HTTPS listener with ALPN — the h1 + h2 proxy pair (the TLS bundle has its own SIGUSR1 reload path; only the L7 proxies swap here).
+    H1 {
+        proxy: SharedH1Proxy,
+    },
     H1s {
         h1_proxy: SharedH1Proxy,
         h2_proxy: SharedH2Proxy,
     },
 }
 
-/// S37-C: one entry per config-reloadable L7 listener (`h1`/`h1s`). Plain-TCP/TLS/QUIC
-/// listeners are NOT registered — the diff surfaces their changes as restart-required.
+/// One entry per config-reloadable L7 listener (`h1`/`h1s`). Plain-TCP/TLS/QUIC listeners are deliberately absent — the diff reports their changes as restart-required.
 #[derive(Clone)]
 struct ListenerReloadEntry {
-    /// Bind address — the diff's listener identity + the reload log label.
     listener: String,
-    /// The swappable proxy handle(s) for this listener.
     proxies: ReloadableProxies,
 }
 
-/// Cert-rotation metric handles.
 #[derive(Clone)]
 struct CertMetrics {
     succeeded_total: prometheus::IntCounter,
@@ -213,19 +187,13 @@ impl CertMetrics {
     }
 }
 
-/// S37-C: SIGHUP config-reload metric handles.
 #[derive(Clone)]
 struct ReloadMetrics {
-    /// Successful reloads that applied at least the swappable subset.
     succeeded_total: prometheus::IntCounter,
-    /// Reloads rejected by `lb_config::validate_config` (or parse) — nothing applied, old config stays live (validate-first).
     failed_total: prometheus::IntCounter,
-    /// Count of swappable changes applied, labelled by field.
     applied_swappable_total: prometheus::IntCounterVec,
-    /// HONESTY metric: detected changes that require a restart and were NOT applied, labelled by
-    /// field. The machine-readable form of the per-field warning — never a silent no-op.
+    /// HONESTY metric: detected changes that require a restart and were NOT applied, labelled by field.
     restart_required_fields_total: prometheus::IntCounterVec,
-    /// Monotonic applied-config version (starts at 1 = boot config; bumps on each reload that applies a swappable change).
     applied_version: prometheus::IntGauge,
 }
 
@@ -275,8 +243,6 @@ impl ReloadMetrics {
     }
 }
 
-/// REL-2-03: reload every TLS entry and update the cert-rotation metrics. A failed reload keeps
-/// the previous bundle live, so a botched cert push never blackholes the listener.
 fn reload_all_tls(registry: &[TlsReloadEntry], metrics: Option<&CertMetrics>) -> (usize, usize) {
     let mut ok = 0_usize;
     let mut fail = 0_usize;
@@ -326,13 +292,7 @@ fn reload_all_tls(registry: &[TlsReloadEntry], metrics: Option<&CertMetrics>) ->
     (ok, fail)
 }
 
-/// S37-C: validate-first SIGHUP config hot-reload.
-///
-/// The binary re-runs the FULL `parse_config` + `validate_config` on the new string (the
-/// type-level validation the control plane's TOML-shape check does NOT cover). On any failure it
-/// rolls back so the manager's current matches the still-live config and applies NOTHING. On
-/// success it diffs, logs + counts every restart-required change, then rebuilds the changed
-/// listeners. Never returns an error: a failed reload leaves the gateway on the previous config.
+/// S37-C: validate-first SIGHUP config hot-reload. Re-runs the FULL `parse_config` + `validate_config` (the control plane only checks TOML shape); any failure rolls back and applies NOTHING.
 #[allow(clippy::too_many_arguments)]
 async fn reload_config(
     config_manager: Option<&mut ConfigManager>,
@@ -352,8 +312,7 @@ async fn reload_config(
         return;
     };
 
-    // Step 1: re-read via ConfigManager. `Ok(false)` ⇒ byte-identical to current; `Err` ⇒ empty or
-    // non-TOML (already rejected without mutating current).
+    // `Ok(false)` ⇒ byte-identical to current; `Err` ⇒ already rejected without mutating current.
     match mgr.reload() {
         Ok(false) => {
             tracing::info!("SIGHUP: config file unchanged — nothing to reload");
@@ -391,8 +350,7 @@ async fn reload_config(
 
     let plan = applied_config.diff(&new_config);
 
-    // HONESTY: log + count EVERY restart-required change. A reload containing ONLY those is
-    // explicitly NOT a silent success — it is logged as "applied 0 swappable".
+    // HONESTY: a reload carrying ONLY restart-required changes is logged as such, never a silent success.
     for change in &plan.restart_required {
         tracing::warn!(field = change.field(), "SIGHUP: {}", change.describe());
         if let Some(m) = metrics {
@@ -402,9 +360,7 @@ async fn reload_config(
         }
     }
 
-    // Step 4: rebuild the UNION of affected listeners so each is rebuilt exactly once — a
-    // process-wide keepalive change pulls in every L7 listener, and one rebuild reads the whole
-    // new listener config, so it applies every co-changed swappable field.
+    // Rebuild the UNION of affected listeners so each is rebuilt exactly once — one rebuild reads the whole new listener config, so it applies every co-changed swappable field.
     let new_keepalive = new_config
         .runtime
         .as_ref()
@@ -435,7 +391,6 @@ async fn reload_config(
             continue; // listener no longer present (removed) — handled elsewhere
         };
         let Some(entry) = registry.iter().find(|e| &e.listener == address) else {
-            // A swappable change for a listener with no L7 swap handle (plain-TCP/TLS). Surface honestly.
             tracing::warn!(
                 listener = %address,
                 "SIGHUP: swappable change detected but no L7 swap handle — not applied (requires restart)"
@@ -463,7 +418,6 @@ async fn reload_config(
                 tracing::info!(listener = %address, "SIGHUP: L7 proxy rebuilt + swapped (new config applied)");
             }
             Err(e) => {
-                // A rebuild failure (e.g. backend DNS now fails) leaves the OLD proxy live — no blip.
                 tracing::warn!(
                     listener = %address,
                     error = %e,
@@ -498,16 +452,9 @@ async fn reload_config(
     );
 }
 
-/// S37-C: rebuild one listener's L7 proxy/proxies from its new config and atomically `.store()`
-/// them. The OLD proxy stays live (refcount-pinned by in-flight connections) until they drop.
+/// S37-C: rebuild one listener's L7 proxies and atomically `.store()` them; the OLD proxy stays live until in-flight connections drop.
 ///
-/// HONESTY INVARIANT: this applies, from the NEW config, exactly the fields
-/// [`lb_config::LbConfig::diff`] classifies as swappable — `backends`, `http`, `h2_security`,
-/// `websocket`, `alt_svc`, `grpc`, and `[runtime].max_keepalive_requests`. It PRESERVES the
-/// process-wide `hooks` bundle (which carries `strict_te` + the per-IP gate), which is why the
-/// diff truthfully reports those as restart-required. Changing the set here without
-/// reclassifying it in `diff` (or vice versa) breaks the invariant the verifier adversarially
-/// tests.
+/// HONESTY INVARIANT: applies exactly the fields [`lb_config::LbConfig::diff`] calls swappable and PRESERVES the process-wide `hooks` bundle (`strict_te` + per-IP gate) — which is why `diff` reports those as restart-required. Changing the set here without reclassifying it in `diff` breaks the invariant the verifier tests.
 async fn rebuild_l7_proxies(
     new_l: &lb_config::ListenerConfig,
     handles: &ReloadableProxies,
@@ -603,23 +550,15 @@ async fn rebuild_l7_proxies(
     Ok(())
 }
 
-/// How a listener terminates inbound traffic.
 enum ListenerMode {
-    /// Plain TCP — no TLS, forward the socket directly.
     PlainTcp,
-    /// TLS over TCP. The bundle lives in an `Arc<ArcSwap<_>>` so a SIGUSR1 cert reload swaps it
-    /// under in-flight handshakes; `_rotator` is held so the ticket-rotation ticker stays alive.
     Tls {
         bundle: lb_security::SharedTlsBundle,
         _rotator: Arc<PlMutex<TicketRotator>>,
     },
-    /// Plain HTTP/1.1. S37-C: the proxy is held in an `Arc<ArcSwap<H1Proxy>>` so a SIGHUP reload
-    /// swaps it under in-flight connections — each connection `load_full()`s a snapshot at accept
-    /// and serves the whole connection on it.
-    H1 { proxy: SharedH1Proxy },
-    /// HTTPS listener offering h2 + http/1.1 via ALPN, dispatched on
-    /// [`rustls::ServerConnection::alpn_protocol`]. TLS bundle and both L7 proxies are
-    /// `ArcSwap`-held for SIGUSR1 cert reload and SIGHUP config reload respectively.
+    H1 {
+        proxy: SharedH1Proxy,
+    },
     H1s {
         h1_proxy: SharedH1Proxy,
         h2_proxy: SharedH2Proxy,
@@ -628,70 +567,35 @@ enum ListenerMode {
     },
 }
 
-/// S37-C: an `H1Proxy` behind an `ArcSwap` for SIGHUP hot-reload — `.load_full()` at accept
-/// captures an owned snapshot for the connection's life.
 type SharedH1Proxy = Arc<ArcSwap<H1Proxy>>;
 
-/// S37-C: an `H2Proxy` held behind an `ArcSwap` for SIGHUP config hot-reload (the H1s ALPN-h2 leg).
 type SharedH2Proxy = Arc<ArcSwap<H2Proxy>>;
 
-/// Per-listener runtime state.
 struct ListenerState {
-    /// Balancer backends built from the config.
     backends: Vec<Backend>,
-    /// Round-robin load balancer instance.
     balancer: parking_lot::Mutex<RoundRobin>,
-    /// Resolved backend addresses for connecting.
     addresses: Vec<SocketAddr>,
-    /// Shared metrics registry.
     metrics: Arc<MetricsRegistry>,
-    /// Active connection gauge.
     active_connections: AtomicU64,
-    /// Shared `lb-io` runtime (auto-detects `io_uring` vs epoll).
     io_runtime: Runtime,
-    /// Shared TCP connection pool for backend dials.
-    ///
-    /// The plain-TCP path dials directly via `TcpStream::connect`; the pool is held so its
-    /// idle-count sampler keeps running for the L7 paths that still dial through it.
+    /// Held only so its idle-count sampler keeps running; the plain-TCP path dials directly via `TcpStream::connect`.
     #[allow(dead_code)]
     pool: TcpPool,
-    /// Shared DNS resolver with positive/negative caching.
     #[allow(dead_code)]
     resolver: DnsResolver,
-    /// Listener termination mode (plain TCP or TLS over TCP).
     mode: ListenerMode,
-    /// SEC-2-10 Wave 2c: max wall-clock budget for one TLS handshake.
     handshake_timeout: Duration,
-    /// Per-listener inflight cap. The owned permit is acquired at the accept site and dropped
-    /// when the per-connection task exits.
     inflight: Arc<Semaphore>,
-    /// CODE-2-09 / REL-2-11 Wave 2c-2: budget for one `TcpStream::connect` on the backend dial path.
     connect_timeout: Duration,
-    /// SEC-2-04: per-listener / per-IP admission gate. `admit_connection` runs BEFORE the
-    /// listener semaphore so a saturated IP cannot starve other clients of inflight slots.
     hooks: Arc<HooksBundle>,
-    /// PROTO-2-11: threaded into `H2Proxy::serve_connection_with_cancel` so a SIGTERM cancel
-    /// emits a graceful GOAWAY instead of aborting.
     shutdown_token: CancellationToken,
-    /// OPS-04+L4-12: the listener-cancel token (child of `shutdown_token`). The accept loop
-    /// selects on it so the drain coordinator stops accepting in phase 4 WITHOUT triggering
-    /// per-connection cancel — that fires in phase 5 after the settle + inflight-drain budget.
+    /// OPS-04+L4-12: child of `shutdown_token`. The accept loop selects on it so drain phase 4 stops accepting WITHOUT cancelling in-flight connections — that is phase 5.
     listener_cancel_token: CancellationToken,
-    /// The process-wide task tracker. Per-connection spawns funnel through `tracker.spawn` so
-    /// `Shutdown::drain` waits on them at SIGTERM, and each task also gets a cooperative-cancel
-    /// arm so a long-running upstream is interrupted rather than aborted on runtime drop.
     tracker: TaskTracker,
-    /// REL-2-09 follow-on: the bind address used as the `listener` label on `accept_inflight{listener=…}` and on the (Wave-2c-2) per-request `http_requests_total{listener, …}` emit-site.
     listener_label: Arc<String>,
-    /// ROUND8 OPS-02: per-listener drain-jitter ceiling (ms). Each connection draws its own
-    /// `[0, this)` sleep so connections WITHIN one pod stagger their abort (intra-pod desync) on
-    /// top of the coordinator's per-process draw, which only desyncs ACROSS replicas. `0`
-    /// restores the original immediate-abort behaviour.
     per_conn_drain_jitter_ms: u64,
 }
 
-/// RAII guard decrementing `accept_inflight{listener}` on drop. Moved into the per-connection
-/// task so the gauge tracks the permit lifetime exactly, including the panic-abort path.
 struct AcceptInflightGuard {
     metrics: Arc<MetricsRegistry>,
     listener: Arc<String>,
@@ -763,12 +667,8 @@ fn split_host_port(s: &str) -> anyhow::Result<(&str, u16)> {
 fn quic_listener_params_from_config(
     bind_addr: SocketAddr,
     cfg: &QuicListenerConfig,
-    // Mode B (B6): resolved raw backend + metric handles when `cfg.raw_proxy` is set; `None` ⇒
-    // H3-terminate (R3).
     raw_backend: Option<RawBackend>,
     quic_modeb_metrics: Option<lb_observability::QuicModeBMetrics>,
-    // S36-A: the `max_requests_per_h3_connection` cap (`0` disables → byte-identical pre-S36 H3
-    // front, R3). Only consulted on H3-terminate; Mode B dispatches before any H3 state exists.
     max_requests_per_h3_connection: u32,
     h3_recycle_metrics: Option<lb_observability::QuicH3RecycleMetrics>,
 ) -> QuicListenerParams {
@@ -782,8 +682,7 @@ fn quic_listener_params_from_config(
     params.max_recv_udp_payload_size = cfg.max_recv_udp_payload_size;
     // S36-A: `with_h3_request_cap` is a no-op for `cap == 0` (byte-identical pre-S36 front, R3).
     params = params.with_h3_request_cap(max_requests_per_h3_connection, h3_recycle_metrics);
-    // Mode B (B6): flip to Mode B ONLY when a raw backend was built. `with_raw_backend` is the
-    // ONLY thing that enables datagrams on the client-facing config; absent ⇒ byte-identical H3.
+    // `with_raw_backend` is the ONLY thing that enables datagrams on the client-facing config; absent ⇒ byte-identical H3.
     if let Some(backend) = raw_backend {
         params = params.with_raw_backend(
             backend,
@@ -796,14 +695,6 @@ fn quic_listener_params_from_config(
     params
 }
 
-// ── TLS helpers ─────────────────────────────────────────────────────────
-//
-// REL-2-03: cert/key loading lives in `lb_security::TlsConfigBundle::load_from_paths` so the
-// same validation runs at startup AND on every SIGUSR1 reload; SEC-2-08's key-perm advisory
-// runs on both paths too.
-
-/// SEC-2-08: refuse a private key whose file mode is group- or world-accessible. Strict on
-/// release builds, lax on debug.
 fn assert_key_perm_advisory(path: &Path) -> anyhow::Result<()> {
     let strict = !cfg!(debug_assertions);
     match lb_security::assert_owner_only(path, strict) {
@@ -823,9 +714,6 @@ fn assert_key_perm_advisory(path: &Path) -> anyhow::Result<()> {
     }
 }
 
-/// REL-2-03: build a `SharedTlsBundle` so SIGUSR1 + inotify cert reloads swap it under
-/// in-flight handshakes. Built with the shared `RotatingTicketer` so session-ticket resumption
-/// survives a cert swap.
 fn build_tls_bundle(
     tls_cfg: &TlsConfig,
     alpn: &[&[u8]],
@@ -854,9 +742,6 @@ fn build_tls_bundle(
     Ok((bundle.into_shared(), rot_arc))
 }
 
-/// Spawn a task nudging `rotator.rotate_if_due` once a minute, stopping when the rotator's Arc
-/// strong count drops to 1. Tracked by the process-wide [`lb_core::Shutdown`] and cancel-aware,
-/// so SIGTERM wakes it out of its sleep rather than leaving it alive until runtime drop.
 fn spawn_rotator_ticker(
     rotator: Arc<PlMutex<TicketRotator>>,
     tracker: TaskTracker,
@@ -890,9 +775,6 @@ fn spawn_rotator_ticker(
     });
 }
 
-/// Parse a backend `protocol` string into [`UpstreamProto`], accepting the same set
-/// [`lb_config::validate_config`] does (`tcp` and `h1` both map to H1). Returns an error naming
-/// the offending value so a misconfigured TOML fails loudly at startup, not silently.
 fn parse_upstream_proto(s: &str) -> anyhow::Result<UpstreamProto> {
     match s {
         "tcp" | "h1" => Ok(UpstreamProto::H1),
@@ -904,7 +786,6 @@ fn parse_upstream_proto(s: &str) -> anyhow::Result<UpstreamProto> {
     }
 }
 
-/// Build the [`UpstreamBackend`] vector by zipping `addresses` with each backend's protocol.
 /// `addresses[i]` MUST correspond to `backends[i]` — `spawn_tcp` enforces that ordering.
 fn build_upstream_backends(
     listener_cfg: &lb_config::ListenerConfig,
@@ -939,9 +820,7 @@ fn build_upstream_backends(
                 b.address
             );
         };
-        // H3 backends need an SNI for the upstream TLS handshake. An explicit
-        // `tls_verify_hostname` wins (so an IP-literal address can be overridden with the
-        // cert-name the backend presents); otherwise fall back to the host portion.
+        // An explicit `tls_verify_hostname` wins, so an IP-literal address can be matched against the cert-name the backend actually presents.
         let sni = if proto == UpstreamProto::H3 {
             b.tls_verify_hostname.clone().or_else(|| {
                 split_host_port(&b.address)
@@ -956,7 +835,6 @@ fn build_upstream_backends(
     Ok(out)
 }
 
-/// Build an [`Http2Pool`] sized to the listener's [`H2SecurityConfig`] where supplied, falling back to [`Http2PoolConfig`]'s defaults otherwise.
 fn build_h2_upstream_pool(
     tcp_pool: TcpPool,
     h2_security_cfg: Option<&H2SecurityConfig>,
@@ -979,7 +857,6 @@ fn build_h2_upstream_pool(
     Arc::new(Http2Pool::new(cfg, tcp_pool))
 }
 
-/// Filter a listener's backends down to those declaring `protocol = "h3"`.
 fn collect_h3_backends(listener_cfg: &lb_config::ListenerConfig) -> Vec<lb_config::BackendConfig> {
     listener_cfg
         .backends
@@ -989,19 +866,9 @@ fn collect_h3_backends(listener_cfg: &lb_config::ListenerConfig) -> Vec<lb_confi
         .collect()
 }
 
-/// Build a [`QuicUpstreamPool`] whose config factory installs [`LB_QUIC_ALPN`] and inherits the
-/// listener's QUIC tunables.
-///
-/// Per-backend TLS verification is driven by the first H3 backend's `tls_*` knobs: with
-/// `tls_verify_peer` the factory loads the CA bundle and aborts startup if it is missing;
-/// explicitly `false` skips verification — a NOT RECOMMENDED opt-out for mesh-encrypted
-/// underlays. Verification posture is a backend-side decision, not a listener one.
 fn build_h3_upstream_pool(
     h3_backends: &[lb_config::BackendConfig],
 ) -> anyhow::Result<Arc<QuicUpstreamPool>> {
-    // All H3 backends on a listener share ONE pool and therefore one config factory, so the
-    // verify-peer posture is only unambiguous if they agree. Reject a mismatch at startup rather
-    // than silently taking the first.
     let mut iter = h3_backends.iter();
     let Some(first) = iter.next() else {
         anyhow::bail!("build_h3_upstream_pool called with zero H3 backends");
@@ -1057,14 +924,6 @@ fn build_h3_upstream_pool(
     )))
 }
 
-/// SESSION 19 / Mode B (B6): build the [`RawBackend`] for a terminate-and-re-originate QUIC
-/// listener from its `[listeners.quic.raw_proxy]` block.
-///
-/// The upstream `config_factory` sets `verify_peer(true)` ALWAYS — peer-cert verification is
-/// never silently disabled in Mode B — loading `backend_ca_path` when set and falling back to
-/// BoringSSL's default roots otherwise, and enables QUIC DATAGRAM (RFC 9221) for the B4 relay.
-/// The real handshake ALPN is overridden per-dial to mirror the client's negotiated protocol.
-/// An unparseable `backend_addr` fails startup (no silent Mode-B-disable).
 fn build_raw_quic_backend(cfg: &lb_config::RawQuicProxyConfig) -> anyhow::Result<RawBackend> {
     let addr: SocketAddr = cfg.backend_addr.parse().with_context(|| {
         format!(
@@ -1079,8 +938,7 @@ fn build_raw_quic_backend(cfg: &lb_config::RawQuicProxyConfig) -> anyhow::Result
             let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
             // Default ALPN; dial_dedicated overrides per-connection to mirror the client's protocol.
             config.set_application_protos(lb_io::quic_pool::UPSTREAM_H3_ALPN_PROTOS)?;
-            // Backend-trust: verify_peer is ALWAYS on and never silently disabled. With a CA bundle load
-            // it; without one fall back to BoringSSL default roots.
+            // Backend-trust: verify_peer is ALWAYS on, never silently disabled. Without a CA bundle, fall back to BoringSSL default roots.
             if let Some(path) = ca_path.as_deref() {
                 config.load_verify_locations_from_file(path)?;
             }
@@ -1103,16 +961,12 @@ fn build_raw_quic_backend(cfg: &lb_config::RawQuicProxyConfig) -> anyhow::Result
         pool,
         addr,
         sni: cfg.sni.clone(),
-        // B6 (R14/R12): single-source the relay's two memory bounds from the operator config, so one
-        // value drives both the wire-advertised queue length and the relay's own queue/admit ceiling.
+        // B6 (R14/R12): one operator value drives both the wire-advertised queue length and the relay's own queue/admit ceiling.
         dgram_queue_cap: cfg.dgram_queue_cap,
         max_relay_streams: cfg.max_relay_streams,
     })
 }
 
-/// Build a [`H1Proxy`] from the listener's resolved backends and optional H2/H3 pools, threading
-/// the multi-protocol surface so one listener can fan out to mixed-protocol backends in a single
-/// round-robin cycle.
 #[allow(clippy::too_many_arguments)]
 fn build_h1_proxy(
     pool: TcpPool,
@@ -1141,10 +995,7 @@ fn build_h1_proxy(
     });
     let mut proxy = H1Proxy::with_multi_proto(pool, Arc::new(picker), alt_svc, timeouts, is_https);
     proxy = proxy.with_max_keepalive_requests(max_keepalive_requests);
-    // SEC-2-04: install the production HooksBundle on the L7 hot path.
     proxy = proxy.with_hooks(hooks);
-    // SEC-2-03: wire the slowloris / slow-POST Watchdog into every H1 proxy (the proxy falls back
-    // to Noop-style behaviour when `None`).
     if let Some(wd) = watchdog {
         proxy = proxy.with_watchdog(wd);
     }
@@ -1160,8 +1011,6 @@ fn build_h1_proxy(
     Ok(Arc::new(proxy))
 }
 
-/// Translate `[listeners.websocket]` to [`WsConfig`]. Centralised so H1 and H2 agree
-/// byte-for-byte.
 fn ws_config_to_runtime(cfg: &WebsocketConfig) -> WsConfig {
     WsConfig {
         idle_timeout: Duration::from_secs(cfg.idle_timeout_seconds),
@@ -1173,14 +1022,7 @@ fn ws_config_to_runtime(cfg: &WebsocketConfig) -> WsConfig {
     }
 }
 
-/// SESSION 28 / WS-over-H3 (RFC 9220) Stage C — the relay launcher closure injected into the
-/// QUIC listener.
-///
-/// Dependency inversion: only the binary sees BOTH `lb-quic` (the `H3WsTunnel` seam) and `lb-l7`
-/// (the single-sourced `proxy_frames`), so it runs the relay across a boundary `lb-quic` cannot.
-/// Per validated extended CONNECT it dials an H1 backend, drives the upstream RFC 6455
-/// handshake, and signals readiness BEFORE the 200 — the H3 analogue of the WS-H1 GHSA / WS-H2
-/// F-S27-1 upstream-before-200 ordering. Dial+handshake is bounded by `header_budget`.
+/// WS-over-H3 (RFC 9220) relay launcher — only the binary sees both `lb-quic`'s `H3WsTunnel` seam and `lb-l7`'s `proxy_frames`, so the relay runs across a boundary `lb-quic` cannot.
 fn build_ws_h3_launcher(
     backends: Vec<SocketAddr>,
     pool: TcpPool,
@@ -1201,9 +1043,7 @@ fn build_ws_h3_launcher(
                     return;
                 };
                 let ws_cfg = ws_proxy.config();
-                // Dial + upstream RFC 6455 handshake INLINE, before readiness, so the H3 client never sees a
-                // 200 toward a backend that never agreed. `take_stream` removes the socket from the pool — a
-                // WS tunnel owns its backend connection for life.
+                // Dial + upstream RFC 6455 handshake INLINE, before readiness, so the client never sees a 200 toward a backend that never agreed.
                 let dial = async {
                     let pooled = pool
                         .acquire_async(backend_addr)
@@ -1228,7 +1068,6 @@ fn build_ws_h3_launcher(
                             headers.push(("sec-websocket-protocol".to_owned(), p));
                         }
                         if ready_tx.send(WsUpstreamOutcome::Ready { headers }).is_err() {
-                            // The actor went away before the 200; dropping `backend_ws` closes the upstream.
                             return;
                         }
                         let client_ws = lb_l7::ws_proxy::server_ws(tunnel, &ws_cfg).await;
@@ -1254,7 +1093,6 @@ fn build_ws_h3_launcher(
     )
 }
 
-/// Build a [`H2Proxy`] sharing the same picker/alt_svc/timeouts shape as the matching [`H1Proxy`].
 #[allow(clippy::too_many_arguments)]
 fn build_h2_proxy(
     pool: TcpPool,
@@ -1291,10 +1129,7 @@ fn build_h2_proxy(
         is_https,
         security,
     );
-    // SEC-2-04: install the production HooksBundle on the L7 hot path.
     proxy = proxy.with_hooks(hooks);
-    // SEC-2-03: same wiring as `build_h1_proxy` — Watchdog on the H2 path so slow-POST eviction
-    // lights up for ALPN=h2 streams too.
     if let Some(wd) = watchdog {
         proxy = proxy.with_watchdog(wd);
     }
@@ -1307,8 +1142,7 @@ fn build_h2_proxy(
     if let Some(ws) = ws_cfg {
         proxy = proxy
             .with_websocket(Arc::new(WsProxy::new(ws_config_to_runtime(ws))))
-            // CF-S27-2 — WS-over-H2 (RFC 8441 extended CONNECT) is OFF by default: only advertise
-            // SETTINGS_ENABLE_CONNECT_PROTOCOL and intercept extended CONNECT when the operator opts in.
+            // CF-S27-2: WS-over-H2 extended CONNECT is OFF by default — advertise `SETTINGS_ENABLE_CONNECT_PROTOCOL` and intercept only on opt-in.
             .with_h2_extended_connect(ws.h2_extended_connect);
     }
     if let Some(grpc) = grpc_cfg {
@@ -1317,7 +1151,6 @@ fn build_h2_proxy(
     Ok(Arc::new(proxy))
 }
 
-/// Translate the TOML `[listeners.grpc]` block to the runtime [`GrpcConfig`].
 fn grpc_config_to_runtime(cfg: &GrpcListenerConfig) -> GrpcConfig {
     GrpcConfig {
         enabled: cfg.enabled,
@@ -1326,8 +1159,6 @@ fn grpc_config_to_runtime(cfg: &GrpcListenerConfig) -> GrpcConfig {
     }
 }
 
-/// Merge the optional TOML block into the default `H2SecurityThresholds`; unset fields inherit
-/// the detector-derived default, keeping the source of truth in `lb_h2::security`.
 fn merge_h2_security(cfg: Option<&H2SecurityConfig>) -> H2SecurityThresholds {
     let mut t = H2SecurityThresholds::default();
     if let Some(c) = cfg {
@@ -1366,21 +1197,12 @@ fn merge_h2_security(cfg: Option<&H2SecurityConfig>) -> H2SecurityThresholds {
     t
 }
 
-/// Bind and spawn a [`QuicListener`].
-///
-/// PROTO-2-11: `shutdown_token` is a CHILD of the global [`lb_core::Shutdown`] token so a
-/// process-wide SIGTERM drains every active QUIC connection through the router's
-/// `CONNECTION_CLOSE (H3_NO_ERROR)` path. It previously made its own token, so SIGTERM reached
-/// the listener only via `QuicListener::shutdown()` and the per-connection drain signal could
-/// not be distinguished from a listener-token cancel.
+/// Bind and spawn a [`QuicListener`]. PROTO-2-11: `shutdown_token` MUST be a CHILD of the global [`lb_core::Shutdown`] token, or SIGTERM cannot be distinguished from a listener-token cancel.
 async fn spawn_quic(
     listener_cfg: &lb_config::ListenerConfig,
-    // F-S26-1: shared TCP pool + DNS resolver so the H3-terminate path can wire
-    // `[[listeners.backends]]`, mirroring `spawn_tcp`. `None` keeps the Mode-B / backendless shapes.
     pool: &TcpPool,
     resolver: &DnsResolver,
     metrics: &Arc<MetricsRegistry>,
-    // S36-A: the H3 request cap; `0` disables recycling (byte-identical pre-S36 front, R3).
     max_requests_per_h3_connection: u32,
     shutdown_token: CancellationToken,
 ) -> anyhow::Result<QuicListener> {
@@ -1395,8 +1217,6 @@ async fn spawn_quic(
         .parse()
         .with_context(|| format!("invalid listen address: {}", listener_cfg.address))?;
 
-    // Mode B (B6): a `[listeners.quic.raw_proxy]` block builds the re-origination backend +
-    // registers quic_modeb_*. Absent ⇒ H3-terminate byte-identically (R3).
     let (raw_backend, modeb_metrics) = match quic_cfg.raw_proxy.as_ref() {
         Some(rp) => {
             let backend = build_raw_quic_backend(rp)
@@ -1409,8 +1229,7 @@ async fn spawn_quic(
     };
     let mode_b = raw_backend.is_some();
 
-    // S36-A: register the `h3_*` recycle metrics at spawn so the rows exist in `/metrics` from the
-    // start. Never on Mode B (no H3 state) and never when the cap is disabled (R3).
+    // S36-A: register the `h3_*` recycle rows at spawn so they exist in `/metrics` from the start. Never on Mode B and never when the cap is disabled (R3).
     let h3_recycle_metrics = if !mode_b && max_requests_per_h3_connection != 0 {
         Some(
             lb_observability::QuicH3RecycleMetrics::register(metrics)
@@ -1429,9 +1248,7 @@ async fn spawn_quic(
         h3_recycle_metrics,
     );
 
-    // WS-over-H3 (RFC 9220): opt in ONLY when `[listeners.websocket]` is present, enabled, AND
-    // `h3_extended_connect = true` — OFF by default (mirrors CF-S27-2), so the H3 settings frame
-    // and `:protocol` rejection stay byte-identical (R3). Never on Mode B.
+    // WS-over-H3 needs websocket.enabled AND `h3_extended_connect` — OFF by default (mirrors CF-S27-2), so the H3 SETTINGS frame and `:protocol` rejection stay byte-identical.
     let ws_enabled = !mode_b
         && listener_cfg
             .websocket
@@ -1441,12 +1258,7 @@ async fn spawn_quic(
         params = params.with_websocket(true);
     }
 
-    // F-S26-1: wire the H3-terminate → backend relay, ONLY off the H3-terminate path (the
-    // validator rejects raw_proxy + backends together). No backends ⇒ `params` untouched and
-    // byte-identical to before (R3). Dispatch by the single validator-enforced family:
-    //   h1/tcp → with_backends (H3→H1, the WS-over-H3 backend leg)
-    //   h2     → with_h2_backend (H3→H2)
-    //   h3     → with_h3_backend (H3→H3)
+    // F-S26-1: dispatch on the single validator-enforced backend family — h1/tcp → `with_backends` (the WS-over-H3 backend leg), h2 → `with_h2_backend`, h3 → `with_h3_backend`.
     if !mode_b && !listener_cfg.backends.is_empty() {
         params = wire_h3_terminate_backends(params, listener_cfg, pool, resolver, metrics).await?;
     }
@@ -1476,7 +1288,6 @@ async fn spawn_quic(
             mode = "H3-terminate",
             cert = %quic_cfg.cert_path,
             retry_secret = %quic_cfg.retry_secret_path,
-            // F-S26-1: 0 ⇒ the transport-only / inline-egress smoke shape (R3).
             backends = listener_cfg.backends.len(),
             "QUIC listener started"
         );
@@ -1484,12 +1295,7 @@ async fn spawn_quic(
     Ok(listener)
 }
 
-/// F-S26-1: wire the H3-terminate → backend forwarding leg onto a QUIC listener's params.
-///
-/// Resolves each `[[listeners.backends]]` address (mirroring `spawn_tcp`'s resolve loop + DNS
-/// bookkeeping) and dispatches on the listener's single backend protocol family: `h1`/`tcp` →
-/// `with_backends` (the WS-over-H3 backend leg), `h2` → `with_h2_backend`, `h3` →
-/// `with_h3_backend`. Caller guarantees the list is non-empty and the listener is NOT Mode B.
+/// F-S26-1: wire the H3-terminate → backend forwarding leg. Caller guarantees a non-empty backend list and a non-Mode-B listener.
 async fn wire_h3_terminate_backends(
     mut params: QuicListenerParams,
     listener_cfg: &lb_config::ListenerConfig,
@@ -1521,8 +1327,7 @@ async fn wire_h3_terminate_backends(
         addresses.push(first);
     }
 
-    // The validator enforces a single non-empty protocol family, so the first backend's protocol
-    // determines the forwarding leg for the whole listener.
+    // The validator enforces a single protocol family, so the first backend picks the leg for the whole listener.
     let Some(first) = listener_cfg.backends.first() else {
         anyhow::bail!(
             "listener {}: wire_h3_terminate_backends called with no backends",
@@ -1533,9 +1338,7 @@ async fn wire_h3_terminate_backends(
         .with_context(|| format!("listener {} backend 0", listener_cfg.address))?;
     match proto {
         UpstreamProto::H1 => {
-            // WS-over-H3 Stage C: when the listener opted into WebSocket, inject the relay launcher over
-            // THESE H1 backends + the shared pool. The H3→H1 leg below dials the same ones. Off ⇒ no
-            // launcher (byte-identical, R3).
+            // WS-over-H3 Stage C: the relay launcher dials THESE same H1 backends as the H3→H1 leg below.
             if params.ws_enabled {
                 if let Some(ws) = listener_cfg.websocket.as_ref() {
                     let header_budget = listener_cfg.http.as_ref().map_or_else(
@@ -1554,8 +1357,6 @@ async fn wire_h3_terminate_backends(
             params = params.with_backends(addresses, pool.clone());
         }
         UpstreamProto::H2 => {
-            // H3→H2: the router takes a single H2 backend by value; `Http2Pool` is a cheap Arc-backed
-            // Clone, so clone out of the Arc.
             let h2pool = build_h2_upstream_pool(pool.clone(), listener_cfg.h2_security.as_ref());
             let Some(addr) = addresses.first().copied() else {
                 anyhow::bail!("listener {}: no resolved H2 backend", listener_cfg.address);
@@ -1563,8 +1364,6 @@ async fn wire_h3_terminate_backends(
             params = params.with_h2_backend((*h2pool).clone(), addr);
         }
         UpstreamProto::H3 => {
-            // H3→H3: a single upstream QUIC backend + its SNI; verify-peer/CA posture comes from the
-            // H3-backend TLS knobs. Same Arc-backed-Clone story as the H2 leg.
             let h3_backends = collect_h3_backends(listener_cfg);
             let h3pool = build_h3_upstream_pool(&h3_backends)?;
             let Some(addr) = addresses.first().copied() else {
@@ -1581,10 +1380,7 @@ async fn wire_h3_terminate_backends(
     Ok(params)
 }
 
-/// S15 A2-8: spawn the Mode A QUIC passthrough listener. Independent of the terminating QUIC
-/// listener — its own UDP port and retry-secret — and it NEVER decrypts client packets
-/// (`PassthroughListener` upholds the NEVER-DECRYPTED invariant; see
-/// `scripts/never_decrypted_proof.sh`).
+/// S15 A2-8: Mode A QUIC passthrough listener — its own UDP port and retry-secret, and it NEVER decrypts client packets (`scripts/never_decrypted_proof.sh`).
 async fn spawn_passthrough(
     cfg: &lb_config::PassthroughConfig,
     metrics: &Arc<MetricsRegistry>,
@@ -1621,8 +1417,6 @@ async fn spawn_passthrough(
     Ok(listener)
 }
 
-/// Resolve backends, build the listener state, and spawn the accept loop for a TCP/TLS/H1/H1s
-/// listener.
 #[allow(clippy::too_many_arguments)]
 async fn spawn_tcp(
     listener_cfg: &lb_config::ListenerConfig,
@@ -1634,7 +1428,6 @@ async fn spawn_tcp(
     max_inflight: u32,
     connect_timeout: Duration,
     max_keepalive_requests: u32,
-    // ROUND8 OPS-02: per-listener drain-jitter ceiling used by the per-conn cancel arm.
     per_conn_drain_jitter_ms: u64,
     hooks: Arc<HooksBundle>,
     shutdown_token: CancellationToken,
@@ -1713,7 +1506,6 @@ async fn spawn_tcp(
         resolver: resolver.clone(),
         mode,
         handshake_timeout,
-        // Per-listener inflight cap.
         inflight: Arc::new(Semaphore::new(
             usize::try_from(max_inflight).unwrap_or(usize::MAX),
         )),
@@ -1728,7 +1520,6 @@ async fn spawn_tcp(
     Ok(tracker.spawn(run_listener(listener_cfg.address.clone(), state)))
 }
 
-/// Build the per-listener [`ListenerMode`] from its config, dispatching on `protocol`.
 #[allow(clippy::too_many_arguments)]
 fn build_listener_mode(
     listener_cfg: &lb_config::ListenerConfig,
@@ -1841,8 +1632,6 @@ fn build_listener_mode(
             let upstreams_h2 = upstreams_h1.clone();
             let needs_h2 = upstreams_h1.iter().any(|b| b.proto == UpstreamProto::H2);
             let needs_h3 = upstreams_h1.iter().any(|b| b.proto == UpstreamProto::H3);
-            // Share the H2/H3 upstream pools between the H1 + H2 proxies on this listener — they dial the
-            // same backends, so one pool keeps a single connection set.
             let h2_pool = needs_h2
                 .then(|| build_h2_upstream_pool(pool.clone(), listener_cfg.h2_security.as_ref()));
             let h3_pool = if needs_h3 {
@@ -1896,9 +1685,7 @@ fn build_listener_mode(
                 _rotator: rotator,
             })
         }
-        // PROTO-2-09: explicit plain-TCP arm. `lb_config` accepts more protocol spellings than this
-        // binary wires, so an unhandled one must fail loudly at startup rather than silently
-        // degrading to raw TCP.
+        // PROTO-2-09: `lb_config` accepts more protocol spellings than this binary wires, so an unhandled one must fail loudly at startup rather than degrade to raw TCP.
         "tcp" => {
             tracing::info!(
                 address = %listener_cfg.address,
@@ -1915,7 +1702,6 @@ fn build_listener_mode(
     }
 }
 
-/// Register the 5 hot-path metric handles and spawn the background sampler that reads them from the shared [`TcpPool`] / [`DnsResolver`].
 fn install_hotpath_metrics(
     metrics: &Arc<MetricsRegistry>,
     pool: &TcpPool,
@@ -1936,9 +1722,7 @@ fn install_hotpath_metrics(
         tracing::warn!(metric = "dns_cache_misses_total", error = %e, "counter register failed");
     }
 
-    // REL-2-08: `http_requests_total{listener, route, version, status_class}` — the label set is
-    // bounded on purpose; `route` is capped by MAX_ROUTES_BUDGET so a hostile path cannot explode
-    // the series count.
+    // REL-2-08: the label set is bounded on purpose — `route` is capped by MAX_ROUTES_BUDGET so a hostile path cannot explode the series count.
     if let Err(e) = metrics.counter_vec(
         "http_requests_total",
         "HTTP requests terminated by the L7 proxy",
@@ -2014,7 +1798,6 @@ fn install_hotpath_metrics(
     });
 }
 
-/// Application entry point.
 fn main() -> anyhow::Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -2029,8 +1812,7 @@ async fn async_main() -> anyhow::Result<()> {
         Ok(()) | Err(lb_observability::TracingError::AlreadyInitialised) => {}
     }
 
-    // CODE-2-02: install the panic hook IMMEDIATELY after the tracing subscriber, so anything that
-    // panics during the rest of boot is logged and counted.
+    // CODE-2-02: install the panic hook IMMEDIATELY after the subscriber, so anything panicking during the rest of boot is logged and counted.
     init_panic_hook();
 
     tracing::info!("ExpressGateway v{}", env!("CARGO_PKG_VERSION"));
@@ -2077,8 +1859,6 @@ async fn async_main() -> anyhow::Result<()> {
         "configuration loaded from {config_path}"
     );
 
-    // CODE-2-13 + S37-C: the ConfigManager owns the in-memory TOML string + version counter and is
-    // the SIGHUP reload entry point; distributed control-plane backends are deferred.
     let cp_backend = FileBackend::new(std::path::PathBuf::from(&config_path));
     let mut config_manager = match ConfigManager::new(Box::new(cp_backend)) {
         Ok(mgr) => {
@@ -2090,8 +1870,7 @@ async fn async_main() -> anyhow::Result<()> {
             Some(mgr)
         }
         Err(e) => {
-            // Fail-soft: `parse_config` already succeeded above, so an InvalidConfig error here cannot mean
-            // the file is bad.
+            // Fail-soft: `parse_config` already succeeded above, so an InvalidConfig error here cannot mean the file is bad.
             tracing::warn!(error = %e, "control plane manager init skipped");
             None
         }
@@ -2099,8 +1878,6 @@ async fn async_main() -> anyhow::Result<()> {
 
     let mut applied_config = config.clone();
 
-    // CODE-2-03: process-wide graceful drain handle. SIGTERM / SIGINT / SIGUSR1 are wired to it so
-    // every tracked task observes one cancellation source.
     let shutdown: lb_core::Shutdown = lb_core::Shutdown::new();
 
     let probes = lb_observability::ProbeRegistry::shared();
@@ -2116,8 +1893,6 @@ async fn async_main() -> anyhow::Result<()> {
     let pool = TcpPool::new(PoolConfig::default(), backend_opts(), io_runtime);
     tracing::info!("TCP backend pool ready (defaults from PROMPT.md §21)");
 
-    // CODE-2-13: passive health-check seed — each unique backend gets a HealthChecker published as
-    // Unknown, so the picker has a well-defined gate from second 0.
     let mut health_seed: Vec<(String, HealthChecker)> = Vec::new();
     for listener in &config.listeners {
         for backend in &listener.backends {
@@ -2160,10 +1935,6 @@ async fn async_main() -> anyhow::Result<()> {
     let xdp_metrics = lb_observability::xdp_metrics::XdpMetrics::register(&metrics)
         .map_err(|e| anyhow::anyhow!("XDP metric registration failed: {e}"))?;
 
-    // ── optional admin HTTP listener (GET /metrics, /livez …) ──
-    //
-    // SEC-2-06: loopback-only by default; a non-loopback bind needs an explicit override AND a
-    // token.
     let admin_cancel = CancellationToken::new();
     if let Some(obs) = config.observability.as_ref() {
         if let Some(bind_str) = obs.metrics_bind.as_deref() {
@@ -2217,7 +1988,6 @@ async fn async_main() -> anyhow::Result<()> {
     let mut quic_listeners: Vec<QuicListener> = Vec::new();
     let mut passthrough_listeners: Vec<PassthroughListener> = Vec::new();
 
-    // SEC-2-10: TLS handshake budget from `[runtime].handshake_timeout_ms`.
     let handshake_timeout = Duration::from_millis(
         config
             .runtime
@@ -2234,24 +2004,20 @@ async fn async_main() -> anyhow::Result<()> {
             .as_ref()
             .map_or(5_000, |r| r.connect_timeout_ms),
     );
-    // ROUND8-L7-06: per-keep-alive-connection request cap (nginx `keepalive_requests 100` parity).
     let max_keepalive_requests = config
         .runtime
         .as_ref()
         .map_or(100, |r| r.max_keepalive_requests);
-    // S36-A: per-connection H3 request cap (cap → GOAWAY → drain → recycle). `0` disables.
     let max_requests_per_h3_connection = config
         .runtime
         .as_ref()
         .map_or(1000, |r| r.max_requests_per_h3_connection);
-    // SEC-2-04: per-listener / per-IP admission gate. The SAME `Arc<HooksBundle>` is shared across
-    // listeners, so the per-IP cap is process-wide, not per-listener.
+    // SEC-2-04: the SAME `Arc<HooksBundle>` is shared across listeners, so the per-IP cap is process-wide, not per-listener.
     let per_ip_cap = config
         .runtime
         .as_ref()
         .map_or(1_024, |r| r.per_ip_connection_cap);
     let conn_gate = ConnGate::new(max_inflight, per_ip_cap, Vec::new());
-    // PROTO-2-17: select the bundle's `SmuggleMode` from `[security].strict_te`.
     let smuggle_mode = if config.security.as_ref().is_some_and(|s| s.strict_te) {
         SmuggleMode::H1Strict
     } else {
@@ -2269,7 +2035,6 @@ async fn async_main() -> anyhow::Result<()> {
         "accept-loop guards configured (CODE-2-05/06/09 + SEC-2-04 — Wave 2c-2)"
     );
 
-    // SEC-2-03: per-process Watchdog from the optional `[runtime.watchdog]` block.
     let watchdog_cfg = config
         .runtime
         .as_ref()
@@ -2296,8 +2061,7 @@ async fn async_main() -> anyhow::Result<()> {
                     }
                     _ = ticker.tick() => {}
                 }
-                // F-RES-5 (S38): the sweeper is OBSERVABILITY-ONLY — it must NOT close the socket, which would
-                // race the drain coordinator. Enforcement belongs to the timeout stack.
+                // F-RES-5 (S38): the sweeper is OBSERVABILITY-ONLY — closing the socket here would race the drain coordinator. Enforcement belongs to the timeout stack.
                 let detected = wd.sweep_expired();
                 if !detected.is_empty() {
                     tracing::warn!(
@@ -2347,8 +2111,7 @@ async fn async_main() -> anyhow::Result<()> {
             );
             continue;
         }
-        // ROUND8 OPS-02: the coordinator-level jitter desyncs ACROSS replicas; the per-listener
-        // div-l7 jitter desyncs connections WITHIN one pod. Both are needed.
+        // ROUND8 OPS-02: the coordinator jitter desyncs ACROSS replicas, this per-listener one desyncs connections WITHIN a pod. Both are needed.
         let per_conn_drain_jitter_ms =
             listener_cfg.effective_drain_jitter_ms(config.runtime.as_ref());
         let handle = spawn_tcp(
@@ -2364,8 +2127,6 @@ async fn async_main() -> anyhow::Result<()> {
             per_conn_drain_jitter_ms,
             Arc::clone(&hooks),
             shutdown.token().clone(),
-            // OPS-04+L4-12: per-listener cooperative-cancel signal, fired by the drain coordinator's
-            // phase 4 so accept loops stop WITHOUT cancelling in-flight connections.
             shutdown.listener_token().clone(),
             shutdown.tracker().clone(),
             Arc::clone(&tls_reload_registry),
@@ -2448,8 +2209,6 @@ async fn async_main() -> anyhow::Result<()> {
                 );
             }
             LifecycleSignal::SigHup => {
-                // S37-C: validate-first config hot-reload — re-read, run the FULL validation, apply nothing on
-                // failure.
                 reload_config(
                     config_manager.as_mut(),
                     &mut applied_config,
@@ -2501,14 +2260,11 @@ async fn async_main() -> anyhow::Result<()> {
     }
     let spec = lb_core::DrainSpec {
         readiness_settle: Duration::from_millis(
-            // ROUND-8 OPS-11: the fallback matches `lb_config::default_readiness_settle_ms()` (11 s — one
-            // kube probe interval plus slack).
+            // ROUND-8 OPS-11: this fallback must match `lb_config::default_readiness_settle_ms()` (11 s — one kube probe interval plus slack).
             runtime_cfg.map_or(11_000, |r| r.readiness_settle_ms),
         ),
         listener_cancel_deadline: Duration::from_millis(500),
         inflight_drain_deadline: Duration::from_millis(max_listener_drain_ms),
-        // The XDP detach closure lands here once the loader API is available; until then the loader is
-        // dropped after the drain settles (below).
         xdp_detach_deadline: None,
         jitter_max: Duration::from_millis(max_listener_jitter_ms),
         mark_draining: Some(Box::new(move || {
@@ -2519,8 +2275,7 @@ async fn async_main() -> anyhow::Result<()> {
         observer: Some(observer),
     };
 
-    // Cancel the admin listener BEFORE the coordinator so it does not serve `/readyz` Ready during
-    // the settle window.
+    // Cancel the admin listener BEFORE the coordinator so it does not serve `/readyz` Ready during the settle window.
     admin_cancel.cancel();
 
     let report = shutdown.run_drain(spec).await;
@@ -2550,8 +2305,6 @@ async fn async_main() -> anyhow::Result<()> {
         }
     }
 
-    // QUIC listeners hold their own cancellation tokens; their drain is independent of the
-    // coordinator's phases.
     let mut quic_drain_handles = Vec::with_capacity(quic_listeners.len());
     for listener in quic_listeners {
         quic_drain_handles.push(listener.shutdown());
@@ -2615,23 +2368,17 @@ async fn async_main() -> anyhow::Result<()> {
         "ExpressGateway stopped"
     );
 
-    // _xdp_loader drops HERE, after the drain has settled, so the userspace inserter sees a stable
-    // map until the last connection is gone.
+    // _xdp_loader drops HERE, after the drain has settled, so the userspace inserter sees a stable map until the last connection is gone.
     drop(_xdp_loader);
 
     Ok(())
 }
 
-/// CODE-2-03 Wave 2c: terminal-or-reload signal returned by [`LifecycleSignals::recv`].
 #[derive(Copy, Clone, Debug)]
 enum LifecycleSignal {
-    /// SIGTERM (k8s lameduck, systemd stop).
     SigTerm,
-    /// SIGINT (Ctrl-C in interactive sessions).
     SigInt,
-    /// SIGUSR1 (REL-2-03 cert reload trigger).
     SigUsr1,
-    /// SIGHUP (S37-C config hot-reload trigger).
     SigHup,
 }
 
@@ -2646,7 +2393,6 @@ impl std::fmt::Display for LifecycleSignal {
     }
 }
 
-/// The four lifecycle-signal streams, installed ONCE and reused across every iteration of the signal loop.
 #[cfg(unix)]
 struct LifecycleSignals {
     sigterm: tokio::signal::unix::Signal,
@@ -2657,7 +2403,6 @@ struct LifecycleSignals {
 
 #[cfg(unix)]
 impl LifecycleSignals {
-    /// Install the streams once.
     fn install() -> anyhow::Result<Self> {
         use tokio::signal::unix::{SignalKind, signal as unix_signal};
         let sigterm = unix_signal(SignalKind::terminate()).context("install SIGTERM handler")?;
@@ -2684,7 +2429,6 @@ impl LifecycleSignals {
         })
     }
 
-    /// Await the next lifecycle signal on the persistent streams.
     async fn recv(&mut self) -> LifecycleSignal {
         // Borrow the disjoint fields up front so the four `select!` arms don't each borrow `self`.
         let LifecycleSignals {
@@ -2718,14 +2462,10 @@ impl LifecycleSignals {
     }
 }
 
-/// Classification for an `accept(2)` error.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 enum AcceptErrorKind {
-    /// Per-process or per-system fd table full.
     EmfileOrEnfile,
-    /// Peer reset during accept.
     ConnReset,
-    /// Anything else — propagate and exit the loop.
     Fatal,
 }
 
@@ -2739,7 +2479,6 @@ impl AcceptErrorKind {
     }
 }
 
-/// Map an `io::Error` from `TcpListener::accept` into an [`AcceptErrorKind`].
 fn classify_accept_error(err: &std::io::Error) -> AcceptErrorKind {
     use std::io::ErrorKind;
     if let Some(raw) = err.raw_os_error() {
@@ -2754,7 +2493,6 @@ fn classify_accept_error(err: &std::io::Error) -> AcceptErrorKind {
     }
 }
 
-/// CODE-2-06: next backoff delay given the previous one.
 fn next_accept_backoff(prev: Duration) -> Duration {
     use rand::RngExt;
     let base = if prev.is_zero() {
@@ -2770,7 +2508,6 @@ fn next_accept_backoff(prev: Duration) -> Duration {
     Duration::from_millis(final_ms)
 }
 
-/// CODE-2-05 Wave 2c-2: write a minimal HTTP/1.1 503 response when an L7 listener sheds a connection over capacity.
 async fn write_h1_shed_response<W: AsyncWrite + Unpin>(io: &mut W) -> std::io::Result<()> {
     const BODY: &[u8] = b"HTTP/1.1 503 Service Unavailable\r\n\
         content-type: text/plain; charset=utf-8\r\n\
@@ -2846,12 +2583,10 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
         "listener started"
     );
 
-    // CODE-2-06: jittered exponential backoff for transient accept(2) errors; reset on success.
     let mut backoff = Duration::ZERO;
 
     loop {
-        // OPS-04+L4-12 (cases C-2, C-3, C-15): the cooperative-cancel arm is `biased` so a pending
-        // cancel wins over a ready accept — otherwise a saturated listener keeps accepting forever.
+        // OPS-04+L4-12 (C-2/C-3/C-15): the cancel arm is `biased` so a pending cancel wins over a ready accept — otherwise a saturated listener accepts forever.
         let accept_outcome = tokio::select! {
             biased;
             () = state.listener_cancel_token.cancelled() => {
@@ -2896,9 +2631,8 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
             }
         };
 
-        // OPS-04+L4-12 case C-3 — SYNCHRONOUS post-accept tail check. `select!` only covers the
-        // FUTURE, so without this an accept that completed in the same poll as the cancel would leak
-        // an accepted fd and drift the per-IP counter.
+        // OPS-04+L4-12 case C-3 — SYNCHRONOUS post-accept tail check: `select!` only covers the FUTURE, so an accept completing in the same poll as the cancel
+        // would otherwise leak an accepted fd and drift the per-IP counter.
         if state.listener_cancel_token.is_cancelled() {
             tracing::debug!(
                 client = %client_addr,
@@ -2909,8 +2643,7 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
             return Ok(());
         }
 
-        // SEC-2-04: per-IP / per-listener admission gate, called BEFORE the inflight semaphore so a
-        // saturated IP cannot starve other clients.
+        // SEC-2-04: admission gate runs BEFORE the inflight semaphore so a saturated IP cannot starve other clients of slots.
         let conn_permit = match state.hooks.admit_connection(client_addr.ip()) {
             Ok(p) => p,
             Err(reject) => {
@@ -2938,8 +2671,7 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
             }
         };
 
-        // CODE-2-05: `try_acquire_owned` returns immediately, so a saturated listener sheds rather
-        // than queueing.
+        // CODE-2-05: `try_acquire_owned` returns immediately, so a saturated listener sheds rather than queueing.
         let permit = match Arc::clone(&state.inflight).try_acquire_owned() {
             Ok(p) => p,
             Err(_) => {
@@ -2980,10 +2712,8 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
         };
 
         let st = Arc::clone(&state);
-        // Move the inflight + admission permits into the task — their Drop releases the slots.
         let _inflight_permit = permit;
         let _admission_permit = conn_permit;
-        // The per-connection task is routed through the tracker so `Shutdown::drain` waits on it.
         let conn_cancel = st.shutdown_token.clone();
         let inflight_gauge_guard = AcceptInflightGuard::new(
             Arc::clone(&state.metrics),
@@ -2997,8 +2727,6 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
             st.metrics.increment("connections_total", 1);
 
             let http_start = Instant::now();
-            // ROUND8 OPS-02: the work future RETURNS the negotiated HTTP version so the drain jitter and
-            // the per-request metrics can be attributed correctly.
             let work = async {
                 let mut http_version: Option<&'static str> = None;
                 let res: anyhow::Result<()> = match &st.mode {
@@ -3012,8 +2740,7 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                         .await
                     }
                     ListenerMode::Tls { bundle, .. } => {
-                        // REL-2-03: snapshot the bundle live at accept time — a concurrent SIGUSR1 reload does not
-                        // disturb this handshake.
+                        // REL-2-03: snapshot the bundle at accept — a concurrent SIGUSR1 reload must not disturb this handshake.
                         let snapshot = bundle.load_full();
                         let acceptor = TlsAcceptor::from(Arc::clone(&snapshot.server_config));
                         match lb_security::timeout_accept(
@@ -3024,7 +2751,6 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                         .await
                         {
                             Ok(tls_stream) => {
-                                // PROTO-2-15: capture SNI from the completed handshake for observability.
                                 if let Some(sni) = tls_stream.get_ref().1.server_name() {
                                     tracing::trace!(
                                         client = %client_addr,
@@ -3045,8 +2771,6 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                     }
                     ListenerMode::H1 { proxy } => {
                         http_version = Some("h1");
-                        // PROTO-2-11: thread the shutdown token into the H1 conn so a SIGTERM mid-request finishes the
-                        // in-flight response instead of aborting the socket.
                         proxy
                             .load_full()
                             .serve_connection_with_cancel(
@@ -3063,8 +2787,6 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                         bundle,
                         ..
                     } => {
-                        // REL-2-03: snapshot the bundle at accept so a concurrent cert reload cannot disturb this
-                        // handshake.
                         let snapshot = bundle.load_full();
                         let acceptor = TlsAcceptor::from(Arc::clone(&snapshot.server_config));
                         match lb_security::timeout_accept(
@@ -3075,7 +2797,6 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                         .await
                         {
                             Ok(tls_stream) => {
-                                // PROTO-2-18: capture SNI from rustls and thread it into the proxy.
                                 let sni = tls_stream.get_ref().1.server_name().map(str::to_owned);
                                 if let Some(s) = sni.as_deref() {
                                     tracing::trace!(
@@ -3088,8 +2809,6 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                                     tls_stream.get_ref().1.alpn_protocol().map(<[u8]>::to_vec);
                                 if alpn.as_deref() == Some(b"h2".as_ref()) {
                                     http_version = Some("h2");
-                                    // PROTO-2-11/-18: hand the shutdown token + SNI into the H2 conn so SIGTERM emits a graceful
-                                    // GOAWAY.
                                     h2_proxy
                                         .load_full()
                                         .serve_connection_with_cancel_sni(
@@ -3121,15 +2840,12 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                 (http_version, res)
             };
 
-            // Race the proxy work against the shutdown token. `biased` polls the cancel arm FIRST so a
-            // pending shutdown is not starved by a continuously-ready work future.
+            // `biased` polls the cancel arm FIRST so a pending shutdown is not starved by a continuously-ready work future.
             tokio::pin!(work);
             let (http_version, result) = tokio::select! {
                 biased;
                 () = conn_cancel.cancelled() => {
-                    // ROUND8 OPS-02 div-l7: rather than abandoning every connection at the SAME instant, each
-                    // connection draws its own `[0, jitter)` sleep on cancel, so aborts spread WITHIN the pod on
-                    // top of the coordinator's per-process draw. `0` collapses to the original immediate abort.
+                    // ROUND8 OPS-02 div-l7: each connection draws its own `[0, jitter)` sleep on cancel so aborts spread WITHIN the pod, on top of the coordinator's per-process draw.
                     let jitter = {
                         let ceil = st.per_conn_drain_jitter_ms;
                         if ceil == 0 {
@@ -3164,8 +2880,6 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                 r = &mut work => r,
             };
 
-            // REL-2-08: emit `http_requests_total` + `http_request_duration_seconds` with the bounded
-            // label set.
             if let Some(version) = http_version {
                 let status_class = if result.is_ok() { "2xx" } else { "5xx" };
                 let listener_label = st.listener_label.as_str();
@@ -3202,7 +2916,6 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
     }
 }
 
-/// Plain TCP / post-TLS-handshake byte copy.
 async fn proxy_connection<C>(
     mut client: C,
     backend_addr: SocketAddr,
@@ -3316,8 +3029,6 @@ mod tests {
         build_h3_upstream_pool(&[a, b]).unwrap();
     }
 
-    // ── SESSION 19 / Mode B (B6) reachability: config → params wiring ──
-    //
     // Proves the binary's config→params path actually reaches Mode B, not just that the library can.
 
     fn quic_cfg_with_raw_proxy(raw: Option<lb_config::RawQuicProxyConfig>) -> QuicListenerConfig {
@@ -3362,8 +3073,7 @@ mod tests {
     fn no_raw_proxy_keeps_h3_termination_params() {
         let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
         let cfg = quic_cfg_with_raw_proxy(None);
-        // R3: without a raw_proxy block no backend is built, so params carry `raw_quic_backend = None`
-        // and the listener is byte-identical to the pre-Mode-B H3 front.
+        // R3: with no raw_proxy block no backend is built, so the listener is byte-identical to the pre-Mode-B H3 front.
         let params = quic_listener_params_from_config(bind, &cfg, None, None, 0, None);
         assert!(
             params.raw_quic_backend.is_none(),
@@ -3375,9 +3085,6 @@ mod tests {
         );
     }
 
-    // F-S26-1 coverage — the `wire_h3_terminate_backends` H2 + H3 dispatch arms.
-
-    /// Build an H3-terminate `ListenerConfig` (protocol=quic, no raw_proxy) carrying a single backend with the given `protocol` + tls knobs.
     fn h3_terminate_cfg_with_backend(
         backend: lb_config::BackendConfig,
     ) -> lb_config::ListenerConfig {
@@ -3433,7 +3140,6 @@ mod tests {
     #[tokio::test]
     async fn wire_h3_terminate_backends_dispatches_h3_arm() {
         let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
-        // tls_verify_peer=false ⇒ build_h3_upstream_pool accepts it with no CA bundle.
         let cfg = h3_terminate_cfg_with_backend(lb_config::BackendConfig {
             address: "127.0.0.1:3002".to_string(),
             protocol: "h3".to_string(),
@@ -3473,7 +3179,6 @@ mod tests {
         );
     }
 
-    /// The H1 arm (must-have, the WS-over-H3 backend leg) — assert.
     #[tokio::test]
     async fn wire_h3_terminate_backends_dispatches_h1_arm() {
         let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
@@ -3517,7 +3222,6 @@ mod tests {
     const MODEB_E2E_LB_SNI: &str = "lb.modeb.test";
     const MODEB_E2E_BACKEND_SNI: &str = "backend.modeb.test";
     const MODEB_E2E_ALPN: &[u8] = b"h3";
-    /// Whole-test budget (handshake + relay round-trip).
     const MODEB_E2E_BUDGET: Duration = Duration::from_secs(10);
 
     struct ModeBE2eCerts {
@@ -3533,7 +3237,6 @@ mod tests {
         }
     }
 
-    /// Issue a self-signed leaf (= its own CA, the s16 pattern) for `sni`, written to a unique temp dir as cert/key/ca PEMs.
     fn modeb_e2e_gen_certs(sni: &str, tag: &str) -> ModeBE2eCerts {
         use std::sync::atomic::{AtomicU64, Ordering};
         static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -3579,7 +3282,6 @@ mod tests {
         (0..len).map(|i| ((i * 31 + 7) % 256) as u8).collect()
     }
 
-    /// The downstream CLIENT config — verifies the LB's leaf via `lb_ca`.
     fn modeb_e2e_client_config(lb_ca: &std::path::Path) -> quiche::Config {
         let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
         cfg.set_application_protos(&[MODEB_E2E_ALPN]).unwrap();
@@ -3600,7 +3302,6 @@ mod tests {
         cfg
     }
 
-    /// A throwaway quiche SERVER backend: accepts ONE connection (the LB's re-originated dial), echoes STREAM bytes back on the same stream id, FINs back once the peer FIN'd and its echo queue drained.
     fn modeb_e2e_spawn_echo_backend(certs: &ModeBE2eCerts) -> SocketAddr {
         let std_sock = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         std_sock.set_nonblocking(true).unwrap();
@@ -3721,8 +3422,7 @@ mod tests {
     /// **S19 B6 — the REAL `spawn_quic` Mode-B e2e.** A real quiche client.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn spawn_quic_mode_b_e2e_round_trips_through_real_listener() {
-        // Distinct CAs: the client trusts the LB leaf; the LB's Mode-B upstream factory trusts the
-        // backend's. A single shared CA would not prove the two legs are separately verified.
+        // Distinct CAs: a single shared CA would not prove the two legs are separately verified.
         let lb_certs = modeb_e2e_gen_certs(MODEB_E2E_LB_SNI, "lb");
         let backend_certs = modeb_e2e_gen_certs(MODEB_E2E_BACKEND_SNI, "be");
 
@@ -3758,7 +3458,6 @@ mod tests {
             backends: vec![],
         };
 
-        // 4) Drive the REAL production entry point (pool + resolver are unused on the Mode-B path).
         let metrics = Arc::new(MetricsRegistry::new());
         let token = CancellationToken::new();
         let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
@@ -3858,7 +3557,6 @@ mod tests {
                 }
             }
 
-            // Bounded re-poll: read one inbound datagram if it arrives within a short window.
             let timeout = client.timeout().unwrap_or(Duration::from_millis(20));
             let wait = timeout.min(Duration::from_millis(20));
             if let Ok(Ok((n, from))) =
@@ -3887,10 +3585,6 @@ mod tests {
         let _ = tokio::time::timeout(Duration::from_secs(5), listener.shutdown()).await;
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // F-S26-1 — REAL `spawn_quic` H3-terminate → H1 backend round-trip.
-    // ─────────────────────────────────────────────────────────────────────
-
     const H3H1_E2E_ALPN: &[u8] = b"h3";
     const H3H1_E2E_SNI: &str = "lb.h3h1.test";
     const H3H1_E2E_MAX_UDP: usize = 65_535;
@@ -3898,7 +3592,6 @@ mod tests {
     const H3H1_E2E_BACKEND_BODY: &[u8] = b"f-s26-1-backend-ok";
     const H3H1_E2E_BUDGET: Duration = Duration::from_secs(20);
 
-    /// A throwaway HTTP/1.1 backend: accepts ONE connection, reads the request head, sends `200 OK` with a fixed body, and closes.
     fn h3h1_e2e_spawn_h1_backend() -> (SocketAddr, tokio::sync::oneshot::Receiver<String>) {
         let std_listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         std_listener.set_nonblocking(true).unwrap();
@@ -3934,7 +3627,6 @@ mod tests {
         (addr, rx)
     }
 
-    /// Downstream client config trusting the LB's self-signed leaf.
     fn h3h1_e2e_client_config(lb_ca: &std::path::Path) -> quiche::Config {
         let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
         cfg.set_application_protos(&[H3H1_E2E_ALPN]).unwrap();
@@ -3954,7 +3646,7 @@ mod tests {
         cfg
     }
 
-    /// **F-S26-1 — the REAL `spawn_quic` H3→H1 e2e.** Proves the binary's.
+    /// **F-S26-1 — the REAL `spawn_quic` H3→H1 e2e.**
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn spawn_quic_h3_terminate_forwards_to_h1_backend_through_real_listener() {
         use quiche::h3::NameValue;
@@ -3993,8 +3685,7 @@ mod tests {
             }],
         };
 
-        // Sanity: the config must be VALID — the validator must accept a quic listener with an h1
-        // backend, or the rest of this test proves nothing.
+        // Sanity: the validator must ACCEPT a quic listener with an h1 backend, or the rest of this test proves nothing.
         lb_config::validate_config(&lb_config::LbConfig {
             listeners: vec![listener_cfg.clone()],
             ..Default::default()
@@ -4122,7 +3813,6 @@ mod tests {
                 }
             }
 
-            // Short bounded recv wait (not a correctness timeout).
             let qto = conn.timeout().unwrap_or(Duration::from_millis(20));
             let wait = qto.clamp(Duration::from_millis(2), Duration::from_millis(20));
             match tokio::time::timeout(wait, client_socket.recv_from(&mut in_buf)).await {
@@ -4162,7 +3852,6 @@ mod tests {
         let _ = tokio::time::timeout(Duration::from_secs(5), listener.shutdown()).await;
     }
 
-    /// A real tokio-tungstenite WS echo backend.
     fn ws_h3_e2e_spawn_ws_echo_backend() -> SocketAddr {
         use futures_util::{SinkExt, StreamExt};
         use tokio_tungstenite::tungstenite::Message;
@@ -4199,7 +3888,6 @@ mod tests {
         addr
     }
 
-    /// Encode a single masked client WS frame (RFC 6455 §5.2).
     #[allow(clippy::indexing_slicing)]
     fn ws_h3_e2e_encode_masked(opcode: u8, payload: &[u8]) -> Vec<u8> {
         assert!(payload.len() < 126, "e2e WS frames stay small (7-bit len)");
@@ -4214,12 +3902,10 @@ mod tests {
         f
     }
 
-    /// A masked Close frame (code 1000 normal closure).
     fn ws_h3_e2e_close_frame() -> Vec<u8> {
         ws_h3_e2e_encode_masked(0x8, &[0x03, 0xE8])
     }
 
-    /// Parse the FIRST complete WS frame from `buf` (server→client frames are unmasked; handles a masked frame defensively too).
     #[allow(clippy::indexing_slicing)]
     fn ws_h3_e2e_parse_frame(buf: &[u8]) -> Option<(u8, Vec<u8>, usize)> {
         if buf.len() < 2 {
@@ -4239,7 +3925,6 @@ mod tests {
                 idx = 4;
                 l
             }
-            // 64-bit length (len7 == 127) is never used in this test.
             std::cmp::Ordering::Greater => return None,
         };
         let mask = if masked {
@@ -4264,7 +3949,6 @@ mod tests {
         Some((opcode, payload, idx + plen))
     }
 
-    /// Build the `ListenerConfig` for a WS-over-H3 listener: protocol=quic,.
     fn ws_h3_e2e_listener_cfg(
         lb_certs: &ModeBE2eCerts,
         retry_secret_path: &std::path::Path,
@@ -4304,18 +3988,13 @@ mod tests {
         }
     }
 
-    /// How the WS-over-H3 client driver closes the tunnel after the echo.
     #[derive(Clone, Copy, Debug)]
     enum WsH3CloseMode {
-        /// Send a WS Close frame (orderly RFC 6455 close).
         Clean,
-        /// `RESET_STREAM` the tunnel stream (abnormal drop — the reset-vs-EOF negative control).
         Reset,
-        /// FIN the tunnel stream cleanly (empty `send_body(.., fin=true)`) — the client closes its WS send half WITHOUT a WS Close frame.
         Fin,
     }
 
-    /// Drive ONE WS-over-H3 client against the listener at `lb_addr`: QUIC + Extended CONNECT (`:protocol=websocket`) → expect a `:status` → send a Text frame → await its echo → close per `mode`.
     async fn ws_h3_e2e_drive_client(
         lb_addr: SocketAddr,
         ca: &std::path::Path,
@@ -4422,7 +4101,6 @@ mod tests {
                     echo_ok = true;
                 }
             }
-            // A non-200 (501/502/504) means no tunnel was established.
             if matches!(status, Some(s) if s != 200) {
                 break;
             }
@@ -4436,8 +4114,7 @@ mod tests {
                             }
                         }
                         WsH3CloseMode::Reset => {
-                            // Abnormal drop: RESET_STREAM + STOP_SENDING with H3_REQUEST_CANCELLED (the reset-vs-EOF
-                            // control).
+                            // Abnormal drop: RESET_STREAM + STOP_SENDING (H3_REQUEST_CANCELLED) — the reset-vs-EOF control.
                             let _ = conn.stream_shutdown(sid, quiche::Shutdown::Write, 0x010c);
                             let _ = conn.stream_shutdown(sid, quiche::Shutdown::Read, 0x010c);
                         }
@@ -4451,7 +4128,6 @@ mod tests {
                     closed = true;
                 }
             }
-            // Pump a few more ticks so the close/reset reaches the LB → backend before we drop.
             if closed {
                 close_drain += 1;
             }
@@ -4512,8 +4188,7 @@ mod tests {
         let (status, echo_ok) =
             ws_h3_e2e_drive_client(lb_addr, &lb_certs.ca, WsH3CloseMode::Clean, b"websocket").await;
 
-        // THE PROOF: the 200 (extended CONNECT success, NOT a 502) came back AND a WS Text frame
-        // round-tripped through the relay.
+        // THE PROOF: a 200 (extended CONNECT success, NOT a 502) came back AND a WS Text frame round-tripped through the relay.
         assert_eq!(
             status,
             Some(200),
@@ -4528,16 +4203,12 @@ mod tests {
         let _ = tokio::time::timeout(Duration::from_secs(5), listener.shutdown()).await;
     }
 
-    /// What a reporting WS backend observed at the end of a tunnel.
     #[derive(Debug, PartialEq, Eq)]
     enum WsBackendOutcome {
-        /// The backend received a WS Close frame (orderly RFC 6455 close).
         CleanClose,
-        /// The stream ended (Err/EOF) WITHOUT a Close — an abnormal drop.
         Abrupt,
     }
 
-    /// A WS echo backend that also REPORTS, per connection, whether it saw a clean WS Close or an abrupt end (Err/EOF without a Close).
     fn ws_h3_e2e_spawn_reporting_backend() -> (
         SocketAddr,
         tokio::sync::mpsc::UnboundedReceiver<WsBackendOutcome>,
@@ -4675,7 +4346,6 @@ mod tests {
         let _ = tokio::time::timeout(Duration::from_secs(5), listener.shutdown()).await;
     }
 
-    /// A WS flood backend: after the client's first (trigger) frame it floods `count` `Binary` frames of `frame_len` bytes, bumping `sent` per FLUSHED frame.
     fn ws_h3_e2e_spawn_flood_backend(
         frame_len: usize,
         count: u64,
@@ -4691,8 +4361,7 @@ mod tests {
         tokio::spawn(async move {
             let listener = TcpListener::from_std(std_listener).unwrap();
             if let Ok((sock, _)) = listener.accept().await {
-                // Shrink the backend's TCP send buffer so a backend the gateway stops reading backpressures
-                // quickly instead of absorbing the flood in kernel memory.
+                // Shrink the backend's send buffer so a gateway that stops reading backpressures quickly, instead of the flood hiding in kernel memory.
                 let _ = socket2::SockRef::from(&sock).set_send_buffer_size(16 * 1024);
                 let Ok(mut ws) = tokio_tungstenite::accept_async(sock).await else {
                     return;
@@ -4717,7 +4386,6 @@ mod tests {
         (addr, sent)
     }
 
-    /// A downstream client config with a SMALL per-stream receive window so.
     fn ws_h3_e2e_small_window_client_config(lb_ca: &std::path::Path) -> quiche::Config {
         let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
         cfg.set_application_protos(&[H3H1_E2E_ALPN]).unwrap();
@@ -4727,10 +4395,8 @@ mod tests {
         cfg.set_max_idle_timeout(15_000);
         cfg.set_max_recv_udp_payload_size(1_350);
         cfg.set_max_send_udp_payload_size(1_350);
-        // CRITICAL for this test: a stalled client must genuinely backpressure the gateway. quiche
-        // AUTO-TUNES its receive windows, so the CLIENT's windows are capped explicitly — left to
-        // auto-tune to 16/24 MiB the test client would absorb the flood and MASK the gateway's
-        // backpressure, making the whole test vacuous.
+        // CRITICAL: quiche AUTO-TUNES receive windows, so the CLIENT's are capped explicitly — left to auto-tune to 16/24 MiB it would absorb the flood,
+        // mask the gateway's backpressure and make this test vacuous.
         cfg.set_initial_max_data(64 * 1024);
         cfg.set_initial_max_stream_data_bidi_local(64 * 1024);
         cfg.set_initial_max_stream_data_bidi_remote(64 * 1024);
@@ -4759,8 +4425,7 @@ mod tests {
 
         let metrics = Arc::new(MetricsRegistry::new());
         let token = CancellationToken::new();
-        // Tiny backend SO_RCVBUF so the kernel TCP buffer between backend and gateway cannot hide the
-        // plateau this test measures.
+        // Tiny backend SO_RCVBUF so the kernel TCP buffer between backend and gateway cannot hide the plateau this test measures.
         let tiny_opts = BackendSockOpts {
             rcvbuf: Some(16 * 1024),
             sndbuf: Some(16 * 1024),
@@ -4874,8 +4539,7 @@ mod tests {
             }
         }
 
-        // Phase A: WITHHOLD reads long enough that an unbounded relay would drain the backend and
-        // grow without limit.
+        // Phase A: WITHHOLD reads long enough that an unbounded relay would drain the backend and grow without limit.
         let withhold_until = tokio::time::Instant::now() + Duration::from_millis(1200);
         while tokio::time::Instant::now() < withhold_until {
             flush_out!();
@@ -4975,7 +4639,6 @@ mod tests {
         let _ = tokio::time::timeout(Duration::from_secs(5), listener.shutdown()).await;
     }
 
-    /// A "dead" WS backend: accepts the TCP connection then immediately closes it WITHOUT completing the RFC 6455 handshake.
     fn ws_h3_e2e_spawn_dead_backend() -> SocketAddr {
         let std_listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         std_listener.set_nonblocking(true).unwrap();
@@ -5019,7 +4682,7 @@ mod tests {
         let _ = tokio::time::timeout(Duration::from_secs(5), listener.shutdown()).await;
     }
 
-    /// **RFC 9220 §5 — upstream unreachable → 502, no premature 200.** The.
+    /// **RFC 9220 §5 — upstream unreachable ⇒ 502, never a premature 200.**
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn ws_over_h3_upstream_unreachable_yields_502() {
         let lb_certs = modeb_e2e_gen_certs(H3H1_E2E_SNI, "wsh3-502");
@@ -5085,7 +4748,7 @@ mod tests {
         let _ = tokio::time::timeout(Duration::from_secs(5), listener.shutdown()).await;
     }
 
-    /// **Fail-closed: `ws_enabled` but NO relay launcher → 502.** The binary's.
+    /// **Fail-closed negative control: `ws_enabled` but NO relay launcher ⇒ 502.**
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn ws_over_h3_enabled_without_launcher_fails_closed_502() {
         let lb_certs = modeb_e2e_gen_certs(H3H1_E2E_SNI, "wsh3-nolauncher");
@@ -5093,8 +4756,7 @@ mod tests {
         let backend_addr = ws_h3_e2e_spawn_ws_echo_backend(); // present but never dialed
 
         let pool = TcpPool::new(PoolConfig::default(), backend_opts(), Runtime::new());
-        // Build the listener WITHOUT a relay launcher (ws_enabled + backends, but no
-        // `with_ws_relay_launcher`) — the negative control.
+        // The negative control: ws_enabled + backends, but no `with_ws_relay_launcher`.
         let params = QuicListenerParams::new(
             "127.0.0.1:0".parse().unwrap(),
             lb_certs.cert.clone(),
@@ -5131,10 +4793,7 @@ mod tests {
         assert_eq!(LifecycleSignal::SigHup.to_string(), "SIGHUP");
     }
 
-    // ── S37-C: ArcSwap snapshot-isolation discipline ───────────────────
-    //
-    // The load-bearing mechanism behind SIGHUP reload: an in-flight connection keeps the snapshot
-    // it captured at accept, while a new connection sees the swapped-in value.
+    // S37-C: an in-flight connection keeps the ArcSwap snapshot it captured at accept, while a new connection sees the swapped-in value.
     #[test]
     fn arcswap_captured_snapshot_survives_store() {
         use arc_swap::ArcSwap;
@@ -5157,8 +4816,7 @@ mod tests {
             "new connection must observe the swapped value"
         );
 
-        // The old snapshot is the SAME allocation the in-flight conn holds (pointer identity), proving
-        // it was not reset under it.
+        // Pointer identity: the old snapshot is the SAME allocation the in-flight conn holds, proving it was not reset under it.
         assert!(Arc::ptr_eq(&in_flight, &in_flight.clone()));
         assert!(
             !Arc::ptr_eq(&in_flight, &new_conn),
@@ -5190,7 +4848,6 @@ mod tests {
         assert_eq!(classify_accept_error(&e), AcceptErrorKind::Fatal);
     }
 
-    // ── CODE-2-06 proof: emfile backoff never busy-loops ──
     #[test]
     fn test_emfile_no_busy_loop() {
         let mut d = Duration::ZERO;
@@ -5203,7 +4860,6 @@ mod tests {
                 "backoff capped at 1 s + jitter, got {d:?}"
             );
         }
-        // After the doubling sequence saturates the cap, the value stays within the jittered band.
         for _ in 0..20 {
             d = next_accept_backoff(d);
             assert!(d >= Duration::from_millis(750));
@@ -5234,7 +4890,6 @@ mod tests {
         );
     }
 
-    // ── CODE-2-09 proof: connect uses the async path ──
     #[tokio::test]
     async fn test_connect_uses_async_path() {
         // Reserved TEST-NET-1 — guaranteed to black-hole SYN.
@@ -5257,7 +4912,6 @@ mod tests {
         );
     }
 
-    // ── PROTO-2-09 proof: an unhandled protocol spelling errors at startup ──
     #[test]
     fn test_typo_protocol_errors() {
         let listener_cfg = lb_config::ListenerConfig {
@@ -5309,7 +4963,6 @@ mod tests {
         );
     }
 
-    // ── SEC-2-06 proof: a non-loopback admin bind is refused ──
     #[test]
     fn test_non_loopback_refused() {
         use lb_security::{AdminAuthGate, AdminBindError};
@@ -5328,7 +4981,6 @@ mod tests {
         AdminAuthGate::validate_bind(bind, true, true).unwrap();
     }
 
-    // ── SEC-2-04 proof: the per-IP cap is enforced at accept ──
     #[test]
     fn test_per_ip_cap_enforced_at_accept() {
         use std::net::{IpAddr, Ipv4Addr};
