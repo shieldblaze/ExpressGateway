@@ -955,7 +955,6 @@ async fn grpc_h3_unary_echo_delivers_status_trailer() {
     let msgs = out.messages();
     assert_eq!(msgs.len(), 1, "one echoed message");
     assert_eq!(msgs[0], payload, "echoed payload byte-identical");
-    // A4: grpc-status:0 trailer delivered.
     assert_eq!(
         out.field("grpc-status"),
         Some("0"),
@@ -963,7 +962,6 @@ async fn grpc_h3_unary_echo_delivers_status_trailer() {
         out.trailer_pairs
     );
     assert!(out.fin, "clean stream FIN");
-    // A2: content-type reached the backend intact.
     assert_eq!(
         st.last_content_type.lock().unwrap().as_deref(),
         Some("application/grpc"),
@@ -1130,7 +1128,6 @@ async fn grpc_h3_large_message_roundtrips_byte_identical() {
     let (backend, _st, _bh) = spawn_h2_grpc_backend(GrpcBackendMode::Echo).await;
     let (_l, gw, _sd) = start_h3_listener_h2(&certs, backend).await;
 
-    // 512 KiB non-UTF-8 message → one gRPC frame, many DATA frames.
     let mut msg = Vec::with_capacity(512 * 1024);
     let mut s: u32 = 0x1234_5678;
     for i in 0..512 * 1024 {
@@ -1331,7 +1328,6 @@ async fn grpc_h3_without_te_header_still_delivers_trailer() {
 
     let payload = Bytes::from_static(b"no-te");
     let body = frame_messages(std::slice::from_ref(&payload));
-    // The default driver sends te:trailers, so use its no-te variant.
     let out = drive_grpc_h3_no_te(gw, &certs.ca, "/echo.Echo/NoTe", vec![body], OVERALL).await;
 
     assert_eq!(out.status, Some(200));

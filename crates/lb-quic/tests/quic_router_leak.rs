@@ -50,7 +50,6 @@ fn test_panicking_actor_removes_entry() {
         "worker thread did not panic — test fixture is broken"
     );
 
-    // Round-4 invariant: both entries are gone.
     assert!(
         !map.contains_key(&router_key),
         "router_key entry leaked after actor panic"
@@ -83,7 +82,6 @@ fn clean_exit_also_removes_entries() {
             router_key.clone(),
             header_dcid_key.clone(),
         );
-        // Scope ends → guard drops → both entries removed.
     }
 
     assert!(!map.contains_key(&router_key));
@@ -108,11 +106,9 @@ async fn cancel_drops_entries() {
     let hk = header_dcid_key.clone();
     let handle = tokio::spawn(async move {
         let _guard = CidEntryGuard::new(map_for_task, rk, hk);
-        // Block forever (virtual time); the abort below cancels us.
         tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
     });
 
-    // Yield once so the task hits the sleep, then abort.
     tokio::task::yield_now().await;
     handle.abort();
     // The aborted future's drop chain runs synchronously inside the

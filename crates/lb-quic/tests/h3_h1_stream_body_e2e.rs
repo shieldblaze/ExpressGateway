@@ -158,7 +158,6 @@ fn build_tcp_pool() -> TcpPool {
 async fn read_h1_request(sock: &mut TcpStream) -> (String, Vec<u8>) {
     let mut all = Vec::with_capacity(4096);
     let mut tmp = [0u8; 8192];
-    // Read until we have the header terminator.
     let head_end = loop {
         if let Some(p) = all.windows(4).position(|w| w == b"\r\n\r\n") {
             break p + 4;
@@ -174,7 +173,6 @@ async fn read_h1_request(sock: &mut TcpStream) -> (String, Vec<u8>) {
     let mut body = all[head_end.min(all.len())..].to_vec();
 
     if lower.contains("transfer-encoding: chunked") {
-        // Keep reading until the chunked terminator is in `body`.
         loop {
             if dechunk_complete(&body) {
                 break;
@@ -211,7 +209,6 @@ fn content_length(lower_head: &str) -> Option<usize> {
 }
 
 fn dechunk_complete(buf: &[u8]) -> bool {
-    // crude: a chunked body is complete once "0\r\n\r\n" appears.
     buf.windows(5).any(|w| w == b"0\r\n\r\n")
 }
 
@@ -219,7 +216,6 @@ fn dechunk(buf: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < buf.len() {
-        // read hex size line
         let Some(nl) = buf[i..].windows(2).position(|w| w == b"\r\n") else {
             break;
         };
@@ -309,7 +305,6 @@ async fn drive_h3_body_request(
     let stream_id: u64 = 0;
     let local = socket.local_addr().map_err(|e| e.to_string())?;
 
-    // HEADERS first WITHOUT fin, then DATA, with fin on the last byte.
     let encoder = QpackEncoder::new();
     let mut headers = vec![
         (":method".to_string(), "POST".to_string()),
@@ -361,7 +356,6 @@ async fn drive_h3_body_request(
             ));
         }
 
-        // Feed request bytes into the stream as flow control allows.
         if conn.is_established() && sent < wire.len() {
             let chunk = &wire[sent..];
             let fin = true; // fin only matters once all bytes accepted
@@ -370,7 +364,6 @@ async fn drive_h3_body_request(
                 Ok(n) => {
                     sent += n;
                     if sent == wire.len() {
-                        // All bytes buffered; now send fin marker.
                         let _ = conn.stream_send(stream_id, &[], true);
                         let _ = fin;
                     }
@@ -501,7 +494,6 @@ fn client_conn(server: SocketAddr, ca: &std::path::Path) -> (quiche::Connection,
     (conn, sock)
 }
 
-// T1 — multi-DATA-frame binary body, reassembled byte-identical.
 #[tokio::test]
 async fn t1_multi_data_frame_binary_body_forwarded_byte_identical() {
     let certs = generate_loopback_certs();
@@ -554,7 +546,6 @@ async fn t1_multi_data_frame_binary_body_forwarded_byte_identical() {
     assert_eq!(body, expected, "reassembled body must be byte-identical");
 }
 
-// T2 — empty body (HEADERS + FIN) ⇒ byte-identical bodyless head.
 #[tokio::test]
 async fn t2_empty_body_is_byte_identical_to_s1_bodyless_head() {
     let certs = generate_loopback_certs();
@@ -563,7 +554,6 @@ async fn t2_empty_body_is_byte_identical_to_s1_bodyless_head() {
 
     let (conn, sock) = client_conn(server, &certs.ca);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
-    // No DATA frames ⇒ HEADERS + FIN.
     let res = drive_h3_body_request(conn, &sock, vec![], vec![], deadline).await;
 
     let captured = tokio::time::timeout(Duration::from_secs(3), body_rx)
@@ -586,7 +576,6 @@ async fn t2_empty_body_is_byte_identical_to_s1_bodyless_head() {
     assert!(body.is_empty(), "bodyless request must have empty body");
 }
 
-// T3 — zero-length DATA frame then FIN ⇒ no spurious chunk.
 #[tokio::test]
 async fn t3_zero_length_data_frame_then_fin_no_spurious_chunk() {
     let certs = generate_loopback_certs();
@@ -595,7 +584,6 @@ async fn t3_zero_length_data_frame_then_fin_no_spurious_chunk() {
 
     let (conn, sock) = client_conn(server, &certs.ca);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
-    // One empty DATA frame, then FIN.
     let res = drive_h3_body_request(conn, &sock, vec![Vec::new()], vec![], deadline).await;
 
     let captured = tokio::time::timeout(Duration::from_secs(3), body_rx)
@@ -615,7 +603,6 @@ async fn t3_zero_length_data_frame_then_fin_no_spurious_chunk() {
     );
 }
 
-// T5 — slow-upstream backpressure / memory-bounded. Requires `test-gauges`.
 #[cfg(feature = "test-gauges")]
 #[tokio::test]
 async fn t5_single_large_data_frame_is_memory_bounded_through_stalled_upstream() {

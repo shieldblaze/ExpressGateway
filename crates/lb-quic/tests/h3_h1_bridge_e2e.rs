@@ -421,14 +421,12 @@ async fn h3_h1_bridge_status_body_and_host_verbatim_through_quic_listener() {
         "H3→H1 bridge must echo the H1 upstream's exact status; got {status}"
     );
 
-    // (2) Response BODY verbatim. Beyond round8 (probe-hit count only).
     assert_eq!(
         body.as_slice(),
         UPSTREAM_BODY,
         "H3→H1 bridge must return the H1 upstream's body verbatim"
     );
 
-    // (3) `:authority` → `Host` actually reached the H1 upstream.
     let head = captured_head.expect("H1 upstream did not capture a request head");
     let host_line = head
         .split("\r\n")
@@ -439,7 +437,6 @@ async fn h3_h1_bridge_status_body_and_host_verbatim_through_quic_listener() {
         format!("Host: {REQUEST_AUTHORITY}"),
         "H3 :authority must be translated to the H1 Host header verbatim"
     );
-    // Request-line sanity: method + path the client sent arrived too.
     assert!(
         head.starts_with(&format!("GET {REQUEST_PATH} HTTP/1.1\r\n")),
         "H1 request line must carry the H3 :method + :path; got first line: {:?}",

@@ -188,7 +188,6 @@ fn spawn_dgram_echo_backend(certs: &TestCerts) -> SocketAddr {
                 return;
             }
             if let Some(c) = conn.as_mut() {
-                // 1) Drain received datagrams into the echo queue.
                 loop {
                     match c.dgram_recv(&mut rd) {
                         Ok(n) => echo_q.push_back(rd.get(..n).unwrap_or(&[]).to_vec()),
@@ -211,7 +210,6 @@ fn spawn_dgram_echo_backend(certs: &TestCerts) -> SocketAddr {
                         }
                     }
                 }
-                // 3) Flush outbound.
                 loop {
                     match c.send(&mut out_buf) {
                         Ok((n, info)) => {
@@ -305,10 +303,8 @@ fn datagram_set() -> Vec<Vec<u8>> {
 async fn s19_b4_datagrams_round_trip_byte_identical() {
     let certs = generate_loopback_certs();
 
-    // 1) Real datagram-echo backend.
     let backend_addr = spawn_dgram_echo_backend(&certs);
 
-    // 2) Shared LB listener socket (the "server" leg).
     let lb_socket = Arc::new(
         UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
             .await
@@ -316,7 +312,6 @@ async fn s19_b4_datagrams_round_trip_byte_identical() {
     );
     let lb_local = lb_socket.local_addr().unwrap();
 
-    // 3) Real downstream CLIENT.
     let client_socket = Arc::new(
         UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
             .await
@@ -343,7 +338,6 @@ async fn s19_b4_datagrams_round_trip_byte_identical() {
     )
     .unwrap();
 
-    // 4) Inline-drive the client⇄LB legs to established.
     let mut out = vec![0u8; MAX_UDP];
     let mut in_buf = vec![0u8; MAX_UDP];
     let deadline = tokio::time::Instant::now() + HANDSHAKE_BUDGET;
@@ -382,7 +376,6 @@ async fn s19_b4_datagrams_round_trip_byte_identical() {
     }
     flush(&mut client_conn, &client_socket, &mut out).await;
 
-    // 6) Forwarder: drain the shared LB socket into the actor's inbound.
     let (tx, rx) = mpsc::channel::<InboundPacket>(64);
     let cancel = CancellationToken::new();
     let fwd_socket = Arc::clone(&lb_socket);
@@ -432,7 +425,6 @@ async fn s19_b4_datagrams_round_trip_byte_identical() {
                 Duration::from_millis(10),
             )
             .await;
-            // Pull echoed datagrams.
             loop {
                 match client_conn.dgram_recv(&mut recv_buf) {
                     Ok(n) => received.push(recv_buf.get(..n).unwrap_or(&[]).to_vec()),
@@ -449,7 +441,6 @@ async fn s19_b4_datagrams_round_trip_byte_identical() {
         }
     });
 
-    // 8) The Mode B backend.
     let pool = QuicUpstreamPool::new(
         QuicPoolConfig::default(),
         upstream_config_factory(certs.ca.clone()),
@@ -476,14 +467,12 @@ async fn s19_b4_datagrams_round_trip_byte_identical() {
         h2_backend: None,
         raw_quic_backend: Some(raw_backend),
         quic_modeb_metrics: None,
-        // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
         ws_enabled: false,
         ws_relay_launcher: None,
         max_requests_per_h3_connection: 0,
         h3_recycle_metrics: None,
     };
 
-    // 9) Run the actor; wait for the echoed datagrams, then cancel.
     let actor = tokio::spawn(run_raw_proxy_actor_for_test(params));
 
     let received = tokio::time::timeout(RELAY_BUDGET, done_rx)
@@ -523,7 +512,6 @@ async fn s19_b4_datagrams_round_trip_byte_identical() {
         "fixture must include a zero-length datagram"
     );
 
-    // Tidy up.
     cancel.cancel();
     forwarder.abort();
     let _ = client_driver.await;

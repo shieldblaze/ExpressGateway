@@ -64,8 +64,6 @@ const PARTIAL_LEN: usize = 24 * 1024;
 /// Sibling-stream payload (small, single-shot, FIN).
 const SIBLING_PAYLOAD: &[u8] = b"sibling-stream-survives-the-reset-0123456789";
 
-// Cert plumbing.
-
 static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 
 struct TestCerts {
@@ -259,7 +257,6 @@ fn spawn_forward_backend(certs: &TestCerts, obs: BackendObs) -> SocketAddr {
         let mut out_buf = vec![0u8; MAX_UDP];
         let mut rd = vec![0u8; MAX_UDP];
         let mut conn: Option<quiche::Connection> = None;
-        // sibling echo queue: bytes pending + peer-FIN-seen + our-FIN-sent.
         let mut sib_pending: Vec<u8> = Vec::new();
         let mut sib_peer_fin = false;
         let mut sib_fin_sent = false;
@@ -308,7 +305,6 @@ fn spawn_forward_backend(certs: &TestCerts, obs: BackendObs) -> SocketAddr {
                         }
                     }
                 }
-                // Echo the sibling stream back so the client sees it complete.
                 if !sib_pending.is_empty() {
                     let mut acc = 0usize;
                     while acc < sib_pending.len() {
@@ -335,7 +331,6 @@ fn spawn_forward_backend(certs: &TestCerts, obs: BackendObs) -> SocketAddr {
                 {
                     sib_fin_sent = true;
                 }
-                // Flush outbound.
                 loop {
                     match c.send(&mut out_buf) {
                         Ok((n, info)) => {
@@ -390,7 +385,6 @@ struct World {
     forwarder: tokio::task::JoinHandle<()>,
     client_socket: Arc<UdpSocket>,
     client_local: SocketAddr,
-    // The client connection is owned by the test body (driven inline).
     client_conn: quiche::Connection,
 }
 
@@ -456,7 +450,6 @@ async fn bring_up(certs: &TestCerts, backend_addr: SocketAddr) -> World {
     }
     assert_eq!(client_conn.application_proto(), H3_ALPN);
 
-    // Forwarder: shared LB socket → actor inbound mpsc (the router's job).
     let (tx, rx) = mpsc::channel::<InboundPacket>(256);
     let cancel = CancellationToken::new();
     let fwd_socket = Arc::clone(&lb_socket);
@@ -508,7 +501,6 @@ async fn bring_up(certs: &TestCerts, backend_addr: SocketAddr) -> World {
         h2_backend: None,
         raw_quic_backend: Some(raw_backend),
         quic_modeb_metrics: None,
-        // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
         ws_enabled: false,
         ws_relay_launcher: None,
         max_requests_per_h3_connection: 0,
@@ -550,7 +542,6 @@ async fn forward_client_reset_propagates_with_code_conn_stays_up() {
     let backend_addr = spawn_forward_backend(&certs, obs.clone());
     let mut w = bring_up(&certs, backend_addr).await;
 
-    // Move the client conn out so we can drive it inline here.
     let mut client = std::mem::replace(
         &mut w.client_conn,
         quiche::accept(
@@ -567,7 +558,6 @@ async fn forward_client_reset_propagates_with_code_conn_stays_up() {
     let mut out = vec![0u8; MAX_UDP];
     let mut in_buf = vec![0u8; MAX_UDP];
 
-    // 1) Partial upload on FWD_STREAM, NO fin.
     let payload = make_payload(PARTIAL_LEN);
     client.stream_send(FWD_STREAM, &payload, false).unwrap();
     flush(&mut client, &client_socket, &mut out).await;
@@ -645,7 +635,6 @@ async fn forward_client_reset_propagates_with_code_conn_stays_up() {
         )
         .await;
 
-        // Pull sibling echo bytes.
         if !sibling_done {
             let readable: Vec<u64> = client.readable().collect();
             for sid in readable {
@@ -680,7 +669,6 @@ async fn forward_client_reset_propagates_with_code_conn_stays_up() {
         }
     }
 
-    // ── ASSERTIONS ──
     let code = obs.fwd_reset_code.load(Ordering::Relaxed);
     assert_ne!(
         code, NO_RESET,
@@ -717,12 +705,9 @@ async fn forward_client_reset_propagates_with_code_conn_stays_up() {
         sibling_recv.len()
     );
 
-    // Put the client back so teardown owns a real conn (cosmetic).
     w.client_conn = client;
     teardown(w).await;
 }
-
-// REVERSE: backend RESET → client StreamReset(code), no clean FIN.
 
 /// The BACKEND resets a backend-initiated bidi stream mid-response; the CLIENT
 /// must observe `StreamReset(REV_RESET_CODE)` and never a clean FIN.
@@ -780,7 +765,6 @@ async fn reverse_backend_reset_propagates_with_code_to_client() {
                             }
                         }
                     }
-                    // Open the server-initiated stream + push partial response.
                     if !opened {
                         match c.stream_send(REV_STREAM, &payload, false) {
                             Ok(n) => {
@@ -798,7 +782,6 @@ async fn reverse_backend_reset_propagates_with_code_to_client() {
                             backend_sent_b.store(sent, Ordering::Relaxed);
                         }
                     }
-                    // When told, RESET the response stream with the code.
                     if do_reset_b.load(Ordering::Relaxed) && !did_reset_b.load(Ordering::Relaxed) {
                         let _ =
                             c.stream_shutdown(REV_STREAM, quiche::Shutdown::Write, REV_RESET_CODE);
@@ -919,7 +902,6 @@ async fn reverse_backend_reset_propagates_with_code_to_client() {
 
     do_reset.store(true, Ordering::Relaxed);
 
-    // Drive until the client observes the propagated StreamReset code.
     let observe = tokio::time::Instant::now() + Duration::from_secs(8);
     while client_reset_code == NO_RESET {
         if tokio::time::Instant::now() >= observe {
@@ -983,8 +965,6 @@ async fn reverse_backend_reset_propagates_with_code_to_client() {
     w.client_conn = client;
     teardown(w).await;
 }
-
-// STOP_SENDING: client STOP_SENDING → backend stream_send stops.
 
 /// The client STOP_SENDINGs the read side of a stream. The relay must propagate
 /// a STOP_SENDING toward the backend, so the backend's `stream_send` eventually
@@ -1156,12 +1136,10 @@ async fn client_stop_sending_propagates_to_backend() {
         }
     }
 
-    // STOP_SENDING the read side of REV_STREAM (Shutdown::Read ⇒ STOP_SENDING).
     client
         .stream_shutdown(REV_STREAM, quiche::Shutdown::Read, STOP_CODE)
         .unwrap();
 
-    // Drive until the backend's stream_send surfaces the propagated stop code.
     let observe = tokio::time::Instant::now() + Duration::from_secs(10);
     while stop_code_seen.load(Ordering::Relaxed) == NO_RESET {
         if tokio::time::Instant::now() >= observe {
@@ -1176,7 +1154,6 @@ async fn client_stop_sending_propagates_to_backend() {
             Duration::from_millis(10),
         )
         .await;
-        // Keep reading so we'd catch any (forbidden) clean FIN.
         let readable: Vec<u64> = client.readable().collect();
         for sid in readable {
             if sid != REV_STREAM {

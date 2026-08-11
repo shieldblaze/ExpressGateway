@@ -486,7 +486,6 @@ async fn p1b_t1_client_cancels_mid_body_upstream_not_completed_and_no_leak() {
 
     let (listener, server, _sd) = start_listener(&certs, backend_addr).await;
 
-    // --- cancelled request ---
     {
         let (mut conn, sock) = client_conn(server, &certs.ca);
         let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
@@ -517,17 +516,14 @@ async fn p1b_t1_client_cancels_mid_body_upstream_not_completed_and_no_leak() {
         conn.stream_shutdown(stream_id, quiche::Shutdown::Write, 0x10)
             .expect("stream_shutdown write");
         let _ = conn.stream_shutdown(stream_id, quiche::Shutdown::Read, 0x10);
-        // Flush the RESET_STREAM frame to the proxy and let it process.
         let flush_until = tokio::time::Instant::now() + Duration::from_millis(500);
         while tokio::time::Instant::now() < flush_until {
             pump.pump_once(&mut conn, &sock)
                 .await
                 .expect("pump post-reset");
         }
-        // conn drops here.
     }
 
-    // --- liveness: a SECOND independent request must still succeed ---
     let (conn2, sock2) = client_conn(server, &certs.ca);
     let deadline2 = tokio::time::Instant::now() + Duration::from_secs(45);
     let mut body2 = vec![0u8; 2048];
@@ -625,7 +621,6 @@ async fn p1b_t2_upstream_resets_mid_body_yields_502() {
             fin_sent = true;
         }
         let done = pump.pump_once(&mut conn, &sock).await.expect("pump");
-        // Once the backend has RST, the proxy should produce a 502.
         let _ = ready_rx.try_recv();
         if done {
             break;

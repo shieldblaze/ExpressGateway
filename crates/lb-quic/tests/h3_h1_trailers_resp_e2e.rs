@@ -480,11 +480,9 @@ fn client_conn(server: SocketAddr, ca: &std::path::Path) -> (quiche::Connection,
 #[tokio::test]
 async fn pc1_request_with_trailing_field_section_completes_and_drops_trailers() {
     let certs = generate_loopback_certs();
-    // Backend echoes a fixed status; we assert the client sees it.
     let (backend_addr, body_rx, backend_h) = spawn_backend(203, b"pc1-ok".to_vec()).await;
     let (listener, server, _sd) = start_listener(&certs, backend_addr).await;
 
-    // Two DATA frames; non-UTF-8 marker at head/mid/tail of the body.
     let mut f0 = vec![0u8; 40_000];
     for (i, b) in f0.iter_mut().enumerate() {
         *b = (i % 251) as u8;
@@ -523,7 +521,6 @@ async fn pc1_request_with_trailing_field_section_completes_and_drops_trailers() 
     backend_h.abort();
 
     let (status, _resp) = res.expect("PC1 e2e failed");
-    // The H3 client receives the backend's real status.
     assert_eq!(status, 203, "client must observe the backend status");
 
     let (head, body) = captured.expect("backend captured no request");
@@ -594,7 +591,6 @@ async fn pc2_large_binary_response_body_reassembled_byte_identical() {
 
     let (conn, sock) = client_conn(server, &certs.ca);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
-    // Bodyless request (HEADERS + FIN): focus is the RESPONSE path.
     let res = drive_h3(conn, &sock, vec![], None, deadline).await;
 
     let _ = tokio::time::timeout(Duration::from_secs(3), listener.shutdown()).await;

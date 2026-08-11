@@ -219,7 +219,6 @@ fn spawn_echo_backend(certs: &TestCerts) -> SocketAddr {
         let mut out_buf = vec![0u8; MAX_UDP];
         let mut rd = vec![0u8; MAX_UDP];
         let mut conn: Option<quiche::Connection> = None;
-        // Per-stream: (bytes queued to echo, peer-FIN-seen, our-FIN-sent).
         let mut echo_pending: HashMap<u64, (Vec<u8>, bool, bool)> = HashMap::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
 
@@ -356,10 +355,8 @@ async fn try_recv_one(
 async fn s19_b5_stream_flood_bounded_table_completes_all() {
     let certs = generate_loopback_certs();
 
-    // 1) Real echo backend.
     let backend_addr = spawn_echo_backend(&certs);
 
-    // 2) Shared LB listener socket (the "server" leg).
     let lb_socket = Arc::new(
         UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
             .await
@@ -367,7 +364,6 @@ async fn s19_b5_stream_flood_bounded_table_completes_all() {
     );
     let lb_local = lb_socket.local_addr().unwrap();
 
-    // 3) Real downstream CLIENT.
     let client_socket = Arc::new(
         UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
             .await
@@ -394,7 +390,6 @@ async fn s19_b5_stream_flood_bounded_table_completes_all() {
     )
     .unwrap();
 
-    // 4) Inline-drive the client⇄LB legs to established.
     let mut out = vec![0u8; MAX_UDP];
     let mut in_buf = vec![0u8; MAX_UDP];
     let deadline = tokio::time::Instant::now() + HANDSHAKE_BUDGET;
@@ -423,7 +418,6 @@ async fn s19_b5_stream_flood_bounded_table_completes_all() {
     }
     assert_eq!(client_conn.application_proto(), H3_ALPN);
 
-    // 5) Forwarder: drain the shared LB socket into the actor's inbound mpsc.
     let (tx, rx) = mpsc::channel::<InboundPacket>(512);
     let cancel = CancellationToken::new();
     let fwd_socket = Arc::clone(&lb_socket);
@@ -458,9 +452,7 @@ async fn s19_b5_stream_flood_bounded_table_completes_all() {
         let mut in_buf = vec![0u8; MAX_UDP];
         let mut recv_buf = vec![0u8; MAX_UDP];
 
-        // Next client-initiated bidi stream id to open (0,4,8,…).
         let mut next_index: u64 = 0;
-        // In-flight streams: sid -> (expected payload, bytes received so far).
         let mut inflight: HashMap<u64, (Vec<u8>, Vec<u8>)> = HashMap::new();
         let mut completed: u64 = 0;
         let mut mismatches: u64 = 0;
@@ -471,7 +463,6 @@ async fn s19_b5_stream_flood_bounded_table_completes_all() {
                 break;
             }
 
-            // (a) Top up the in-flight window with fresh streams.
             while (inflight.len() as u64) < CONCURRENCY && next_index < TOTAL_STREAMS {
                 let sid = next_index * 4; // client-initiated bidi ids
                 let payload = make_payload(next_index.wrapping_add(1), PAYLOAD_LEN);
@@ -497,7 +488,6 @@ async fn s19_b5_stream_flood_bounded_table_completes_all() {
             )
             .await;
 
-            // (b) Pull echoed bytes; finish streams whose echo FIN'd.
             let readable: Vec<u64> = client_conn.readable().collect();
             for sid in readable {
                 let mut fin_seen = false;
@@ -530,10 +520,8 @@ async fn s19_b5_stream_flood_bounded_table_completes_all() {
                 }
             }
 
-            // (c) Done when every stream has been opened AND completed.
             if next_index >= TOTAL_STREAMS && inflight.is_empty() {
                 if let Some(tx) = done_tx.take() {
-                    // Report completed only if no byte mismatch occurred.
                     let _ = tx.send(if mismatches == 0 { completed } else { 0 });
                 }
                 break;
@@ -541,7 +529,6 @@ async fn s19_b5_stream_flood_bounded_table_completes_all() {
         }
     });
 
-    // 7) The Mode B actor.
     let pool = QuicUpstreamPool::new(
         QuicPoolConfig::default(),
         upstream_config_factory(certs.ca.clone()),
@@ -568,14 +555,12 @@ async fn s19_b5_stream_flood_bounded_table_completes_all() {
         h2_backend: None,
         raw_quic_backend: Some(raw_backend),
         quic_modeb_metrics: None,
-        // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
         ws_enabled: false,
         ws_relay_launcher: None,
         max_requests_per_h3_connection: 0,
         h3_recycle_metrics: None,
     };
 
-    // 8) Run the actor; wait for every stream to complete, then cancel.
     let actor = tokio::spawn(run_raw_proxy_actor_for_test(params));
 
     let completed = tokio::time::timeout(RELAY_BUDGET, done_rx)
@@ -600,7 +585,6 @@ async fn s19_b5_stream_flood_bounded_table_completes_all() {
          by reclamation"
     );
 
-    // Tidy up.
     cancel.cancel();
     forwarder.abort();
     let _ = client_driver.await;

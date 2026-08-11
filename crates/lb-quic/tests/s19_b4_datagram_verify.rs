@@ -44,8 +44,6 @@ const MAX_UDP: usize = 65_535;
 const HANDSHAKE_BUDGET: Duration = Duration::from_secs(5);
 const RELAY_BUDGET: Duration = Duration::from_secs(12);
 
-// Cert plumbing.
-
 static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 
 struct TestCerts {
@@ -335,7 +333,6 @@ async fn build_rig(certs: TestCerts, backend_addr: SocketAddr) -> Rig {
     )
     .unwrap();
 
-    // Drive the client⇄LB legs to established inline.
     let mut out = vec![0u8; MAX_UDP];
     let mut in_buf = vec![0u8; MAX_UDP];
     let deadline = tokio::time::Instant::now() + HANDSHAKE_BUDGET;
@@ -364,7 +361,6 @@ async fn build_rig(certs: TestCerts, backend_addr: SocketAddr) -> Rig {
     }
     assert_eq!(client_conn.application_proto(), H3_ALPN);
 
-    // Forwarder: shared LB socket → actor inbound.
     let (tx, rx) = mpsc::channel::<InboundPacket>(4096);
     let cancel = CancellationToken::new();
     let fwd_socket = Arc::clone(&lb_socket);
@@ -390,7 +386,6 @@ async fn build_rig(certs: TestCerts, backend_addr: SocketAddr) -> Rig {
         }
     });
 
-    // Mode B actor (the system under test).
     let pool = QuicUpstreamPool::new(
         QuicPoolConfig::default(),
         upstream_config_factory(certs.ca.clone()),
@@ -417,7 +412,6 @@ async fn build_rig(certs: TestCerts, backend_addr: SocketAddr) -> Rig {
         h2_backend: None,
         raw_quic_backend: Some(raw_backend),
         quic_modeb_metrics: None,
-        // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
         ws_enabled: false,
         ws_relay_launcher: None,
         max_requests_per_h3_connection: 0,
@@ -463,8 +457,6 @@ fn pass_through_set() -> Vec<Vec<u8>> {
             .collect(), // large near-max-writable
     ]
 }
-
-// PROOF 1 — real-wire pass-through, BOTH directions, binary-safe.
 
 /// The echo backend bounces each datagram back, exercising BOTH relay
 /// directions in one round-trip; every one must return byte-identical. Also
@@ -516,7 +508,6 @@ async fn verify_b4_pass_through_both_directions_binary() {
         "client must receive exactly as many datagrams as it sent \
          (verbatim through the Mode B relay BOTH directions)"
     );
-    // Byte-identical multiset (datagrams are unordered).
     let mut remaining = received;
     for s in &sent {
         let pos = remaining.iter().position(|r| r == s).unwrap_or_else(|| {
@@ -529,7 +520,6 @@ async fn verify_b4_pass_through_both_directions_binary() {
     }
     assert!(remaining.is_empty(), "no extra/unexpected datagrams");
 
-    // Two-connections proof (Mode B): distinct client vs upstream SCIDs.
     let outcome = teardown(rig).await.expect("actor produced an outcome");
     assert_ne!(
         outcome.client_scid, outcome.upstream_scid,
@@ -560,7 +550,6 @@ async fn verify_b4_queue_bound_under_flood_stays_healthy() {
     let backend_addr = spawn_dgram_backend(&certs, Arc::clone(&stall));
     let mut rig = build_rig(certs, backend_addr).await;
 
-    // A representative ~1000B payload (fits the negotiated writable len).
     let payload: Vec<u8> = (0..1_000usize).map(|i| (i % 251) as u8).collect();
     const FLOOD: usize = 50_000;
 
@@ -672,7 +661,6 @@ async fn verify_b4_drop_newest_oldest_survive_when_drained() {
     let mut sent_ok: usize = 0;
     let deadline = tokio::time::Instant::now() + RELAY_BUDGET;
 
-    // Phase A — flood while the sink is stalled (queues fill past cap).
     for i in 0..FLOOD {
         if tokio::time::Instant::now() >= deadline {
             break;
@@ -698,7 +686,6 @@ async fn verify_b4_drop_newest_oldest_survive_when_drained() {
     }
     flush(&mut rig.client_conn, &rig.client_socket, &mut out).await;
 
-    // Phase B — release the sink; collect whatever survived flowing back.
     stall.store(false, Ordering::Relaxed);
     let mut received: Vec<Vec<u8>> = Vec::new();
     let drain_deadline = tokio::time::Instant::now() + Duration::from_secs(4);
@@ -751,7 +738,6 @@ async fn verify_b4_drop_newest_oldest_survive_when_drained() {
         !received.is_empty(),
         "datagrams still flow once the sink drains (relay not wedged by the flood)"
     );
-    // (3) Every delivered datagram is byte-intact (verbatim 600B, recognizable tag).
     for r in &received {
         assert_eq!(
             r.len(),

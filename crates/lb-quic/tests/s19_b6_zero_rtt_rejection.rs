@@ -44,8 +44,6 @@ const EARLY_STREAM_ID: u64 = 0;
 /// data" result non-vacuous. (BoringSSL ticket keys are 48 bytes.)
 const SESSION_TICKET_KEY: [u8; 48] = [0xa5; 48];
 
-// Cert plumbing.
-
 static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 
 struct TestCerts {
@@ -236,7 +234,6 @@ async fn drive_to_established(
 async fn s19_b6_lb_server_rejects_client_zero_rtt_early_data() {
     let certs = generate_loopback_certs();
 
-    // Two UDP sockets: the LB-as-server leg and the client leg.
     let server_socket = UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
         .await
         .unwrap();
@@ -246,7 +243,6 @@ async fn s19_b6_lb_server_rejects_client_zero_rtt_early_data() {
         .unwrap();
     let client_local = client_socket.local_addr().unwrap();
 
-    // ── Connection #1: full 1-RTT handshake; capture the LB's session ──
     let mut server_cfg = lb_server_config(&certs);
     let mut client_cfg = client_config_early_data(&certs);
 
@@ -324,7 +320,6 @@ async fn s19_b6_lb_server_rejects_client_zero_rtt_early_data() {
     // handshake) — sanity only.
     assert!(!early_seen_1, "fresh conn #1 must not be in early data");
 
-    // ── Connection #2: resume + ATTEMPT 0-RTT early data ──
     let mut server_cfg2 = lb_server_config(&certs);
     let mut client_cfg2 = client_config_early_data(&certs);
 
@@ -366,7 +361,6 @@ async fn s19_b6_lb_server_rejects_client_zero_rtt_early_data() {
     // is WHICH epoch carries it, observed via `is_in_early_data()`.
     let _ = client2.stream_send(EARLY_STREAM_ID, &early_payload, true);
 
-    // Drive #2 to established, watching for ANY early-data epoch on either end.
     let mut early_seen_2 = false;
     let mut server_early_2 = false;
     drive_to_established(
@@ -381,7 +375,6 @@ async fn s19_b6_lb_server_rejects_client_zero_rtt_early_data() {
     )
     .await;
 
-    // ── WIRE ASSERTIONS ───────────────────────────────────────────────
     eprintln!(
         "conn#2: is_resumed={} is_in_early_data(final)={} early_seen_during_hs={} server_early_recv={}",
         client2.is_resumed(),
@@ -422,7 +415,6 @@ async fn s19_b6_lb_server_rejects_client_zero_rtt_early_data() {
          0-RTT-capable path was genuinely exercised and still refused early data"
     );
 
-    // (4) Only AFTER establishment do the early bytes reach the peer.
     let mut rd = vec![0u8; MAX_UDP];
     let mut server_got: Vec<u8> = Vec::new();
     let drain_deadline = tokio::time::Instant::now() + Duration::from_secs(3);

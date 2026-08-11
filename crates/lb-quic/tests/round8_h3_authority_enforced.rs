@@ -237,7 +237,6 @@ async fn run_case(authority: &str) -> (Option<u16>, u32) {
     )
     .unwrap();
 
-    // Handshake pump (both ends driven inline until established).
     let mut out = vec![0u8; MAX_UDP];
     let mut in_buf = vec![0u8; MAX_UDP];
     let deadline = tokio::time::Instant::now() + HANDSHAKE_BUDGET;
@@ -311,10 +310,8 @@ async fn run_case(authority: &str) -> (Option<u16>, u32) {
         backends: Arc::new(vec![backend]),
         h3_backend: None,
         h2_backend: None,
-        // S16 Mode B seam: None keeps this on the H3 termination path.
         raw_quic_backend: None,
         quic_modeb_metrics: None,
-        // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
         ws_enabled: false,
         ws_relay_launcher: None,
         max_requests_per_h3_connection: 0,
@@ -361,7 +358,6 @@ async fn run_case(authority: &str) -> (Option<u16>, u32) {
         }
     }
 
-    // Give any (erroneously) dispatched upstream dial a beat to land.
     tokio::time::sleep(Duration::from_millis(200)).await;
     let count = hits.load(Ordering::SeqCst);
 

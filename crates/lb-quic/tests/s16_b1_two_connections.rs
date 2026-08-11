@@ -285,7 +285,6 @@ async fn try_recv_one(
 async fn s16_b1_two_distinct_connections_not_a_bridge() {
     let certs = generate_loopback_certs();
 
-    // 1) Real backend that records the SCID the LB dials it with.
     let (backend_addr, observed_upstream_scid) = spawn_backend_recording_scid(&certs);
 
     // 2) The shared LB listener socket (the "server" leg). The actor
@@ -298,7 +297,6 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
     );
     let lb_local = lb_socket.local_addr().unwrap();
 
-    // 3) The real downstream CLIENT.
     let client_socket = Arc::new(
         UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
             .await
@@ -314,7 +312,6 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
     let c_scid = random_scid();
     let c_scid_ref = quiche::ConnectionId::from_ref(&c_scid);
 
-    // The LB-as-server connection (handed to the actor) + the real client.
     let mut server_conn =
         quiche::accept(&s_scid_ref, None, lb_local, client_local, &mut server_cfg).unwrap();
     let mut client_conn = quiche::connect(
@@ -360,7 +357,6 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
         .await;
     }
 
-    // Sanity: the client negotiated `h3` against the LB.
     assert_eq!(
         client_conn.application_proto(),
         H3_ALPN,
@@ -418,7 +414,6 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
         }
     });
 
-    // 7) The Mode B re-origination backend.
     let pool = QuicUpstreamPool::new(
         QuicPoolConfig::default(),
         upstream_config_factory(certs.ca.clone()),
@@ -447,7 +442,6 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
         h2_backend: None,
         raw_quic_backend: Some(raw_backend),
         quic_modeb_metrics: None,
-        // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
         ws_enabled: false,
         ws_relay_launcher: None,
         max_requests_per_h3_connection: 0,
@@ -463,7 +457,6 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
         cancel_for_timer.cancel();
     });
 
-    // 9) Drive the actor via the test hook and capture the outcome.
     let outcome = tokio::time::timeout(
         Duration::from_secs(15),
         run_raw_proxy_actor_for_test(params),
@@ -472,12 +465,10 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
     .expect("Mode B actor must not hang")
     .expect("Mode B actor must establish both legs and return RawProxyOutcome");
 
-    // Tidy up the driver tasks.
     cancel.cancel();
     forwarder.abort();
     let _ = client_driver.await;
 
-    // ── MECHANISM ASSERTIONS ─────────────────────────────────────────
     eprintln!("client_scid    = {:02x?}", outcome.client_scid);
     eprintln!("upstream_scid  = {:02x?}", outcome.upstream_scid);
     eprintln!("client_trace   = {}", outcome.client_trace_id);
@@ -488,7 +479,6 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
     );
     eprintln!("client_chosen_scid (downstream) = {client_chosen_scid:02x?}");
 
-    // (1) Distinct SCIDs — the LB chose an independent SCID upstream.
     assert_ne!(
         outcome.client_scid, outcome.upstream_scid,
         "two-connections proof: client SCID and upstream SCID MUST differ \
@@ -518,7 +508,6 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
     );
     eprintln!("backend_observed_scid = {backend_saw:02x?}");
 
-    // The SCID the backend saw is the LB-as-client SCID === upstream_scid.
     assert_eq!(
         backend_saw, outcome.upstream_scid,
         "the SCID the backend observed on the inbound Initial MUST equal \

@@ -78,8 +78,6 @@ const BACKEND_RECV_WINDOW: usize = 128 * 1024;
 /// while stalled) plus full byte-identical completeness on resume.
 const STALL_CEILING: usize = 3 * 1024 * 1024;
 
-// Cert plumbing.
-
 static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 
 struct TestCerts {
@@ -272,7 +270,6 @@ fn spawn_stalling_echo_backend(
         let mut out_buf = vec![0u8; MAX_UDP];
         let mut rd = vec![0u8; MAX_UDP];
         let mut conn: Option<quiche::Connection> = None;
-        // Per-stream: (bytes queued to echo, peer-FIN-seen, our-FIN-sent).
         let mut echo_pending: HashMap<u64, (Vec<u8>, bool, bool)> = HashMap::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
 
@@ -307,7 +304,6 @@ fn spawn_stalling_echo_backend(
                             }
                         }
                     }
-                    // Echo back.
                     let sids: Vec<u64> = echo_pending.keys().copied().collect();
                     for sid in sids {
                         if let Some(e) = echo_pending.get_mut(&sid) {
@@ -339,7 +335,6 @@ fn spawn_stalling_echo_backend(
                         }
                     }
                 }
-                // Always flush outbound (ACKs, MAX_DATA, echo bytes).
                 loop {
                     match c.send(&mut out_buf) {
                         Ok((n, info)) => {
@@ -352,7 +347,6 @@ fn spawn_stalling_echo_backend(
                     }
                 }
             }
-            // Short timeout so we keep pumping ACKs even while "stalled".
             let timeout = conn
                 .as_ref()
                 .and_then(quiche::Connection::timeout)
@@ -422,14 +416,12 @@ async fn s16_b2_backpressure_client_throttled_then_complete_on_resume() {
     let reading_enabled = Arc::new(AtomicBool::new(false));
     let total_echoed = Arc::new(AtomicUsize::new(0));
 
-    // 1) Backend that starts STALLED (not reading stream data).
     let backend_addr = spawn_stalling_echo_backend(
         &certs,
         Arc::clone(&reading_enabled),
         Arc::clone(&total_echoed),
     );
 
-    // 2) Shared LB listener socket.
     let lb_socket = Arc::new(
         UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
             .await
@@ -437,7 +429,6 @@ async fn s16_b2_backpressure_client_throttled_then_complete_on_resume() {
     );
     let lb_local = lb_socket.local_addr().unwrap();
 
-    // 3) Real downstream CLIENT.
     let client_socket = Arc::new(
         UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
             .await
@@ -464,7 +455,6 @@ async fn s16_b2_backpressure_client_throttled_then_complete_on_resume() {
     )
     .unwrap();
 
-    // 4) Drive client⇄LB to established.
     let mut out = vec![0u8; MAX_UDP];
     let mut in_buf = vec![0u8; MAX_UDP];
     let deadline = tokio::time::Instant::now() + HANDSHAKE_BUDGET;
@@ -502,7 +492,6 @@ async fn s16_b2_backpressure_client_throttled_then_complete_on_resume() {
     let fin_queued = Arc::new(AtomicBool::new(false));
     let transfer_complete = Arc::new(AtomicBool::new(false));
 
-    // 6) Forwarder.
     let (tx, rx) = mpsc::channel::<InboundPacket>(256);
     let cancel = CancellationToken::new();
     let fwd_socket = Arc::clone(&lb_socket);
@@ -547,7 +536,6 @@ async fn s16_b2_backpressure_client_throttled_then_complete_on_resume() {
             if client_cancel.is_cancelled() || client_conn.is_closed() {
                 break;
             }
-            // Push unsent tail + FIN.
             let cursor = sent_cursor_drv.load(Ordering::Relaxed);
             if cursor < payload_for_driver.len() {
                 let tail = payload_for_driver.get(cursor..).unwrap_or(&[]);
@@ -603,7 +591,6 @@ async fn s16_b2_backpressure_client_throttled_then_complete_on_resume() {
         }
     });
 
-    // 8) The Mode B actor.
     let pool = QuicUpstreamPool::new(
         QuicPoolConfig::default(),
         upstream_config_factory(certs.ca.clone()),
@@ -630,7 +617,6 @@ async fn s16_b2_backpressure_client_throttled_then_complete_on_resume() {
         h2_backend: None,
         raw_quic_backend: Some(raw_backend),
         quic_modeb_metrics: None,
-        // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
         ws_enabled: false,
         ws_relay_launcher: None,
         max_requests_per_h3_connection: 0,
@@ -704,7 +690,6 @@ async fn s16_b2_backpressure_client_throttled_then_complete_on_resume() {
          (mis-configured fixture, not a backpressure proof)"
     );
 
-    // ── PHASE B: RESUME the backend; the full payload must complete. ──
     reading_enabled.store(true, Ordering::Relaxed);
 
     // Generous budget: the small backend window makes the resumed transfer
@@ -735,7 +720,6 @@ async fn s16_b2_backpressure_client_throttled_then_complete_on_resume() {
          byte-identical after resume (no loss, no reorder)"
     );
 
-    // Tidy up.
     cancel.cancel();
     forwarder.abort();
     let _ = client_driver.await;

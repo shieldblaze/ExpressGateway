@@ -497,9 +497,7 @@ async fn build_rig(certs: TestCerts, backend_addr: SocketAddr, metrics: QuicMode
         h3_backend: None,
         h2_backend: None,
         raw_quic_backend: Some(raw_backend),
-        // ── THE WIRING UNDER TEST: a REAL metrics handle. ──
         quic_modeb_metrics: Some(metrics),
-        // SESSION 27 WS-over-H3 Stage A: Mode-B test never H3-terminates.
         ws_enabled: false,
         ws_relay_launcher: None,
         max_requests_per_h3_connection: 0,
@@ -573,7 +571,6 @@ async fn connections_total_increments_and_gauge_returns_to_zero() {
             Duration::from_millis(10),
         )
         .await;
-        // Sample the live gauge: once the relay is established it is 1.
         if connections.get() >= 1 {
             gauge_seen_one = true;
         }
@@ -590,22 +587,18 @@ async fn connections_total_increments_and_gauge_returns_to_zero() {
         echoed, payload,
         "stream round-trip must complete (both legs established)"
     );
-    // `connections_total` MOVED: at least one established two-conn relay.
     assert!(
         connections_total.get() >= 1,
         "quic_modeb_connections_total must increment to >= 1 once the relay \
          established (observed {})",
         connections_total.get()
     );
-    // The live gauge was raised to 1 while the relay ran (RAII inc).
     assert!(
         gauge_seen_one,
         "quic_modeb_connections gauge must read >= 1 WHILE the relay is live"
     );
 
-    // Tear down and confirm the gauge returns to 0 (ActiveConnGuard::drop).
     teardown(rig).await;
-    // The actor has returned; give the Drop a beat to be observed.
     let drop_deadline = tokio::time::Instant::now() + Duration::from_secs(3);
     while connections.get() != 0 && tokio::time::Instant::now() < drop_deadline {
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -686,7 +679,6 @@ async fn datagrams_dropped_total_increments_under_flood() {
         }
     }
 
-    // Give the relay a few more turns to surface the drop delta.
     let drop_deadline = tokio::time::Instant::now() + Duration::from_secs(4);
     while dropped.get() == 0 && tokio::time::Instant::now() < drop_deadline {
         flush(&mut rig.client_conn, &rig.client_socket, &mut out).await;
@@ -747,12 +739,10 @@ async fn streams_active_set_nonzero_during_multistream_transfer() {
 
     for k in 0..N {
         let sid = k * 4; // client-initiated bidi stream ids
-        // Short write is fine; the driver below keeps flushing.
         let _ = rig.client_conn.stream_send(sid, &payload, true);
     }
     flush(&mut rig.client_conn, &rig.client_socket, &mut out).await;
 
-    // Drive + sample the gauge while the multi-stream transfer is in flight.
     let mut max_seen: i64 = 0;
     let mut got: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
     let deadline = tokio::time::Instant::now() + RELAY_BUDGET;

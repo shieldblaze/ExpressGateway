@@ -208,7 +208,6 @@ fn spawn_echo_backend(certs: &TestCerts) -> SocketAddr {
         let mut out_buf = vec![0u8; MAX_UDP];
         let mut rd = vec![0u8; MAX_UDP];
         let mut conn: Option<quiche::Connection> = None;
-        // Per-stream: (bytes queued to echo, peer-FIN-seen, our-FIN-sent).
         let mut echo_pending: HashMap<u64, (Vec<u8>, bool, bool)> = HashMap::new();
         let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
 
@@ -217,7 +216,6 @@ fn spawn_echo_backend(certs: &TestCerts) -> SocketAddr {
                 return;
             }
             if let Some(c) = conn.as_mut() {
-                // 1) Read readable streams into the per-stream echo queue.
                 let readable: Vec<u64> = c.readable().collect();
                 for sid in readable {
                     loop {
@@ -240,7 +238,6 @@ fn spawn_echo_backend(certs: &TestCerts) -> SocketAddr {
                         }
                     }
                 }
-                // 2) Drain each echo queue back onto the same stream.
                 let sids: Vec<u64> = echo_pending.keys().copied().collect();
                 for sid in sids {
                     if let Some(e) = echo_pending.get_mut(&sid) {
@@ -266,7 +263,6 @@ fn spawn_echo_backend(certs: &TestCerts) -> SocketAddr {
                         }
                     }
                 }
-                // 3) Flush outbound.
                 loop {
                     match c.send(&mut out_buf) {
                         Ok((n, info)) => {
@@ -354,10 +350,8 @@ async fn s16_b2_multistream_byte_identical_round_trip() {
         (16, 130_000), // distinct mid-size
     ];
 
-    // 1) Real echo backend.
     let backend_addr = spawn_echo_backend(&certs);
 
-    // 2) Shared LB listener socket (the "server" leg).
     let lb_socket = Arc::new(
         UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
             .await
@@ -365,7 +359,6 @@ async fn s16_b2_multistream_byte_identical_round_trip() {
     );
     let lb_local = lb_socket.local_addr().unwrap();
 
-    // 3) Real downstream CLIENT.
     let client_socket = Arc::new(
         UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
             .await
@@ -392,7 +385,6 @@ async fn s16_b2_multistream_byte_identical_round_trip() {
     )
     .unwrap();
 
-    // 4) Inline-drive the client⇄LB legs to established.
     let mut out = vec![0u8; MAX_UDP];
     let mut in_buf = vec![0u8; MAX_UDP];
     let deadline = tokio::time::Instant::now() + HANDSHAKE_BUDGET;
@@ -429,7 +421,6 @@ async fn s16_b2_multistream_byte_identical_round_trip() {
         .map(|&(sid, len)| (sid, make_payload(sid.wrapping_add(1), len)))
         .collect();
 
-    // Sanity: every payload is distinct and the big one exceeds the window.
     assert!(
         plan.iter().any(|&(_, len)| len > 256 * 1024),
         "fixture: at least one payload must exceed the 256 KiB relay window"
@@ -440,7 +431,6 @@ async fn s16_b2_multistream_byte_identical_round_trip() {
     let mut send_cursor: HashMap<u64, usize> = plan.iter().map(|&(sid, _)| (sid, 0usize)).collect();
     let mut fin_queued: HashMap<u64, bool> = plan.iter().map(|&(sid, _)| (sid, false)).collect();
 
-    // Kick off the first send for each stream before handing off.
     for &(sid, _) in &plan {
         let payload = payloads.get(&sid).unwrap();
         match client_conn.stream_send(sid, payload, true) {
@@ -507,7 +497,6 @@ async fn s16_b2_multistream_byte_identical_round_trip() {
                 break;
             }
 
-            // (a) Push any unsent payload tail + FIN for each stream.
             for &(sid, _) in &plan_for_driver {
                 let payload = payloads_for_driver.get(&sid).unwrap();
                 let cursor = *send_cursor.get(&sid).unwrap();
@@ -543,7 +532,6 @@ async fn s16_b2_multistream_byte_identical_round_trip() {
             )
             .await;
 
-            // (b) Pull echoed bytes off every readable stream.
             let readable: Vec<u64> = client_conn.readable().collect();
             for sid in readable {
                 if *got_fin.get(&sid).unwrap_or(&true) {
@@ -569,7 +557,6 @@ async fn s16_b2_multistream_byte_identical_round_trip() {
                 }
             }
 
-            // (c) Done when every stream has FIN'd.
             if got_fin.values().all(|&f| f) {
                 if let Some(tx) = done_tx.take() {
                     let _ = tx.send(std::mem::take(&mut received));
@@ -579,7 +566,6 @@ async fn s16_b2_multistream_byte_identical_round_trip() {
         }
     });
 
-    // 8) The Mode B backend.
     let pool = QuicUpstreamPool::new(
         QuicPoolConfig::default(),
         upstream_config_factory(certs.ca.clone()),
@@ -606,14 +592,12 @@ async fn s16_b2_multistream_byte_identical_round_trip() {
         h2_backend: None,
         raw_quic_backend: Some(raw_backend),
         quic_modeb_metrics: None,
-        // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
         ws_enabled: false,
         ws_relay_launcher: None,
         max_requests_per_h3_connection: 0,
         h3_recycle_metrics: None,
     };
 
-    // 9) Run the actor; wait for all echoed payloads, then cancel.
     let actor = tokio::spawn(run_raw_proxy_actor_for_test(params));
 
     let received = tokio::time::timeout(RELAY_BUDGET, done_rx)
@@ -621,7 +605,6 @@ async fn s16_b2_multistream_byte_identical_round_trip() {
         .expect("client must receive every echoed payload before the budget")
         .expect("client driver must deliver the received bytes");
 
-    // ── THE ASSERTIONS: every stream byte-identical + cleanly FIN'd. ──
     for &(sid, len) in &plan {
         let got = received
             .get(&sid)
@@ -648,7 +631,6 @@ async fn s16_b2_multistream_byte_identical_round_trip() {
         plan.iter().map(|&(_, l)| l).collect::<Vec<_>>()
     );
 
-    // Tidy up.
     cancel.cancel();
     forwarder.abort();
     let _ = client_driver.await;

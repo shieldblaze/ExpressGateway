@@ -289,10 +289,8 @@ async fn try_recv_one(
 async fn s19_b6_mode_b_holds_two_distinct_connections_not_a_bridge() {
     let certs = generate_loopback_certs();
 
-    // 1) Real backend that records the SCID the LB dials it with.
     let (backend_addr, observed_upstream_scid) = spawn_backend_recording_scid(&certs);
 
-    // 2) The shared LB listener socket (the "server" leg).
     let lb_socket = Arc::new(
         UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
             .await
@@ -300,7 +298,6 @@ async fn s19_b6_mode_b_holds_two_distinct_connections_not_a_bridge() {
     );
     let lb_local = lb_socket.local_addr().unwrap();
 
-    // 3) The real downstream CLIENT.
     let client_socket = Arc::new(
         UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
             .await
@@ -327,10 +324,8 @@ async fn s19_b6_mode_b_holds_two_distinct_connections_not_a_bridge() {
     )
     .unwrap();
 
-    // The client's CHOSEN SCID — what a bridge would forward to the backend.
     let client_chosen_scid = client_conn.source_id().as_ref().to_vec();
 
-    // 4) Inline-drive BOTH legs to established (round8 pattern).
     let mut out = vec![0u8; MAX_UDP];
     let mut in_buf = vec![0u8; MAX_UDP];
     let deadline = tokio::time::Instant::now() + HANDSHAKE_BUDGET;
@@ -363,7 +358,6 @@ async fn s19_b6_mode_b_holds_two_distinct_connections_not_a_bridge() {
         "fixture: client must negotiate h3 with the LB"
     );
 
-    // 5) Forwarder: shared LB socket → actor inbound mpsc (router stand-in).
     let (tx, rx) = mpsc::channel::<InboundPacket>(64);
     let cancel = CancellationToken::new();
     let fwd_socket = Arc::clone(&lb_socket);
@@ -389,7 +383,6 @@ async fn s19_b6_mode_b_holds_two_distinct_connections_not_a_bridge() {
         }
     });
 
-    // 6) Client keep-alive driver (so neither leg idles out mid-dial).
     let client_cancel = cancel.clone();
     let client_driver = tokio::spawn(async move {
         let mut out = vec![0u8; MAX_UDP];
@@ -410,7 +403,6 @@ async fn s19_b6_mode_b_holds_two_distinct_connections_not_a_bridge() {
         }
     });
 
-    // 7) The Mode B re-origination backend.
     let pool = QuicUpstreamPool::new(
         QuicPoolConfig::default(),
         upstream_config_factory(certs.ca.clone()),
@@ -435,7 +427,6 @@ async fn s19_b6_mode_b_holds_two_distinct_connections_not_a_bridge() {
         h2_backend: None,
         raw_quic_backend: Some(raw_backend),
         quic_modeb_metrics: None,
-        // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
         ws_enabled: false,
         ws_relay_launcher: None,
         max_requests_per_h3_connection: 0,
@@ -450,7 +441,6 @@ async fn s19_b6_mode_b_holds_two_distinct_connections_not_a_bridge() {
         cancel_for_timer.cancel();
     });
 
-    // 9) Drive the actor via the test hook and capture the outcome.
     let outcome = tokio::time::timeout(
         Duration::from_secs(15),
         run_raw_proxy_actor_for_test(params),
@@ -463,7 +453,6 @@ async fn s19_b6_mode_b_holds_two_distinct_connections_not_a_bridge() {
     forwarder.abort();
     let _ = client_driver.await;
 
-    // ── MECHANISM ASSERTIONS ──────────────────────────────────────────
     eprintln!("client_scid          = {:02x?}", outcome.client_scid);
     eprintln!("upstream_scid        = {:02x?}", outcome.upstream_scid);
     eprintln!("client_trace_id      = {}", outcome.client_trace_id);
@@ -474,7 +463,6 @@ async fn s19_b6_mode_b_holds_two_distinct_connections_not_a_bridge() {
     );
     eprintln!("client_chosen_scid   = {client_chosen_scid:02x?}");
 
-    // (1) Distinct SCIDs — the LB chose an independent SCID upstream.
     assert_ne!(
         outcome.client_scid, outcome.upstream_scid,
         "two-connections proof: client SCID and upstream SCID MUST differ \

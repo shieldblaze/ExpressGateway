@@ -513,7 +513,6 @@ async fn drive_h3_response_client(
     // SESSION 4 / P1-C (R8/C4): a post-DATA HEADERS frame (no `:status`)
     // is the RFC 9114 §4.1 trailing field section.
     let mut trailers: Vec<(String, String)> = Vec::new();
-    // CF-H3-HEAD: non-`:status` fields of the response HEAD frame.
     let mut head_fields: Vec<(String, String)> = Vec::new();
 
     loop {
@@ -547,7 +546,6 @@ async fn drive_h3_response_client(
             ));
         }
 
-        // Send the (bodyless) request HEADERS + FIN.
         if conn.is_established() && !header_done {
             match conn.stream_send(stream_id, &headers_frame[sent..], false) {
                 Ok(0) | Err(quiche::Error::Done) => {}
@@ -613,7 +611,6 @@ async fn drive_h3_response_client(
                         body.extend_from_slice(&payload);
                         if let Some(after) = cancel_after {
                             if !cancelled && body.len() >= after {
-                                // R6: cancel the response stream.
                                 let _ =
                                     conn.stream_shutdown(stream_id, quiche::Shutdown::Read, 0x10);
                                 cancelled = true;
@@ -783,7 +780,6 @@ async fn drive_h3_response_client_stalled(
     let mut fin = false;
     let mut reset_code: Option<u64> = None;
 
-    // Stall lifecycle.
     let mut stream_seen_readable = false;
     let mut stall_until: Option<tokio::time::Instant> = None;
     let mut sampled = false;
@@ -1005,7 +1001,6 @@ fn c5_resp_retained_ceiling_is_sound_and_much_less_than_1mib() {
     let chunk_max = 8 * 1024;
     let frame_hdr_max = 16;
     let ceiling = resp_retained_ceiling(depth, chunk_max, frame_hdr_max);
-    // Sound bound is strictly larger than the looser depth×chunk form.
     assert!(
         ceiling > 4 * (depth * chunk_max),
         "C5: ceiling must include the frame-header term"
@@ -1360,7 +1355,6 @@ fn assert_c1_reset(out: &ClientOutcome, label: &str) {
 /// Content-Length, and over-cap.
 #[tokio::test]
 async fn r5_upstream_reset_midresponse_yields_reset_stream() {
-    // (a) hard TCP RST mid-body ⇒ RespAbort::UpstreamReset.
     let out = run_abort_scenario(RespBody::RstMidBody {
         declared_len: 200_000,
         partial: binary_body(16 * 1024),
@@ -1368,7 +1362,6 @@ async fn r5_upstream_reset_midresponse_yields_reset_stream() {
     .await;
     assert_c1_reset(&out, "R5a upstream-RST");
 
-    // (b) premature EOF before Content-Length ⇒ RespAbort::PrematureEof.
     let out = run_abort_scenario(RespBody::ResetMidBody {
         declared_len: 200_000,
         partial: binary_body(16 * 1024),
@@ -1405,7 +1398,6 @@ async fn r6_client_cancel_midresponse_stops_upstream_read() {
     let (listener, server, _sd) = start_listener(&certs, backend).await;
     let (conn, sock) = client_conn(server, &certs.ca);
 
-    // Cancel after ≥ 32 KiB of body (STOP_SENDING + RESET_STREAM).
     let deadline = tokio::time::Instant::now() + Duration::from_secs(45);
     let drive = tokio::spawn(async move {
         drive_h3_response_client(conn, &sock, vec![], Some(32 * 1024), deadline).await
@@ -1492,7 +1484,6 @@ async fn run_c2_scenario(body: RespBody, cancel_after: Option<usize>) -> (Client
 
 #[tokio::test]
 async fn c2_every_abort_variant_drops_pooled_upstream_and_resets() {
-    // UpstreamReset (hard RST mid-body).
     let (out, idle) = run_c2_scenario(
         RespBody::RstMidBody {
             declared_len: 200_000,
@@ -1507,7 +1498,6 @@ async fn c2_every_abort_variant_drops_pooled_upstream_and_resets() {
         "C2/UpstreamReset: poisoned upstream must NOT be parked"
     );
 
-    // PrematureEof (EOF before Content-Length).
     let (out, idle) = run_c2_scenario(
         RespBody::ResetMidBody {
             declared_len: 200_000,
@@ -1522,7 +1512,6 @@ async fn c2_every_abort_variant_drops_pooled_upstream_and_resets() {
         "C2/PrematureEof: poisoned upstream must NOT be parked"
     );
 
-    // ChunkedDecode: a first chunk decodes, then a non-hex size token.
     let (out, idle) = run_c2_raw_chunked(
         "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n3\r\nabc\r\nZZ\r\nx\r\n",
     )
@@ -1533,7 +1522,6 @@ async fn c2_every_abort_variant_drops_pooled_upstream_and_resets() {
         "C2/ChunkedDecode: poisoned upstream must NOT be parked"
     );
 
-    // OverCap (declared > MAX_RESPONSE_BODY_BYTES).
     let (out, idle) = run_c2_scenario(
         RespBody::OverCap {
             declared_len: (64 * 1024 * 1024) + (4 * 1024 * 1024),
@@ -1692,14 +1680,12 @@ async fn run_raw_chunked_abort(raw: &str) -> ClientOutcome {
 
 #[tokio::test]
 async fn c3_malformed_chunked_responses_reset_never_forward_truncated() {
-    // (1) non-hex chunk size.
     let out = run_raw_chunked_abort(
         "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\nZZ\r\nabc\r\n0\r\n\r\n",
     )
     .await;
     assert_c1_reset(&out, "C3 non-hex-chunk-size");
 
-    // (2) missing CRLF after chunk data (junk where CRLF must be).
     let out = run_raw_chunked_abort(
         "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n3\r\nabcXX0\r\n\r\n",
     )

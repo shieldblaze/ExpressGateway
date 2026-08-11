@@ -24,7 +24,6 @@ const QUIC_V1: u32 = 0x0000_0001;
 const LB_SCID_LEN: usize = 16;
 
 fn run_diff(odcid: &[u8], client_scid: &[u8], new_scid: &[u8; 16], token: &[u8]) {
-    // Our writer.
     let mut ours = Vec::with_capacity(1024);
     _test_build_retry_packet(odcid, client_scid, new_scid, QUIC_V1, token, &mut ours)
         .expect("our build_retry_packet should succeed for valid inputs");

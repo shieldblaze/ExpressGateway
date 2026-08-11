@@ -57,8 +57,6 @@ const NO_RESET: u64 = u64::MAX;
 /// Partial body the client sends BEFORE the reset (multi-packet, no FIN).
 const PARTIAL_LEN: usize = 24 * 1024;
 
-// Cert plumbing.
-
 static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 
 struct TestCerts {
@@ -261,7 +259,6 @@ fn spawn_recording_backend(
                     // it false-positives on a correctly-reset stream. The
                     // `fin == true` branch above is the genuine signal.
                 }
-                // Flush outbound (ACKs / flow-control updates).
                 loop {
                     match c.send(&mut out_buf) {
                         Ok((n, info)) => {
@@ -383,7 +380,6 @@ async fn s16_b3_client_reset_propagates_with_code_to_backend() {
     )
     .unwrap();
 
-    // Drive client⇄LB to established.
     let mut out = vec![0u8; MAX_UDP];
     let mut in_buf = vec![0u8; MAX_UDP];
     let deadline = tokio::time::Instant::now() + HANDSHAKE_BUDGET;
@@ -412,12 +408,10 @@ async fn s16_b3_client_reset_propagates_with_code_to_backend() {
     }
     assert_eq!(client_conn.application_proto(), H3_ALPN);
 
-    // Send a PARTIAL body (no FIN).
     let payload = make_payload(PARTIAL_LEN);
     let _ = client_conn.stream_send(STREAM_ID, &payload, false).unwrap();
     flush(&mut client_conn, &client_socket, &mut out).await;
 
-    // Forwarder: drain the shared LB socket into the actor's inbound mpsc.
     let (tx, rx) = mpsc::channel::<InboundPacket>(256);
     let cancel = CancellationToken::new();
     let fwd_socket = Arc::clone(&lb_socket);
@@ -474,7 +468,6 @@ async fn s16_b3_client_reset_propagates_with_code_to_backend() {
         }
     });
 
-    // The Mode B actor.
     let pool = QuicUpstreamPool::new(
         QuicPoolConfig::default(),
         upstream_config_factory(certs.ca.clone()),
@@ -501,7 +494,6 @@ async fn s16_b3_client_reset_propagates_with_code_to_backend() {
         h2_backend: None,
         raw_quic_backend: Some(raw_backend),
         quic_modeb_metrics: None,
-        // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
         ws_enabled: false,
         ws_relay_launcher: None,
         max_requests_per_h3_connection: 0,
@@ -527,7 +519,6 @@ async fn s16_b3_client_reset_propagates_with_code_to_backend() {
     let bytes_before_reset = recv_bytes.load(Ordering::Relaxed);
     eprintln!("reset-propagation: backend received {bytes_before_reset} bytes before reset");
 
-    // Fire the reset.
     do_reset.store(true, Ordering::Relaxed);
 
     // Wait for the backend to observe the PROPAGATED RESET_STREAM carrying the
@@ -540,7 +531,6 @@ async fn s16_b3_client_reset_propagates_with_code_to_backend() {
         tokio::time::sleep(Duration::from_millis(25)).await;
     }
 
-    // ── THE B3 ASSERTIONS ──
     let seen = observed_reset_code.load(Ordering::Relaxed);
     assert_ne!(
         seen, NO_RESET,
@@ -572,7 +562,6 @@ async fn s16_b3_client_reset_propagates_with_code_to_backend() {
          code={seen:#x} (== client {RESET_CODE:#x}) on stream 0, no clean FIN"
     );
 
-    // Tidy up.
     cancel.cancel();
     forwarder.abort();
     let _ = client_driver.await;

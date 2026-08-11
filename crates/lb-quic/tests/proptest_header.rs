@@ -24,7 +24,6 @@ proptest! {
     #[test]
     fn header_from_slice_no_panic(buf in vec(any::<u8>(), 0..1500)) {
         let res = std::panic::catch_unwind(|| {
-            // Use a buf clone since from_slice borrows.
             let mut owned = buf.clone();
             Header::from_slice(&mut owned, quiche::MAX_CONN_ID_LEN).map(|_| ())
         });

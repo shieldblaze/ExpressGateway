@@ -135,7 +135,6 @@ async fn spawn_throwaway_server(certs: &TestCerts) -> SocketAddr {
             if tokio::time::Instant::now() >= deadline {
                 return;
             }
-            // Flush any pending outbound on the accepted conn.
             if let Some(c) = conn.as_mut() {
                 loop {
                     match c.send(&mut out_buf) {
@@ -231,7 +230,6 @@ async fn dial_dedicated_reaches_established_with_mirrored_alpn() {
         H3_ALPN,
         "dial_dedicated must mirror the requested ALPN onto the wire"
     );
-    // The fresh-dial counter bumped (parity with dial_new).
     assert_eq!(
         pool.fresh_dials(),
         1,

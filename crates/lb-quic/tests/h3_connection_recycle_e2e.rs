@@ -40,8 +40,6 @@ const TEST_SNI: &str = "expressgateway.test";
 const H3_ALPN_PROTOS: &[&[u8]] = &[b"h3"];
 const HANDSHAKE_BUDGET: Duration = Duration::from_secs(5);
 
-// cert + config helpers.
-
 struct CertTempFile(PathBuf);
 
 impl Drop for CertTempFile {
@@ -104,7 +102,6 @@ fn scid_bytes(salt: u32) -> [u8; quiche::MAX_CONN_ID_LEN] {
     let mut b = [0u8; quiche::MAX_CONN_ID_LEN];
     use ring::rand::SecureRandom;
     ring::rand::SystemRandom::new().fill(&mut b).unwrap();
-    // Mix the salt so two conns in one test never collide.
     b[0] ^= u8::try_from(salt & 0xff).unwrap_or(0);
     b
 }
@@ -291,7 +288,6 @@ async fn drive_with_backend_delay(
     let mut out = vec![0u8; MAX_UDP];
     let mut in_buf = vec![0u8; MAX_UDP];
 
-    // Handshake pump.
     let deadline = tokio::time::Instant::now() + HANDSHAKE_BUDGET;
     while !(server_conn.is_established() && client_conn.is_established()) {
         if tokio::time::Instant::now() > deadline {
@@ -317,7 +313,6 @@ async fn drive_with_backend_delay(
         .await;
     }
 
-    // Build the client h3 layer on the established transport.
     let h3_cfg = quiche::h3::Config::new().unwrap();
     let mut client_h3 = quiche::h3::Connection::with_transport(&mut client_conn, &h3_cfg).unwrap();
 
@@ -399,9 +394,7 @@ async fn drive_with_backend_delay(
                     send_refused_after_goaway = true;
                     sent = n_requests; // stop trying to open more
                 }
-                Err(quiche::h3::Error::StreamBlocked) | Err(quiche::h3::Error::Done) => {
-                    // transient — retry next iteration
-                }
+                Err(quiche::h3::Error::StreamBlocked) | Err(quiche::h3::Error::Done) => {}
                 Err(e) => panic!("unexpected send_request error: {e:?}"),
             }
         }
@@ -416,7 +409,6 @@ async fn drive_with_backend_delay(
         )
         .await;
 
-        // Drain client h3 events.
         loop {
             match client_h3.poll(&mut client_conn) {
                 Ok((sid, quiche::h3::Event::Headers { list, .. })) => {
@@ -505,7 +497,6 @@ async fn drive_with_backend_delay(
             Duration::from_millis(30),
         )
         .await;
-        // Drain any late events (e.g. a trailing GoAway / Reset).
         loop {
             match client_h3.poll(&mut client_conn) {
                 Ok((id, quiche::h3::Event::GoAway)) => goaway_id = Some(id),
@@ -744,7 +735,6 @@ async fn drive_one_client_against(
     let mut out = vec![0u8; MAX_UDP];
     let mut in_buf = vec![0u8; MAX_UDP];
 
-    // Handshake.
     let deadline = tokio::time::Instant::now() + HANDSHAKE_BUDGET;
     while !client_conn.is_established() {
         if tokio::time::Instant::now() > deadline {
@@ -881,7 +871,6 @@ async fn fresh_connection_serves_after_recycle() {
 
     let (backend, _hits) = spawn_probe_backend().await;
 
-    // A retry-secret path the listener generates if missing.
     let retry_path = std::env::temp_dir().join(format!(
         "lb-quic-s36-recycle-retry-{}-{}.key",
         std::process::id(),
@@ -923,7 +912,6 @@ async fn fresh_connection_serves_after_recycle() {
          (>= cap={cap} 200s); got {c1_200}"
     );
 
-    // Give the listener a beat to finish recycling connection #1.
     tokio::time::sleep(Duration::from_millis(300)).await;
 
     // Connection #2: a FRESH connection (new SCID ⇒ new actor) must serve
@@ -935,7 +923,6 @@ async fn fresh_connection_serves_after_recycle() {
          requests (got {c2_200} clean 200s on connection #2)"
     );
 
-    // The recycle metric saw at least connection #1's recycle.
     assert!(
         metrics.goaway_sent_total.get() >= 1,
         "S36-A: at least one GOAWAY recorded across the two connections (got {})",

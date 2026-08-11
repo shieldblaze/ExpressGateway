@@ -34,8 +34,6 @@ const RELAY_BUDGET: Duration = Duration::from_secs(8);
 /// client-initiated bidi stream; identity-mapped both legs).
 const STREAM_ID: u64 = 0;
 
-// Cert plumbing.
-
 static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 
 struct TestCerts {
@@ -191,7 +189,6 @@ fn spawn_echo_backend(certs: &TestCerts) -> SocketAddr {
             if tokio::time::Instant::now() >= deadline {
                 return;
             }
-            // 1) Read any readable streams into the per-stream echo queue.
             if let Some(c) = conn.as_mut() {
                 let readable: Vec<u64> = c.readable().collect();
                 for sid in readable {
@@ -215,7 +212,6 @@ fn spawn_echo_backend(certs: &TestCerts) -> SocketAddr {
                         }
                     }
                 }
-                // 2) Drain each echo queue back onto the same stream.
                 let sids: Vec<u64> = echo_pending.keys().copied().collect();
                 for sid in sids {
                     if let Some(e) = echo_pending.get_mut(&sid) {
@@ -236,13 +232,11 @@ fn spawn_echo_backend(certs: &TestCerts) -> SocketAddr {
                         if acc > 0 {
                             e.0.drain(..acc.min(e.0.len()));
                         }
-                        // FIN back once the peer FIN'd and the queue is empty.
                         if e.1 && e.0.is_empty() && !e.2 && c.stream_send(sid, &[], true).is_ok() {
                             e.2 = true;
                         }
                     }
                 }
-                // 3) Flush outbound.
                 loop {
                     match c.send(&mut out_buf) {
                         Ok((n, info)) => {
@@ -319,10 +313,8 @@ async fn try_recv_one(
 async fn s16_b2_one_bidi_stream_round_trips_byte_identical() {
     let certs = generate_loopback_certs();
 
-    // 1) Real echo backend.
     let backend_addr = spawn_echo_backend(&certs);
 
-    // 2) Shared LB listener socket (the "server" leg).
     let lb_socket = Arc::new(
         UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
             .await
@@ -330,7 +322,6 @@ async fn s16_b2_one_bidi_stream_round_trips_byte_identical() {
     );
     let lb_local = lb_socket.local_addr().unwrap();
 
-    // 3) Real downstream CLIENT.
     let client_socket = Arc::new(
         UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
             .await
@@ -357,7 +348,6 @@ async fn s16_b2_one_bidi_stream_round_trips_byte_identical() {
     )
     .unwrap();
 
-    // 4) Inline-drive the client⇄LB legs to established (round8 pattern).
     let mut out = vec![0u8; MAX_UDP];
     let mut in_buf = vec![0u8; MAX_UDP];
     let deadline = tokio::time::Instant::now() + HANDSHAKE_BUDGET;
@@ -451,7 +441,6 @@ async fn s16_b2_one_bidi_stream_round_trips_byte_identical() {
                 Duration::from_millis(10),
             )
             .await;
-            // Pull echoed bytes off stream 0.
             if !got_fin {
                 loop {
                     match client_conn.stream_recv(STREAM_ID, &mut recv_buf) {
@@ -476,7 +465,6 @@ async fn s16_b2_one_bidi_stream_round_trips_byte_identical() {
         }
     });
 
-    // 8) The Mode B backend.
     let pool = QuicUpstreamPool::new(
         QuicPoolConfig::default(),
         upstream_config_factory(certs.ca.clone()),
@@ -503,14 +491,12 @@ async fn s16_b2_one_bidi_stream_round_trips_byte_identical() {
         h2_backend: None,
         raw_quic_backend: Some(raw_backend),
         quic_modeb_metrics: None,
-        // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
         ws_enabled: false,
         ws_relay_launcher: None,
         max_requests_per_h3_connection: 0,
         h3_recycle_metrics: None,
     };
 
-    // 9) Run the actor; wait for the echoed payload, then cancel.
     let actor = tokio::spawn(run_raw_proxy_actor_for_test(params));
 
     let received = tokio::time::timeout(RELAY_BUDGET, done_rx)
@@ -530,7 +516,6 @@ async fn s16_b2_one_bidi_stream_round_trips_byte_identical() {
          client→LB→backend→LB→client raw-stream relay"
     );
 
-    // Tidy up.
     cancel.cancel();
     forwarder.abort();
     let _ = client_driver.await;
@@ -587,7 +572,6 @@ async fn run_concurrent_relay(n_streams: u64, payload_len: usize, full_send: boo
     )
     .unwrap();
 
-    // Handshake the client⇄LB legs to established.
     let mut out = vec![0u8; MAX_UDP];
     let mut in_buf = vec![0u8; MAX_UDP];
     let deadline = tokio::time::Instant::now() + HANDSHAKE_BUDGET;
@@ -628,7 +612,6 @@ async fn run_concurrent_relay(n_streams: u64, payload_len: usize, full_send: boo
     }
     flush(&mut client_conn, &client_socket, &mut out).await;
 
-    // Forwarder: shared LB socket → actor inbound mpsc (the router's job).
     let (tx, rx) = mpsc::channel::<InboundPacket>(64);
     let cancel = CancellationToken::new();
     let fwd_socket = Arc::clone(&lb_socket);
@@ -654,7 +637,6 @@ async fn run_concurrent_relay(n_streams: u64, payload_len: usize, full_send: boo
         }
     });
 
-    // The Mode B backend + actor.
     let pool = QuicUpstreamPool::new(
         QuicPoolConfig::default(),
         upstream_config_factory(certs.ca.clone()),
@@ -679,7 +661,6 @@ async fn run_concurrent_relay(n_streams: u64, payload_len: usize, full_send: boo
         h2_backend: None,
         raw_quic_backend: Some(raw_backend),
         quic_modeb_metrics: None,
-        // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
         ws_enabled: false,
         ws_relay_launcher: None,
         max_requests_per_h3_connection: 0,

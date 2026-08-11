@@ -175,7 +175,6 @@ fn listener_params(certs: &TestCerts) -> QuicListenerParams {
     )
 }
 
-// 1. Two concurrent clients on ONE listener socket ⇒ distinct per-CID actors.
 #[tokio::test]
 async fn two_concurrent_clients_distinct_actors() {
     let certs = generate_loopback_certs();

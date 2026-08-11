@@ -285,7 +285,6 @@ async fn drive_h3(
     let mut out = ClientOut::default();
     let mut stalling_until: Option<tokio::time::Instant> = None;
     let mut stalled_once = false;
-    // Latched so the STOP_SENDING fires exactly once.
     let mut resp_stop_sent = false;
 
     let deadline = tokio::time::Instant::now() + overall;
@@ -447,7 +446,6 @@ async fn drive_h3(
                     stalled_once = true;
                 }
             }
-            // CASE 12: STOP_SENDING the response stream and stop reading.
             if let Some(k) = cfg.stop_reading_resp_after {
                 if !resp_stop_sent && !out.fin && out.body.len() >= k {
                     let _ = conn.stream_shutdown(sid, quiche::Shutdown::Read, 0x010c);
@@ -591,7 +589,6 @@ async fn spawn_h3_upstream(
         // Accept loop: one quiche conn at a time (serially — the pool
         // opens a fresh conn per request, single-stream, non-reusable).
         loop {
-            // Wait for an Initial.
             let (n, from) = match sock.recv_from(&mut in_buf).await {
                 Ok(v) => v,
                 Err(_) => return,
@@ -613,7 +610,6 @@ async fn spawn_h3_upstream(
                 Ok(c) => c,
                 Err(_) => continue,
             };
-            // Feed the Initial we already read.
             let _ = conn.recv(
                 in_buf.get_mut(..n).unwrap_or(&mut []),
                 quiche::RecvInfo { from, to: local },
@@ -621,7 +617,6 @@ async fn spawn_h3_upstream(
 
             let seen = seen.clone();
             let mode = mode.clone();
-            // Per-connection request/response state.
             let req_sid: u64 = 0;
             let mut rx_tail: Vec<u8> = Vec::new();
             let mut body: Vec<u8> = Vec::new();
@@ -642,7 +637,6 @@ async fn spawn_h3_upstream(
             let conn_deadline = tokio::time::Instant::now() + Duration::from_secs(120);
 
             while tokio::time::Instant::now() < conn_deadline {
-                // Flush egress.
                 loop {
                     match conn.send(&mut out_buf) {
                         Ok((m, info)) => {
@@ -656,7 +650,6 @@ async fn spawn_h3_upstream(
                     break;
                 }
 
-                // Drain request stream bytes.
                 if conn.is_established() {
                     // For StallReadThenEcho, `draining` is computed BEFORE the
                     // drain so the drain itself is gated on it: during the
@@ -734,7 +727,6 @@ async fn spawn_h3_upstream(
                     }
                 }
 
-                // Emit the response once the request is in / FIN'd.
                 if conn.is_established()
                     && !response_started
                     && (req_fin || matches!(mode, UpstreamMode::LargeResp(_)))
@@ -775,7 +767,6 @@ async fn spawn_h3_upstream(
                 }
 
                 if response_started && !resp_done {
-                    // Build the full response wire ONCE.
                     if !resp_built {
                         match &mode {
                             UpstreamMode::Echo | UpstreamMode::StallReadThenEcho(_) => {
@@ -794,7 +785,6 @@ async fn spawn_h3_upstream(
                                 resp_fin_on_drain = true;
                             }
                             UpstreamMode::ResetMidResponse => {
-                                // Declare 1 MiB, write ~64 KiB, then RESET.
                                 resp_wire = response_head(200, Some(1_048_576));
                                 resp_wire.extend_from_slice(&data_frames(&vec![7u8; 64 * 1024]));
                                 resp_fin_on_drain = false;
@@ -915,7 +905,6 @@ async fn spawn_h3_upstream(
                     Ok(Err(_)) | Err(_) => conn.on_timeout(),
                 }
             }
-            // Connection finished; loop to accept the next pooled dial.
         }
     });
     (addr, h)
@@ -2195,7 +2184,6 @@ async fn h3h3_e2e_pool_acquire_failure_returns_502() {
             std::net::UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
                 .unwrap();
         s.local_addr().unwrap()
-        // `s` dropped here ⇒ port unbound, no responder.
     };
 
     let (listener, gw, sd) = start_h3_listener_h3(&certs, dead_backend).await;

@@ -157,14 +157,12 @@ async fn try_recv_one(
                 Err(e) => panic!("conn.recv: {e:?}"),
             }
         }
-        // Timeout or socket error: nothing to feed.
         Ok(Err(_)) | Err(_) => false,
     }
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn test_h3_connection_close_emitted_on_cancel() {
-    // ----- cert + sockets -----
     let (cert_file, key_file) = write_test_cert();
     let cert_path = cert_file.0.to_str().unwrap().to_string();
     let key_path = key_file.0.to_str().unwrap().to_string();
@@ -182,7 +180,6 @@ async fn test_h3_connection_close_emitted_on_cancel() {
     );
     let client_local = client_socket.local_addr().expect("client local");
 
-    // ----- configs + connections -----
     let mut server_cfg = build_config(true, &cert_path, &key_path);
     let mut client_cfg = build_config(false, &cert_path, &key_path);
 
@@ -203,7 +200,6 @@ async fn test_h3_connection_close_emitted_on_cancel() {
     )
     .expect("quiche::connect");
 
-    // ----- handshake pump -----
     let mut out = vec![0u8; MAX_UDP];
     let mut in_buf = vec![0u8; MAX_UDP];
     let deadline = tokio::time::Instant::now() + HANDSHAKE_BUDGET;
@@ -249,7 +245,6 @@ async fn test_h3_connection_close_emitted_on_cancel() {
         "server should be closed or draining after graceful_h3_shutdown"
     );
 
-    // ----- drive the client until peer_error() arrives -----
     let post_deadline = tokio::time::Instant::now() + POST_CLOSE_BUDGET;
     while client_conn.peer_error().is_none() {
         if tokio::time::Instant::now() > post_deadline {

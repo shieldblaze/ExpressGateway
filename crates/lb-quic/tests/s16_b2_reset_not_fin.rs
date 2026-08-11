@@ -247,7 +247,6 @@ fn spawn_recording_backend(
                     // reset, it would FALSELY report a clean end on a
                     // correctly-reset stream.
                 }
-                // Flush outbound (ACKs / flow-control updates).
                 loop {
                     match c.send(&mut out_buf) {
                         Ok((n, info)) => {
@@ -364,7 +363,6 @@ async fn s16_b2_client_reset_does_not_become_clean_fin_upstream() {
     )
     .unwrap();
 
-    // Drive client⇄LB to established.
     let mut out = vec![0u8; MAX_UDP];
     let mut in_buf = vec![0u8; MAX_UDP];
     let deadline = tokio::time::Instant::now() + HANDSHAKE_BUDGET;
@@ -393,12 +391,10 @@ async fn s16_b2_client_reset_does_not_become_clean_fin_upstream() {
     }
     assert_eq!(client_conn.application_proto(), H3_ALPN);
 
-    // Send a PARTIAL body (no FIN).
     let payload = make_payload(PARTIAL_LEN);
     let _ = client_conn.stream_send(STREAM_ID, &payload, false).unwrap();
     flush(&mut client_conn, &client_socket, &mut out).await;
 
-    // Forwarder: drain the shared LB socket into the actor's inbound mpsc.
     let (tx, rx) = mpsc::channel::<InboundPacket>(256);
     let cancel = CancellationToken::new();
     let fwd_socket = Arc::clone(&lb_socket);
@@ -424,7 +420,6 @@ async fn s16_b2_client_reset_does_not_become_clean_fin_upstream() {
         }
     });
 
-    // Client driver: keep the client live; RESET stream 0 when told to.
     let do_reset = Arc::new(AtomicBool::new(false));
     let did_reset = Arc::new(AtomicBool::new(false));
     let client_cancel = cancel.clone();
@@ -454,7 +449,6 @@ async fn s16_b2_client_reset_does_not_become_clean_fin_upstream() {
         }
     });
 
-    // The Mode B actor.
     let pool = QuicUpstreamPool::new(
         QuicPoolConfig::default(),
         upstream_config_factory(certs.ca.clone()),
@@ -481,7 +475,6 @@ async fn s16_b2_client_reset_does_not_become_clean_fin_upstream() {
         h2_backend: None,
         raw_quic_backend: Some(raw_backend),
         quic_modeb_metrics: None,
-        // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
         ws_enabled: false,
         ws_relay_launcher: None,
         max_requests_per_h3_connection: 0,
@@ -507,7 +500,6 @@ async fn s16_b2_client_reset_does_not_become_clean_fin_upstream() {
     let bytes_before_reset = recv_bytes.load(Ordering::Relaxed);
     eprintln!("reset-not-FIN: backend received {bytes_before_reset} bytes before reset");
 
-    // Fire the reset.
     do_reset.store(true, Ordering::Relaxed);
 
     // Give the system ample time to (mis)propagate. Under B2 the relay drops
@@ -538,7 +530,6 @@ async fn s16_b2_client_reset_does_not_become_clean_fin_upstream() {
         recv_bytes.load(Ordering::Relaxed)
     );
 
-    // Tidy up.
     cancel.cancel();
     forwarder.abort();
     let _ = client_driver.await;

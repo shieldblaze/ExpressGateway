@@ -226,7 +226,6 @@ fn binary_body(n: usize) -> Vec<u8> {
     let mut s: u32 = 0x9E37_79B9;
     for i in 0..n {
         s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-        // Bias toward high bytes so the body is decidedly non-UTF-8.
         v.push((((s >> 24) as u8) | 0x80).wrapping_add(i as u8));
     }
     v
@@ -315,7 +314,6 @@ async fn drive_h3(
 
     let deadline = tokio::time::Instant::now() + overall;
     while tokio::time::Instant::now() < deadline {
-        // Flush egress.
         loop {
             match conn.send(&mut out_buf) {
                 Ok((n, info)) => {
@@ -358,7 +356,6 @@ async fn drive_h3(
             head_sent = true;
         }
 
-        // Partial-accept handling; FIN only when fully drained and not aborting.
         if head_sent && !req_done && !did_reset {
             if let Some(k) = cfg.reset_after_req_bytes {
                 let body_sent = tx_off.saturating_sub(data_start);
@@ -395,7 +392,6 @@ async fn drive_h3(
             }
         }
 
-        // Drain response unless stalling.
         let now = tokio::time::Instant::now();
         if let Some(until) = stalling_until {
             if now >= until {
@@ -893,7 +889,6 @@ async fn h2_e2e_request_memory_bounded_through_stalled_backend() {
             };
             tokio::spawn(async move {
                 let svc = service_fn(move |req: Request<Incoming>| async move {
-                    // Stall ~1.5 s BEFORE draining the request body.
                     tokio::time::sleep(Duration::from_millis(1500)).await;
                     let got = req
                         .into_body()
@@ -1123,7 +1118,6 @@ async fn h2_e2e_client_reset_midrequest_rsts_h2_upstream_no_truncated_request() 
     let (backend, bh) = spawn_h2_echo(seen.clone()).await;
     let (listener, gw, sd) = start_h3_listener_h2(&certs, backend).await;
 
-    // 2 MiB intended; the client RESETs after ~256 KiB of body.
     let payload = binary_body(2 * 1024 * 1024);
     let chunks: Vec<Vec<u8>> = payload.chunks(32 * 1024).map(<[u8]>::to_vec).collect();
 
@@ -1142,7 +1136,6 @@ async fn h2_e2e_client_reset_midrequest_rsts_h2_upstream_no_truncated_request() 
     )
     .await;
 
-    // Give the backend a moment to observe the stream fault.
     tokio::time::sleep(Duration::from_millis(300)).await;
     let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
     sd.cancel();
