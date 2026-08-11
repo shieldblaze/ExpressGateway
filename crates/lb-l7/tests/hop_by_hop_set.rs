@@ -1,9 +1,7 @@
-//! PROTO-2-08 — the exact hop-by-hop set stripped by
-//! `lb_l7::h1_proxy::strip_hop_by_hop`, per RFC 9110 §7.6.1.
+//! PROTO-2-08 — the exact RFC 9110 §7.6.1 hop-by-hop strip set.
 //!
-//! THE CATCH: `Trailer` (RFC 9110 §6.6.2) is the END-TO-END declaration header
-//! and MUST traverse the proxy, while `Trailers` is not a header field name at
-//! all — only a `TE` value-token — so it must not appear in the strip set.
+//! THE CATCH: `Trailer` (§6.6.2) is END-TO-END and must traverse the proxy,
+//! while `Trailers` is not a field name at all — only a `TE` value-token.
 
 use hyper::HeaderMap;
 use hyper::header::{HeaderName, HeaderValue};
@@ -42,7 +40,6 @@ fn mk_map(names: &[&str]) -> HeaderMap {
 
 #[test]
 fn strip_removes_exactly_the_rfc_9110_set() {
-    // Seed both sets; the strip must remove only the hop-by-hop names.
     let all: Vec<&str> = EXPECTED_HOP_BY_HOP
         .iter()
         .chain(EXPECTED_END_TO_END.iter())
@@ -67,8 +64,7 @@ fn strip_removes_exactly_the_rfc_9110_set() {
 
 #[test]
 fn strip_does_not_remove_the_trailers_pseudo_token() {
-    // `trailers` is only a TE value-token (RFC 9110 §10.1.4); the singular
-    // `Trailer` header is end-to-end. Seed one and confirm the strip leaves it.
+    // `trailers` is only a TE value-token; `Trailer` is end-to-end.
     let mut h = mk_map(&["trailer"]);
     lb_l7::h1_proxy::strip_hop_by_hop(&mut h);
     assert!(
@@ -79,8 +75,7 @@ fn strip_does_not_remove_the_trailers_pseudo_token() {
 
 #[test]
 fn strip_removes_connection_listed_extras() {
-    // RFC 9110 §7.6.1 also requires stripping names listed inside `Connection`.
-    // Re-assert at the public surface so a refactor is caught here too.
+    // Names listed inside `Connection` must also be stripped.
     let mut h = HeaderMap::new();
     h.insert(
         hyper::header::CONNECTION,

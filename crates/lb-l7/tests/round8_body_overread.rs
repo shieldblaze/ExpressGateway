@@ -1,12 +1,6 @@
-//! ROUND8-L7-10 — the H2 upstream eviction guarantee plus the H1
-//! take-and-discard doc-comment provenance.
-//!
-//! A full over-read regression needs a hyper H2 server that deliberately sends
-//! `Content-Length: 5` with 10 body bytes — substantial scaffolding for a
-//! doc-grade finding. Instead this pins the contract at the public API plus the
-//! source-of-truth doc-blocks: no stale `PeerEntry` survives any error path,
-//! and the doc-blocks that keep the Pingora upstream-smuggling lesson (0.6.0 /
-//! 0.8.0 CHANGELOG) alive are still present in lb-l7 and lb-io.
+//! ROUND8-L7-10 — pins the H2 eviction guarantee (no stale `PeerEntry` on any
+//! error path) plus the presence of the doc-blocks carrying the Pingora
+//! upstream-smuggling lesson in lb-l7 and lb-io.
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -21,8 +15,7 @@ use lb_io::sockopts::BackendSockOpts;
 
 #[tokio::test]
 async fn h2_pool_failed_send_leaves_no_stale_entry() {
-    // Dial a dead port: the `Dial` arm fails, and the postcondition we care
-    // about holds for EVERY error path — `peer_count` is 0, no stale entry.
+    // Dead port: the postcondition holds for EVERY error path.
     let tcp_cfg = PoolConfig {
         connect_timeout: Duration::from_millis(100),
         ..PoolConfig::default()
@@ -60,9 +53,6 @@ async fn h2_pool_failed_send_leaves_no_stale_entry() {
 
 #[test]
 fn h1_take_and_discard_doc_block_present() {
-    // The doc-block on `H1Proxy::proxy_request` is the single source of truth
-    // warning future refactors against dropping `take_stream()` without wiring
-    // the body-mismatch mitigation. Detect drift by string-matching it.
     let src =
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/h1_proxy.rs")).unwrap();
     assert!(

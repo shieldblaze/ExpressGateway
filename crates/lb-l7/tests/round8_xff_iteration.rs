@@ -1,25 +1,15 @@
-//! ROUND8-L7-04 — multi-value `X-Forwarded-For` / `Via` preservation.
-//!
-//! Reference: Envoy GHSA-ghc4-35x6-crw5 — an RBAC bypass when a header
-//! appeared on two lines and the joined-string regex matched only the first.
-//! The producer side MUST iterate every existing header line and emit the
-//! canonical comma-joined list (RFC 7239 / RFC 9110 §5.3) before appending the
-//! peer. The pre-fix code used `HeaderMap::get(..)`, which returns only the
-//! first value, then `insert(..)`, which clobbered the rest.
+//! ROUND8-L7-04 — multi-value `X-Forwarded-For` / `Via` preservation (Envoy
+//! GHSA-ghc4-35x6-crw5: an RBAC bypass when a header appeared on two lines and
+//! only the first was read). The producer MUST iterate every existing line.
 
-// `append_xff` / `append_via` are `pub(crate)` and intentionally so, so this
-// integration crate cannot call them. The assertion is on the OUTPUT shape
-// instead: after N duplicate XFF header lines the upstream must see ONE value
-// whose comma-separated list has N + 1 members. If it does not, the silent-drop
-// bug is back.
+// The helpers are `pub(crate)`, so this asserts on the OUTPUT shape: N
+// duplicate lines must become ONE value with N + 1 members.
 
 use http::HeaderMap;
 use http::HeaderValue;
 
-/// MIRROR of the production `append_xff` shape (the real helper is
-/// `pub(crate)`). If production ever diverges from this mirror, the same-crate
-/// `h1_proxy::tests` proofs are the source of truth — that is where the
-/// regression actually surfaces.
+/// MIRROR of the production `append_xff`. If production diverges, the
+/// same-crate `h1_proxy::tests` proofs are the source of truth.
 fn append_xff_test_mirror(headers: &mut HeaderMap, peer_ip: &str) {
     let mut joined = String::new();
     for v in headers.get_all("x-forwarded-for") {
@@ -45,7 +35,6 @@ fn two_xff_headers_preserved_in_join() {
     h.append("x-forwarded-for", HeaderValue::from_static("1.1.1.1"));
     h.append("x-forwarded-for", HeaderValue::from_static("2.2.2.2"));
     append_xff_test_mirror(&mut h, "9.9.9.9");
-    // After fix: one header with three comma-separated values.
     let all: Vec<&str> = h
         .get_all("x-forwarded-for")
         .iter()
@@ -103,8 +92,7 @@ fn no_xff_header_inserts_peer_only() {
 
 #[test]
 fn xff_with_comma_in_existing_value_preserves_inner_commas() {
-    // A single pre-existing line may already be a comma list; the producer must
-    // preserve it as-is and just append.
+    // A pre-existing comma list must be preserved as-is, then appended to.
     let mut h = HeaderMap::new();
     h.append(
         "x-forwarded-for",

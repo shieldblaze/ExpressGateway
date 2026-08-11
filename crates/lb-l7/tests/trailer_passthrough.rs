@@ -1,13 +1,5 @@
-//! PROTO-2-12 — trailer pass-through across protocol bridges.
-//!
-//! RFC 9110 §6.6.2: trailers are END-TO-END, so an intermediary MUST forward
-//! declared trailers when bridging across protocol versions. `BridgeRequest` /
-//! `BridgeResponse` carry a `trailers` list that every bridge propagates, and
-//! the writeback side re-emits it as a `Frame::trailers`.
-//!
-//! Pinned here: every bridge forwards request AND response trailers unchanged;
-//! `Frame::trailers` survives the writeback; and the H3 legs carry trailers
-//! positively rather than the former `Vec::new()` baseline.
+//! PROTO-2-12 — trailers are END-TO-END (RFC 9110 §6.6.2), so every bridge must
+//! forward request AND response trailers unchanged, including the H3 legs.
 
 use bytes::Bytes;
 use http_body_util::BodyExt;
@@ -41,7 +33,6 @@ fn resp_with_trailers() -> BridgeResponse {
     }
 }
 
-/// Every cross-protocol bridge MUST forward the request trailer list.
 #[test]
 fn every_bridge_forwards_request_trailers() {
     let combos = [
@@ -67,7 +58,6 @@ fn every_bridge_forwards_request_trailers() {
     }
 }
 
-/// Every cross-protocol bridge MUST forward the response trailer list.
 #[test]
 fn every_bridge_forwards_response_trailers() {
     let combos = [
@@ -93,7 +83,6 @@ fn every_bridge_forwards_response_trailers() {
     }
 }
 
-/// `BridgeRequest` and `BridgeResponse` carry a trailers field.
 #[test]
 fn bridge_request_response_carry_trailers() {
     let req = lb_l7::BridgeRequest {
@@ -114,8 +103,7 @@ fn bridge_request_response_carry_trailers() {
     assert_eq!(resp.trailers.len(), 1);
 }
 
-/// Sanity: hyper's `Frame::trailers` round-trips the way the proxy's
-/// `build_body_with_trailers` helper relies on.
+/// `Frame::trailers` must round-trip the way `build_body_with_trailers` relies on.
 #[tokio::test]
 async fn stream_body_with_trailers_round_trips() {
     use http::HeaderMap;
@@ -134,12 +122,8 @@ async fn stream_body_with_trailers_round_trips() {
     assert_eq!(trailers.get("x-trailer").unwrap(), "value");
 }
 
-/// PROTO-2-19 — drive hyper's H1 server encoder over an in-memory duplex with a
-/// response built by `build_h1_response_with_trailers`, and assert on the RAW
-/// bytes: `Transfer-Encoding: chunked` on the head, a `Trailer:` declaration
-/// naming the fields, and the trailer block after the `0\r\n` terminator. This
-/// is the H2→H1 leg, where the H1 listener used to silently drop trailers at
-/// the hyper encoder.
+/// PROTO-2-19 — RAW-byte assertion through hyper's real H1 encoder (the H2→H1
+/// leg, where the listener used to silently drop trailers).
 #[tokio::test]
 async fn test_h2_h1_trailers_emitted_on_wire() {
     use hyper::Request;
@@ -150,9 +134,8 @@ async fn test_h2_h1_trailers_emitted_on_wire() {
     use std::convert::Infallible;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    // Modelled on the gRPC-over-H2 backend shape. The upstream
-    // `Content-Length` is deliberate: it verifies the helper drops it when
-    // trailers are present.
+    // The upstream `Content-Length` is deliberate: the helper must drop it
+    // when trailers are present.
     let translated = lb_l7::BridgeResponse {
         status: 200,
         headers: vec![
@@ -168,7 +151,6 @@ async fn test_h2_h1_trailers_emitted_on_wire() {
 
     let (server_io, mut client_io) = tokio::io::duplex(64 * 1024);
 
-    // hyper-1's H1 server drives the encoding.
     let server_task = tokio::spawn(async move {
         let svc = service_fn(move |_req: Request<Incoming>| {
             let resp = build_h1_response_with_trailers(translated.clone(), None);
@@ -179,9 +161,8 @@ async fn test_h2_h1_trailers_emitted_on_wire() {
             .await;
     });
 
-    // RFC 9110 §6.6.1: a server MUST NOT generate trailer fields unless the
-    // client signalled `TE: trailers`. Mirroring that contract is what makes
-    // hyper's H1 encoder actually flush the `Frame::trailers` onto the wire.
+    // RFC 9110 §6.6.1: `TE: trailers` from the client is what makes hyper's
+    // encoder actually flush the `Frame::trailers` onto the wire.
     client_io
         .write_all(b"GET / HTTP/1.1\r\nHost: x\r\nTE: trailers\r\nConnection: close\r\n\r\n")
         .await
@@ -201,7 +182,6 @@ async fn test_h2_h1_trailers_emitted_on_wire() {
             .contains("transfer-encoding: chunked"),
         "expected chunked TE on the head; got: {text}"
     );
-    // Comma-list order in `Trailer:` matches the input vec order.
     assert!(
         text.to_ascii_lowercase()
             .contains("trailer: grpc-status, grpc-message"),
@@ -211,8 +191,6 @@ async fn test_h2_h1_trailers_emitted_on_wire() {
         !text.to_ascii_lowercase().contains("content-length: 5"),
         "Content-Length must be dropped when trailers are present (RFC 9110 §6.5); got: {text}"
     );
-    // After the last data chunk, `0\r\n` then the trailer fields, then a blank
-    // line.
     assert!(
         text.contains("\r\n0\r\n"),
         "expected chunked terminator `0\\r\\n`; got: {text}"
@@ -227,10 +205,7 @@ async fn test_h2_h1_trailers_emitted_on_wire() {
     );
 }
 
-/// PROTO-2-19 — H3→H1 analogue of the test above: the same helper fed an
-/// H3-origin trailer-bearing `BridgeResponse`. The wire-bytes assertion is
-/// identical because both paths feed the same encoder through the same
-/// head-shaping code.
+/// PROTO-2-19 — H3→H1 analogue of the test above.
 #[tokio::test]
 async fn test_h3_h1_trailers_emitted_on_wire() {
     use hyper::Request;
@@ -245,7 +220,6 @@ async fn test_h3_h1_trailers_emitted_on_wire() {
         status: 200,
         headers: vec![("content-type".to_owned(), "application/grpc".to_owned())],
         body: Bytes::from_static(b"world"),
-        // A trailer-bearing response arriving over QUIC, downgraded to H1.
         trailers: vec![
             ("grpc-status".to_owned(), "0".to_owned()),
             ("grpc-message".to_owned(), "OK".to_owned()),
@@ -263,7 +237,6 @@ async fn test_h3_h1_trailers_emitted_on_wire() {
             .await;
     });
 
-    // RFC 9110 §6.6.1: `TE: trailers` is what makes hyper's encoder flush them.
     client_io
         .write_all(b"GET / HTTP/1.1\r\nHost: x\r\nTE: trailers\r\nConnection: close\r\n\r\n")
         .await
@@ -302,14 +275,10 @@ async fn test_h3_h1_trailers_emitted_on_wire() {
     );
 }
 
-/// PROTO-2-12 H3 leg — the `lb-quic` request surface carries a `trailers` field
-/// with a `Default` impl. (The buffering response carrier that mirrored this
-/// was deleted when the H3 datapath moved to `quiche::h3`; live response
-/// trailers now ride the streaming `H3RespEvent` sink.)
+/// PROTO-2-12 H3 leg — the `lb-quic` request surface carries a `trailers` field.
 #[test]
 fn lb_quic_h3_surfaces_carry_trailers() {
-    // RFC 9114 §4.1: request trailers arrive in a post-DATA HEADERS frame, not
-    // the request head — so `Default` yields an empty list.
+    // RFC 9114 §4.1: request trailers arrive post-DATA, so `Default` is empty.
     let mut req = lb_quic::H3Request::default();
     assert!(
         req.trailers.is_empty(),
@@ -323,9 +292,7 @@ fn lb_quic_h3_surfaces_carry_trailers() {
     );
 }
 
-/// PROTO-2-12 H3 leg — positive end-to-end pin that request and response
-/// trailers survive EVERY (src, dst) pair involving HTTP/3, over the same
-/// bridge code path the proxy's H3 legs use.
+/// PROTO-2-12 H3 leg — trailers survive EVERY (src, dst) pair involving HTTP/3.
 #[test]
 fn h3_legs_forward_trailers_for_every_pair_involving_h3() {
     let h3_pairs = [

@@ -1,12 +1,7 @@
-//! ROUND8-L7-09 proof — the protocol-neutral authority validator is ON THE
-//! REQUEST PATH for both H1 and H2, not merely present as a library function.
-//!
-//! Reference: HAProxy `BUG/MAJOR: http: forbid comma character in authority
-//! value` + `BUG/MEDIUM: h1: Enforce the authority validation during H1 request
-//! parsing` — the H1 parser was missing the check the H2/H3 path had. A `pub
-//! fn` with ZERO callsites does not close a "validation must run on every
-//! parser" finding, so these tests drive REAL H1 and H2 connections through
-//! `serve_connection`.
+//! ROUND8-L7-09 — the authority validator must be ON THE REQUEST PATH for both
+//! H1 and H2, so these drive REAL connections through `serve_connection`
+//! (HAProxy `BUG/MEDIUM: h1: Enforce the authority validation during H1
+//! request parsing` — a `pub fn` with zero callsites closes nothing).
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -23,9 +18,8 @@ use lb_l7::h2_proxy::H2Proxy;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-// The backend deliberately points at a CLOSED port: if the validator does not
-// trip, the request reaches the picker and the dial yields 502. A 400 therefore
-// proves the authority validator ran BEFORE upstream selection.
+// The backend is a CLOSED port, so 502 means the request got past validation
+// and 400 proves the validator ran BEFORE upstream selection.
 const CLOSED_BACKEND: &str = "127.0.0.1:1";
 
 fn timeouts() -> HttpTimeouts {
@@ -58,7 +52,6 @@ async fn spawn_h1_proxy() -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {
-        // Serve a few connections so each test request gets its own.
         for _ in 0..8 {
             if let Ok((sock, peer)) = listener.accept().await {
                 let p = Arc::clone(&proxy);
@@ -71,7 +64,6 @@ async fn spawn_h1_proxy() -> SocketAddr {
     addr
 }
 
-/// Send one raw H1 request and return the status line.
 async fn h1_status(proxy: SocketAddr, host: &str) -> String {
     let mut client = TcpStream::connect(proxy).await.unwrap();
     let req = format!("GET /p HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n");
@@ -103,8 +95,7 @@ async fn h1_status(proxy: SocketAddr, host: &str) -> String {
 async fn h1_comma_in_authority_rejected_before_upstream() {
     let proxy = spawn_h1_proxy().await;
 
-    // Comma in authority (HAProxy BUG/MAJOR). Must be 400, NOT 502 — a 502
-    // would mean we reached the closed backend.
+    // 400, NOT 502 — a 502 would mean we reached the closed backend.
     let status = h1_status(proxy, "example.test,attacker.example").await;
     assert!(
         status.contains(" 400"),
@@ -112,7 +103,6 @@ async fn h1_comma_in_authority_rejected_before_upstream() {
          validator BEFORE upstream selection; got status line: {status:?}"
     );
 
-    // Whitespace in authority — also a desync primitive.
     let status = h1_status(proxy, "example.test attacker").await;
     assert!(
         status.contains(" 400"),
@@ -123,8 +113,7 @@ async fn h1_comma_in_authority_rejected_before_upstream() {
 #[tokio::test]
 async fn h1_valid_authority_passes_validator() {
     let proxy = spawn_h1_proxy().await;
-    // Well-formed authority: the validator lets it through, so the closed
-    // backend yields 502 — proving the request got PAST validation.
+    // Negative control: 502 proves the request got PAST validation.
     let status = h1_status(proxy, "example.test:8080").await;
     assert!(
         status.contains(" 502"),
@@ -158,7 +147,6 @@ async fn spawn_h2_proxy() -> SocketAddr {
     addr
 }
 
-/// Drive one h2 request with an explicit `:authority`; return the status code.
 async fn h2_status(proxy: SocketAddr, authority: &str) -> u16 {
     let tcp = TcpStream::connect(proxy).await.unwrap();
     let io = hyper_util::rt::TokioIo::new(tcp);
@@ -206,20 +194,14 @@ async fn h2_valid_authority_passes_validator() {
     );
 }
 
-// ── ROUND8-L7-09 bypass closure ──
-// The first fix wired the validator onto the PLAIN H1/H2 path only. Three forks
-// reached upstream selection ahead of it: H1 WebSocket upgrade, H2
-// extended-CONNECT, and H2 gRPC. The validator is now a single choke point at
-// the top of each `handle_inner`, ABOVE the fork. These tests drive each
-// previously-bypassing fork with a comma in the authority and assert both a 400
-// AND that a real probe backend recorded ZERO connections.
+// Bypass closure: the H1 WS-upgrade, H2 extended-CONNECT and H2 gRPC forks all
+// reached upstream selection ahead of the first fix. Each is driven here with a
+// comma in the authority, asserting 400 AND zero probe-backend connections.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-/// A real listening backend that counts inbound TCP connections. If any fork
-/// bypasses the choke point and reaches upstream selection, the picker dials it
-/// and `count` goes non-zero — a stronger signal than the closed-port
-/// status-code inference the older cases use.
+/// Counts inbound TCP connections: a fork that bypasses the choke point dials
+/// it, so a non-zero count is a stronger signal than the closed-port inference.
 async fn spawn_probe_backend() -> (SocketAddr, Arc<AtomicU32>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -258,17 +240,14 @@ async fn spawn_h1_ws_proxy(backend: SocketAddr) -> SocketAddr {
     addr
 }
 
-/// H1 WebSocket upgrade with a comma in `Host` must be 400 at the choke point
-/// (the previously-bypassing `handle_ws_upgrade` fork), with ZERO probe
-/// connections.
+/// The previously-bypassing `handle_ws_upgrade` fork: 400, ZERO probe dials.
 #[tokio::test]
 async fn test_ws_upgrade_comma_authority_rejected() {
     let (backend, hits) = spawn_probe_backend().await;
     let proxy = spawn_h1_ws_proxy(backend).await;
 
     let mut client = TcpStream::connect(proxy).await.unwrap();
-    // Structurally valid RFC 6455 handshake (so the WS-upgrade fork is taken)
-    // but with a comma in the authority.
+    // Structurally valid handshake, so the WS-upgrade fork IS taken.
     let req = "GET /chat HTTP/1.1\r\n\
                Host: example.test,attacker.example\r\n\
                Upgrade: websocket\r\n\
@@ -304,7 +283,6 @@ async fn test_ws_upgrade_comma_authority_rejected() {
          point (NOT 101/502 — the WS fork must not bypass the \
          validator); got: {status_line:?}"
     );
-    // Give any (erroneously) dispatched upstream dial a beat to land.
     tokio::time::sleep(Duration::from_millis(150)).await;
     assert_eq!(
         hits.load(Ordering::SeqCst),
@@ -320,9 +298,7 @@ async fn spawn_h2_ws_proxy(backend: SocketAddr) -> SocketAddr {
     let proxy = Arc::new(
         H2Proxy::new(pool(), Arc::new(picker), None, timeouts(), false)
             .with_websocket(Arc::new(WsProxy::new(WsConfig::default())))
-            // CF-S27-2: WS-over-H2 extended CONNECT is gated off by default, so
-            // this test must opt in — otherwise the h2 layer rejects it
-            // (PROTOCOL_ERROR) before the guard is reached.
+            // CF-S27-2: must opt in, or h2 rejects before the guard is reached.
             .with_h2_extended_connect(true),
     );
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -340,8 +316,7 @@ async fn spawn_h2_ws_proxy(backend: SocketAddr) -> SocketAddr {
     addr
 }
 
-/// H2 RFC 8441 extended CONNECT with a bad `:authority` must be 400 at the
-/// choke point — the previously-bypassing `handle_ws_extended_connect` fork.
+/// The previously-bypassing `handle_ws_extended_connect` fork.
 #[tokio::test]
 async fn test_h2_ext_connect_comma_authority_rejected() {
     let (backend, hits) = spawn_probe_backend().await;
@@ -356,7 +331,6 @@ async fn test_h2_ext_connect_comma_authority_rejected() {
     tokio::spawn(async move {
         let _ = conn.await;
     });
-    // Routed through `handle_ws_extended_connect`; comma in `:authority`.
     let mut req = hyper::Request::builder()
         .method("CONNECT")
         .uri("https://example.test,attacker.example/chat")
@@ -410,8 +384,7 @@ async fn spawn_h2_grpc_proxy(backend: SocketAddr) -> SocketAddr {
     addr
 }
 
-/// H2 gRPC request with a bad `:authority` must be 400 at the choke point — the
-/// previously-bypassing `GrpcProxy::handle` fork.
+/// The previously-bypassing `GrpcProxy::handle` fork.
 #[tokio::test]
 async fn test_h2_grpc_comma_authority_rejected() {
     let (backend, hits) = spawn_probe_backend().await;

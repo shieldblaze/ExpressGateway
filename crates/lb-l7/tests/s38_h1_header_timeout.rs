@@ -1,13 +1,7 @@
-//! F-RES-1 (S38) regression — H1 slowloris header-phase deadline.
+//! F-RES-1 — `header_read_timeout` is INERT unless a `Timer` is wired.
 //!
-//! The H1 server builder must wire `header_read_timeout` via a `Timer` or hyper
-//! silently ignores it. Pre-fix there was no `.timer(..)`, so the deadline was
-//! INERT and a client trickling a partial request head was bounded only by the
-//! 60 s connection `total` — a slowloris hold.
-//!
-//! NEGATIVE CONTROL: a SMALL header timeout (1 s) with a LARGE total (10 s), a
-//! partial head, then silence. FAILS pre-fix (held until `total`); PASSES
-//! post-fix (closed at ~1 s).
+//! NEGATIVE CONTROL: a SMALL header timeout (1 s) with a LARGE total (10 s) and
+//! a partial head. FAILS pre-fix (held until `total`), passes post-fix.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -21,7 +15,6 @@ use lb_l7::h1_proxy::{H1Proxy, HttpTimeouts, RoundRobinAddrs};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-/// A backend returning a fixed 200, used only by the positive control.
 async fn spawn_ok_backend() -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -32,7 +25,6 @@ async fn spawn_ok_backend() -> SocketAddr {
             };
             tokio::spawn(async move {
                 let mut buf = [0u8; 4096];
-                // Read until the request head terminator, then answer.
                 let mut acc = Vec::new();
                 loop {
                     let Ok(n) = sock.read(&mut buf).await else {
@@ -55,7 +47,6 @@ async fn spawn_ok_backend() -> SocketAddr {
     addr
 }
 
-/// Boot the H1 proxy with the given header timeout (total fixed at 10 s).
 async fn spawn_proxy(backend_addr: SocketAddr, header_timeout: Duration) -> SocketAddr {
     let pool = TcpPool::new(
         PoolConfig::default(),
@@ -91,8 +82,7 @@ async fn spawn_proxy(backend_addr: SocketAddr, header_timeout: Duration) -> Sock
     addr
 }
 
-/// NEGATIVE CONTROL: a partial request head with a 1 s header timeout
-/// must be closed at ~1 s, NOT held until the 10 s `total`.
+/// NEGATIVE CONTROL: closed at ~1 s, NOT held until the 10 s `total`.
 #[tokio::test]
 async fn h1_partial_head_closed_at_header_timeout_not_total() {
     let backend = spawn_ok_backend().await;
@@ -100,7 +90,6 @@ async fn h1_partial_head_closed_at_header_timeout_not_total() {
     let proxy = spawn_proxy(backend, header_timeout).await;
 
     let mut client = TcpStream::connect(proxy).await.unwrap();
-    // Send a partial request head (no terminating CRLFCRLF) and stall.
     client
         .write_all(b"GET / HTTP/1.1\r\nHost: example.com\r\n")
         .await
@@ -108,8 +97,6 @@ async fn h1_partial_head_closed_at_header_timeout_not_total() {
     client.flush().await.unwrap();
 
     let start = Instant::now();
-    // A working header timeout closes shortly after 1 s; the inert build would
-    // hold the connection until the 10 s `total`.
     let mut buf = [0u8; 256];
     let closed = tokio::time::timeout(Duration::from_secs(6), async {
         loop {
@@ -135,8 +122,7 @@ async fn h1_partial_head_closed_at_header_timeout_not_total() {
     );
 }
 
-/// POSITIVE CONTROL: a COMPLETE request still proxies fine with the
-/// timer wired (proves the fix doesn't break normal traffic).
+/// POSITIVE CONTROL: a complete request still proxies with the timer wired.
 #[tokio::test]
 async fn h1_complete_request_still_proxies_with_timer() {
     let backend = spawn_ok_backend().await;
