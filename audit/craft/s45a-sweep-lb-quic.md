@@ -5,18 +5,73 @@
 | metric (brief's regex `^\s*(//\|/\*\|\*)`) | value |
 |---|---|
 | comment lines BEFORE (baseline `602126ec`) | **9,669** |
-| comment lines AFTER | **4,841** |
+| comment lines AFTER | **4,842** |
 | reduction | **49.9 %** |
 
 With the tightened regex that excludes deref lines like `*total = …` (44 such
 lines, counted as "comments" by the brief's pattern in both directions):
-9,625 → 4,797 = **50.2 %**.
+9,625 → 4,798 = **50.1 %**.
 
 Every commit was verified with a mechanical guard: the non-comment, non-blank
-lines of each file are byte-identical to `602126ec`. Two files differ only where
-`cargo fmt` collapsed a block whose sole content was the deleted comment
-(`h3_bridge.rs` `map_err(|_| { RespAbort::BadHead })` → one-liner;
-`h3_connection_recycle_e2e.rs` `=> { }` → `=> {}`). No other code changed.
+lines of each file are byte-identical to `602126ec`.
+
+## Mandatory proofs
+
+**Code identity** — `python3 audit/craft/s45a-code-identity.py main`:
+
+```
+S45A code-identity proof — 231 .rs files changed vs main
+  2 file(s) with real code changes — each needs justification:
+    CODE DIFFERS   crates/lb-observability/src/xdp_metrics.rs   <- not my area
+    CODE DIFFERS   crates/lb-quic/src/h3_bridge.rs              <- lead-ACCEPTED
+```
+
+The only lb-quic entry is the `map_err` closure the lead accepted (a block
+expression returning a value vs the value; a rustfmt artifact of removing the
+comment inside the closure).
+
+A THIRD entry, `crates/lb-quic/tests/h3_connection_recycle_e2e.rs`, was listed
+before this pass and has been RESTORED rather than justified. My second
+mechanical sweep deleted `// transient — retry next iteration`, which was the
+sole content of an otherwise-empty match arm, and rustfmt then collapsed
+`=> { }` to `=> {}`. I put the comment back, so that file's code is now
+byte-identical to main and `cargo fmt --check` stays clean. Cost: one comment
+line (the AFTER total below already includes it).
+
+**Attribute lines** — `git diff main -- crates/lb-quic | grep -E '^[-+]\s*#\['`
+returns EMPTY: zero attribute lines added or removed. A stronger full census over
+all 46 changed files confirms it — 478 attribute lines on main, 478 now, and every
+distinct attribute line occurs the same number of times:
+
+```
+46 changed .rs files; distinct attribute lines: main=76 now=76
+total attribute lines: main=478 now=478
+  every attribute line occurs the SAME number of times as on main
+```
+
+This is structural, not luck: the applier REFUSES to run if any targeted line —
+or any replacement line — is not a comment or blank, and `#[...]` matches
+neither. The two mechanical sweeps only ever delete a 1-line plain `//` block.
+
+One apparent discrepancy worth recording: a raw `grep -c '#\[test\]'` shows
+93 on main vs 92 now. Both main-side hits are INSIDE the F-COR-8 prose in
+`tests/h3_graceful_close.rs`, which mentions `#[test]` twice; my compression
+merged them into one mention. That file has no `#[test]` ATTRIBUTE at all — its
+tests are `#[tokio::test]` (87 on main, 87 now) and its function count is
+unchanged at 7.
+
+**F-S29-1 canary** — `grep -c 'or_insert_with()' crates/lb-quic/src/conn_actor.rs`
+= **1**. Surviving text at `conn_actor.rs:416-425`:
+
+> F-S29-1 (gRPC-over-H3 large-response trailer drop): the spawn site inserts the
+> `Progressive` StreamTx alongside the receiver, but `drain_streams_to_conn`'s
+> `retain` REMOVES it the instant the stream goes terminal, and a stale receiver
+> can outlive it. Use `get_mut`, NOT `entry().or_insert_with()`: a fresh StreamTx
+> would replay the leftover `End`, fire a spurious FIN + RESET, and
+> `stream_shutdown` would DISCARD a large response's still-buffered trailer+FIN
+> (small responses raced clear; large ones silently lost the trailing
+> `grpc-status` HEADERS — gRPC-fatal). A missing StreamTx means the stream
+> already terminated correctly: drop the stale receiver, skip.
 
 `cargo fmt -p lb-quic -- --check` is CLEAN.
 

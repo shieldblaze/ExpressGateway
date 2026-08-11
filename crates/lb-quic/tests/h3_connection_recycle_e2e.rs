@@ -394,7 +394,9 @@ async fn drive_with_backend_delay(
                     send_refused_after_goaway = true;
                     sent = n_requests; // stop trying to open more
                 }
-                Err(quiche::h3::Error::StreamBlocked) | Err(quiche::h3::Error::Done) => {}
+                Err(quiche::h3::Error::StreamBlocked) | Err(quiche::h3::Error::Done) => {
+                    // transient — retry next iteration
+                }
                 Err(e) => panic!("unexpected send_request error: {e:?}"),
             }
         }
