@@ -225,7 +225,7 @@ area lands at 50 %. Two structural reasons, both measurable:
 
 1. **`#![deny(missing_docs)]` floor.** `src/` has 130 `pub fn/const/static/
    struct/enum/trait/type/mod` items plus every `pub` struct field and `pub` enum
-   variant, each of which must keep ≥1 doc line. 1,395 of the 4,797 remaining
+   variant, each of which must keep ≥1 doc line. 1,395 of the 4,798 remaining
    lines are `///` in `src/`, and a large share of those are already
    one-liners that cannot go lower.
 2. **Catch density.** This is the crate the standard's own §"Catches that
