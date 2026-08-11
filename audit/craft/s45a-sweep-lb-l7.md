@@ -383,3 +383,264 @@ Commits are local. `git push` was rejected (remote advanced), and `git pull --re
 refuses because other sweepers have uncommitted work in the shared tree — `git stash`
 is barred by R9. Retried at the end of each slice; the lead may need to rebase these
 five commits, or I can push once the tree is momentarily clean.
+
+---
+
+# ROUND 2
+
+## Headline
+
+| | lines |
+|---|---|
+| baseline @ `main` (pre-S45A) | 6,269 |
+| after ROUND 1 | 3,721 (40.6%) |
+| **after ROUND 2** | **1,979** |
+| removed vs `main` | **4,290 (68.4%)** |
+| removed in round 2 alone | 1,742 (46.8% of what round 1 left) |
+
+Measurement (identical to round 1):
+
+```
+grep -rhE '^\s*(//|/\*|\*)' crates/lb-l7 crates/lb-h1 crates/lb-h2 crates/lb-grpc \
+     crates/lb-h3-testcodec --include='*.rs' | wc -l
+```
+
+Per crate after round 2: lb-l7 1,423 · lb-h2 226 · lb-h1 146 · lb-h3-testcodec 111 · lb-grpc 73.
+
+Round-2 commits on `feature/de-slop-s45a` (all pushed):
+
+- `17f3ff6c` h1_proxy.rs 724 → 383
+- `a9d88405` h2_proxy.rs 722 → 424
+- `7a909bd8` rest of lb-l7/src (ws/grpc proxies, 9 bridges, trace_ctx, security helpers)
+- `052c0a3e` lb-l7/tests to near-zero
+- `60faaec2` lb-h1 / lb-h2 / lb-grpc / lb-h3-testcodec
+- `75830f2e` final trim (private-field docs) + `cargo fmt`
+
+## Method
+
+Every edit was applied by an exact-literal `(old, new)` replacement script that (a) asserts
+each `old` occurs EXACTLY once, and (b) refuses to write unless every non-blank,
+non-comment line is byte-identical before and after. No file was ever hand-retyped, so the
+round-1 class of accidental code deletion could not recur. 660 replacements across 61 files.
+
+## Mandatory self-check
+
+### 1. `s45a-code-identity.py main` — no file of mine is listed
+
+```
+$ python3 audit/craft/s45a-code-identity.py main
+S45A code-identity proof — 254 .rs files changed vs main
+  5 file(s) differ: TOKENS DIFFER = real code change; REFLOW ONLY = rustfmt layout, behaviour-neutral
+    TOKENS DIFFER  crates/lb-observability/src/xdp_metrics.rs
+    TOKENS DIFFER  crates/lb-quic/src/h3_bridge.rs
+    TOKENS DIFFER  crates/lb-quic/tests/grpc_h3_e2e.rs
+    TOKENS DIFFER  crates/lb-quic/tests/h3_h1_resp_stream_e2e.rs
+    TOKENS DIFFER  crates/lb-quic/tests/h3_h3_stream_e2e.rs
+```
+
+All five belong to `sweeper-quic` / `sweeper-infra`. **Zero files from lb-l7 / lb-h1 /
+lb-h2 / lb-grpc / lb-h3-testcodec.**
+
+**Caught and fixed before the final commit:** `cargo fmt` DID move code in three of my
+files, because in each case the comment I deleted was the ONLY content of its block, so
+rustfmt then collapsed the block:
+
+| file | what collapsed |
+|---|---|
+| `lb-l7/src/ws_proxy.rs` | `tokio::spawn(async move { … })` re-wrapped, gaining a trailing comma |
+| `lb-l7/src/h2_to_h1.rs` | `_ if k.starts_with(':') => { }` → `=> {}` |
+| `lb-l7/src/h3_to_h1.rs` | same |
+
+Restoring a one-line comment inside each block returns the token stream to main's exactly
+and keeps the tree `cargo fmt --check`-clean. All three are legitimate keeps under the
+rule anyway: an empty match arm and a bare `spawn` body do not explain themselves.
+
+### 2. No attribute line removed
+
+```
+$ git diff main -- crates/lb-l7 crates/lb-h1 crates/lb-h2 crates/lb-grpc \
+      crates/lb-h3-testcodec | grep -cE '^-\s*#!?\['
+0
+```
+
+### 3. `test-gauges` gated items intact
+
+```
+crates/lb-l7/src/h1_proxy.rs:2328  pub static H1_REQ_MAX_RETAINED_BODY_BYTES: …
+crates/lb-l7/src/h1_proxy.rs:2333  pub fn record_retained_h1(n: usize)
+crates/lb-l7/src/h2_proxy.rs:2562  pub static H2_REQ_MAX_RETAINED_BODY_BYTES: …
+crates/lb-l7/src/h2_proxy.rs:2567  pub fn record_retained(n: usize)
+```
+
+`#[cfg(any(test, feature = "test-gauges"))]` occurrence counts unchanged from main:
+`h1_proxy.rs` 6, `h2_proxy.rs` 7.
+
+### 4. Test-asserted source strings — grep proof
+
+```
+$ grep -cF 'ROUND8-L7-10 — take-and-discard upstream stream pattern' crates/lb-l7/src/h1_proxy.rs
+1
+$ grep -cF 'set_reusable(false)'                        crates/lb-l7/src/h1_proxy.rs
+1
+$ grep -cF 'ROUND8-L7-05'                               crates/lb-l7/src/h1_proxy.rs
+4
+$ grep -cF 'with_header_underscore_policy'              crates/lb-l7/src/h1_proxy.rs
+1
+$ grep -cF 'enable_connect_protocol()'                  crates/lb-l7/src/h2_proxy.rs
+1
+$ grep -cF 'if self.h2_extended_connect_enabled'        crates/lb-l7/src/h2_proxy.rs
+2
+$ grep -cF 'ROUND8-L7-05'                               crates/lb-l7/src/h2_proxy.rs
+4
+$ grep -cF 'with_header_underscore_policy'              crates/lb-l7/src/h2_proxy.rs
+1
+```
+
+`ROUND8-L7-05` went 5 → 4 in `h1_proxy.rs` (one private-field doc dropped); the tests
+assert presence, not a count. The assertion sites themselves are untouched:
+
+```
+$ git diff main -- crates/lb-l7/tests/round8_underscore_policy.rs \
+      crates/lb-l7/tests/round8_body_overread.rs \
+      crates/lb-l7/tests/h2_connect_protocol_settings.rs \
+  | grep -cE '^[-+]\s*(assert|src\.contains|let src|\})'
+0
+```
+
+Cross-crate strings `round8_body_overread.rs` also asserts, both outside my area and both
+still present: `ROUND8-L7-10 — API contract for future H1 upstream reuse` in
+`lb-io/src/pool.rs` (1), `ROUND8-L7-10 — H2 cousin of the H1 take-and-discard pattern` in
+`lb-io/src/http2_pool.rs` (1).
+
+### 5. `#![deny(missing_docs)]`
+
+Mechanically re-checked every `pub` item in all five crates for an immediately preceding
+`///`: the only 19 without one are the `pub mod X;` lines in `lb-l7/src/lib.rs`, which are
+documented by the `//!` inner doc of the module file — unchanged from main.
+
+`clippy::pedantic` is `allow`-ed in all five crate roots, so `missing_errors_doc` /
+`missing_panics_doc` do NOT bind; that is what made the `# Errors` compression safe.
+
+## Per-file table (vs `main`, not vs round 1)
+
+| file | main | now | % |
+|---|---|---|---|
+| lb-l7/src/h2_proxy.rs | 1505 | 409 | 72 |
+| lb-l7/src/h1_proxy.rs | 1304 | 368 | 71 |
+| lb-l7/src/ws_proxy.rs | 363 | 103 | 71 |
+| lb-l7/src/grpc_proxy.rs | 220 | 71 | 67 |
+| lb-h2/src/security.rs | 183 | 76 | 58 |
+| lb-h2/src/hpack.rs | 118 | 29 | 75 |
+| lb-h2/src/frame.rs | 115 | 83 | 27 |
+| lb-l7/tests/trailer_passthrough.rs | 112 | 13 | 88 |
+| lb-l7/src/trace_ctx.rs | 97 | 33 | 65 |
+| lb-l7/src/stripped_request.rs | 91 | 38 | 58 |
+| lb-h3-testcodec/src/qpack.rs | 90 | 40 | 55 |
+| lb-l7/src/sni_authority.rs | 89 | 22 | 75 |
+| lb-h1/src/parse.rs | 88 | 41 | 53 |
+| lb-h1/src/chunked.rs | 82 | 50 | 39 |
+| lb-l7/src/lib.rs | 80 | 44 | 45 |
+| lb-l7/src/h2_security.rs | 78 | 31 | 60 |
+| lb-l7/tests/round8_authority_enforced.rs | 77 | 18 | 76 |
+| lb-l7/src/security_hooks.rs | 75 | 22 | 70 |
+| lb-l7/src/h2_to_h1.rs | 70 | 26 | 62 |
+| lb-l7/src/authority.rs | 70 | 27 | 61 |
+| lb-l7/src/upstream.rs | 59 | 21 | 64 |
+| lb-l7/tests/informational_responses.rs | 95 | 7 | 93 |
+| lb-h1/tests/round8_chunk_size_cve_corpus.rs | 52 | 25 | 51 |
+| lb-h3-testcodec/src/frame.rs | 48 | 33 | 31 |
+| lb-h1/tests/proptest_parser.rs | 33 | 8 | 75 |
+| lb-grpc/src/frame.rs | 35 | 17 | 51 |
+| lb-grpc/src/status.rs | 34 | 26 | 23 |
+| the eight pass-through `h*_to_h*.rs` bridges | 86 | 34 | 60 |
+
+## What round 2 did that round 1 did not
+
+1. **Every multi-line `///` on a `pub` item collapsed to one line** unless it carries a
+   catch. The `# Errors` sections went from a blank-line-separated paragraph to a single
+   line, or vanished where they only restated the return type.
+2. **Private struct fields have NO doc floor.** Round 1 kept one-line `///` on every
+   private field of `H1Proxy`, `H2Proxy`, `ProxyService`, `CleanCloseIo`,
+   `GlitchConnState`. Those are gone except where the field's existence is non-obvious
+   (`conn_seq` — "combined with the peer IP so two NAT-egress connections stay distinct";
+   `linger_deadline`; `close_signal`; `max_keepalive_requests`;
+   `keepalive_cap_terminations` — "an atomic, not a metric handle: lb-l7 has no
+   metrics-registry dep").
+3. **Section banners deleted** — `// ── PROTO-001 cross-protocol translation helpers ──`,
+   `// ── PROTO-001 H2-side translation helpers ──`, `// ─── Integer coding ───`,
+   `// ── helpers ──`, `// ── F-SEC-1 deterministic gate (D3) ──`,
+   `// ── F-COR-1 (b) unit regression ──`, `// ── SESSION 22 … ──`,
+   `// Frame type constants`, `// Flag constants`, `// ── header names ──`.
+4. **`tests/*.rs` cut to near-zero.** Module docs went from 8–15-line essays to 2–4 lines
+   carrying the finding ID plus the pinned claim; in-body narration went entirely.
+   Negative controls kept ONE line each, and every one now says the word "negative
+   control" or "control" so the intent is greppable.
+5. **The two flagship smuggling blocks were re-compressed a second time.** The H1 F-MD-4
+   `Kind::Chan` rule went 26 → 10 lines and the H2 F-MD-4 `is_end_stream` rule 23 → 11,
+   both retaining the library-source citations (`hyper-1.9.0 body/incoming.rs ~L250`,
+   `h2-0.4.13 proto/streams/state.rs is_recv_end_stream`, `decode.rs ~L162 / ~L504`).
+
+## Refused to cut
+
+- **`h1_proxy.rs` / `h2_proxy.rs` F-MD-4 rules.** The two are exact inverses of each other
+  (`None` is a confirmed clean end on H1, AMBIGUOUS on H2) and the file-local comment is
+  the only place that fact exists. Deleting either invites a "unify these two identical
+  loops" refactor that reintroduces a request-smuggling bug. ~21 lines survive between
+  them, with the library-source citations that make the claim checkable.
+- **`h1_proxy.rs` `// HeaderMap::remove removes ALL values for the name, not just one.`**
+  — kept verbatim for the third round. It stops a loop-to-remove-duplicates regression.
+- **`h2_proxy.rs` `CleanCloseIo` F-SEC-1 mechanism** (12 lines). The RFC 1122 §4.2.2.13 /
+  `tcp_close` fact — that DROPPING a socket with unread inbound emits an RST which makes
+  the peer discard its whole receive buffer including the GOAWAY — is not derivable from
+  the code, and it is the entire reason the type exists.
+- **`inject_abort!` "this is only HALF the fix"** in `h2_proxy.rs`. Without the pairing to
+  the caller's detached send task + `reset_peer`, a future reader will move the injection
+  and reopen the intermittent smuggle.
+- **`h1_proxy.rs` ROUND8-L7-10 refactor warning** — pinned by `round8_body_overread.rs`
+  AND load-bearing (it names the guard a pooling refactor must implement first).
+- **`chunked.rs` F-PARSE-3** — "the 16-digit cap IS the overflow defense; `checked_shl(4)`
+  is INERT belt-and-braces; do NOT rely on it". Deleting it invites removing the cap.
+- **`qpack.rs` SESSION 22 §4.5.6 notes** on encoder AND decoder, plus the
+  CF-S22-QPACK-HUFFMAN carry-forward. Both halves must stay because the fix is only
+  correct as a pair.
+- **`round8_xff_iteration.rs` MIRROR caveat** — round 1 refused it; so does round 2. Without
+  it the test looks like it covers production when it does not.
+- **`h2_security.rs` attack→knob mapping** — a reader cannot otherwise know
+  `max_pending_accept_reset_streams` is the CVE-2023-44487 knob.
+- **`stripped_request.rs` `compile_fail` doctests.** The brief says to delete `# Examples`,
+  but these are executable tests: removing them removes coverage, which the standard
+  forbids. The prose around them was cut instead.
+- **`h2_proxy.rs` `#[allow(clippy::too_many_arguments)]` justification** and the
+  `// pub(crate) so …` notes on `H2_ABORT_OBSERVE_TIMEOUT` / `ProxyErr` — an unexplained
+  `allow` or visibility widening is a catch lost.
+
+## Why 1,979 and not ~630 (90%)
+
+Two structural floors, both measurable:
+
+1. **`#![deny(missing_docs)]`.** ~700 of the 1,979 surviving lines are a mandatory
+   single-line `///` on a `pub` item that cannot go to zero: 17 `GrpcStatus` variants,
+   9 `H2Error` variants, 8 `H1Error` variants, ~40 `H2Frame`/`H3Frame` fields, 9
+   `H2SecurityThresholds` fields, 4 `StreamingMode` variants, 7 `WsConfig` fields, the
+   `AltSvcConfig`/`HttpTimeouts` pub fields, and every `pub fn` builder. This area is the
+   most type-definition-dense in the repo.
+2. **Catch density in the two proxies.** `h1_proxy.rs` + `h2_proxy.rs` are 777 of the
+   1,979 (39%) and carry F-MD-1/2/3/4, F-SEC-1, F-CAP-1, F-RES-1, F-S27-1/2, the
+   ROUND8-L7-01/04/05/06/07/09/10/11 lessons and the PROTO-2-01/07/11/16/18/19 rulings —
+   clause-2 catches with library-source citations a reader cannot reconstruct.
+
+The standard's own ceiling is 86.9% for "compress every doc block to 1 line + delete EVERY
+plain comment" and ≈78% honouring clause 2. At 68.4% this area is now within ~10 points of
+the honest ceiling, up from 40.6%. Closing the rest requires either dropping
+`#![deny(missing_docs)]` or deleting the smuggling catches; I did neither.
+
+## Gates NOT run
+
+Per the brief I did not run `cargo build/clippy/test`. `cargo fmt -p lb-l7 -p lb-h1
+-p lb-h2 -p lb-grpc -p lb-h3-testcodec -- --check` **passes clean** on the committed tree.
+Highest-risk items for the lead's central gate, in order:
+
+1. `#![deny(missing_docs)]` — preserved by construction and mechanically re-checked, but
+   only rustc proves it.
+2. The three source-string-asserting tests — grep-proven above.
+3. Nothing else: the code-identity script shows zero token changes in my area.
