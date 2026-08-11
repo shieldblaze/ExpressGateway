@@ -1,4 +1,5 @@
-//! SEC-2-12 proof: the loader's belt-and-suspenders license check must refuse an ELF that lacks a `license` section, and must refuse an ELF whose `license` section payload is not `"GPL\0"`.
+//! SEC-2-12 proof: the loader's belt-and-suspenders license check must refuse an ELF that lacks a
+//! `license` section, and must refuse an ELF whose `license` section payload is not `"GPL\0"`.
 
 #![cfg(target_os = "linux")]
 
@@ -15,7 +16,8 @@ fn test_loader_refuses_elf_without_license() {
     );
 }
 
-/// SEC-2-12: a "real" looking ELF (valid header) but no `license` section is also rejected with a message that names the missing section, so operators can fix the build.
+/// SEC-2-12: a "real" looking ELF (valid header) but no `license` section is also rejected with a
+/// message that names the missing section, so operators can fix the build.
 #[test]
 fn test_loader_refuses_real_elf_without_license_section() {
     let mut elf = vec![0u8; 64];

@@ -9,7 +9,8 @@ use hyper::body::Incoming;
 use hyper::service::service_fn;
 use hyper_util::rt::TokioIo;
 
-/// Spawn a hyper H1 server on a duplex pair, then issue a client request that carries `Expect: 100-continue` and a body.
+/// Spawn a hyper H1 server on a duplex pair, then issue a client request that carries `Expect:
+/// 100-continue` and a body.
 #[tokio::test(flavor = "current_thread")]
 async fn test_100_continue_traverses_lb() {
     let (server_io, client_io) = tokio::io::duplex(64 * 1024);

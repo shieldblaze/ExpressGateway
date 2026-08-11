@@ -1,7 +1,10 @@
 //! ROUND8-L4-12: real RTM_GETLINK XDP prog-id query (Linux-only).
 //!
-//! Closes the EBUSY-on-redeploy hazard: a plain attach onto an interface still holding our previous program fails `EBUSY`, so replacing it — or VERIFYING a detach really removed it —
-//! requires the kernel-visible `prog_id` bound to `IFLA_XDP`. aya 0.13.1 exposes no public `bpf_xdp_query`, so the query goes over a raw `AF_NETLINK`/`NETLINK_ROUTE` socket, the same thing `ip link show` does.
+//! Closes the EBUSY-on-redeploy hazard: a plain attach onto an interface still holding our previous
+//! program fails `EBUSY`, so replacing it — or VERIFYING a detach really removed it —
+//! requires the kernel-visible `prog_id` bound to `IFLA_XDP`. aya 0.13.1 exposes no public
+//! `bpf_xdp_query`, so the query goes over a raw `AF_NETLINK`/`NETLINK_ROUTE` socket, the same
+//! thing `ip link show` does.
 //!
 //! Wire format (kernel UAPI, stable since Linux 4.13):
 //! ```text
@@ -18,7 +21,9 @@
 //!       rtattr IFLA_XDP_ATTACHED (2) -> u8   (XDP mode)
 //! ```
 //!
-//! [`parse_getlink_response`] / [`parse_ifinfo_payload`] are pure, allocation-free and panic-free (no slice indexing — every read goes through `.get()`), so the byte-parse proof in `tests/round8_netlink_xdp_query.rs` runs against a real-shaped blob without `CAP_NET_ADMIN`.
+//! [`parse_getlink_response`] / [`parse_ifinfo_payload`] are pure, allocation-free and panic-free
+//! (no slice indexing — every read goes through `.get()`), so the byte-parse proof in
+//! `tests/round8_netlink_xdp_query.rs` runs against a real-shaped blob without `CAP_NET_ADMIN`.
 
 #![cfg(target_os = "linux")]
 #![allow(unsafe_code)]
@@ -47,7 +52,8 @@ const fn align(len: usize, to: usize) -> usize {
     (len + to - 1) & !(to - 1)
 }
 
-/// Slice-safe helpers — every multibyte read goes through `.get()` so a hostile or truncated kernel buffer can never panic (the crate denies `clippy::indexing_slicing`).
+/// Slice-safe helpers — every multibyte read goes through `.get()` so a hostile or truncated kernel
+/// buffer can never panic (the crate denies `clippy::indexing_slicing`).
 #[inline]
 fn read_u16(buf: &[u8], at: usize) -> Option<u16> {
     let end = at.checked_add(2)?;
@@ -75,13 +81,16 @@ fn read_i32(buf: &[u8], at: usize) -> Option<i32> {
 /// One decoded XDP attachment fact for an interface.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct XdpLinkInfo {
-    /// Kernel `bpf_prog_info.id` of the attached program. `None` means the `IFLA_XDP` nested block carried no `IFLA_XDP_PROG_ID`, i.e. nothing is attached.
+    /// Kernel `bpf_prog_info.id` of the attached program. `None` means the `IFLA_XDP` nested block
+    /// carried no `IFLA_XDP_PROG_ID`, i.e. nothing is attached.
     pub prog_id: Option<u32>,
     /// Raw `IFLA_XDP_ATTACHED` mode byte (`XDP_ATTACHED_*`), if the kernel reported it.
     pub attached_mode: Option<u8>,
 }
 
-/// Parse a `RTM_NEWLINK` reply body (everything after the leading 16-byte `nlmsghdr`, starting at the `ifinfomsg`) and pull out the `IFLA_XDP` nested block. Returns a default (prog_id `None`) when nothing is attached — the success signal `detach_verifying` needs.
+/// Parse a `RTM_NEWLINK` reply body (everything after the leading 16-byte `nlmsghdr`, starting at
+/// the `ifinfomsg`) and pull out the `IFLA_XDP` nested block. Returns a default (prog_id `None`)
+/// when nothing is attached — the success signal `detach_verifying` needs.
 #[must_use]
 pub fn parse_ifinfo_payload(payload: &[u8]) -> XdpLinkInfo {
     let mut out = XdpLinkInfo::default();
@@ -109,14 +118,16 @@ pub fn parse_ifinfo_payload(payload: &[u8]) -> XdpLinkInfo {
             }
         }
     }
-    // The kernel never hands out prog_id 0; treat 0 as "none" so attach_replacing does not think a foreign prog 0 owns the iface.
+    // The kernel never hands out prog_id 0; treat 0 as "none" so attach_replacing does not think a
+    // foreign prog 0 owns the iface.
     if out.prog_id == Some(0) {
         out.prog_id = None;
     }
     out
 }
 
-/// Parse a full netlink datagram and return the XDP link info from the first `RTM_NEWLINK`. `NLMSG_ERROR` with a non-zero errno becomes `Err`; `NLMSG_DONE` and unrelated types are skipped.
+/// Parse a full netlink datagram and return the XDP link info from the first `RTM_NEWLINK`.
+/// `NLMSG_ERROR` with a non-zero errno becomes `Err`; `NLMSG_DONE` and unrelated types are skipped.
 pub fn parse_getlink_response(buf: &[u8]) -> io::Result<XdpLinkInfo> {
     const NLMSG_ERROR: u16 = 0x2;
     const NLMSG_DONE: u16 = 0x3;
@@ -188,7 +199,8 @@ pub fn parse_getlink_response(buf: &[u8]) -> io::Result<XdpLinkInfo> {
     Ok(XdpLinkInfo::default())
 }
 
-/// Minimal `rtattr` TLV iterator (`rta_len: u16, rta_type: u16`, payload, padded to `RTA_ALIGNTO`). A malformed entry terminates iteration — never panics, never loops forever.
+/// Minimal `rtattr` TLV iterator (`rta_len: u16, rta_type: u16`, payload, padded to `RTA_ALIGNTO`).
+/// A malformed entry terminates iteration — never panics, never loops forever.
 struct RtattrIter<'a> {
     buf: &'a [u8],
     pos: usize,
@@ -225,7 +237,8 @@ impl<'a> Iterator for RtattrIter<'a> {
     }
 }
 
-/// Live query: open an `AF_NETLINK`/`NETLINK_ROUTE` socket, send an `RTM_GETLINK` for `iface`, and return the attached XDP `prog_id` (or `None`). A read needs no `CAP_NET_ADMIN`.
+/// Live query: open an `AF_NETLINK`/`NETLINK_ROUTE` socket, send an `RTM_GETLINK` for `iface`, and
+/// return the attached XDP `prog_id` (or `None`). A read needs no `CAP_NET_ADMIN`.
 pub fn query_xdp_prog_id(iface: &str) -> io::Result<Option<u32>> {
     let ifindex = if_nametoindex(iface)?;
     let buf = rtm_getlink_roundtrip(ifindex)?;
@@ -275,7 +288,8 @@ fn rtm_getlink_roundtrip(ifindex: u32) -> io::Result<Vec<u8>> {
     }
     let _guard = OwnedFd(fd);
 
-    // Request: nlmsghdr(16) + ifinfomsg(16), built field-by-field into a fixed buffer via slice-safe writes.
+    // Request: nlmsghdr(16) + ifinfomsg(16), built field-by-field into a fixed buffer via
+    // slice-safe writes.
     let total = NLMSGHDR_LEN + IFINFOMSG_LEN;
     let mut req = vec![0u8; total];
     write_at(&mut req, 0, &(total as u32).to_ne_bytes())?;

@@ -7,7 +7,8 @@ use lb_l4_xdp::loader::{
     L7_PORTS_PIN_NAME, STATS_PIN_NAME,
 };
 
-/// Always-on: pin-name constants must literally match the `#[map(name = "...")]` strings in the eBPF source.
+/// Always-on: pin-name constants must literally match the `#[map(name = "...")]` strings in the
+/// eBPF source.
 #[test]
 fn pin_name_constants_match_ebpf_source() {
     let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/ebpf/src/main.rs"))
@@ -29,7 +30,8 @@ fn pin_name_constants_match_ebpf_source() {
     }
 }
 
-/// Default pin directory must be exactly the path the plan + the systemd unit + the operator runbook all reference.
+/// Default pin directory must be exactly the path the plan + the systemd unit + the operator
+/// runbook all reference.
 #[test]
 fn default_pin_dir_is_canonical() {
     assert_eq!(
@@ -39,7 +41,8 @@ fn default_pin_dir_is_canonical() {
     );
 }
 
-/// EBPF-2-05 named proof test: maps pinned by subprocess A must be reusable by subprocess B with state intact.
+/// EBPF-2-05 named proof test: maps pinned by subprocess A must be reusable by subprocess B with
+/// state intact.
 #[test]
 #[ignore = "needs CAP_BPF + bpffs mount — runs in CI privileged stage"]
 fn test_maps_pinned_then_loaded_from_pin() {

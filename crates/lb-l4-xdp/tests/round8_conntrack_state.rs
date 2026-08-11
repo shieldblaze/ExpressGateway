@@ -1,6 +1,10 @@
 //! ROUND8-L4-02 proof: TCP-state-aware conntrack pruning.
 //!
-//! Cilium `bpf/lib/conntrack.h` lesson: pure LRU is vulnerable to a sliding-RST replay (an adversary spraying RST/FIN across already-evicted flows fills the LRU's young end and pushes live flows toward eviction). The eBPF path is unreachable in CI, so this models the BPF state machine over the userspace table + the `StatSlot` vocabulary, turning any drift between the two into a test failure.
+//! Cilium `bpf/lib/conntrack.h` lesson: pure LRU is vulnerable to a sliding-RST replay (an
+//! adversary spraying RST/FIN across already-evicted flows fills the LRU's young end and pushes
+//! live flows toward eviction). The eBPF path is unreachable in CI, so this models the BPF state
+//! machine over the userspace table + the `StatSlot` vocabulary, turning any drift between the two
+//! into a test failure.
 
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
@@ -8,7 +12,8 @@
 use lb_l4_xdp::stats_export::{NUM_SLOTS, StatSlot};
 use lb_l4_xdp::{ConntrackTable, FlowKey};
 
-// TCP flag bits as they appear on the wire — the same constants the BPF program uses (`ebpf/src/main.rs` TCP_FLAG_*).
+// TCP flag bits as they appear on the wire — the same constants the BPF program uses
+// (`ebpf/src/main.rs` TCP_FLAG_*).
 const FIN: u8 = 0x01;
 const RST: u8 = 0x04;
 const ACK: u8 = 0x10;
@@ -27,7 +32,8 @@ struct Stats {
     ct_hit: u64,
 }
 
-/// Simulator of the eBPF program's TCP path: lookup + state-aware prune (matches the inline code in `handle_ipv4`).
+/// Simulator of the eBPF program's TCP path: lookup + state-aware prune (matches the inline code in
+/// `handle_ipv4`).
 fn sim_tcp_path(
     table: &mut ConntrackTable,
     stats: &mut Stats,
@@ -47,12 +53,14 @@ fn sim_tcp_path(
     };
     stats.ct_hit += 1;
 
-    // 3. Sentinel guard (ROUND8-L4-01) is covered by the L4-01 test; modelled here as "any backend index is valid".
+    // 3. Sentinel guard (ROUND8-L4-01) is covered by the L4-01 test; modelled here as "any backend
+    //    index is valid".
     let _ = backend;
 
     let action = Action::Tx;
 
-    // 5. FIN-ACK prune AFTER the rewrite: the last FIN-ACK is forwarded, but the slot is freed so a replay cannot keep a closed flow alive.
+    // 5. FIN-ACK prune AFTER the rewrite: the last FIN-ACK is forwarded, but the slot is freed so a
+    //    replay cannot keep a closed flow alive.
     if (flags & FIN) != 0 && (flags & ACK) != 0 {
         table.remove(flow);
         stats.fin_prune += 1;
@@ -143,7 +151,8 @@ fn syn_ack_does_not_prune() {
 
 #[test]
 fn rst_replay_only_evicts_matching_flow() {
-    // An RST for flow A must not affect flow B — this is what guards live flows against the sliding-RST replay.
+    // An RST for flow A must not affect flow B — this is what guards live flows against the
+    // sliding-RST replay.
     let mut table = ConntrackTable::new();
     let mut stats = Stats::default();
     let a = flow(50000);
@@ -176,10 +185,14 @@ fn rst_for_untracked_flow_is_no_op_on_table() {
 
 #[test]
 fn stat_slot_indices_for_prune_slots_are_stable() {
-    // Wire-stability: operators key Prom recording rules off the slot index; the L4-02 commit is the source of truth for slot 13/14.
+    // Wire-stability: operators key Prom recording rules off the slot index; the L4-02 commit is
+    // the source of truth for slot 13/14.
     assert_eq!(StatSlot::CtRstPrune as usize, 13);
     assert_eq!(StatSlot::CtFinPrune as usize, 14);
-    // Every prune slot must fall inside the `read_stats()` `0..NUM_SLOTS` loop, and the last kernel slot must be the last STAT_*-backed variant. Both are expressed RELATIVE to the enum (not a literal) so the next slot addition cannot silently break the read loop — an earlier `CtFinPrune + 1 == NUM_SLOTS` literal regressed exactly that way.
+    // Every prune slot must fall inside the `read_stats()` `0..NUM_SLOTS` loop, and the last kernel
+    // slot must be the last STAT_*-backed variant. Both are expressed RELATIVE to the enum (not a
+    // literal) so the next slot addition cannot silently break the read loop — an earlier
+    // `CtFinPrune + 1 == NUM_SLOTS` literal regressed exactly that way.
     assert!(
         (StatSlot::CtRstPrune as usize) < NUM_SLOTS,
         "CtRstPrune slot must be inside the read_stats loop"

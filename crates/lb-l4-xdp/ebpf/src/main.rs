@@ -1,10 +1,13 @@
 //! L4 XDP data plane for TCP/UDP load balancing.
 //!
-//! IPv4: parse eth (optionally stripping ONE 802.1Q tag — QinQ is deferred), ACL_DENY_TRIE on src IP, ports, CONNTRACK; on a hit rewrite MAC + dst IP + dst port with RFC 1624
-//! incremental checksum updates and `XDP_TX`, on a miss `XDP_PASS` so userspace picks a backend. IPv6 mirrors it (up to two extension headers; no L3 checksum, but the L4 checksum
+//! IPv4: parse eth (optionally stripping ONE 802.1Q tag — QinQ is deferred), ACL_DENY_TRIE on src
+//! IP, ports, CONNTRACK; on a hit rewrite MAC + dst IP + dst port with RFC 1624
+//! incremental checksum updates and `XDP_TX`, on a miss `XDP_PASS` so userspace picks a backend.
+//! IPv6 mirrors it (up to two extension headers; no L3 checksum, but the L4 checksum
 //! covers the pseudo-header so RFC 1624 still applies).
 //!
-//! On ANY bounds-check failure the program returns `XDP_PASS` — never `XDP_DROP` on a parse failure.
+//! On ANY bounds-check failure the program returns `XDP_PASS` — never `XDP_DROP` on a parse
+//! failure.
 
 #![no_std]
 #![no_main]
@@ -19,7 +22,9 @@
 )]
 #![warn(clippy::pedantic)]
 
-// EBPF-2-01/02: the kernel `BPF_PROG_LOAD` syscall reads `bpf_attr.license` from this ELF section; declaring it explicitly drops the dependency on aya-obj's "GPL" default, and `no_mangle` keeps bpf-linker's DCE from stripping the symbol.
+// EBPF-2-01/02: the kernel `BPF_PROG_LOAD` syscall reads `bpf_attr.license` from this ELF section;
+// declaring it explicitly drops the dependency on aya-obj's "GPL" default, and `no_mangle` keeps
+// bpf-linker's DCE from stripping the symbol.
 #[unsafe(link_section = "license")]
 #[unsafe(no_mangle)]
 pub static LICENSE: [u8; 4] = *b"GPL\0";
@@ -29,7 +34,9 @@ use core::mem;
 use aya_ebpf::{
     bindings::xdp_action,
     macros::{map, xdp},
-    // EBPF-2-03: CONNTRACK/CONNTRACK_V6 are LruHashMap so the kernel evicts the oldest entry under flood instead of returning ENOMEM. L7_PORTS is config-managed, never flood-pressured, so it stays a plain HashMap.
+    // EBPF-2-03: CONNTRACK/CONNTRACK_V6 are LruHashMap so the kernel evicts the oldest entry under
+    // flood instead of returning ENOMEM. L7_PORTS is config-managed, never flood-pressured, so it
+    // stays a plain HashMap.
     maps::{HashMap, LpmTrie, LruHashMap, PerCpuArray, lpm_trie::Key as LpmKey},
     programs::XdpContext,
 };
@@ -96,7 +103,8 @@ struct Ipv6Hdr {
     dst: [u8; 16],
 }
 
-/// IPv6 extension-header shape; only `next_header` + `hdr_ext_len` are consulted. `hdr_ext_len` is in 8-byte units NOT counting the first 8 bytes — the kernel convention.
+/// IPv6 extension-header shape; only `next_header` + `hdr_ext_len` are consulted. `hdr_ext_len` is
+/// in 8-byte units NOT counting the first 8 bytes — the kernel convention.
 #[repr(C, packed(2))]
 struct Ipv6ExtHdr {
     next_header: u8,
@@ -110,13 +118,17 @@ struct TcpHdr {
     _seq: u32,
     _ack: u32,
     _data_offset_ns: u8,
-    /// CWR | ECE | URG | ACK | PSH | RST | SYN | FIN — read by ROUND8-L4-02 for state-aware conntrack pruning.
+    /// CWR | ECE | URG | ACK | PSH | RST | SYN | FIN — read by ROUND8-L4-02 for state-aware
+    /// conntrack pruning.
     flags: u8,
     _window: u16,
 }
 
-/// ROUND8-L4-02: TCP control bits for the state-aware conntrack prune (Cilium `bpf/lib/conntrack.h`). Pure LRU is vulnerable to a sliding-RST replay: an adversary spraying RST/FIN
-/// across evicted flows fills the LRU's young end and pushes live flows out. Pruning on RST and on FIN-ACK tracks TCP-FSM reality without a verifier-costly full FSM.
+/// ROUND8-L4-02: TCP control bits for the state-aware conntrack prune (Cilium
+/// `bpf/lib/conntrack.h`). Pure LRU is vulnerable to a sliding-RST replay: an adversary spraying
+/// RST/FIN
+/// across evicted flows fills the LRU's young end and pushes live flows out. Pruning on RST and on
+/// FIN-ACK tracks TCP-FSM reality without a verifier-costly full FSM.
 const TCP_FLAG_FIN: u8 = 0x01;
 const TCP_FLAG_RST: u8 = 0x04;
 const TCP_FLAG_ACK: u8 = 0x10;
@@ -153,7 +165,8 @@ pub struct FlowKeyV6 {
     pub _pad: [u8; 3],
 }
 
-/// Conntrack value for IPv4 flows. Carries the full rewrite state so the BPF program needs no secondary lookup to run an `XDP_TX`.
+/// Conntrack value for IPv4 flows. Carries the full rewrite state so the BPF program needs no
+/// secondary lookup to run an `XDP_TX`.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct BackendEntry {
@@ -176,17 +189,24 @@ pub struct BackendEntryV6 {
     pub src_mac: [u8; 6],
 }
 
-// ROUND8-L4-04: atomic per-VIP backend-table publication (Unimog / l4drop D1). `BackendTable` is ONE map value, so a single `bpf_map_update_elem` of the whole struct is atomic w.r.t.
-// concurrent lookups — a reader sees the entire old or entire new table, never a torn merge. That single-syscall publication IS the fix for the previous N-syscall window.
+// ROUND8-L4-04: atomic per-VIP backend-table publication (Unimog / l4drop D1). `BackendTable` is
+// ONE map value, so a single `bpf_map_update_elem` of the whole struct is atomic w.r.t.
+// concurrent lookups — a reader sees the entire old or entire new table, never a torn merge. That
+// single-syscall publication IS the fix for the previous N-syscall window.
 //
-// SCOPE: this freezes the layout + the userspace publish/daisy-chain contract only. The verifier-heavy hot-path read (per-packet `BACKENDS_V4[vip]` + bounded `entries[hash % count]`
-// + generation compare) lands with consistent-hash selection; wiring it now would force a verifier-log re-capture for a path no production flow exercises yet.
+// SCOPE: this freezes the layout + the userspace publish/daisy-chain contract only. The
+// verifier-heavy hot-path read (per-packet `BACKENDS_V4[vip]` + bounded `entries[hash % count]`
+// + generation compare) lands with consistent-hash selection; wiring it now would force a
+// verifier-log re-capture for a path no production flow exercises yet.
 
-/// ROUND8-L4-04: verifier-tractable ceiling on backends per VIP. More needs partitioning or Maglev consistent hashing (`audit/deferred.md`).
+/// ROUND8-L4-04: verifier-tractable ceiling on backends per VIP. More needs partitioning or Maglev
+/// consistent hashing (`audit/deferred.md`).
 pub const MAX_BACKENDS_PER_VIP: usize = 64;
 
-/// ROUND8-L4-04: per-VIP backend table, published atomically as a single map value (Unimog D1). `generation` increments on every publish; a CT entry whose remembered generation differs is
-/// in the transitional window and consults `previous_entries` (Unimog lesson 3), so in-flight flows reach the previous backend instead of being stranded.
+/// ROUND8-L4-04: per-VIP backend table, published atomically as a single map value (Unimog D1).
+/// `generation` increments on every publish; a CT entry whose remembered generation differs is
+/// in the transitional window and consults `previous_entries` (Unimog lesson 3), so in-flight flows
+/// reach the previous backend instead of being stranded.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct BackendTable {
@@ -205,8 +225,10 @@ pub struct BackendTable {
 static BACKENDS_V4: HashMap<u32, BackendTable> =
     HashMap::<u32, BackendTable>::with_max_entries(1024, 0);
 
-/// ROUND8-L4-04: verifier-safe, behaviorally-inert reference to `BACKENDS_V4`, called once on the IPv4 CT-miss path so (1) bpf-linker DCE keeps the map + its BTF alive and (2) a lookup
-/// that observes a published table proves the single-syscall swap is visible to the data plane. It deliberately does NOT select a backend or mutate CONNTRACK — that is the deferred
+/// ROUND8-L4-04: verifier-safe, behaviorally-inert reference to `BACKENDS_V4`, called once on the
+/// IPv4 CT-miss path so (1) bpf-linker DCE keeps the map + its BTF alive and (2) a lookup
+/// that observes a published table proves the single-syscall swap is visible to the data plane. It
+/// deliberately does NOT select a backend or mutate CONNTRACK — that is the deferred
 /// verifier-heavy piece. Without this the map reads as dead code.
 #[inline(always)]
 fn backend_table_published(vip: u32) -> bool {
@@ -226,22 +248,31 @@ const STAT_CT_HIT_V6: u32 = 6;
 const STAT_TX_V6: u32 = 7;
 const STAT_VLAN: u32 = 8;
 const STAT_V6_EXT_UNSUPPORTED: u32 = 9;
-/// ROUND8-L4-01: a conntrack hit whose backend_ip/backend_port is zero is an unpopulated controller entry. PASS (not drop) so the kernel still routes it; the counter is the signal.
+/// ROUND8-L4-01: a conntrack hit whose backend_ip/backend_port is zero is an unpopulated controller
+/// entry. PASS (not drop) so the kernel still routes it; the counter is the signal.
 const STAT_BACKEND_UNPOPULATED: u32 = 10;
-/// ROUND8-L4-08: IPv4 fragment seen — passed to the kernel for reassembly (Katran/Cilium design: no in-XDP reassembly).
+/// ROUND8-L4-08: IPv4 fragment seen — passed to the kernel for reassembly (Katran/Cilium design: no
+/// in-XDP reassembly).
 const STAT_V4_FRAGMENT: u32 = 11;
 const STAT_V6_FRAGMENT: u32 = 12;
-/// ROUND8-L4-02: a TCP RST evicted its conntrack entry. The packet still goes `XDP_PASS` so the RST reaches the peer end-to-end; only flow *tracking* stops.
+/// ROUND8-L4-02: a TCP RST evicted its conntrack entry. The packet still goes `XDP_PASS` so the RST
+/// reaches the peer end-to-end; only flow *tracking* stops.
 const STAT_CT_RST_PRUNE: u32 = 13;
-/// ROUND8-L4-02: a TCP FIN-ACK evicted its conntrack entry. The packet is still forwarded (`XDP_TX`), but the slot is freed so a replay cannot pin LRU capacity.
+/// ROUND8-L4-02: a TCP FIN-ACK evicted its conntrack entry. The packet is still forwarded
+/// (`XDP_TX`), but the slot is freed so a replay cannot pin LRU capacity.
 const STAT_CT_FIN_PRUNE: u32 = 14;
-/// ROUND8-L4-03: a new flow (conntrack miss) was rate-capped under a SYN flood. Per Katran `is_under_flood()`, above the per-CPU cap the miss path short-circuits to `XDP_PASS` WITHOUT
-/// signalling userspace to populate CONNTRACK, so the LRU stays stable for established (CT-hit) flows instead of being thrashed by the attacker's unique 5-tuples.
+/// ROUND8-L4-03: a new flow (conntrack miss) was rate-capped under a SYN flood. Per Katran
+/// `is_under_flood()`, above the per-CPU cap the miss path short-circuits to `XDP_PASS` WITHOUT
+/// signalling userspace to populate CONNTRACK, so the LRU stays stable for established (CT-hit)
+/// flows instead of being thrashed by the attacker's unique 5-tuples.
 const STAT_NEW_FLOW_RATE_CAP: u32 = 15;
 
-// EBPF-2-03: LRU_HASH evicts the oldest entry under flood instead of returning ENOMEM at insert, closing the flow-spray DoS that starved legitimate new connections.
+// EBPF-2-03: LRU_HASH evicts the oldest entry under flood instead of returning ENOMEM at insert,
+// closing the flow-spray DoS that starved legitimate new connections.
 //
-// EBPF-2-05: the explicit lowercase `name = …` decouples the on-disk pin filename from Rust identifier churn — aya defaults it to the uppercased identifier, so a rename of the Rust static would force a pin rename + state loss.
+// EBPF-2-05: the explicit lowercase `name = …` decouples the on-disk pin filename from Rust
+// identifier churn — aya defaults it to the uppercased identifier, so a rename of the Rust static
+// would force a pin rename + state loss.
 #[map(name = "conntrack")]
 static CONNTRACK: LruHashMap<FlowKey, BackendEntry> =
     LruHashMap::<FlowKey, BackendEntry>::with_max_entries(1_000_000, 0);
@@ -253,18 +284,22 @@ static CONNTRACK_V6: LruHashMap<FlowKeyV6, BackendEntryV6> =
 #[map(name = "l7_ports")]
 static L7_PORTS: HashMap<u16, u8> = HashMap::<u16, u8>::with_max_entries(256, 0);
 
-/// IPv4 deny ACL as a longest-prefix-match trie. Key data is the address in network byte order; `prefix_len` is the CIDR mask length.
+/// IPv4 deny ACL as a longest-prefix-match trie. Key data is the address in network byte order;
+/// `prefix_len` is the CIDR mask length.
 #[map(name = "acl_deny_trie")]
 static ACL_DENY_TRIE: LpmTrie<u32, u32> = LpmTrie::<u32, u32>::with_max_entries(100_000, 0);
 
 #[map(name = "stats")]
 static STATS: PerCpuArray<u64> = PerCpuArray::<u64>::with_max_entries(32, 0);
 
-// ROUND8-L4-03: per-CPU new-flow-rate tracker (Katran `is_under_flood()` lesson 4). Under a SYN flood an attacker sprays millions of unique 5-tuples/sec; each is a CT miss the control
-// plane would answer with a `bpf_map_update_elem`, making every established flow an LRU eviction loser. The cap is per-CPU (XDP runs one instance per RX queue, so no cross-CPU
+// ROUND8-L4-03: per-CPU new-flow-rate tracker (Katran `is_under_flood()` lesson 4). Under a SYN
+// flood an attacker sprays millions of unique 5-tuples/sec; each is a CT miss the control
+// plane would answer with a `bpf_map_update_elem`, making every established flow an LRU eviction
+// loser. The cap is per-CPU (XDP runs one instance per RX queue, so no cross-CPU
 // coherence cost) over a 1 s window keyed off `bpf_ktime_get_ns()`.
 //
-// IMPORTANT: this changes the BPF source, so the verifier-log baselines under `audit/ebpf/verifier-logs/*.committed` must be refreshed by the next CI matrix run.
+// IMPORTANT: this changes the BPF source, so the verifier-log baselines under
+// `audit/ebpf/verifier-logs/*.committed` must be refreshed by the next CI matrix run.
 
 /// Per-CPU sliding-window counter for the new-flow-rate cap.
 #[repr(C)]
@@ -278,18 +313,23 @@ pub struct RateWindow {
 #[map(name = "new_flow_rate")]
 static NEW_FLOW_RATE: PerCpuArray<RateWindow> = PerCpuArray::<RateWindow>::with_max_entries(1, 0);
 
-/// Runtime-tunable per-CPU new-flow cap — a one-entry per-CPU array the hot path reads once per CT-miss (verifier-cheap). A zero value means the operator DISABLED the cap.
+/// Runtime-tunable per-CPU new-flow cap — a one-entry per-CPU array the hot path reads once per
+/// CT-miss (verifier-cheap). A zero value means the operator DISABLED the cap.
 #[map(name = "new_flow_cap_cfg")]
 static NEW_FLOW_CAP_CFG: PerCpuArray<u32> = PerCpuArray::<u32>::with_max_entries(1, 0);
 
-/// ROUND8-L4-03: Katran `MAX_CONN_RATE` parity — the compile-time fallback for the window before userspace first writes `NEW_FLOW_CAP_CFG`. Since 0 in the cfg map means "operator
-/// disabled", not-yet-written is distinguished from disabled by consulting this fallback ONLY when the slot is unreadable.
+/// ROUND8-L4-03: Katran `MAX_CONN_RATE` parity — the compile-time fallback for the window before
+/// userspace first writes `NEW_FLOW_CAP_CFG`. Since 0 in the cfg map means "operator
+/// disabled", not-yet-written is distinguished from disabled by consulting this fallback ONLY when
+/// the slot is unreadable.
 const DEFAULT_NEW_FLOW_CAP_PER_CPU: u32 = 125_000;
 
 const RATE_WINDOW_NS: u64 = 1_000_000_000;
 
-/// ROUND8-L4-03: true when this CPU has admitted more than the configured cap of new flows in the current 1 s window (Katran `is_under_flood()`: per-CPU window, reset on rollover,
-/// increment-then-compare). Called only on the CT-MISS path — an established flow is never rate-capped, which is the whole point.
+/// ROUND8-L4-03: true when this CPU has admitted more than the configured cap of new flows in the
+/// current 1 s window (Katran `is_under_flood()`: per-CPU window, reset on rollover,
+/// increment-then-compare). Called only on the CT-MISS path — an established flow is never
+/// rate-capped, which is the whole point.
 #[inline(always)]
 fn is_under_flood() -> bool {
     let cap = match NEW_FLOW_CAP_CFG.get_ptr(0) {
@@ -302,7 +342,8 @@ fn is_under_flood() -> bool {
         return false;
     }
     let Some(slot) = NEW_FLOW_RATE.get_ptr_mut(0) else {
-        // Map unreadable — fail OPEN (do not drop legitimate traffic because telemetry state is unavailable).
+        // Map unreadable — fail OPEN (do not drop legitimate traffic because telemetry state is
+        // unavailable).
         return false;
     };
     // SAFETY: aya returned a non-null pointer for this CPU's slot;
@@ -318,18 +359,22 @@ fn is_under_flood() -> bool {
 }
 
 
-// ROUND8-L4-09: every addition in `ptr_at`/`ptr_at_mut` uses `checked_add`. Callers pass compile-time-known offsets today, but the verifier evolves between LTS kernels and aya #1562
-// documented scalar/pointer re-ordering on recent rustc/LLVM. This guards the CVE-2022-23222-class bounds-check elision for any future runtime-controlled offset; `checked_add` lowers to
+// ROUND8-L4-09: every addition in `ptr_at`/`ptr_at_mut` uses `checked_add`. Callers pass
+// compile-time-known offsets today, but the verifier evolves between LTS kernels and aya #1562
+// documented scalar/pointer re-ordering on recent rustc/LLVM. This guards the CVE-2022-23222-class
+// bounds-check elision for any future runtime-controlled offset; `checked_add` lowers to
 // `llvm.uadd.with.overflow.i64`, which the verifier handles on 5.15+.
 //
-// IMPORTANT: changing this file obliges a refresh of the verifier-log baselines under `audit/ebpf/verifier-logs/*.log.committed`.
+// IMPORTANT: changing this file obliges a refresh of the verifier-log baselines under
+// `audit/ebpf/verifier-logs/*.log.committed`.
 
 #[inline(always)]
 unsafe fn ptr_at<T>(ctx: &XdpContext, offset: usize) -> Option<*const T> {
     let start = ctx.data();
     let end = ctx.data_end();
     let len = mem::size_of::<T>();
-    // Checked arithmetic so the bounds-check cannot be elided via wrap-around (aya #1562 / CVE-2022-23222 class).
+    // Checked arithmetic so the bounds-check cannot be elided via wrap-around (aya #1562 /
+    // CVE-2022-23222 class).
     let needed = start.checked_add(offset)?.checked_add(len)?;
     if needed > end {
         return None;
@@ -363,7 +408,8 @@ fn incr_stat(idx: u32) {
     }
 }
 
-// RFC 1624 incremental checksum helpers. §3: HC' = ~(~HC + ~m + m'), where HC is the old checksum, m the old 16-bit field and m' the new one. Operates on already-folded
+// RFC 1624 incremental checksum helpers. §3: HC' = ~(~HC + ~m + m'), where HC is the old checksum,
+// m the old 16-bit field and m' the new one. Operates on already-folded
 // ones-complement sums; carries are folded at the end.
 
 #[inline(always)]
@@ -374,7 +420,8 @@ fn fold32(mut sum: u32) -> u16 {
     sum as u16
 }
 
-/// Incrementally update a 16-bit one's-complement checksum (RFC 1624 eq. 3). Fields are host-neutral, so callers may pass raw packet bytes directly.
+/// Incrementally update a 16-bit one's-complement checksum (RFC 1624 eq. 3). Fields are
+/// host-neutral, so callers may pass raw packet bytes directly.
 #[inline(always)]
 fn csum16_update(old_csum: u16, old_field: u16, new_field: u16) -> u16 {
     // ~HC + ~m + m', as u32 to preserve carries through the folds.
@@ -456,7 +503,8 @@ fn handle_ipv4(ctx: &XdpContext, l3_offset: usize) -> Result<u32, ()> {
     let src_addr = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*ip).src)) };
     let dst_addr = unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*ip).dst)) };
 
-    // ROUND8-L4-08: RFC 791 §3.1 — `frag_off` bit 14 is MF and bits 0..12 are the offset in 8-byte units. MF==1 or offset>0 means this is not a complete datagram: pass to the kernel
+    // ROUND8-L4-08: RFC 791 §3.1 — `frag_off` bit 14 is MF and bits 0..12 are the offset in 8-byte
+    // units. MF==1 or offset>0 means this is not a complete datagram: pass to the kernel
     // for reassembly (Katran/Cilium design).
     let frag_off_be =
         unsafe { core::ptr::read_unaligned(core::ptr::addr_of!((*ip).frag_off)) };
@@ -466,7 +514,8 @@ fn handle_ipv4(ctx: &XdpContext, l3_offset: usize) -> Result<u32, ()> {
         return Ok(xdp_action::XDP_PASS);
     }
 
-    // LPM key data is u32 in network byte order; a /32 lookup returns the most specific matching deny prefix.
+    // LPM key data is u32 in network byte order; a /32 lookup returns the most specific matching
+    // deny prefix.
     let lpm_key = LpmKey::<u32>::new(32, src_addr);
     if ACL_DENY_TRIE.get(&lpm_key).is_some() {
         incr_stat(STAT_DROP);
@@ -474,7 +523,8 @@ fn handle_ipv4(ctx: &XdpContext, l3_offset: usize) -> Result<u32, ()> {
     }
 
     let l4_offset = l3_offset + ip_hdr_len;
-    // ROUND8-L4-02: parse TCP flags alongside the ports so the prune branch fires BEFORE the rewrite path.
+    // ROUND8-L4-02: parse TCP flags alongside the ports so the prune branch fires BEFORE the
+    // rewrite path.
     let (src_port, dst_port, tcp_flags) = match protocol {
         IPPROTO_TCP => {
             let tcp = unsafe { ptr_at::<TcpHdr>(ctx, l4_offset).ok_or(())? };
@@ -520,8 +570,10 @@ fn handle_ipv4(ctx: &XdpContext, l3_offset: usize) -> Result<u32, ()> {
         _pad: [0; 3],
     };
 
-    // ROUND8-L4-02: prune BEFORE the lookup-and-rewrite hot path. The LRU returns the entry even on RST/FIN-ACK and we always want the slot freed, so a sliding-RST replay cannot pin LRU
-    // capacity. The packet goes XDP_PASS on RST and XDP_TX on FIN-ACK (the last FIN-ACK still needs rewriting and forwarding).
+    // ROUND8-L4-02: prune BEFORE the lookup-and-rewrite hot path. The LRU returns the entry even on
+    // RST/FIN-ACK and we always want the slot freed, so a sliding-RST replay cannot pin LRU
+    // capacity. The packet goes XDP_PASS on RST and XDP_TX on FIN-ACK (the last FIN-ACK still needs
+    // rewriting and forwarding).
     if protocol == IPPROTO_TCP && (tcp_flags & TCP_FLAG_RST) != 0 {
         // The Result is discarded: "no such key" is the steady state for unrelated RST sprays.
         let _ = CONNTRACK.remove(&key);
@@ -536,9 +588,12 @@ fn handle_ipv4(ctx: &XdpContext, l3_offset: usize) -> Result<u32, ()> {
     let entry: BackendEntry = match unsafe { CONNTRACK.get(&key) } {
         Some(v) => *v,
         None => {
-            // ROUND8-L4-04: behaviorally-inert touch that keeps the map + BTF alive for userspace `publish_backends_v4` and proves the publication is visible here.
+            // ROUND8-L4-04: behaviorally-inert touch that keeps the map + BTF alive for userspace
+            // `publish_backends_v4` and proves the publication is visible here.
             let _table_ready = backend_table_published(dst_addr);
-            // ROUND8-L4-03: a CT miss is a NEW flow — the attacker's lever under a SYN flood. Above the per-CPU cap, short-circuit to XDP_PASS WITHOUT the STAT_PASS signal the control loop reads as "populate CT". CT-hit flows above are unaffected.
+            // ROUND8-L4-03: a CT miss is a NEW flow — the attacker's lever under a SYN flood. Above
+            // the per-CPU cap, short-circuit to XDP_PASS WITHOUT the STAT_PASS signal the control
+            // loop reads as "populate CT". CT-hit flows above are unaffected.
             if is_under_flood() {
                 incr_stat(STAT_NEW_FLOW_RATE_CAP);
                 return Ok(xdp_action::XDP_PASS);
@@ -549,7 +604,8 @@ fn handle_ipv4(ctx: &XdpContext, l3_offset: usize) -> Result<u32, ()> {
     };
     incr_stat(STAT_CT_HIT_V4);
 
-    // ROUND8-L4-01: sentinel guard — a zero backend_ip/backend_port is a not-yet-populated controller entry, so XDP_PASS keeps the kernel stack as the fallback.
+    // ROUND8-L4-01: sentinel guard — a zero backend_ip/backend_port is a not-yet-populated
+    // controller entry, so XDP_PASS keeps the kernel stack as the fallback.
     if entry.backend_ip == 0 || entry.backend_port == 0 {
         incr_stat(STAT_BACKEND_UNPOPULATED);
         return Ok(xdp_action::XDP_PASS);
@@ -558,7 +614,8 @@ fn handle_ipv4(ctx: &XdpContext, l3_offset: usize) -> Result<u32, ()> {
     rewrite_v4(ctx, l3_offset, ip_hdr_len, protocol, dst_addr, &entry)?;
     incr_stat(STAT_TX_V4);
 
-    // ROUND8-L4-02: FIN-ACK prune AFTER the rewrite — the last FIN-ACK must still reach the backend, but the slot is freed so a replay cannot revive a closed flow.
+    // ROUND8-L4-02: FIN-ACK prune AFTER the rewrite — the last FIN-ACK must still reach the
+    // backend, but the slot is freed so a replay cannot revive a closed flow.
     if protocol == IPPROTO_TCP
         && (tcp_flags & TCP_FLAG_FIN) != 0
         && (tcp_flags & TCP_FLAG_ACK) != 0
@@ -686,7 +743,8 @@ fn handle_ipv6(ctx: &XdpContext, l3_offset: usize) -> Result<u32, ()> {
 
     let mut off = l3_offset + IPV6_HDR_LEN;
 
-    // Skip at most 2 extension headers (Hop-by-Hop, Routing). The verifier will not accept an unbounded loop; a fixed small count is fine.
+    // Skip at most 2 extension headers (Hop-by-Hop, Routing). The verifier will not accept an
+    // unbounded loop; a fixed small count is fine.
     let mut extensions_consumed: u32 = 0;
     while extensions_consumed < 2
         && (next_hdr == IPPROTO_HOPOPTS || next_hdr == IPPROTO_ROUTING)
@@ -709,7 +767,8 @@ fn handle_ipv6(ctx: &XdpContext, l3_offset: usize) -> Result<u32, ()> {
         return Ok(xdp_action::XDP_PASS);
     }
 
-    // ROUND8-L4-08: the IPv6 Fragment Extension Header (RFC 2460 §4.5) is present in BOTH first and later fragments, so any packet carrying it lacks a complete L4 header to rewrite.
+    // ROUND8-L4-08: the IPv6 Fragment Extension Header (RFC 2460 §4.5) is present in BOTH first and
+    // later fragments, so any packet carrying it lacks a complete L4 header to rewrite.
     if next_hdr == IPPROTO_FRAGMENT {
         incr_stat(STAT_V6_FRAGMENT);
         return Ok(xdp_action::XDP_PASS);
@@ -855,7 +914,8 @@ fn rewrite_v6(
                     core::ptr::read_unaligned(core::ptr::addr_of!((*udp_m).dst_port));
                 let old_check =
                     core::ptr::read_unaligned(core::ptr::addr_of!((*udp_m).check));
-                // IPv6 requires a non-zero UDP checksum; we only rewrite if one was already computed.
+                // IPv6 requires a non-zero UDP checksum; we only rewrite if one was already
+                // computed.
                 if old_check != 0 {
                     let mut c = u16::from_be(old_check);
                     c = csum16_update_v6(c, old_dst_ip, &entry.backend_ip);

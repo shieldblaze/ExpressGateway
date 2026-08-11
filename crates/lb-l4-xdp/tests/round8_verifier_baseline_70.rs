@@ -1,7 +1,9 @@
 //! F-ESC-1 — REAL kernel-7.0 eBPF verifier baseline capture (privileged, `#[ignore]`d).
 //!
-//! Loads `lb_xdp.bin` through the proven aya path (a genuine `BPF_PROG_LOAD`) and records the kernel's own verifier facts via aya `ProgramInfo` plus `bpftool prog show --json`, writing a
-//! structured baseline to `audit/ebpf/verifier-logs/7.0.log.committed`. No attach is performed (no MTU/channel disruption): the LOAD is what runs the verifier, so it alone suffices.
+//! Loads `lb_xdp.bin` through the proven aya path (a genuine `BPF_PROG_LOAD`) and records the
+//! kernel's own verifier facts via aya `ProgramInfo` plus `bpftool prog show --json`, writing a
+//! structured baseline to `audit/ebpf/verifier-logs/7.0.log.committed`. No attach is performed (no
+//! MTU/channel disruption): the LOAD is what runs the verifier, so it alone suffices.
 
 use lb_l4_xdp::LB_XDP_ELF;
 use lb_l4_xdp::loader::XdpLoader;
@@ -68,7 +70,8 @@ fn capture_real_70_verifier_baseline() {
     );
     let bpftool_plain = cmd("bpftool", &["prog", "show", "id", &prog_id.to_string()]);
 
-    // GPL license assertion: lb_xdp must declare GPL or the kernel would reject GPL-only helpers — proven by a successful load.
+    // GPL license assertion: lb_xdp must declare GPL or the kernel would reject GPL-only helpers —
+    // proven by a successful load.
     let gpl_assert = "GPL license: ASSERTED (BPF_PROG_LOAD succeeded; the kernel rejects \
                       GPL-only helpers used by lb_xdp under a non-GPL license, so a \
                       successful real load is proof of the GPL declaration).";
@@ -113,7 +116,8 @@ fn capture_real_70_verifier_baseline() {
     std::fs::write(OUT, &body).expect("write 7.0.log.committed");
     eprintln!("F-ESC-1: wrote real 7.0 verifier baseline to {OUT}\n{body}");
 
-    // Sanity: the capture must carry real kernel counters (the explanatory header intentionally NAMES the old placeholder marker, so assert on the data fields, not prose).
+    // Sanity: the capture must carry real kernel counters (the explanatory header intentionally
+    // NAMES the old placeholder marker, so assert on the data fields, not prose).
     assert!(prog_id > 0, "loaded prog must have a real kernel id");
     assert!(tag != 0, "prog tag must be a real kernel-computed tag");
     assert!(

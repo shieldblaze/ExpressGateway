@@ -1,4 +1,5 @@
-//! ROUND8-L4-07 proof: the legacy `flags: u32` field is gone from both `BackendEntry` and `BackendEntryV6`.
+//! ROUND8-L4-07 proof: the legacy `flags: u32` field is gone from both `BackendEntry` and
+//! `BackendEntryV6`.
 
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]

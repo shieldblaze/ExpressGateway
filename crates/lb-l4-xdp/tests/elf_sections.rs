@@ -1,5 +1,7 @@
-//! EBPF-2-01 / EBPF-2-02 proof: the committed BPF ELF must carry a `license` section spelling exactly GPL + NUL, must carry non-empty `.BTF` and `.BTF.ext` sections, and must stay under the
-//! 64 KiB ceiling `build.rs` enforces. Gated on `cfg(lb_xdp_elf)`: when the ELF is absent this file compiles as an empty module.
+//! EBPF-2-01 / EBPF-2-02 proof: the committed BPF ELF must carry a `license` section spelling
+//! exactly GPL + NUL, must carry non-empty `.BTF` and `.BTF.ext` sections, and must stay under the
+//! 64 KiB ceiling `build.rs` enforces. Gated on `cfg(lb_xdp_elf)`: when the ELF is absent this file
+//! compiles as an empty module.
 
 #![cfg(all(target_os = "linux", lb_xdp_elf))]
 
@@ -43,7 +45,8 @@ fn btf_sections_present_and_non_empty() {
 
 #[test]
 fn elf_size_within_budget() {
-    // build.rs hard-fails over MAX_ELF_BYTES, but cargo runs build.rs and tests in different processes — repeat it here so a stale `target/` still catches the regression.
+    // build.rs hard-fails over MAX_ELF_BYTES, but cargo runs build.rs and tests in different
+    // processes — repeat it here so a stale `target/` still catches the regression.
     let elf_len = LB_XDP_ELF.len() as u64;
     assert!(
         elf_len <= MAX_ELF_BYTES,

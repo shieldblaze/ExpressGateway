@@ -1,4 +1,5 @@
-//! ROUND8-L4-05 proof: NIC silent-drop blocklist + post-attach probe scaffold (aya #1193 / Cilium lesson 8).
+//! ROUND8-L4-05 proof: NIC silent-drop blocklist + post-attach probe scaffold (aya #1193 / Cilium
+//! lesson 8).
 
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -65,14 +66,16 @@ fn ethtool_firmware_line_parsing() {
     assert_eq!(parse_ethtool_firmware("driver: veth\n"), None);
 }
 
-/// `drv_supported` on a non-existent interface must fail OPEN (Allowed): we never block `Drv` just because sysfs/ethtool introspection failed — the runtime probe + alert is the backstop.
+/// `drv_supported` on a non-existent interface must fail OPEN (Allowed): we never block `Drv` just
+/// because sysfs/ethtool introspection failed — the runtime probe + alert is the backstop.
 #[test]
 fn drv_supported_fails_open_on_unknown_iface() {
     let r = drv_supported("eg-nonexistent-iface-zzz").expect("never hard-errors");
     assert_eq!(r, DrvSupport::Allowed);
 }
 
-/// The attach-probe-failed counter is a process-global monotonic atomic projected to `xdp_attach_probe_failed_total`.
+/// The attach-probe-failed counter is a process-global monotonic atomic projected to
+/// `xdp_attach_probe_failed_total`.
 #[test]
 fn attach_probe_failed_counter_is_monotonic() {
     let a = attach_probe_failed_count();
@@ -171,7 +174,8 @@ fn aya_version_is_pinned_to_the_no_test_run_release() {
     );
 }
 
-/// Proves the tripwire above ACTUALLY fails under a simulated "aya gained the API" condition (a future Cargo.lock that resolves aya to a newer release).
+/// Proves the tripwire above ACTUALLY fails under a simulated "aya gained the API" condition (a
+/// future Cargo.lock that resolves aya to a newer release).
 #[test]
 fn tripwire_fires_when_aya_is_upgraded_simulation() {
     let simulated_future_lock = "\
@@ -217,7 +221,8 @@ version = \"0.14.0\"
     );
 }
 
-/// The parser must not be fooled by `aya-obj` / `aya-ebpf` / `aya-log` (whose names START with `aya` but are different crates).
+/// The parser must not be fooled by `aya-obj` / `aya-ebpf` / `aya-log` (whose names START with
+/// `aya` but are different crates).
 #[test]
 fn aya_lock_parser_does_not_confuse_sibling_crates() {
     let lock = "\
@@ -236,7 +241,8 @@ version = \"8.8.8\"
     assert_eq!(aya_version_from_lock(lock).as_deref(), Some("0.13.1"));
 }
 
-/// CI privileged-stage scaffold: attach to dummy0, pre-insert a synthetic CT entry, run the probe, assert Ok + dst MAC rewritten.
+/// CI privileged-stage scaffold: attach to dummy0, pre-insert a synthetic CT entry, run the probe,
+/// assert Ok + dst MAC rewritten.
 #[test]
 #[ignore = "needs CAP_BPF + aya BPF_PROG_TEST_RUN (aya 0.13.1 API blocker)"]
 fn probe_synthetic_packet_round_trip() {

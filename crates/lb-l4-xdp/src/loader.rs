@@ -19,10 +19,14 @@ use aya::{
 use aya_obj::{Object, ParseError};
 use std::collections::HashMap as StdHashMap;
 
-// SEC-2-12: the ELF is parsed a SECOND time with `object` (kernel-free) so the license assertion runs before aya's `EbpfLoader::load` touches `bpf(2)`; `object::Object` and `aya_obj::Object` collide by name, hence the aliases.
+// SEC-2-12: the ELF is parsed a SECOND time with `object` (kernel-free) so the license assertion
+// runs before aya's `EbpfLoader::load` touches `bpf(2)`; `object::Object` and `aya_obj::Object`
+// collide by name, hence the aliases.
 use object::{File as ObjectFile, Object as ObjectTrait, ObjectSection as ObjectSectionTrait};
 
-// EBPF-2-05: these MUST match the `#[map(name = "...")]` strings in `crates/lb-l4-xdp/ebpf/src/main.rs` — aya creates `<pin_dir>/<NAME>` and bpftool/cilium-cli read the same strings.
+// EBPF-2-05: these MUST match the `#[map(name = "...")]` strings in
+// `crates/lb-l4-xdp/ebpf/src/main.rs` — aya creates `<pin_dir>/<NAME>` and bpftool/cilium-cli read
+// the same strings.
 
 /// Pin filename of the IPv4 conntrack map.
 pub const CONNTRACK_PIN_NAME: &str = "conntrack";
@@ -36,22 +40,29 @@ pub const L7_PORTS_PIN_NAME: &str = "l7_ports";
 /// Pin filename of the IPv4 deny LPM trie.
 pub const ACL_DENY_TRIE_PIN_NAME: &str = "acl_deny_trie";
 
-/// Pin filename of the per-CPU stats array (EBPF-2-08 exposes the counter slots via `stats_export.rs`).
+/// Pin filename of the per-CPU stats array (EBPF-2-08 exposes the counter slots via
+/// `stats_export.rs`).
 pub const STATS_PIN_NAME: &str = "stats";
 
-/// ROUND8-L4-03: pin of the runtime new-flow-cap config (per-CPU `u32`) read by the BPF `is_under_flood()` hot path; a `0` value disables the rate limiter.
+/// ROUND8-L4-03: pin of the runtime new-flow-cap config (per-CPU `u32`) read by the BPF
+/// `is_under_flood()` hot path; a `0` value disables the rate limiter.
 pub const NEW_FLOW_CAP_CFG_PIN_NAME: &str = "new_flow_cap_cfg";
 
-/// ROUND8-L4-03: pin of the per-CPU sliding-window counter. Owned by the BPF program — userspace never writes it; named here so observability tooling finds the pin.
+/// ROUND8-L4-03: pin of the per-CPU sliding-window counter. Owned by the BPF program — userspace
+/// never writes it; named here so observability tooling finds the pin.
 pub const NEW_FLOW_RATE_PIN_NAME: &str = "new_flow_rate";
 
-/// ROUND8-L4-04: pin of the atomic per-VIP backend table, written one whole `BackendTable` value per `bpf_map_update_elem` (Unimog / l4drop D1).
+/// ROUND8-L4-04: pin of the atomic per-VIP backend table, written one whole `BackendTable` value
+/// per `bpf_map_update_elem` (Unimog / l4drop D1).
 pub const BACKENDS_V4_PIN_NAME: &str = "backends_v4";
 
-/// Default bpffs root. The directory must already exist as `0750` owned by the LB uid:gid before the loader runs (see `crates/lb/src/xdp.rs` + the systemd unit); tests override it with `EG_BPFFS_ROOT`.
+/// Default bpffs root. The directory must already exist as `0750` owned by the LB uid:gid before
+/// the loader runs (see `crates/lb/src/xdp.rs` + the systemd unit); tests override it with
+/// `EG_BPFFS_ROOT`.
 pub const DEFAULT_PIN_DIR: &str = "/sys/fs/bpf/expressgateway";
 
-// Userspace mirrors of the BPF map key/value layouts in `ebpf/src/main.rs`. They MUST stay in lock-step: aya compares their byte size against the ELF's declared map sizes.
+// Userspace mirrors of the BPF map key/value layouts in `ebpf/src/main.rs`. They MUST stay in
+// lock-step: aya compares their byte size against the ELF's declared map sizes.
 
 /// IPv4 flow key — matches `FlowKey` in the ebpf crate byte-for-byte.
 #[repr(C)]
@@ -67,7 +78,8 @@ pub struct FlowKey {
     pub dst_port: u16,
     /// IP protocol (TCP=6, UDP=17).
     pub protocol: u8,
-    /// Padding keeping the key 16 bytes wide for verifier alignment. CODE-2-07: `pub` only for back-compat — new code uses [`FlowKey::new`], which owns the zero-init contract.
+    /// Padding keeping the key 16 bytes wide for verifier alignment. CODE-2-07: `pub` only for
+    /// back-compat — new code uses [`FlowKey::new`], which owns the zero-init contract.
     pub pad: [u8; 3],
 }
 
@@ -76,7 +88,9 @@ pub struct FlowKey {
 unsafe impl Pod for FlowKey {}
 
 impl FlowKey {
-    /// Construct a [`FlowKey`] with explicit zero-initialised padding. CODE-2-07: `pad` is unconditionally `[0u8; 3]` and cannot be overridden, so the zero-init property survives refactoring.
+    /// Construct a [`FlowKey`] with explicit zero-initialised padding. CODE-2-07: `pad` is
+    /// unconditionally `[0u8; 3]` and cannot be overridden, so the zero-init property survives
+    /// refactoring.
     #[must_use]
     pub const fn new(
         src_addr: u32,
@@ -118,7 +132,9 @@ pub struct BackendEntry {
 unsafe impl Pod for BackendEntry {}
 
 impl BackendEntry {
-    /// Construct a [`BackendEntry`] with zero-initialised padding. ROUND8-L4-01 caveat: infallible for back-compat, so it does NOT reject the zero-IP/zero-port sentinels — new callers use [`BackendEntry::try_new`].
+    /// Construct a [`BackendEntry`] with zero-initialised padding. ROUND8-L4-01 caveat: infallible
+    /// for back-compat, so it does NOT reject the zero-IP/zero-port sentinels — new callers use
+    /// [`BackendEntry::try_new`].
     #[must_use]
     pub const fn new(
         backend_idx: u32,
@@ -137,8 +153,10 @@ impl BackendEntry {
         }
     }
 
-    /// ROUND8-L4-01: fallible constructor rejecting the `backend_ip == 0` / `backend_port == 0` sentinels — the Katran-lesson-10 silent-drop vector, where a zero backend yields `XDP_TX` to
-    /// 0.0.0.0:0 and the kernel drops it without telemetry. The eBPF program enforces the same guard at runtime.
+    /// ROUND8-L4-01: fallible constructor rejecting the `backend_ip == 0` / `backend_port == 0`
+    /// sentinels — the Katran-lesson-10 silent-drop vector, where a zero backend yields `XDP_TX` to
+    /// 0.0.0.0:0 and the kernel drops it without telemetry. The eBPF program enforces the same
+    /// guard at runtime.
     pub fn try_new(
         backend_idx: u32,
         backend_ip: u32,
@@ -230,7 +248,8 @@ pub struct BackendEntryV6 {
 unsafe impl Pod for BackendEntryV6 {}
 
 impl BackendEntryV6 {
-    /// Construct a [`BackendEntryV6`] with zero-initialised padding. Like [`BackendEntry::new`] it is infallible and does NOT reject the zero sentinels — prefer `try_new`.
+    /// Construct a [`BackendEntryV6`] with zero-initialised padding. Like [`BackendEntry::new`] it
+    /// is infallible and does NOT reject the zero sentinels — prefer `try_new`.
     #[must_use]
     pub const fn new(
         backend_idx: u32,
@@ -249,7 +268,8 @@ impl BackendEntryV6 {
         }
     }
 
-    /// ROUND8-L4-01: fallible IPv6 constructor rejecting `backend_ip == [0; 16]` and `backend_port == 0`. See [`BackendEntry::try_new`].
+    /// ROUND8-L4-01: fallible IPv6 constructor rejecting `backend_ip == [0; 16]` and
+    /// `backend_port == 0`. See [`BackendEntry::try_new`].
     pub fn try_new(
         backend_idx: u32,
         backend_ip: [u8; 16],
@@ -277,8 +297,10 @@ impl BackendEntryV6 {
     }
 }
 
-// CODE-2-07: compile-time byte-size assertions — the build fails if either side's layout drifts (a `pad` byte dropped, a field width changed).
-// FlowKey 4+4+2+2+1+3=16 · FlowKeyV6 16+16+2+2+1+3=40 · BackendEntry 4+4+2+2+6+6=24 · BackendEntryV6 4+16+2+2+6+6=36 (ROUND8-L4-07 dropped 4 B of flags from both entries).
+// CODE-2-07: compile-time byte-size assertions — the build fails if either side's layout drifts (a
+// `pad` byte dropped, a field width changed).
+// FlowKey 4+4+2+2+1+3=16 · FlowKeyV6 16+16+2+2+1+3=40 · BackendEntry 4+4+2+2+6+6=24 ·
+// BackendEntryV6 4+16+2+2+6+6=36 (ROUND8-L4-07 dropped 4 B of flags from both entries).
 
 /// Expected wire size of [`FlowKey`] (matches BPF-side struct).
 pub const FLOWKEY_SIZE: usize = 16;
@@ -294,11 +316,14 @@ const _: () = assert!(core::mem::size_of::<FlowKeyV6>() == FLOWKEY_V6_SIZE);
 const _: () = assert!(core::mem::size_of::<BackendEntry>() == BACKEND_ENTRY_SIZE);
 const _: () = assert!(core::mem::size_of::<BackendEntryV6>() == BACKEND_ENTRY_V6_SIZE);
 
-/// ROUND8-L4-04: verifier-tractable ceiling on backends per VIP. MUST equal `MAX_BACKENDS_PER_VIP` in `crates/lb-l4-xdp/ebpf/src/main.rs`.
+/// ROUND8-L4-04: verifier-tractable ceiling on backends per VIP. MUST equal `MAX_BACKENDS_PER_VIP`
+/// in `crates/lb-l4-xdp/ebpf/src/main.rs`.
 pub const MAX_BACKENDS_PER_VIP: usize = 64;
 
-/// ROUND8-L4-04: userspace mirror of the eBPF `BackendTable`. The whole struct is ONE map value, so `publish_backends_v4` writes it with a single `bpf_map_update_elem` and a concurrent
-/// data-plane lookup never sees a half-populated merge (Unimog / l4drop D1); `previous_*` is the Unimog lesson-3 daisy-chain. Layout MUST match the eBPF struct byte-for-byte.
+/// ROUND8-L4-04: userspace mirror of the eBPF `BackendTable`. The whole struct is ONE map value, so
+/// `publish_backends_v4` writes it with a single `bpf_map_update_elem` and a concurrent
+/// data-plane lookup never sees a half-populated merge (Unimog / l4drop D1); `previous_*` is the
+/// Unimog lesson-3 daisy-chain. Layout MUST match the eBPF struct byte-for-byte.
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct BackendTable {
@@ -321,7 +346,8 @@ pub struct BackendTable {
 unsafe impl Pod for BackendTable {}
 
 impl BackendTable {
-    /// An all-zero table — the sentinel for "this VIP has never been published", so the daisy-chain shift starts from a clean slate on the first publish.
+    /// An all-zero table — the sentinel for "this VIP has never been published", so the daisy-chain
+    /// shift starts from a clean slate on the first publish.
     #[must_use]
     pub const fn zeroed() -> Self {
         const ZERO_ENTRY: BackendEntry = BackendEntry::new(0, 0, 0, [0u8; 6], [0u8; 6]);
@@ -351,7 +377,8 @@ pub const BACKEND_TABLE_SIZE: usize = 4
     + BACKEND_ENTRY_SIZE * MAX_BACKENDS_PER_VIP;
 const _: () = assert!(core::mem::size_of::<BackendTable>() == BACKEND_TABLE_SIZE);
 
-/// XDP attach mode, mirroring the kernel's `XDP_FLAGS_*` bits. `Skb` works on any interface (the CI/dev default); `Drv` needs NIC driver support and `Hw` needs hardware offload.
+/// XDP attach mode, mirroring the kernel's `XDP_FLAGS_*` bits. `Skb` works on any interface (the
+/// CI/dev default); `Drv` needs NIC driver support and `Hw` needs hardware offload.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum XdpMode {
     /// Generic / SKB mode.
@@ -373,7 +400,8 @@ impl XdpMode {
         }
     }
 
-    /// EBPF-2-04: telemetry label for [`crate::stats_export`]. Kept symmetric with `XdpFlags` so a future kernel mode added to aya produces a compile error here.
+    /// EBPF-2-04: telemetry label for [`crate::stats_export`]. Kept symmetric with `XdpFlags` so a
+    /// future kernel mode added to aya produces a compile error here.
     #[must_use]
     pub const fn to_label(self) -> crate::stats_export::AttachModeLabel {
         match self {
@@ -384,8 +412,10 @@ impl XdpMode {
     }
 }
 
-/// EBPF-2-04: classify a `ProgramError` as "mode unsupported by this NIC" — the ONLY errnos that trigger ladder fall-through; any other error is a real bug (verifier reject, bad ifname)
-/// and must not be swallowed. EOPNOTSUPP=95 / EINVAL=22 are kernel-stable, coded as literals to avoid a `libc` dependency.
+/// EBPF-2-04: classify a `ProgramError` as "mode unsupported by this NIC" — the ONLY errnos that
+/// trigger ladder fall-through; any other error is a real bug (verifier reject, bad ifname)
+/// and must not be swallowed. EOPNOTSUPP=95 / EINVAL=22 are kernel-stable, coded as literals to
+/// avoid a `libc` dependency.
 fn is_unsupported_mode(e: &ProgramError) -> bool {
     const EINVAL: i32 = 22;
     const EOPNOTSUPP: i32 = 95;
@@ -435,26 +465,33 @@ pub enum XdpLoaderError {
     #[error("all xdp attach modes exhausted; last error: {0}")]
     AllAttachModesExhausted(String),
 
-    /// EBPF-2-08: installing the STATS per-CPU handle into the [`crate::stats_export`] module failed (already installed, or the map type didn't match `u64`).
+    /// EBPF-2-08: installing the STATS per-CPU handle into the [`crate::stats_export`] module
+    /// failed (already installed, or the map type didn't match `u64`).
     #[error("stats export install failed: {0}")]
     StatsExport(String),
 
-    /// SEC-2-12: the ELF `license` section is missing or is not `GPL` + NUL. Most BPF helpers used here are `gpl_only`, so this turns a deep `EACCES` at `bpf(BPF_PROG_LOAD)` into a clear startup error.
+    /// SEC-2-12: the ELF `license` section is missing or is not `GPL` + NUL. Most BPF helpers used
+    /// here are `gpl_only`, so this turns a deep `EACCES` at `bpf(BPF_PROG_LOAD)` into a clear
+    /// startup error.
     #[error("bpf elf license check failed: {0}")]
     LicenseInvalid(String),
 
-    /// ROUND8-L4-06: out-of-range CIDR prefix passed to [`XdpLoader::insert_acl_deny`]. Accepted range is `1..=32`: `/0` is the block-everything footgun, `/33`+ is structurally nonsensical.
+    /// ROUND8-L4-06: out-of-range CIDR prefix passed to [`XdpLoader::insert_acl_deny`]. Accepted
+    /// range is `1..=32`: `/0` is the block-everything footgun, `/33`+ is structurally nonsensical.
     #[error("invalid IPv4 ACL prefix length: got {0}, must be in 1..=32")]
     InvalidAclPrefixV4(u8),
 
-    /// ROUND8-L4-01: `BackendEntry`/`BackendEntryV6` construction with `backend_ip == 0` or `backend_port == 0` — Katran lesson 10, a zero-IP backend `XDP_TX`s to 0.0.0.0:0 and the kernel drops it invisibly.
+    /// ROUND8-L4-01: `BackendEntry`/`BackendEntryV6` construction with `backend_ip == 0` or
+    /// `backend_port == 0` — Katran lesson 10, a zero-IP backend `XDP_TX`s to 0.0.0.0:0 and the
+    /// kernel drops it invisibly.
     #[error("backend entry unpopulated: {reason}")]
     BackendUnpopulated {
         /// Operator-facing description (which field was zero).
         reason: &'static str,
     },
 
-    /// ROUND8-L4-11: the `pin_dir` is not backed by bpffs. Pinning into a regular tmpfs makes aya deep-fail with an opaque EINVAL; this surfaces the actionable remediation instead.
+    /// ROUND8-L4-11: the `pin_dir` is not backed by bpffs. Pinning into a regular tmpfs makes aya
+    /// deep-fail with an opaque EINVAL; this surfaces the actionable remediation instead.
     #[error("pin path {path:?} is not bpffs (found magic 0x{found_magic:x}); {hint}")]
     PinPathNotBpffs {
         /// The bad path the loader was asked to use.
@@ -465,7 +502,8 @@ pub enum XdpLoaderError {
         hint: String,
     },
 
-    /// ROUND8-L4-11: the `statfs(2)` call on the pin directory itself failed (path missing, permission denied, ...).
+    /// ROUND8-L4-11: the `statfs(2)` call on the pin directory itself failed (path missing,
+    /// permission denied, ...).
     #[error("statfs on pin path {path:?} failed: {source}")]
     PinPathStatFailed {
         /// The path that could not be stat'd.
@@ -475,15 +513,19 @@ pub enum XdpLoaderError {
         source: io::Error,
     },
 
-    /// ROUND8-L4-12: `XdpLoader::attach_replacing` found a foreign XDP program already attached to the interface.
+    /// ROUND8-L4-12: `XdpLoader::attach_replacing` found a foreign XDP program already attached to
+    /// the interface.
     #[error("foreign XDP program attached: prog_id={0}; refusing to attach")]
     ForeignProgramAttached(u32),
 
-    /// ROUND8-L4-12: an XDP program was expected but the kernel reports none. For `detach_verifying` this is the idempotent already-detached case; for `attach_replacing` it is a hard error.
+    /// ROUND8-L4-12: an XDP program was expected but the kernel reports none. For
+    /// `detach_verifying` this is the idempotent already-detached case; for `attach_replacing` it
+    /// is a hard error.
     #[error("no XDP program attached to {0}")]
     NoProgramAttached(String),
 
-    /// ROUND8-L4-12: the netlink `RTM_GETLINK` query failed, so the caller cannot prove the kernel attach state — `attach_replacing`/`detach_verifying` must NOT proceed blind.
+    /// ROUND8-L4-12: the netlink `RTM_GETLINK` query failed, so the caller cannot prove the kernel
+    /// attach state — `attach_replacing`/`detach_verifying` must NOT proceed blind.
     #[error("XDP netlink query failed for {iface}: {detail}")]
     XdpQueryFailed {
         /// Interface name.
@@ -492,7 +534,8 @@ pub enum XdpLoaderError {
         detail: String,
     },
 
-    /// ROUND8-L4-12: `detach_verifying` returned successfully but the post-detach kernel query still shows a program attached.
+    /// ROUND8-L4-12: `detach_verifying` returned successfully but the post-detach kernel query
+    /// still shows a program attached.
     #[error("detach left a program attached on {iface}: prog_id={prog_id:?}")]
     DetachLeftProgramAttached {
         /// Interface name.
@@ -501,11 +544,15 @@ pub enum XdpLoaderError {
         prog_id: Option<u32>,
     },
 
-    /// ROUND8-L4-04: more than [`MAX_BACKENDS_PER_VIP`] entries passed to [`XdpLoader::publish_backends_v4`]. Returned BEFORE any map write, so a too-large publish is a no-op and the live table is untouched.
+    /// ROUND8-L4-04: more than [`MAX_BACKENDS_PER_VIP`] entries passed to
+    /// [`XdpLoader::publish_backends_v4`]. Returned BEFORE any map write, so a too-large publish is
+    /// a no-op and the live table is untouched.
     #[error("too many backends for one VIP: got {0}, max {max}", max = MAX_BACKENDS_PER_VIP)]
     TooManyBackends(usize),
 
-    /// ROUND8-L4-05: the post-attach silent-drop probe or the static NIC blocklist found the requested mode dead (aya #1193 / Cilium lesson 8). The blocklist path demotes `Drv` → `Skb` and only surfaces this if `Skb` also fails.
+    /// ROUND8-L4-05: the post-attach silent-drop probe or the static NIC blocklist found the
+    /// requested mode dead (aya #1193 / Cilium lesson 8). The blocklist path demotes `Drv` → `Skb`
+    /// and only surfaces this if `Skb` also fails.
     #[error("xdp attach probe failed in {mode:?} mode: {reason}")]
     AttachProbeFailed {
         /// The mode whose attach was found dead by the probe/blocklist.
@@ -515,10 +562,12 @@ pub enum XdpLoaderError {
     },
 }
 
-/// SEC-2-12: required value of the ELF `license` section — kernel-side `bpf_attr.license` is a NUL-terminated C string that must equal `GPL`, so the payload is exactly four bytes.
+/// SEC-2-12: required value of the ELF `license` section — kernel-side `bpf_attr.license` is a
+/// NUL-terminated C string that must equal `GPL`, so the payload is exactly four bytes.
 const EXPECTED_LICENSE: &[u8] = b"GPL\0";
 
-/// SEC-2-12: parse the ELF and assert its `license` section is `GPL` + NUL. A free function so unit tests can synthesise an ELF without the section and prove the assertion trips.
+/// SEC-2-12: parse the ELF and assert its `license` section is `GPL` + NUL. A free function so unit
+/// tests can synthesise an ELF without the section and prove the assertion trips.
 fn assert_license_is_gpl(elf: &[u8]) -> Result<(), XdpLoaderError> {
     let parsed = ObjectFile::parse(elf).map_err(|e| {
         XdpLoaderError::LicenseInvalid(format!("could not parse ELF for license check: {e}"))
@@ -542,7 +591,8 @@ fn assert_license_is_gpl(elf: &[u8]) -> Result<(), XdpLoaderError> {
     Ok(())
 }
 
-/// EBPF-2-04: outcome of [`XdpLoader::attach_with_fallback`] — the mode the kernel accepted and how many ladder steps were tried. Surfaced as `xdp_attach_attempts_total`.
+/// EBPF-2-04: outcome of [`XdpLoader::attach_with_fallback`] — the mode the kernel accepted and how
+/// many ladder steps were tried. Surfaced as `xdp_attach_attempts_total`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AttachOutcome {
     /// The mode the kernel accepted.
@@ -551,7 +601,8 @@ pub struct AttachOutcome {
     pub attempts: u8,
 }
 
-/// EBPF-2-04: operator-facing knob mirroring [`lb_config::XdpModeChoice`], kept here so this crate stays non-circular with `lb-config`.
+/// EBPF-2-04: operator-facing knob mirroring [`lb_config::XdpModeChoice`], kept here so this crate
+/// stays non-circular with `lb-config`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum XdpModeChoice {
     /// Drv → Skb fallback ladder.
@@ -565,11 +616,14 @@ pub enum XdpModeChoice {
     Hw,
 }
 
-/// High-level handle to a loaded BPF object containing an XDP program. Nothing is loaded into the kernel until [`XdpLoader::attach`] is called.
+/// High-level handle to a loaded BPF object containing an XDP program. Nothing is loaded into the
+/// kernel until [`XdpLoader::attach`] is called.
 #[derive(Debug)]
 pub struct XdpLoader {
     ebpf: Ebpf,
-    /// ROUND8-L4-12: link ids from `xdp.attach()`, keyed by `prog_name`, retained so `detach_verifying` can issue a REAL `Xdp::detach(link_id)` — aya 0.13.1 consumes the id by value and `XdpLinkId` is not `Clone`.
+    /// ROUND8-L4-12: link ids from `xdp.attach()`, keyed by `prog_name`, retained so
+    /// `detach_verifying` can issue a REAL `Xdp::detach(link_id)` — aya 0.13.1 consumes the id by
+    /// value and `XdpLinkId` is not `Clone`.
     attached_links: StdHashMap<String, XdpLinkId>,
 }
 
@@ -579,18 +633,26 @@ impl XdpLoader {
         Self::load_from_bytes_pinned(elf, None)
     }
 
-    /// EBPF-2-05: load with an optional `map_pin_path` so the maps survive a process restart. Aya reuses an existing pin when the kernel-side `map_type`/`key_size`/`value_size` match the ELF;
-    /// on size mismatch it returns [`MapError::InvalidPin`] and recovery means unlinking the stale pins. The caller owns creating the directory (`0750`, LB uid:gid). ROUND8-L4-11: the mount type
-    /// is verified via [`crate::bpffs::assert_bpffs`], so a non-bpffs path returns [`XdpLoaderError::PinPathNotBpffs`] with a remediation hint instead of a deep-aya `InvalidPin` trail.
+    /// EBPF-2-05: load with an optional `map_pin_path` so the maps survive a process restart. Aya
+    /// reuses an existing pin when the kernel-side `map_type`/`key_size`/`value_size` match the
+    /// ELF;
+    /// on size mismatch it returns [`MapError::InvalidPin`] and recovery means unlinking the stale
+    /// pins. The caller owns creating the directory (`0750`, LB uid:gid). ROUND8-L4-11: the mount
+    /// type
+    /// is verified via [`crate::bpffs::assert_bpffs`], so a non-bpffs path returns
+    /// [`XdpLoaderError::PinPathNotBpffs`] with a remediation hint instead of a deep-aya
+    /// `InvalidPin` trail.
     pub fn load_from_bytes_pinned(
         elf: &[u8],
         pin_path: Option<&std::path::Path>,
     ) -> Result<Self, XdpLoaderError> {
-        // SEC-2-12: verify the ELF declares license `GPL` BEFORE handing it to aya, so a bad license is a clear startup error rather than EACCES inside `bpf(BPF_PROG_LOAD)`.
+        // SEC-2-12: verify the ELF declares license `GPL` BEFORE handing it to aya, so a bad
+        // license is a clear startup error rather than EACCES inside `bpf(BPF_PROG_LOAD)`.
         assert_license_is_gpl(elf)?;
         let mut loader = EbpfLoader::new();
         if let Some(p) = pin_path {
-            // ROUND8-L4-11: runs BEFORE `loader.map_pin_path(p)` so the operator sees the typed error instead of the deep-aya EINVAL.
+            // ROUND8-L4-11: runs BEFORE `loader.map_pin_path(p)` so the operator sees the typed
+            // error instead of the deep-aya EINVAL.
             crate::bpffs::assert_bpffs(p)?;
             loader.map_pin_path(p);
         }
@@ -601,14 +663,18 @@ impl XdpLoader {
         })
     }
 
-    /// EBPF-2-08: hand the STATS per-CPU array to [`crate::stats_export`]. The map is TAKEN (not borrowed) so a second call cannot double-install it — single ownership matches the once-per-process invariant `crates/lb/src/xdp.rs` relies on.
+    /// EBPF-2-08: hand the STATS per-CPU array to [`crate::stats_export`]. The map is TAKEN (not
+    /// borrowed) so a second call cannot double-install it — single ownership matches the
+    /// once-per-process invariant `crates/lb/src/xdp.rs` relies on.
     pub fn install_stats_export(&mut self) -> Result<(), XdpLoaderError> {
         let map = self.take_map(STATS_PIN_NAME)?;
         crate::stats_export::install_stats_handle(map)
             .map_err(|e| XdpLoaderError::StatsExport(e.to_string()))
     }
 
-    /// ROUND8-L4-03: write the per-CPU new-flow cap into `new_flow_cap_cfg` so the BPF `is_under_flood()` hot path reads an operator-tunable threshold (Katran `MAX_CONN_RATE` parity). A `cap` of `0` DISABLES the rate limiter; idempotent, broadcast to every CPU slot.
+    /// ROUND8-L4-03: write the per-CPU new-flow cap into `new_flow_cap_cfg` so the BPF
+    /// `is_under_flood()` hot path reads an operator-tunable threshold (Katran `MAX_CONN_RATE`
+    /// parity). A `cap` of `0` DISABLES the rate limiter; idempotent, broadcast to every CPU slot.
     pub fn set_new_flow_cap(&mut self, cap: u32) -> Result<(), XdpLoaderError> {
         use aya::maps::{PerCpuArray, PerCpuValues};
         let map = self
@@ -636,8 +702,11 @@ impl XdpLoader {
         AyaHashMap::try_from(map).map_err(Into::into)
     }
 
-    /// ROUND8-L4-04: atomically publish a new backend set for `vip` (Unimog / l4drop D1). The whole `BackendTable` goes out in a SINGLE `bpf_map_update_elem`, so a concurrent data-plane lookup
-    /// observes either the entire previous or the entire new table — never a half-populated merge. Daisy-chain (Unimog lesson 3): the current `entries`/`count` shift into `previous_*` first, so flows
+    /// ROUND8-L4-04: atomically publish a new backend set for `vip` (Unimog / l4drop D1). The whole
+    /// `BackendTable` goes out in a SINGLE `bpf_map_update_elem`, so a concurrent data-plane lookup
+    /// observes either the entire previous or the entire new table — never a half-populated merge.
+    /// Daisy-chain (Unimog lesson 3): the current `entries`/`count` shift into `previous_*` first,
+    /// so flows
     /// pinned to a now-old backend stay steerable during the transitional window.
     pub fn publish_backends_v4(
         &mut self,
@@ -649,7 +718,8 @@ impl XdpLoader {
         }
         let key = u32::from(vip).to_be();
         let mut map = self.backends_v4_map()?;
-        // Read-modify-publish: the read is a point-in-time snapshot, the single insert below is the atomic swap. One writer (the control plane), so no publish-publish race.
+        // Read-modify-publish: the read is a point-in-time snapshot, the single insert below is the
+        // atomic swap. One writer (the control plane), so no publish-publish race.
         let mut table = match map.get(&key, 0) {
             Ok(t) => t,
             Err(MapError::KeyNotFound) => BackendTable::zeroed(),
@@ -658,7 +728,8 @@ impl XdpLoader {
         // Daisy-chain shift: current → previous (Unimog lesson 3).
         table.previous_entries = table.entries;
         table.previous_count = table.count;
-        // Repopulate `entries` from the new set; zero the tail so a shrink cannot leave a stale backend addressable.
+        // Repopulate `entries` from the new set; zero the tail so a shrink cannot leave a stale
+        // backend addressable.
         let zero = BackendEntry::new(0, 0, 0, [0u8; 6], [0u8; 6]);
         table.entries = [zero; MAX_BACKENDS_PER_VIP];
         for (slot, e) in table.entries.iter_mut().zip(new_entries.iter()) {
@@ -671,13 +742,15 @@ impl XdpLoader {
         Ok(())
     }
 
-    /// Kernel-free ELF inspection: parse the BPF object with aya-obj and return every program name it declares.
+    /// Kernel-free ELF inspection: parse the BPF object with aya-obj and return every program name
+    /// it declares.
     pub fn program_names(elf: &[u8]) -> Result<Vec<String>, XdpLoaderError> {
         let obj = Object::parse(elf)?;
         Ok(obj.programs.keys().cloned().collect())
     }
 
-    /// Load an XDP program from the object into the kernel. Must be called before [`XdpLoader::attach`] for the named program.
+    /// Load an XDP program from the object into the kernel. Must be called before
+    /// [`XdpLoader::attach`] for the named program.
     pub fn kernel_load(&mut self, prog_name: &str) -> Result<(), XdpLoaderError> {
         let program = self
             .ebpf
@@ -690,7 +763,9 @@ impl XdpLoader {
         Ok(())
     }
 
-    /// Attach the kernel-loaded XDP program to an interface. Requires a prior [`XdpLoader::kernel_load`], plus `CAP_BPF` + `CAP_NET_ADMIN` (older kernels: `CAP_SYS_ADMIN`).
+    /// Attach the kernel-loaded XDP program to an interface. Requires a prior
+    /// [`XdpLoader::kernel_load`], plus `CAP_BPF` + `CAP_NET_ADMIN` (older kernels:
+    /// `CAP_SYS_ADMIN`).
     pub fn attach(
         &mut self,
         prog_name: &str,
@@ -704,14 +779,20 @@ impl XdpLoader {
         let xdp: &mut Xdp = program
             .try_into()
             .map_err(|_| XdpLoaderError::NotXdp(prog_name.to_owned()))?;
-        // ROUND8-L4-12: retain the XdpLinkId so `detach_verifying` can issue a real `Xdp::detach(link_id)` and then VERIFY the interface is bare, rather than relying on drop semantics.
+        // ROUND8-L4-12: retain the XdpLinkId so `detach_verifying` can issue a real
+        // `Xdp::detach(link_id)` and then VERIFY the interface is bare, rather than relying on drop
+        // semantics.
         let link_id = xdp.attach(ifname, mode.to_flags())?;
         self.attached_links.insert(prog_name.to_owned(), link_id);
         Ok(())
     }
 
-    /// EBPF-2-04: probe ladder for XDP attach. Falls back from Drv to Skb ONLY on `EOPNOTSUPP`/`EINVAL`; any other error short-circuits so the real failure surfaces. `Native` and `Hw`
-    /// intentionally SKIP the ladder — an operator who asked for Native gets a loud startup failure rather than a silent 10-50x regression to SKB. On success it calls [`crate::stats_export::record_attach_mode`].
+    /// EBPF-2-04: probe ladder for XDP attach. Falls back from Drv to Skb ONLY on
+    /// `EOPNOTSUPP`/`EINVAL`; any other error short-circuits so the real failure surfaces. `Native`
+    /// and `Hw`
+    /// intentionally SKIP the ladder — an operator who asked for Native gets a loud startup failure
+    /// rather than a silent 10-50x regression to SKB. On success it calls
+    /// [`crate::stats_export::record_attach_mode`].
     pub fn attach_with_fallback(
         &mut self,
         prog_name: &str,
@@ -734,12 +815,16 @@ impl XdpLoader {
 
         let mut attempts: u8 = 0;
         let mut last_err: Option<String> = None;
-        // ROUND8-L4-12: the link id is moved into `self.attached_links` only after the `xdp`/`self.ebpf` borrow is released (XdpLinkId is not Clone).
+        // ROUND8-L4-12: the link id is moved into `self.attached_links` only after the
+        // `xdp`/`self.ebpf` borrow is released (XdpLinkId is not Clone).
         let mut succeeded: Option<(String, XdpLinkId, XdpMode)> = None;
         for &mode in order {
             attempts = attempts.saturating_add(1);
-            // ROUND8-L4-05: static NIC blocklist gate. On a known-bad (driver, firmware) combo we SKIP `Drv` entirely rather than attempt it — the attach syscall would SUCCEED while the packet path
-            // silently goes to /dev/null (aya #1193 / Cilium lesson 8), so failing the attach is not enough.
+            // ROUND8-L4-05: static NIC blocklist gate. On a known-bad (driver, firmware) combo we
+            // SKIP `Drv` entirely rather than attempt it — the attach syscall would SUCCEED while
+            // the packet path
+            // silently goes to /dev/null (aya #1193 / Cilium lesson 8), so failing the attach is
+            // not enough.
             if mode == XdpMode::Drv {
                 if let Ok(crate::nic_compat::DrvSupport::Refuse { reason }) =
                     crate::nic_compat::drv_supported(ifname)
@@ -791,15 +876,19 @@ impl XdpLoader {
         ))
     }
 
-    /// Take ownership of a BPF map by name so the caller can access it through aya's typed map wrappers.
+    /// Take ownership of a BPF map by name so the caller can access it through aya's typed map
+    /// wrappers.
     pub fn take_map(&mut self, name: &'static str) -> Result<Map, XdpLoaderError> {
         self.ebpf
             .take_map(name)
             .ok_or(XdpLoaderError::MapNotFound(name))
     }
 
-    /// Typed accessor for the IPv4 conntrack map. EBPF-2-03: the kernel-side map is `BPF_MAP_TYPE_LRU_HASH`, so the kernel evicts the oldest entry at `max_entries` instead of returning `ENOMEM`
-    /// — LRU eviction is the expected steady state, so "insert failed under pressure" belongs at WARN, not ERROR.
+    /// Typed accessor for the IPv4 conntrack map. EBPF-2-03: the kernel-side map is
+    /// `BPF_MAP_TYPE_LRU_HASH`, so the kernel evicts the oldest entry at `max_entries` instead of
+    /// returning `ENOMEM`
+    /// — LRU eviction is the expected steady state, so "insert failed under pressure" belongs at
+    /// WARN, not ERROR.
     pub fn conntrack_map(
         &mut self,
     ) -> Result<AyaHashMap<&mut MapData, FlowKey, BackendEntry>, XdpLoaderError> {
@@ -822,7 +911,8 @@ impl XdpLoader {
         AyaHashMap::try_from(map).map_err(Into::into)
     }
 
-    /// Typed accessor for the IPv4 deny LPM trie (Pillar 4b-2 upgrade from the Pillar 4a `HashMap<u32, u32>`).
+    /// Typed accessor for the IPv4 deny LPM trie (Pillar 4b-2 upgrade from the Pillar 4a
+    /// `HashMap<u32, u32>`).
     pub fn acl_trie(&mut self) -> Result<LpmTrie<&mut MapData, u32, u32>, XdpLoaderError> {
         let map = self
             .ebpf
@@ -831,9 +921,12 @@ impl XdpLoader {
         LpmTrie::try_from(map).map_err(Into::into)
     }
 
-    /// Insert a CIDR deny rule into the IPv4 ACL LPM trie. `prefix_len` is the number of leading bits to match; the stored value (`1`) is an opaque presence tag.
+    /// Insert a CIDR deny rule into the IPv4 ACL LPM trie. `prefix_len` is the number of leading
+    /// bits to match; the stored value (`1`) is an opaque presence tag.
     ///
-    /// ROUND8-L4-06: `prefix_len` is gated to `1..=32` — a `/0` would match every packet (the default-deny footgun) and `/33`+ is structurally invalid. Only the prefix is gated: `insert_acl_deny(32, 0.0.0.0)` is a single host route, not a wildcard.
+    /// ROUND8-L4-06: `prefix_len` is gated to `1..=32` — a `/0` would match every packet (the
+    /// default-deny footgun) and `/33`+ is structurally invalid. Only the prefix is gated:
+    /// `insert_acl_deny(32, 0.0.0.0)` is a single host route, not a wildcard.
     ///
     /// TODO(L4-06): mirror this guard with `1..=128` when an IPv6 ACL trie ships (absent today).
     pub fn insert_acl_deny(
@@ -844,13 +937,15 @@ impl XdpLoader {
         if prefix_len == 0 || prefix_len > 32 {
             return Err(XdpLoaderError::InvalidAclPrefixV4(prefix_len));
         }
-        // aya stores IPv4 addresses as `u32.to_be()` so the BPF side compares them byte-for-byte against the packet's already-network-order src_addr.
+        // aya stores IPv4 addresses as `u32.to_be()` so the BPF side compares them byte-for-byte
+        // against the packet's already-network-order src_addr.
         let key = LpmKey::<u32>::new(u32::from(prefix_len), u32::from(ipv4).to_be());
         let mut trie = self.acl_trie()?;
         trie.insert(&key, 1u32, 0).map_err(Into::into)
     }
 
-    /// Borrow the underlying `Ebpf` object — escape hatch for callers that need full aya access (e.g. iterating all maps/programs).
+    /// Borrow the underlying `Ebpf` object — escape hatch for callers that need full aya access
+    /// (e.g. iterating all maps/programs).
     #[must_use]
     pub const fn ebpf(&self) -> &Ebpf {
         &self.ebpf
@@ -861,12 +956,17 @@ impl XdpLoader {
         &mut self.ebpf
     }
 
-    // ROUND8-L4-12: the drain contract with OPS-04 (`crates/lb/src/main.rs`) is ORDERED — cancel accept loops, drain in-flight tasks, THEN `detach_verifying(prog, iface, our_prog_id)` last.
+    // ROUND8-L4-12: the drain contract with OPS-04 (`crates/lb/src/main.rs`) is ORDERED — cancel
+    // accept loops, drain in-flight tasks, THEN `detach_verifying(prog, iface, our_prog_id)` last.
 
-    /// ROUND8-L4-12: result of a kernel-side XDP query. `prog_id == None` means nothing is attached; `Some(_)` carries the kernel `bpf_prog_info.id` bound to IFLA_XDP.
+    /// ROUND8-L4-12: result of a kernel-side XDP query. `prog_id == None` means nothing is
+    /// attached; `Some(_)` carries the kernel `bpf_prog_info.id` bound to IFLA_XDP.
     pub fn query_xdp(iface: &str) -> Result<XdpQueryResult, XdpLoaderError> {
-        // ROUND8-L4-12: a REAL kernel query via netlink RTM_GETLINK (aya 0.13.1 exposes no public `bpf_xdp_query`). This is what closes the EBUSY-on-redeploy hazard — the old `prog_id: None`
-        // stub made every ownership/teardown check VACUOUS. The byte parser is unit-tested against a captured real netlink blob; the live read needs no CAP_NET_ADMIN.
+        // ROUND8-L4-12: a REAL kernel query via netlink RTM_GETLINK (aya 0.13.1 exposes no public
+        // `bpf_xdp_query`). This is what closes the EBUSY-on-redeploy hazard — the old `prog_id:
+        // None`
+        // stub made every ownership/teardown check VACUOUS. The byte parser is unit-tested against
+        // a captured real netlink blob; the live read needs no CAP_NET_ADMIN.
         let prog_id = crate::netlink_xdp::query_xdp_prog_id(iface).map_err(|e| {
             XdpLoaderError::XdpQueryFailed {
                 iface: iface.to_owned(),
@@ -879,7 +979,9 @@ impl XdpLoader {
         })
     }
 
-    /// ROUND8-L4-12: attach with an explicit replace-of-known-prog-id. Verifies `query_xdp(iface).prog_id == Some(old_prog_id)` BEFORE attaching, so a co-resident third-party XDP program (e.g. Cilium) cannot be clobbered.
+    /// ROUND8-L4-12: attach with an explicit replace-of-known-prog-id. Verifies
+    /// `query_xdp(iface).prog_id == Some(old_prog_id)` BEFORE attaching, so a co-resident
+    /// third-party XDP program (e.g. Cilium) cannot be clobbered.
     pub fn attach_replacing(
         &mut self,
         prog_name: &str,
@@ -890,7 +992,9 @@ impl XdpLoader {
         let cur = Self::query_xdp(iface)?;
         match cur.prog_id {
             Some(id) if id == old_prog_id => {
-                // Detach our previous link first (a real `Xdp::detach`), then re-attach: a fresh attach over our own still-attached program returns EBUSY, and aya 0.13.1 exposes no BPF_F_REPLACE wrapper.
+                // Detach our previous link first (a real `Xdp::detach`), then re-attach: a fresh
+                // attach over our own still-attached program returns EBUSY, and aya 0.13.1 exposes
+                // no BPF_F_REPLACE wrapper.
                 if let Some(link_id) = self.attached_links.remove(prog_name) {
                     let program = self
                         .ebpf
@@ -909,9 +1013,13 @@ impl XdpLoader {
         }
     }
 
-    /// ROUND8-L4-12: detach with kernel-side verification — the signature OPS-04's drain coordinator calls as its final step. `Ok(())` only when the pre-detach query reports `Some(expected_prog_id)`,
-    /// the aya detach succeeds, AND the post-detach query reports `None`. `ForeignProgramAttached` means someone else owns the interface (alert, leave it alone); `NoProgramAttached` is the
-    /// idempotent already-detached case; `DetachLeftProgramAttached` is a kernel bug (alert ERR, force `ip link set dev <iface> xdp off`).
+    /// ROUND8-L4-12: detach with kernel-side verification — the signature OPS-04's drain
+    /// coordinator calls as its final step. `Ok(())` only when the pre-detach query reports
+    /// `Some(expected_prog_id)`,
+    /// the aya detach succeeds, AND the post-detach query reports `None`. `ForeignProgramAttached`
+    /// means someone else owns the interface (alert, leave it alone); `NoProgramAttached` is the
+    /// idempotent already-detached case; `DetachLeftProgramAttached` is a kernel bug (alert ERR,
+    /// force `ip link set dev <iface> xdp off`).
     pub fn detach_verifying(
         &mut self,
         prog_name: &str,
@@ -922,7 +1030,8 @@ impl XdpLoader {
         let pre = Self::query_xdp(iface)?;
         match pre.prog_id {
             Some(id) if id == expected_prog_id => {
-                // Step 2: REAL detach. With no tracked link (pin-loaded out of band) fall through to dropping aya's managed link by removing the program.
+                // Step 2: REAL detach. With no tracked link (pin-loaded out of band) fall through
+                // to dropping aya's managed link by removing the program.
                 if let Some(link_id) = self.attached_links.remove(prog_name) {
                     let program = self
                         .ebpf
@@ -938,7 +1047,8 @@ impl XdpLoader {
             None => return Err(XdpLoaderError::NoProgramAttached(iface.to_owned())),
         }
 
-        // Step 3: REAL post-detach query. Now that this is a genuine RTM_GETLINK, a surviving prog_id is a true kernel-bug / racing-attacher signal, not a stub artefact.
+        // Step 3: REAL post-detach query. Now that this is a genuine RTM_GETLINK, a surviving
+        // prog_id is a true kernel-bug / racing-attacher signal, not a stub artefact.
         let post = Self::query_xdp(iface)?;
         if let Some(prog_id) = post.prog_id {
             return Err(XdpLoaderError::DetachLeftProgramAttached {
@@ -950,7 +1060,8 @@ impl XdpLoader {
     }
 }
 
-/// ROUND8-L4-12: outcome of a kernel-side XDP attachment query. `prog_id == Some(id)` is the kernel `bpf_prog_info.id` bound to the interface's IFLA_XDP attribute.
+/// ROUND8-L4-12: outcome of a kernel-side XDP attachment query. `prog_id == Some(id)` is the kernel
+/// `bpf_prog_info.id` bound to the interface's IFLA_XDP attribute.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct XdpQueryResult {
     /// Kernel prog_id of the attached program, or `None` if none.
@@ -959,12 +1070,17 @@ pub struct XdpQueryResult {
     pub mode: Option<XdpMode>,
 }
 
-/// ROUND8-L4-03: Katran `MAX_CONN_RATE` parity default. Mirrors `ebpf/src/main.rs::DEFAULT_NEW_FLOW_CAP_PER_CPU` and `lb_config`'s `default_xdp_new_flow_cap_per_sec_per_cpu` — all three must move together.
+/// ROUND8-L4-03: Katran `MAX_CONN_RATE` parity default. Mirrors
+/// `ebpf/src/main.rs::DEFAULT_NEW_FLOW_CAP_PER_CPU` and `lb_config`'s
+/// `default_xdp_new_flow_cap_per_sec_per_cpu` — all three must move together.
 pub const DEFAULT_NEW_FLOW_CAP_PER_SEC_PER_CPU: u32 = 125_000;
 
-/// ROUND8-L4-03: userspace leaky-bucket limiter for control-plane conntrack inserts — the BPF-side `is_under_flood()` gate covers the attacker's data-plane RPS, this covers the OTHER door,
-/// where `lb-balancer` under a SYN flood would push millions of throwaway CT entries/sec and thrash the LRU just the same. `SystemTime` (not `Instant`) keeps the gate `Send + Sync + 'static`;
-/// the refill math only uses deltas, so a wall-clock step backwards merely yields a safe zero-refill tick.
+/// ROUND8-L4-03: userspace leaky-bucket limiter for control-plane conntrack inserts — the BPF-side
+/// `is_under_flood()` gate covers the attacker's data-plane RPS, this covers the OTHER door,
+/// where `lb-balancer` under a SYN flood would push millions of throwaway CT entries/sec and thrash
+/// the LRU just the same. `SystemTime` (not `Instant`) keeps the gate `Send + Sync + 'static`;
+/// the refill math only uses deltas, so a wall-clock step backwards merely yields a safe
+/// zero-refill tick.
 #[derive(Debug)]
 pub struct CtInsertGate {
     tokens: AtomicU32,
@@ -974,7 +1090,9 @@ pub struct CtInsertGate {
 }
 
 impl CtInsertGate {
-    /// Build a gate with `refill_per_sec` admissions/sec and a one-second burst ceiling. A `refill_per_sec` of `0` DISABLES the gate (every `try_admit` returns `true`) — how `xdp_new_flow_cap_per_sec_per_cpu = 0` opts out.
+    /// Build a gate with `refill_per_sec` admissions/sec and a one-second burst ceiling. A
+    /// `refill_per_sec` of `0` DISABLES the gate (every `try_admit` returns `true`) — how
+    /// `xdp_new_flow_cap_per_sec_per_cpu = 0` opts out.
     #[must_use]
     pub fn new(refill_per_sec: u32) -> Self {
         Self {
@@ -993,7 +1111,8 @@ impl CtInsertGate {
             .unwrap_or(0)
     }
 
-    /// Attempt to admit one control-plane conntrack insert. On `false` the caller MUST skip the insert and bump `StatSlot::NewFlowRateCap`.
+    /// Attempt to admit one control-plane conntrack insert. On `false` the caller MUST skip the
+    /// insert and bump `StatSlot::NewFlowRateCap`.
     pub fn try_admit(&self) -> bool {
         if self.refill_per_sec == 0 {
             return true; // disabled
@@ -1090,7 +1209,8 @@ mod tests {
     #[test]
     #[allow(clippy::panic)] // crate-level lint, intentional in test code
     fn license_check_rejects_elf_without_license_section() {
-        // 64-bit LE ELF header, type=REL, machine=BPF, empty section header table (e_shnum=0): `object` parses this as a valid ELF with zero sections.
+        // 64-bit LE ELF header, type=REL, machine=BPF, empty section header table (e_shnum=0):
+        // `object` parses this as a valid ELF with zero sections.
         let mut elf = vec![0u8; 64];
         elf[0..4].copy_from_slice(&[0x7f, b'E', b'L', b'F']);
         elf[4] = 2; // EI_CLASS = ELFCLASS64
@@ -1140,7 +1260,9 @@ mod tests {
     }
 
     fn build_elf_with_license_section(payload: &[u8]) -> Vec<u8> {
-        // Layout: [0..64] ELF header · [64..] section data (shstrtab payload "\0.shstrtab\0license\0", then the license payload) · then the section header table (3 entries × 64 bytes).
+        // Layout: [0..64] ELF header · [64..] section data (shstrtab payload
+        // "\0.shstrtab\0license\0", then the license payload) · then the section header table (3
+        // entries × 64 bytes).
         const EHDR_SIZE: usize = 64;
         const SHDR_SIZE: usize = 64;
 

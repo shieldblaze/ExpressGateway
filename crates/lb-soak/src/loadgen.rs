@@ -1,4 +1,6 @@
-//! Sustained load drivers, one per datapath. Each `run_*_load` spawns `concurrency` workers looping a unit of work until the [`CancellationToken`] fires. The goal is sustained churning concurrency — NOT throughput — so workers favour connection turnover.
+//! Sustained load drivers, one per datapath. Each `run_*_load` spawns `concurrency` workers looping
+//! a unit of work until the [`CancellationToken`] fires. The goal is sustained churning concurrency
+//! — NOT throughput — so workers favour connection turnover.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -109,9 +111,13 @@ async fn h1_keepalive_burst(target: SocketAddr, seed: u64, burst: usize) -> anyh
     Ok(served)
 }
 
-// The WS relay is a long-lived opaque tunnel, so the soak-class risk is a connection/fd/memory LEAK under churn (the F-S20-2 class). `run_ws_h1_load` holds tunnels open (the live-connection bound must plateau); `run_ws_h1_churn` cycles open→close (the RECLAIM probe — an unreleased fd/slot/relay task ratchets up across cycles).
+// The WS relay is a long-lived opaque tunnel, so the soak-class risk is a connection/fd/memory LEAK
+// under churn (the F-S20-2 class). `run_ws_h1_load` holds tunnels open (the live-connection bound
+// must plateau); `run_ws_h1_churn` cycles open→close (the RECLAIM probe — an unreleased
+// fd/slot/relay task ratchets up across cycles).
 
-/// A byte mismatch is a relay integrity DEFECT; a close/read-timeout is only a lifecycle event (the worker reconnects).
+/// A byte mismatch is a relay integrity DEFECT; a close/read-timeout is only a lifecycle event (the
+/// worker reconnects).
 enum WsEcho {
     Bytes(Vec<u8>),
     Closed,
@@ -165,7 +171,8 @@ async fn ws_h1_echo_loop(
                 stats.err();
                 anyhow::bail!("ws ECHO MISMATCH (relay integrity defect)");
             }
-            // A clean close mid-loop is a connection-LIFECYCLE event, not an echo-integrity failure: it does NOT increment `err`.
+            // A clean close mid-loop is a connection-LIFECYCLE event, not an echo-integrity
+            // failure: it does NOT increment `err`.
             WsEcho::Closed => return Ok(()),
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -289,7 +296,9 @@ pub async fn run_ws_h1_churn(
     }
 }
 
-// CRITICAL (F-S27-2): this client READS NORMALLY — it drains inbound DATA and releases flow-control capacity. A NON-reading client would exercise the gated H2 unbounded-buffer DoS instead, which is NOT what this soak proves.
+// CRITICAL (F-S27-2): this client READS NORMALLY — it drains inbound DATA and releases flow-control
+// capacity. A NON-reading client would exercise the gated H2 unbounded-buffer DoS instead, which is
+// NOT what this soak proves.
 
 struct H2StreamAdapter {
     send: h2::SendStream<Bytes>,
@@ -314,7 +323,8 @@ impl tokio::io::AsyncRead for H2StreamAdapter {
             Poll::Pending => Poll::Pending,
             Poll::Ready(None) => Poll::Ready(Ok(())), // clean EOF
             Poll::Ready(Some(Ok(mut data))) => {
-                // Release the whole frame back to the window — the normal-reading contract that keeps the relay bounded (NOT the F-S27-2 path).
+                // Release the whole frame back to the window — the normal-reading contract that
+                // keeps the relay bounded (NOT the F-S27-2 path).
                 let len = data.len();
                 let _ = self.recv.flow_control().release_capacity(len);
                 let n = len.min(buf.remaining());
@@ -674,7 +684,9 @@ pub async fn run_h2_load(
     }
 }
 
-/// Accept-any server-cert verifier for the loopback LOAD client — never an operator path. The gateway's loopback certs are `is_ca=true` (required so quiche accepts them as their own CA), which rustls rejects as an end-entity leaf.
+/// Accept-any server-cert verifier for the loopback LOAD client — never an operator path. The
+/// gateway's loopback certs are `is_ca=true` (required so quiche accepts them as their own CA),
+/// which rustls rejects as an end-entity leaf.
 #[derive(Debug)]
 struct AcceptAnyServerCert(Arc<rustls::crypto::CryptoProvider>);
 
@@ -880,9 +892,13 @@ async fn quic_session(
     let payload: Vec<u8> = (0..payload_len)
         .map(|i| ((i * 31 + 7) % 256) as u8)
         .collect();
-    // `expecting[sid]` tracks echo bytes received; `send_off[sid]` tracks payload bytes the local quiche ACCEPTED on the send side (FIN applies only on the call that accepts the final bytes).
+    // `expecting[sid]` tracks echo bytes received; `send_off[sid]` tracks payload bytes the local
+    // quiche ACCEPTED on the send side (FIN applies only on the call that accepts the final bytes).
     //
-    // F-S20-1 (S21): `stream_send` is bounded by the connection's cwnd-aware SEND CAPACITY and may accept only a PREFIX — the initial ~13.5 KB window is shared across streams. The client MUST re-send the remainder as capacity frees; calling `stream_send` once is what made S20 misread a load-client truncation as a gateway relay stall.
+    // F-S20-1 (S21): `stream_send` is bounded by the connection's cwnd-aware SEND CAPACITY and may
+    // accept only a PREFIX — the initial ~13.5 KB window is shared across streams. The client MUST
+    // re-send the remainder as capacity frees; calling `stream_send` once is what made S20 misread
+    // a load-client truncation as a gateway relay stall.
     let mut expecting: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
     let mut send_off: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
     for s in 0..streams_per_conn {
@@ -898,7 +914,8 @@ async fn quic_session(
     let relay_deadline = tokio::time::Instant::now() + Duration::from_secs(12);
     while !expecting.is_empty() {
         if tokio::time::Instant::now() > relay_deadline || conn.is_closed() {
-            // Diagnostic (F-S20-1): `sent<want` is a load-client send bug; `sent==want` with `got<want` is a genuine relay/echo tail loss.
+            // Diagnostic (F-S20-1): `sent<want` is a load-client send bug; `sent==want` with
+            // `got<want` is a genuine relay/echo tail loss.
             let mut left: Vec<(u64, usize)> = expecting.iter().map(|(k, v)| (*k, *v)).collect();
             left.sort_unstable();
             let detail: Vec<String> = left
@@ -983,9 +1000,13 @@ async fn quic_session(
     Ok(())
 }
 
-// A REAL `quiche::h3::Connection` client against the H3-terminate front — `with_transport` opens the control + QPACK uni streams and sends SETTINGS, so this drives the ingress as a
-// conformant peer would. Against a backend-less front there are exactly two observable outcomes and BOTH are asserted (non-vacuous): a bad `:authority` MUST read back the inline-400 (a
-// true request→response round-trip), and a valid `:authority` MUST be silently dropped — no response and no stream reset — within a short drop-window. A 2xx or a 400 on the valid class is the failure.
+// A REAL `quiche::h3::Connection` client against the H3-terminate front — `with_transport` opens
+// the control + QPACK uni streams and sends SETTINGS, so this drives the ingress as a
+// conformant peer would. Against a backend-less front there are exactly two observable outcomes and
+// BOTH are asserted (non-vacuous): a bad `:authority` MUST read back the inline-400 (a
+// true request→response round-trip), and a valid `:authority` MUST be silently dropped — no
+// response and no stream reset — within a short drop-window. A 2xx or a 400 on the valid class is
+// the failure.
 
 const H3_RESP_BUDGET: Duration = Duration::from_secs(5);
 const H3_DROP_WINDOW: Duration = Duration::from_millis(600);
@@ -1038,8 +1059,11 @@ pub async fn run_h3_load(
     }
 }
 
-/// H3 RST/STOP_SENDING flood — the F-MD-4 chaos injector for the H3-terminate front. Each worker rapidly opens request streams and alternately `RESET_STREAM`s them (the gateway's
-/// request-side `StreamReset` arm) and `STOP_SENDING`s them (the `StreamStopped` arm). The bound under test (R8): stream table + reset accounting + response-producer tasks stay bounded — the H3 analogue of the H2 rapid-reset (CVE-2023-44487) injector.
+/// H3 RST/STOP_SENDING flood — the F-MD-4 chaos injector for the H3-terminate front. Each worker
+/// rapidly opens request streams and alternately `RESET_STREAM`s them (the gateway's
+/// request-side `StreamReset` arm) and `STOP_SENDING`s them (the `StreamStopped` arm). The bound
+/// under test (R8): stream table + reset accounting + response-producer tasks stay bounded — the H3
+/// analogue of the H2 rapid-reset (CVE-2023-44487) injector.
 pub async fn run_h3_reset_flood(
     target: SocketAddr,
     sni: String,
@@ -1149,7 +1173,8 @@ async fn h3_reset_burst(
             }
             Err(_) => break,
         };
-        // Alternate the F-MD-4 trigger: RESET_STREAM (peer-reset the stream the gateway is READING) vs STOP_SENDING (peer-stop the stream it would WRITE the response on).
+        // Alternate the F-MD-4 trigger: RESET_STREAM (peer-reset the stream the gateway is READING)
+        // vs STOP_SENDING (peer-stop the stream it would WRITE the response on).
         // H3_REQUEST_CANCELLED = 0x10C.
         if i % 2 == 0 {
             let _ = conn.stream_shutdown(sid, quiche::Shutdown::Write, 0x10C);
@@ -1226,10 +1251,12 @@ async fn h3_session(
         if conn.is_closed() {
             break;
         }
-        // Alternate classes so every connection drives BOTH the inline-400 egress and the no-backend drop. Even = bad authority (→400), odd = valid authority (→drop).
+        // Alternate classes so every connection drives BOTH the inline-400 egress and the
+        // no-backend drop. Even = bad authority (→400), odd = valid authority (→drop).
         let bad_authority = i % 2 == 0;
         let body_len = BODY_SIZES[((seed as usize).wrapping_add(i)) % BODY_SIZES.len()];
-        // Per-request outcome is ISOLATED: a class violation is `err` but does NOT abort the batch. Only a transport-level failure propagates.
+        // Per-request outcome is ISOLATED: a class violation is `err` but does NOT abort the batch.
+        // Only a transport-level failure propagates.
         match h3_one_request(
             &mut conn,
             &mut h3,
@@ -1257,8 +1284,10 @@ async fn h3_session(
     Ok((ok, err))
 }
 
-/// Issue ONE H3 request and verify the class-specific outcome end-to-end. Bad-authority MUST read the inline 400 + body within `H3_RESP_BUDGET`; valid-authority is expected to be
-/// silently dropped, so a 2xx, a 400, or a connection-level close mid-poll are all failures — the ingress must not tear the connection down for one dropped request.
+/// Issue ONE H3 request and verify the class-specific outcome end-to-end. Bad-authority MUST read
+/// the inline 400 + body within `H3_RESP_BUDGET`; valid-authority is expected to be
+/// silently dropped, so a 2xx, a 400, or a connection-level close mid-poll are all failures — the
+/// ingress must not tear the connection down for one dropped request.
 #[allow(clippy::too_many_arguments)]
 async fn h3_one_request(
     conn: &mut quiche::Connection,
@@ -1270,7 +1299,8 @@ async fn h3_one_request(
     bad_authority: bool,
     body_len: usize,
 ) -> anyhow::Result<H3Outcome> {
-    // A comma in :authority is the canonical reject case (ROUND8-L7-16 / the HAProxy comma class); a clean host:port is the valid case.
+    // A comma in :authority is the canonical reject case (ROUND8-L7-16 / the HAProxy comma class);
+    // a clean host:port is the valid case.
     let authority = if bad_authority {
         "victim.example,attacker.example"
     } else {
@@ -1289,9 +1319,11 @@ async fn h3_one_request(
     }
 
     let bodyless = body_len == 0;
-    // `StreamBlocked` means the peer's bidi MAX_STREAMS grant is exhausted — normal flow-control under churn, NOT a gateway fault (the S21 lesson: a load client must HONOR flow control).
+    // `StreamBlocked` means the peer's bidi MAX_STREAMS grant is exhausted — normal flow-control
+    // under churn, NOT a gateway fault (the S21 lesson: a load client must HONOR flow control).
     let open_deadline = tokio::time::Instant::now() + Duration::from_secs(3);
-    // `loop { break id }` rather than `Option` + `.expect()`: infallible-by-construction still trips the panic-freedom deny lint (S34).
+    // `loop { break id }` rather than `Option` + `.expect()`: infallible-by-construction still
+    // trips the panic-freedom deny lint (S34).
     let stream_id = loop {
         match h3.send_request(conn, &headers, bodyless) {
             Ok(id) => break id,
@@ -1396,7 +1428,9 @@ async fn h3_one_request(
         }
         Ok(H3Outcome::Verified400)
     } else {
-        // No-backend silent drop: NO `:status` must arrive. A 2xx is impossible; a 400 means the valid authority was wrongly rejected; a connection close means the ingress tore down the whole conn for one dropped request.
+        // No-backend silent drop: NO `:status` must arrive. A 2xx is impossible; a 400 means the
+        // valid authority was wrongly rejected; a connection close means the ingress tore down the
+        // whole conn for one dropped request.
         if let Some(s) = status {
             if (200..300).contains(&s) {
                 anyhow::bail!(
@@ -1464,7 +1498,9 @@ fn random_cid() -> [u8; quiche::MAX_CONN_ID_LEN] {
     cid
 }
 
-// WS-over-H3 (RFC 9220): same leak-class question as sc8_ws_h1 over the H3/quiche datapath. The client frames WS by hand (a raw quiche stream cannot be wrapped in tungstenite), so payloads stay < 126 bytes — the 7-bit length form.
+// WS-over-H3 (RFC 9220): same leak-class question as sc8_ws_h1 over the H3/quiche datapath. The
+// client frames WS by hand (a raw quiche stream cannot be wrapped in tungstenite), so payloads stay
+// < 126 bytes — the 7-bit length form.
 
 /// Encode a masked client WS frame (RFC 6455 §5.2).
 #[allow(clippy::indexing_slicing)]
@@ -1556,7 +1592,9 @@ fn ws_h3_drain(
     }
 }
 
-/// One WS-over-H3 session: handshake → extended CONNECT → 200 → echo round-trips → clean Close. `until_cancel` HOLDS the tunnel open (sustained pressure); otherwise it runs `max_frames` then closes (churn / reclaim).
+/// One WS-over-H3 session: handshake → extended CONNECT → 200 → echo round-trips → clean Close.
+/// `until_cancel` HOLDS the tunnel open (sustained pressure); otherwise it runs `max_frames` then
+/// closes (churn / reclaim).
 #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 async fn ws_h3_echo_session(
     target: SocketAddr,
@@ -1664,7 +1702,8 @@ async fn ws_h3_echo_session(
         let payload: Vec<u8> = (0..len)
             .map(|k| ((k as u64).wrapping_add(seed).wrapping_add(f as u64) % 251) as u8)
             .collect();
-        // BINARY (0x2), not Text: a WS Text frame MUST be valid UTF-8 (RFC 6455 §5.6) and tungstenite correctly tears the tunnel down on non-UTF-8 Text.
+        // BINARY (0x2), not Text: a WS Text frame MUST be valid UTF-8 (RFC 6455 §5.6) and
+        // tungstenite correctly tears the tunnel down on non-UTF-8 Text.
         let frame = ws_mask_frame(0x2, &payload);
 
         let send_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -1869,8 +1908,10 @@ fn grpc_h3_drain(
     }
 }
 
-/// One gRPC-over-H3 session on a fresh QUIC connection: `until_cancel` issues unary RPCs until cancelled, else exactly `rpcs` then closes (the stream/fd reclaim probe). Verifies status 200,
-/// a byte-identical echo, AND `grpc-status: 0` — the trailer the S29 fix preserves — so an F-S29-1 regression under load surfaces as `err()`, not a silent pass.
+/// One gRPC-over-H3 session on a fresh QUIC connection: `until_cancel` issues unary RPCs until
+/// cancelled, else exactly `rpcs` then closes (the stream/fd reclaim probe). Verifies status 200,
+/// a byte-identical echo, AND `grpc-status: 0` — the trailer the S29 fix preserves — so an F-S29-1
+/// regression under load surfaces as `err()`, not a silent pass.
 #[allow(clippy::too_many_arguments)]
 async fn grpc_h3_unary_session(
     target: SocketAddr,
@@ -2070,7 +2111,8 @@ pub async fn run_grpc_h3_load(
     }
 }
 
-/// gRPC-over-H3 churn — the per-RPC stream + connection/fd reclaim probe (the leak class F-S29-1 also touched).
+/// gRPC-over-H3 churn — the per-RPC stream + connection/fd reclaim probe (the leak class F-S29-1
+/// also touched).
 pub async fn run_grpc_h3_churn(
     target: SocketAddr,
     sni: String,
@@ -2135,7 +2177,9 @@ mod tests {
         assert_eq!(s.err_count(), 1);
     }
 
-    /// F-S20-1: drive the REAL `quic_session` client against a QUIC echo backend. 4 streams × 4096 B exceeds the ~13.5 KB initial cwnd, so the 4th stream's first `stream_send` is a PARTIAL write — the exact condition the pre-fix single-shot client mishandled.
+    /// F-S20-1: drive the REAL `quic_session` client against a QUIC echo backend. 4 streams × 4096
+    /// B exceeds the ~13.5 KB initial cwnd, so the 4th stream's first `stream_send` is a PARTIAL
+    /// write — the exact condition the pre-fix single-shot client mishandled.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn quic_session_full_send_multistream_echoes() {
         let dir = std::env::temp_dir().join(format!(
@@ -2164,7 +2208,8 @@ mod tests {
         r.expect("4 concurrent streams must echo end-to-end via the partial-write re-send loop");
     }
 
-    /// sc8_ws_h1 self-test: non-vacuous — it byte-verifies a real RFC 6455 echo round-trip, so a broken handshake or a wrong echo fails.
+    /// sc8_ws_h1 self-test: non-vacuous — it byte-verifies a real RFC 6455 echo round-trip, so a
+    /// broken handshake or a wrong echo fails.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn ws_h1_open_close_cycle_echoes() {
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -2206,7 +2251,8 @@ mod tests {
         );
     }
 
-    // The per-request VERDICT logic in `h3_one_request` must be proven non-vacuous on its own: it must accept a real 400+body round-trip AND REJECT a 200 on the bad-authority class.
+    // The per-request VERDICT logic in `h3_one_request` must be proven non-vacuous on its own: it
+    // must accept a real 400+body round-trip AND REJECT a 200 on the bad-authority class.
 
     async fn h3_pair_with_status(
         status: u16,
@@ -2222,7 +2268,9 @@ mod tests {
         h3_pair_build(Some(status)).await
     }
 
-    /// Build a loopback client/server `quiche::h3` pair. `status = Some(s)` ⇒ the server answers the first request with `:status s` + body; `None` ⇒ it drains the request but NEVER responds (the analogue of the production no-backend silent drop).
+    /// Build a loopback client/server `quiche::h3` pair. `status = Some(s)` ⇒ the server answers
+    /// the first request with `:status s` + body; `None` ⇒ it drains the request but NEVER responds
+    /// (the analogue of the production no-backend silent drop).
     async fn h3_pair_build(
         status: Option<u16>,
     ) -> (
@@ -2354,7 +2402,8 @@ mod tests {
                                         break;
                                     }
                                 }
-                                // `None` ⇒ the no-backend silent-drop analogue: drain, never respond, never reset.
+                                // `None` ⇒ the no-backend silent-drop analogue: drain, never
+                                // respond, never reset.
                                 if let Some(s) = status {
                                     let st = s.to_string();
                                     let resp = [quiche::h3::Header::new(b":status", st.as_bytes())];
@@ -2410,7 +2459,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn h3_one_request_rejects_wrong_status_on_bad_authority() {
-        // Load-bearing negative control: a (wrong) 200 on the bad-authority class MUST be an Err — proves the status check is not vacuous.
+        // Load-bearing negative control: a (wrong) 200 on the bad-authority class MUST be an Err —
+        // proves the status check is not vacuous.
         let (mut conn, mut h3, sock, local, server, cancel, dir) = h3_pair_with_status(200).await;
         let mut out = vec![0u8; MAX_UDP];
         let mut inb = vec![0u8; MAX_UDP];
@@ -2429,7 +2479,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn h3_one_request_valid_authority_silent_drop_is_bounded() {
-        // The valid-authority class mirrors the production no-backend drop: the client must observe NO :status and report BoundedDrop — NOT hang, NOT mis-count it as a failure.
+        // The valid-authority class mirrors the production no-backend drop: the client must observe
+        // NO :status and report BoundedDrop — NOT hang, NOT mis-count it as a failure.
         let (mut conn, mut h3, sock, local, server, cancel, dir) = h3_pair_no_response().await;
         let mut out = vec![0u8; MAX_UDP];
         let mut inb = vec![0u8; MAX_UDP];
@@ -2453,7 +2504,8 @@ mod tests {
         );
     }
 
-    /// A client/server H3 pair whose server accepts + handshakes but NEVER answers — the in-process analogue of the production no-backend silent drop.
+    /// A client/server H3 pair whose server accepts + handshakes but NEVER answers — the in-process
+    /// analogue of the production no-backend silent drop.
     async fn h3_pair_no_response() -> (
         quiche::Connection,
         quiche::h3::Connection,

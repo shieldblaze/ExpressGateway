@@ -1,5 +1,8 @@
-//! Closed-loop latency + throughput drivers for the S39 perf characterization. Unlike [`crate::loadgen`] (ok/err counts only) this times EVERY request into a per-worker latency vector.
-//! The quiche/TLS connection patterns are COPIED from `loadgen` rather than factored out of it, so the soak path stays byte-identical (R3).
+//! Closed-loop latency + throughput drivers for the S39 perf characterization. Unlike
+//! [`crate::loadgen`] (ok/err counts only) this times EVERY request into a per-worker latency
+//! vector.
+//! The quiche/TLS connection patterns are COPIED from `loadgen` rather than factored out of it, so
+//! the soak path stays byte-identical (R3).
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -158,7 +161,8 @@ impl BenchSummary {
     }
 }
 
-/// Measurement window: warmup is discarded, recording happens only inside `[warmup_end, measure_end)`.
+/// Measurement window: warmup is discarded, recording happens only inside `[warmup_end,
+/// measure_end)`.
 #[derive(Clone, Copy)]
 struct Window {
     warmup_end: Instant,
@@ -221,7 +225,8 @@ pub async fn bench_h1(
                             continue;
                         }
                     };
-                // TCP_NODELAY on the LOAD CLIENT socket: without it Nagle + the ~40ms delayed-ACK timer inflate the tail — a harness artifact, not the gateway.
+                // TCP_NODELAY on the LOAD CLIENT socket: without it Nagle + the ~40ms delayed-ACK
+                // timer inflate the tail — a harness artifact, not the gateway.
                 let _ = stream.set_nodelay(true);
                 let (mut sender, conn) =
                     match hyper::client::conn::http1::handshake(TokioIo::new(stream)).await {
@@ -307,7 +312,8 @@ pub async fn bench_h2(
                         .await
                     {
                         Ok(Ok(s)) => {
-                            // TCP_NODELAY on the client socket: Nagle would hold small H2 control frames into the ~40ms delayed-ACK tail (harness artifact).
+                            // TCP_NODELAY on the client socket: Nagle would hold small H2 control
+                            // frames into the ~40ms delayed-ACK tail (harness artifact).
                             let _ = s.set_nodelay(true);
                             s
                         }
@@ -630,7 +636,8 @@ pub async fn bench_h3(
     join_all(workers).await
 }
 
-/// One Mode A echo unit: open a bidi stream, send `payload` with FIN (re-sending the cwnd-bounded remainder per the F-S20-1 contract), then read the full echo back.
+/// One Mode A echo unit: open a bidi stream, send `payload` with FIN (re-sending the cwnd-bounded
+/// remainder per the F-S20-1 contract), then read the full echo back.
 async fn quic_echo_one(
     conn: &mut quiche::Connection,
     socket: &UdpSocket,
@@ -686,7 +693,8 @@ async fn quic_echo_one(
     }
 }
 
-/// Closed-loop QUIC Mode A passthrough. TLS is end-to-end client<->backend (the gateway never decrypts), so `sni`/`ca` are the BACKEND's.
+/// Closed-loop QUIC Mode A passthrough. TLS is end-to-end client<->backend (the gateway never
+/// decrypts), so `sni`/`ca` are the BACKEND's.
 pub async fn bench_quic_modea(
     target: SocketAddr,
     backend_sni: String,

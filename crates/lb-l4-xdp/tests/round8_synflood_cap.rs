@@ -1,11 +1,13 @@
-//! ROUND8-L4-03 proof: per-CPU new-flow-rate cap / SYN-flood mitigation (Katran `is_under_flood()` lesson 4).
+//! ROUND8-L4-03 proof: per-CPU new-flow-rate cap / SYN-flood mitigation (Katran `is_under_flood()`
+//! lesson 4).
 
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use lb_l4_xdp::loader::{CtInsertGate, DEFAULT_NEW_FLOW_CAP_PER_SEC_PER_CPU};
 
-/// A burst far above the per-second cap must be partially denied: the gate admits at most `burst` (== refill_per_sec) tokens before the bucket empties.
+/// A burst far above the per-second cap must be partially denied: the gate admits at most `burst`
+/// (== refill_per_sec) tokens before the bucket empties.
 #[test]
 fn ct_insert_gate_blocks_burst_above_cap() {
     let cap = 100_000u32;
@@ -55,7 +57,8 @@ fn ct_insert_gate_refills_after_window() {
     );
 }
 
-/// `cap == 0` is the operator opt-out (config `xdp_new_flow_cap_per_sec_per_cpu = 0`): every insert is admitted, the gate is a no-op.
+/// `cap == 0` is the operator opt-out (config `xdp_new_flow_cap_per_sec_per_cpu = 0`): every insert
+/// is admitted, the gate is a no-op.
 #[test]
 fn ct_insert_gate_zero_cap_disables() {
     let gate = CtInsertGate::new(0);
@@ -64,7 +67,9 @@ fn ct_insert_gate_zero_cap_disables() {
     }
 }
 
-/// The userspace default tracks Katran's per-core `MAX_CONN_RATE` and the eBPF-side fallback constant — a single source of truth so the data-plane and control-plane caps cannot silently diverge.
+/// The userspace default tracks Katran's per-core `MAX_CONN_RATE` and the eBPF-side fallback
+/// constant — a single source of truth so the data-plane and control-plane caps cannot silently
+/// diverge.
 #[test]
 fn default_cap_matches_katran_max_conn_rate() {
     assert_eq!(DEFAULT_NEW_FLOW_CAP_PER_SEC_PER_CPU, 125_000);

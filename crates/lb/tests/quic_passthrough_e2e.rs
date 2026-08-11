@@ -406,12 +406,16 @@ async fn drive_client(
     }
 }
 
-/// **Gate (i) real-QUIC wire e2e — handshake + STREAM round-trip.** Asserts the handshake completes through the LB, a binary payload echoes back byte-faithfully (the LB does not mutate),
+/// **Gate (i) real-QUIC wire e2e — handshake + STREAM round-trip.** Asserts the handshake completes
+/// through the LB, a binary payload echoes back byte-faithfully (the LB does not mutate),
 /// and the client's `peer_cert` is the BACKEND's leaf — the NEVER-DECRYPTED proof at the wire.
 ///
-/// CF-S15-PASSTHROUGH-RETRY-ODCID: when the LB mints the Retry the backend must know the client's ORIGINAL DCID (pre-Retry) for `original_destination_connection_id` and the LB-chosen SCID
-/// for `retry_source_connection_id`. Plain `quiche::accept(odcid)` is insufficient — it defaults the retry SCID to the server's own, which the client rejects. This fixture shares the
-/// `RetryTokenSigner` secret so the backend recovers both; production needs a side channel (a PROXY-protocol analogue for QUIC). The LB-mints-Retry policy itself is correct and stays.
+/// CF-S15-PASSTHROUGH-RETRY-ODCID: when the LB mints the Retry the backend must know the client's
+/// ORIGINAL DCID (pre-Retry) for `original_destination_connection_id` and the LB-chosen SCID
+/// for `retry_source_connection_id`. Plain `quiche::accept(odcid)` is insufficient — it defaults
+/// the retry SCID to the server's own, which the client rejects. This fixture shares the
+/// `RetryTokenSigner` secret so the backend recovers both; production needs a side channel (a
+/// PROXY-protocol analogue for QUIC). The LB-mints-Retry policy itself is correct and stays.
 #[tokio::test(flavor = "current_thread")]
 async fn passthrough_e2e_real_quiche_client_handshake_and_stream() {
     let certs = make_certs();

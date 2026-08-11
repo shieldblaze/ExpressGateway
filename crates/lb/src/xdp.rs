@@ -1,11 +1,14 @@
 //! Optional XDP data-plane attach (Linux-only; the non-Linux path is a stub returning `None`).
 //!
-//! Attaches only when `[runtime].xdp_enabled`, `CAP_BPF` + `CAP_NET_ADMIN`, and `cfg(lb_xdp_elf)` all hold; the returned `XdpLoader` guard must be kept alive until shutdown. On any missing precondition it logs and returns `None` — never panics, never errors.
+//! Attaches only when `[runtime].xdp_enabled`, `CAP_BPF` + `CAP_NET_ADMIN`, and `cfg(lb_xdp_elf)`
+//! all hold; the returned `XdpLoader` guard must be kept alive until shutdown. On any missing
+//! precondition it logs and returns `None` — never panics, never errors.
 
 #[cfg(target_os = "linux")]
 pub use linux::try_attach_xdp;
 
-/// SEC-2-11: re-exports for the capability-probe integration test, which exercises the fallback policy without requiring real capability changes in CI.
+/// SEC-2-11: re-exports for the capability-probe integration test, which exercises the fallback
+/// policy without requiring real capability changes in CI.
 #[cfg(target_os = "linux")]
 pub mod cap_probe {
     // Only the integration test imports these; suppress the unused-import lint for the binary.
@@ -26,7 +29,9 @@ mod linux {
     #[cfg(lb_xdp_elf)]
     use lb_l4_xdp::loader::XdpModeChoice as LoaderXdpModeChoice;
 
-    /// EBPF-2-04: translate the operator-facing config enum into the loader's mode choice. Two separate types avoid an `lb-l4-xdp` <-> `lb-config` cyclic dep, so this conversion is the one place they must stay in sync.
+    /// EBPF-2-04: translate the operator-facing config enum into the loader's mode choice. Two
+    /// separate types avoid an `lb-l4-xdp` <-> `lb-config` cyclic dep, so this conversion is the
+    /// one place they must stay in sync.
     #[cfg(lb_xdp_elf)]
     const fn cfg_to_loader_mode(c: CfgXdpModeChoice) -> LoaderXdpModeChoice {
         match c {
@@ -37,8 +42,10 @@ mod linux {
         }
     }
 
-    /// SEC-2-11: which capability path the probe accepted. Kernels >= 5.8 split `CAP_BPF` out of `CAP_SYS_ADMIN`; older kernels do not know the bit at all and the `caps` crate reports
-    /// `Ok(false)` for it, so "no CAP_BPF" is treated as a signal to try the legacy `CAP_SYS_ADMIN` path rather than as a failure.
+    /// SEC-2-11: which capability path the probe accepted. Kernels >= 5.8 split `CAP_BPF` out of
+    /// `CAP_SYS_ADMIN`; older kernels do not know the bit at all and the `caps` crate reports
+    /// `Ok(false)` for it, so "no CAP_BPF" is treated as a signal to try the legacy `CAP_SYS_ADMIN`
+    /// path rather than as a failure.
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum CapMode {
         /// `CAP_BPF` + `CAP_NET_ADMIN` (preferred, ≥5.8 kernels).
@@ -60,14 +67,21 @@ mod linux {
         ProbeError(String),
     }
 
-    /// SEC-2-11: capability probe with `CAP_SYS_ADMIN` fallback (`check` is injected so tests can exercise every branch without root). If `CAP_BPF` is held, `CAP_NET_ADMIN` is also required
-    /// (the preferred >= 5.8 posture); otherwise fall back to `CAP_SYS_ADMIN`, the only legal path on pre-5.8 kernels. Probe errors are swallowed for `CAP_BPF` ONLY — `CapsError` is opaque and
-    /// a kernel that does not know the bit is exactly what the fallback is for; an error on `CAP_SYS_ADMIN` or `CAP_NET_ADMIN` DOES surface, because by then there are no fallbacks left.
+    /// SEC-2-11: capability probe with `CAP_SYS_ADMIN` fallback (`check` is injected so tests can
+    /// exercise every branch without root). If `CAP_BPF` is held, `CAP_NET_ADMIN` is also required
+    /// (the preferred >= 5.8 posture); otherwise fall back to `CAP_SYS_ADMIN`, the only legal path
+    /// on pre-5.8 kernels. Probe errors are swallowed for `CAP_BPF` ONLY — `CapsError` is opaque
+    /// and
+    /// a kernel that does not know the bit is exactly what the fallback is for; an error on
+    /// `CAP_SYS_ADMIN` or `CAP_NET_ADMIN` DOES surface, because by then there are no fallbacks
+    /// left.
     pub fn probe_caps_with<F>(mut check: F) -> CapState
     where
         F: FnMut(Capability) -> Result<bool, String>,
     {
-        // Any error or `Ok(false)` means not available — a kernel that does not know CAP_BPF reports `Ok(false)`, so there is no distinguishable error path. The string is captured only so the fallback can include it if both paths fail.
+        // Any error or `Ok(false)` means not available — a kernel that does not know CAP_BPF
+        // reports `Ok(false)`, so there is no distinguishable error path. The string is captured
+        // only so the fallback can include it if both paths fail.
         let bpf_result = check(Capability::CAP_BPF);
         let bpf_ok = matches!(bpf_result, Ok(true));
 
@@ -75,7 +89,8 @@ mod linux {
             match check(Capability::CAP_NET_ADMIN) {
                 Ok(true) => return CapState::Ok(CapMode::BpfPlusNetAdmin),
                 Ok(false) => {
-                    // We hold CAP_BPF but not CAP_NET_ADMIN. Last chance: CAP_SYS_ADMIN may cover it.
+                    // We hold CAP_BPF but not CAP_NET_ADMIN. Last chance: CAP_SYS_ADMIN may cover
+                    // it.
                     if let Ok(true) = check(Capability::CAP_SYS_ADMIN) {
                         return CapState::Ok(CapMode::SysAdmin);
                     }
@@ -85,7 +100,8 @@ mod linux {
             }
         }
 
-        // Fall back to CAP_SYS_ADMIN: the only path on pre-5.8 kernels, and still valid on 5.8+ where CAP_BPF simply was not granted.
+        // Fall back to CAP_SYS_ADMIN: the only path on pre-5.8 kernels, and still valid on 5.8+
+        // where CAP_BPF simply was not granted.
         match check(Capability::CAP_SYS_ADMIN) {
             Ok(true) => CapState::Ok(CapMode::SysAdmin),
             Ok(false) => CapState::MissingBpfAndSysAdmin,
@@ -126,7 +142,8 @@ mod linux {
                 );
             }
             CapState::Ok(CapMode::SysAdmin) => {
-                // The fallback for 5.4-5.7 distros and for `--cap-add SYS_ADMIN`. INFO, not WARN: granting CAP_SYS_ADMIN explicitly is a clear operator intent.
+                // The fallback for 5.4-5.7 distros and for `--cap-add SYS_ADMIN`. INFO, not WARN:
+                // granting CAP_SYS_ADMIN explicitly is a clear operator intent.
                 tracing::info!(
                     cap_mode = "cap_sys_admin",
                     "xdp: capability probe succeeded via legacy CAP_SYS_ADMIN path \
@@ -164,7 +181,8 @@ mod linux {
         attach_with_elf(iface, rt.xdp_mode)
     }
 
-    /// EBPF-2-04: probe the attach-mode ladder (Drv -> Skb for `Auto`; loud-fail for `Native`/`Hw`), recording the chosen mode so the Prom scrape need not re-query the kernel.
+    /// EBPF-2-04: probe the attach-mode ladder (Drv -> Skb for `Auto`; loud-fail for
+    /// `Native`/`Hw`), recording the chosen mode so the Prom scrape need not re-query the kernel.
     #[cfg(lb_xdp_elf)]
     fn attach_with_elf(iface: &str, mode: CfgXdpModeChoice) -> Option<XdpLoader> {
         let mut loader = match XdpLoader::load_from_bytes(lb_l4_xdp::LB_XDP_ELF) {

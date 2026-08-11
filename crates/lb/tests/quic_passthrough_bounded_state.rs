@@ -43,7 +43,8 @@ fn varint(v: u64, out: &mut Vec<u8>) {
     }
 }
 
-/// Build a syntactically-valid QUIC v1 Initial with `dcid` as the destination CID and `token` in the token field.
+/// Build a syntactically-valid QUIC v1 Initial with `dcid` as the destination CID and `token` in
+/// the token field.
 fn build_initial(dcid: &[u8], scid: &[u8], token: &[u8]) -> Vec<u8> {
     let mut pkt = Vec::with_capacity(64 + token.len());
     pkt.push(0b1100_0000);

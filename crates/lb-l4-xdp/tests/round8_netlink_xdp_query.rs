@@ -29,7 +29,8 @@ fn push_rtattr(out: &mut Vec<u8>, atype: u16, payload: &[u8]) {
     let _ = align4(rta_len);
 }
 
-/// Build a full `RTM_NEWLINK` netlink datagram for an interface that has an XDP program (prog_id `prog`) attached in mode `mode_byte`, terminated by an `NLMSG_DONE`.
+/// Build a full `RTM_NEWLINK` netlink datagram for an interface that has an XDP program (prog_id
+/// `prog`) attached in mode `mode_byte`, terminated by an `NLMSG_DONE`.
 fn build_link_reply_with_xdp(ifindex: i32, ifname: &str, prog: u32, mode_byte: u8) -> Vec<u8> {
     let mut ifi = Vec::new();
     ifi.push(0u8); // AF_UNSPEC
@@ -75,7 +76,8 @@ fn build_link_reply_with_xdp(ifindex: i32, ifname: &str, prog: u32, mode_byte: u
     msg
 }
 
-/// Build the same shape but with NO `IFLA_XDP` attribute — the "interface has no XDP program" / post-detach success case.
+/// Build the same shape but with NO `IFLA_XDP` attribute — the "interface has no XDP program" /
+/// post-detach success case.
 fn build_link_reply_no_xdp(ifindex: i32, ifname: &str) -> Vec<u8> {
     let mut ifi = Vec::new();
     ifi.push(0u8);
@@ -180,7 +182,8 @@ fn empty_buffer_is_default_not_error() {
     assert_eq!(info, XdpLinkInfo::default());
 }
 
-/// Privileged CI lane: exercise the live AF_NETLINK socket path against the loopback interface (always present).
+/// Privileged CI lane: exercise the live AF_NETLINK socket path against the loopback interface
+/// (always present).
 #[test]
 #[ignore = "live AF_NETLINK socket — privileged CI lane only"]
 fn live_query_loopback_has_no_xdp() {

@@ -1,4 +1,5 @@
-//! ROUND8-L4-09 proof: the `ptr_at` checked-arithmetic bounds check rejects wrap-around offsets and accepts the in-bounds cases.
+//! ROUND8-L4-09 proof: the `ptr_at` checked-arithmetic bounds check rejects wrap-around offsets and
+//! accepts the in-bounds cases.
 
 /// Userspace mirror of `crates/lb-l4-xdp/ebpf/src/main.rs` `ptr_at` arithmetic.
 fn ptr_at_in_bounds(start: usize, offset: usize, len: usize, end: usize) -> bool {

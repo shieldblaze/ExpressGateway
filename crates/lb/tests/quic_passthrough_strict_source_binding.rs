@@ -1,4 +1,5 @@
-//! S15 A2 verify gate (vi) — strict_source_binding knob proved in BOTH positions per owner ruling §9.1'.
+//! S15 A2 verify gate (vi) — strict_source_binding knob proved in BOTH positions per owner ruling
+//! §9.1'.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -53,7 +54,8 @@ fn build_initial(dcid: &[u8], scid: &[u8], token: &[u8]) -> Vec<u8> {
     pkt
 }
 
-/// Build a syntactically-valid QUIC v1 short-header datagram carrying `dcid` (whose length must match the LB's `max_dcid_len_routed`).
+/// Build a syntactically-valid QUIC v1 short-header datagram carrying `dcid` (whose length must
+/// match the LB's `max_dcid_len_routed`).
 fn build_short(dcid: &[u8]) -> Vec<u8> {
     let mut pkt = Vec::with_capacity(2 + dcid.len());
     pkt.push(0b0100_0000);

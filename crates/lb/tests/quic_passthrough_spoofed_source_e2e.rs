@@ -1,7 +1,10 @@
 //! S15 A3 verify gate 1 — spoofed-source-IP end-to-end (author != verifier).
 //!
-//! Installs a flow from peer A, then sends a spoofed short-header packet from peer B on the SAME DCID with `strict_source_binding=true`, and asserts TWO layers: the spoofed packet is DROPPED
-//! (backend datagram count unchanged) AND exactly one `audit/source_binding_violation` event is emitted with the recorded+observed peers. A negative control (`strict=false`, packet FORWARDED, NO audit line) proves the audit line is not vacuously emitted on every NAT-rebind.
+//! Installs a flow from peer A, then sends a spoofed short-header packet from peer B on the SAME
+//! DCID with `strict_source_binding=true`, and asserts TWO layers: the spoofed packet is DROPPED
+//! (backend datagram count unchanged) AND exactly one `audit/source_binding_violation` event is
+//! emitted with the recorded+observed peers. A negative control (`strict=false`, packet FORWARDED,
+//! NO audit line) proves the audit line is not vacuously emitted on every NAT-rebind.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -21,7 +24,8 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::layer::{Context, SubscriberExt};
 use tracing_subscriber::registry::Registry;
 
-/// Requires the `audit/source_binding_violation` event to fire, not just the behavioural half (backend not reached).
+/// Requires the `audit/source_binding_violation` event to fire, not just the behavioural half
+/// (backend not reached).
 const AUDIT_LINE_REQUIRED: bool = true;
 
 const AUDIT_TOKEN: &str = "source_binding_violation";

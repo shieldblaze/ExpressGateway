@@ -1,4 +1,5 @@
-//! Minimal Prometheus text-exposition parser, scoped to the gauge/counter subset the product emits. A wrong parse is a wrong bound verdict, so it is unit-tested.
+//! Minimal Prometheus text-exposition parser, scoped to the gauge/counter subset the product emits.
+//! A wrong parse is a wrong bound verdict, so it is unit-tested.
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Sample {

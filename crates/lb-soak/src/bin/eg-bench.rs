@@ -1,4 +1,6 @@
-//! `eg-bench` — the S39 closed-loop perf characterization driver (R12). Sets up the SAME binary + backends/config the soak uses, drives one protocol path at a fixed concurrency for a fixed window, and reports achieved RPS + p50/p99/p999 + the child's RSS/fd/CPU cost.
+//! `eg-bench` — the S39 closed-loop perf characterization driver (R12). Sets up the SAME binary +
+//! backends/config the soak uses, drives one protocol path at a fixed concurrency for a fixed
+//! window, and reports achieved RPS + p50/p99/p999 + the child's RSS/fd/CPU cost.
 //!
 //!   eg-bench --protocol <P> --connections <C> --duration-secs <D> \
 //!            [--warmup-secs <W=5>] [--payload <bytes=0>] [--out <dir>] [--label <s>]
@@ -30,7 +32,8 @@ struct Args {
     payload: usize,
     out: Option<PathBuf>,
     label: Option<String>,
-    /// When nonzero, run "serve only": set up gateway+backend, print the listener (so an external tool — oha — can drive it for the H1/H1s/H2 cross-validation), idle for N secs, tear down.
+    /// When nonzero, run "serve only": set up gateway+backend, print the listener (so an external
+    /// tool — oha — can drive it for the H1/H1s/H2 cross-validation), idle for N secs, tear down.
     serve_secs: u64,
 }
 
@@ -107,7 +110,8 @@ struct ResSample {
     threads: u64,
 }
 
-/// Read utime+stime (clock ticks) from `/proc/<pid>/stat`. Robust to a `comm` containing spaces/parens (splits on the final `)`).
+/// Read utime+stime (clock ticks) from `/proc/<pid>/stat`. Robust to a `comm` containing
+/// spaces/parens (splits on the final `)`).
 fn read_proc_ticks(pid: u32) -> Option<u64> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let rparen = stat.rfind(')')?;

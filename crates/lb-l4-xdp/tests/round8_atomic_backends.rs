@@ -21,7 +21,8 @@ fn be(ip_last: u8, port: u16) -> BackendEntry {
     )
 }
 
-/// The userspace mirror must be byte-identical to the eBPF `BackendTable` (aya rejects the map accessor otherwise).
+/// The userspace mirror must be byte-identical to the eBPF `BackendTable` (aya rejects the map
+/// accessor otherwise).
 #[test]
 fn backend_table_wire_size_is_frozen() {
     assert_eq!(core::mem::size_of::<BackendTable>(), BACKEND_TABLE_SIZE);
@@ -77,7 +78,8 @@ fn daisy_chain_shifts_current_into_previous() {
     assert_eq!(t2.entries[1].backend_ip, 0);
 }
 
-/// `generation` wraps cleanly at u32::MAX (only equality vs. the CT-remembered value matters, never ordering).
+/// `generation` wraps cleanly at u32::MAX (only equality vs. the CT-remembered value matters, never
+/// ordering).
 #[test]
 fn generation_wraps() {
     let mut t = BackendTable::zeroed();
@@ -101,7 +103,8 @@ fn too_many_backends_error_carries_count() {
     );
 }
 
-/// Sanity: `MAC_B` is referenced so the constant is not dead — keeps the daisy-chain fixture honest if a future edit drops the B path.
+/// Sanity: `MAC_B` is referenced so the constant is not dead — keeps the daisy-chain fixture honest
+/// if a future edit drops the B path.
 #[test]
 fn fixture_macs_distinct() {
     assert_ne!(MAC_A, MAC_B);

@@ -2,7 +2,8 @@
 
 use lb_l4_xdp::nic_compat::{DrvSupport, driver_of, drv_supported};
 
-/// (1) lead D1: on THIS box (ena, kernel 7.0 — a NOT-known-bad combo, firmware unresolved) `drv_supported("ens5")` MUST be `Allowed`.
+/// (1) lead D1: on THIS box (ena, kernel 7.0 — a NOT-known-bad combo, firmware unresolved)
+/// `drv_supported("ens5")` MUST be `Allowed`.
 #[test]
 fn drv_supported_ens5_is_allowed_on_this_not_known_bad_ena_box() {
     let iface = "ens5";

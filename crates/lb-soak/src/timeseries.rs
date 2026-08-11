@@ -4,7 +4,8 @@ use std::fmt::Write as _;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MetricKind {
-    /// Should not climb over the run (RSS, fds, threads, and bounded-state gauges that oscillate around a level).
+    /// Should not climb over the run (RSS, fds, threads, and bounded-state gauges that oscillate
+    /// around a level).
     Trend,
     /// Monotonic counter (drops/evictions).
     Counter,
@@ -35,9 +36,11 @@ impl Verdict {
 pub struct TrendConfig {
     /// Leading fraction discarded as warmup before judging steady state. Default 0.10.
     pub warmup_frac: f64,
-    /// Last-third median may exceed the first-third median by this fraction and stay BOUNDED. Default 0.10.
+    /// Last-third median may exceed the first-third median by this fraction and stay BOUNDED.
+    /// Default 0.10.
     pub band: f64,
-    /// Minimum monotone fraction (non-negative deltas) to call a climb consistent, not noise. Default 0.60.
+    /// Minimum monotone fraction (non-negative deltas) to call a climb consistent, not noise.
+    /// Default 0.60.
     pub monotone_min: f64,
     /// Minimum trimmed-sample count to render a verdict. Default 8.
     pub min_samples: usize,
@@ -104,7 +107,8 @@ impl TimeSeries {
         self.t.is_empty()
     }
 
-    /// Append a sample. Missing trailing values are NaN-filled so a transient scrape miss does not desync the columns.
+    /// Append a sample. Missing trailing values are NaN-filled so a transient scrape miss does not
+    /// desync the columns.
     pub fn push(&mut self, t_secs: f64, mut values: Vec<f64>) {
         values.resize(self.columns.len(), f64::NAN);
         values.truncate(self.columns.len());
@@ -147,7 +151,8 @@ impl TimeSeries {
         out
     }
 
-    /// Analyze every column under the given per-column [`MetricKind`] (a column not present in `kinds` defaults to [`MetricKind::Trend`]).
+    /// Analyze every column under the given per-column [`MetricKind`] (a column not present in
+    /// `kinds` defaults to [`MetricKind::Trend`]).
     #[must_use]
     pub fn analyze(&self, cfg: &TrendConfig, kinds: &[(String, MetricKind)]) -> Vec<ColumnVerdict> {
         self.columns
@@ -304,7 +309,9 @@ pub fn analyze_column(
 
     let (verdict, note) = match kind {
         MetricKind::Counter => {
-            // A constant-rate counter has first/second-half slopes ~equal; 1.8x cleanly separates linear (1.0x) from quadratic (~2.4x) growth, so only an accelerating counter is DRIFT.
+            // A constant-rate counter has first/second-half slopes ~equal; 1.8x cleanly separates
+            // linear (1.0x) from quadratic (~2.4x) growth, so only an accelerating counter is
+            // DRIFT.
             let first_half = slope(&trimmed[..tn / 2]);
             let second_half = slope(&trimmed[tn / 2..]);
             if second_half > first_half * 1.8 + eps && second_half > 0.0 {
@@ -415,7 +422,8 @@ mod tests {
 
     #[test]
     fn sawtooth_around_constant_is_bounded() {
-        // Sawtooth: high monotone fraction but NO net trend. The rel-growth gate must keep this from reading as a leak.
+        // Sawtooth: high monotone fraction but NO net trend. The rel-growth gate must keep this
+        // from reading as a leak.
         let vals: Vec<f64> = (0..60).map(|i| ((i % 20) * 10) as f64).collect();
         let v = analyze_column("conns", &vals, MetricKind::Trend, &cfg());
         assert_eq!(

@@ -1,4 +1,5 @@
-//! CODE-2-02 proof — release-build smoke test that asserts a `panic!()` inside a tokio task aborts the process when built under `panic = "abort"`.
+//! CODE-2-02 proof — release-build smoke test that asserts a `panic!()` inside a tokio task aborts
+//! the process when built under `panic = "abort"`.
 
 use std::path::Path;
 

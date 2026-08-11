@@ -1,4 +1,5 @@
-//! ROUND8-L4-08 proof: IPv4 fragments and IPv6 packets with a Fragment Extension Header are passed to the kernel (never rewritten in XDP).
+//! ROUND8-L4-08 proof: IPv4 fragments and IPv6 packets with a Fragment Extension Header are passed
+//! to the kernel (never rewritten in XDP).
 
 use lb_l4_xdp::stats_export::{NUM_SLOTS, StatSlot};
 

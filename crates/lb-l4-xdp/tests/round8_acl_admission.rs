@@ -1,4 +1,5 @@
-//! ROUND8-L4-06 proof: `XdpLoader::insert_acl_deny` rejects `prefix_len == 0` and `prefix_len > 32`.
+//! ROUND8-L4-06 proof: `XdpLoader::insert_acl_deny` rejects `prefix_len == 0` and `prefix_len >
+//! 32`.
 
 #![cfg(target_os = "linux")]
 

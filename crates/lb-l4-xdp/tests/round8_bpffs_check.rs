@@ -1,4 +1,5 @@
-//! ROUND8-L4-11 proof: `bpffs::assert_bpffs` fail-fasts when the pin directory the loader is asked to use is NOT bpffs.
+//! ROUND8-L4-11 proof: `bpffs::assert_bpffs` fail-fasts when the pin directory the loader is asked
+//! to use is NOT bpffs.
 
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]

@@ -1,11 +1,13 @@
-//! SEC-2-11 proof: the XDP capability probe must fall back from `CAP_BPF` to `CAP_SYS_ADMIN` on pre-5.8 kernels.
+//! SEC-2-11 proof: the XDP capability probe must fall back from `CAP_BPF` to `CAP_SYS_ADMIN` on
+//! pre-5.8 kernels.
 
 #![cfg(target_os = "linux")]
 
 use caps::Capability;
 use lb::xdp::cap_probe::{CapMode, CapState, probe_caps_with};
 
-/// Build a closure that returns `Ok(true)` for any cap whose name is listed in `held` and `Ok(false)` otherwise.
+/// Build a closure that returns `Ok(true)` for any cap whose name is listed in `held` and
+/// `Ok(false)` otherwise.
 fn fake_caps(held: &'static [Capability]) -> impl FnMut(Capability) -> Result<bool, String> {
     move |cap| Ok(held.contains(&cap))
 }
@@ -30,7 +32,8 @@ fn test_cap_sys_admin_fallback() {
     );
 }
 
-/// Neither cap held: the probe must reject with a clear "both missing" state, not a one-sided error.
+/// Neither cap held: the probe must reject with a clear "both missing" state, not a one-sided
+/// error.
 #[test]
 fn test_no_caps_rejects() {
     let state = probe_caps_with(fake_caps(&[]));
@@ -40,7 +43,8 @@ fn test_no_caps_rejects() {
     );
 }
 
-/// CAP_BPF held but CAP_NET_ADMIN missing, AND CAP_SYS_ADMIN missing: must surface the "almost there" diagnostic.
+/// CAP_BPF held but CAP_NET_ADMIN missing, AND CAP_SYS_ADMIN missing: must surface the "almost
+/// there" diagnostic.
 #[test]
 fn test_bpf_without_net_admin_rejects() {
     let state = probe_caps_with(fake_caps(&[Capability::CAP_BPF]));
@@ -80,7 +84,8 @@ fn test_cap_bpf_probe_error_falls_through_to_sys_admin() {
     assert!(calls.contains(&Capability::CAP_SYS_ADMIN));
 }
 
-/// Probe error on BOTH CAP_BPF and CAP_SYS_ADMIN must surface a composite ProbeError that mentions both — operators need both strings to diagnose the kernel state.
+/// Probe error on BOTH CAP_BPF and CAP_SYS_ADMIN must surface a composite ProbeError that mentions
+/// both — operators need both strings to diagnose the kernel state.
 #[test]
 fn test_double_probe_error_composes_message() {
     let state = probe_caps_with(|cap| match cap {

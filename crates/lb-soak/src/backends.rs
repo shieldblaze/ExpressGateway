@@ -1,4 +1,6 @@
-//! Origin servers the gateway proxies to during a soak: H1 + H2 (hyper) and a multi-connection QUIC echo server (quiche), each runtime-tunable via [`BackendControl`] so the chaos injectors can flip it slow/dropping without a restart.
+//! Origin servers the gateway proxies to during a soak: H1 + H2 (hyper) and a multi-connection QUIC
+//! echo server (quiche), each runtime-tunable via [`BackendControl`] so the chaos injectors can
+//! flip it slow/dropping without a restart.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -83,7 +85,8 @@ async fn handle(
         .unwrap_or_else(|_| Response::new(Full::new(Bytes::from_static(b"ok")))))
 }
 
-/// Response body: the echoed request bytes then a `grpc-status: 0` trailing HEADERS — the shape that drives the gateway's H3 response-trailer egress (the F-S29-1 path).
+/// Response body: the echoed request bytes then a `grpc-status: 0` trailing HEADERS — the shape
+/// that drives the gateway's H3 response-trailer egress (the F-S29-1 path).
 struct GrpcEchoBody {
     data: Option<Bytes>,
     trailer_sent: bool,
@@ -266,7 +269,10 @@ pub async fn spawn_ws_h1_backend(stop: Arc<AtomicBool>) -> anyhow::Result<Socket
 /// Per-stream echo bookkeeping: (queued bytes still to echo, peer-FIN-seen, FIN-sent).
 type EchoState = (Vec<u8>, bool, bool);
 
-/// Spawn a multi-connection QUIC echo backend: demuxes by DCID, echoes each bidi stream's bytes back on the same stream id (FIN-aware), and echoes back DATAGRAMs. It does NOT speak real H3 — the raw proxy relays opaque stream bytes, so a byte echo is the correct far end for BOTH Mode A and Mode B.
+/// Spawn a multi-connection QUIC echo backend: demuxes by DCID, echoes each bidi stream's bytes
+/// back on the same stream id (FIN-aware), and echoes back DATAGRAMs. It does NOT speak real H3 —
+/// the raw proxy relays opaque stream bytes, so a byte echo is the correct far end for BOTH Mode A
+/// and Mode B.
 pub fn spawn_quic_echo_backend(
     cert_path: std::path::PathBuf,
     key_path: std::path::PathBuf,
