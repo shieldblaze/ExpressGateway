@@ -1,7 +1,5 @@
-//! HTTP request smuggling detection.
-//!
-//! Implements checks per RFC 9112 section 6.1 and the H2-to-H1 downgrade
-//! rules from RFC 9113 section 8.2.2.
+//! HTTP request smuggling detection: RFC 9112 §6.1 checks plus the H2→H1 downgrade rules of
+//! RFC 9113 §8.2.2.
 
 use crate::SecurityError;
 
@@ -42,8 +40,7 @@ impl SmuggleDetector {
         Ok(())
     }
 
-    /// Reject CL-TE smuggling — both `Content-Length` and `Transfer-Encoding` present (RFC 9112
-    /// §6.1 ambiguity).
+    /// Reject CL-TE smuggling — both `Content-Length` and `Transfer-Encoding` (RFC 9112 §6.1).
     pub fn check_cl_te(headers: &[(String, String)]) -> Result<(), SecurityError> {
         let has_cl = headers
             .iter()
@@ -58,8 +55,7 @@ impl SmuggleDetector {
         Ok(())
     }
 
-    /// Reject TE-CL smuggling — `Transfer-Encoding` whose FINAL codec is not `chunked` (RFC 9112
-    /// §6.1 MUST).
+    /// Reject TE-CL smuggling — `Transfer-Encoding` whose FINAL codec is not `chunked` (§6.1 MUST).
     pub fn check_te_cl(headers: &[(String, String)]) -> Result<(), SecurityError> {
         for (name, value) in headers {
             if name.eq_ignore_ascii_case("transfer-encoding") {
@@ -73,8 +69,7 @@ impl SmuggleDetector {
         Ok(())
     }
 
-    /// Run every applicable smuggling check, SHORT-CIRCUITING on the first failure;
-    /// `is_h2_origin` adds the H2 downgrade check.
+    /// Run every applicable check, SHORT-CIRCUITING on the first failure; `is_h2_origin` adds H2→H1.
     pub fn check_all(
         headers: &[(String, String)],
         is_h2_origin: bool,
@@ -108,17 +103,10 @@ impl SmuggleDetector {
         Ok(())
     }
 
-    /// Strict TE policy (SEC-2-15): only the bare token `chunked` passes.
-    ///
-    /// RFC 9112 §6.1 allows a codec chain ahead of `chunked`, but upstreams routinely
-    /// mis-implement the decode — forwarding the still-gzipped payload to an application that
-    /// decompresses it itself produces a body-length mismatch across the gateway. Collapsing the
-    /// chain removes the ambiguity.
-    ///
-    /// # Errors
-    ///
-    /// [`SecurityError::SmuggleTECL`] — reused rather than a new variant, so callers matching on
-    /// one "smuggle" class keep compiling. Changing that is an API break.
+    /// Strict TE policy (SEC-2-15): only the bare token `chunked` passes. RFC 9112 §6.1 allows a
+    /// codec chain ahead of `chunked`, but upstreams routinely mis-decode it and the still-gzipped
+    /// payload becomes a body-length mismatch across the gateway. Errors reuse
+    /// [`SecurityError::SmuggleTECL`] deliberately — a new variant is an API break.
     pub fn check_te_strict(headers: &[(String, String)]) -> Result<(), SecurityError> {
         for (name, value) in headers {
             if name.eq_ignore_ascii_case("transfer-encoding") {
@@ -137,8 +125,8 @@ impl SmuggleDetector {
         Ok(())
     }
 
-    /// Reject H2→H1 downgrade smuggling per RFC 9113 §8.2.2: hop-by-hop headers, a `te` that is
-    /// not exactly `trailers`, and pseudo-headers leaking into the translated H1 message.
+    /// Reject H2→H1 downgrade smuggling (RFC 9113 §8.2.2): hop-by-hop headers, a `te` that is not
+    /// exactly `trailers`, and pseudo-headers leaking into the translated H1 message.
     pub fn check_h2_downgrade(
         headers: &[(String, String)],
         is_from_h2: bool,

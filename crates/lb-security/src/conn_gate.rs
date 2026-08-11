@@ -1,12 +1,8 @@
-//! Per-IP and per-listener concurrent-connection cap (SEC-2-04).
-//!
-//! [`ConnGate::admit`] runs at accept time and never blocks; on [`OverCap`] the listener must RST
-//! the socket WITHOUT writing a response, or the cap itself becomes an amplification lever.
-//!
-//! The per-listener counter uses AcqRel rather than Relaxed per SEC-2-16: it gates a security
-//! decision, so the consume edge has to observe every prior decrement.
-//!
-//! The trusted-CIDR field is carried but NOT matched — deferred per `audit/deferred.md` L-002.
+//! Per-IP and per-listener concurrent-connection cap (SEC-2-04). [`ConnGate::admit`] runs at accept
+//! time and never blocks; on [`OverCap`] the listener must RST the socket WITHOUT writing a
+//! response, or the cap itself becomes an amplification lever. The per-listener counter is AcqRel,
+//! not Relaxed (SEC-2-16), because it gates a security decision. The trusted-CIDR field is carried
+//! but NOT matched (L-002).
 
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -122,10 +118,8 @@ impl ConnGate {
         &self.inner.trusted_cidrs
     }
 
-    /// Admit a connection from `peer`.
-    ///
-    /// The per-IP overflow path MUST roll the per-listener counter back (it was already bumped);
-    /// without the rollback a sustained over-cap stream silently erodes the listener cap.
+    /// Admit a connection from `peer`. The per-IP overflow path MUST roll the per-listener counter
+    /// back, or a sustained over-cap stream silently erodes the listener cap.
     pub fn admit(&self, peer: IpAddr) -> Result<ConnPermit, OverCap> {
         let mut cur = self.inner.per_listener.load(Ordering::Acquire);
         loop {

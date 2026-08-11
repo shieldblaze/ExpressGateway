@@ -1,7 +1,6 @@
-//! Consolidated HTTP/2 "glitches" abuse counter (HAProxy 3.0 `tune.h2.fe.glitches-threshold`).
-//!
-//! One weighted rolling-window score across all H2 detectors, because operators cannot tune six
-//! independent per-detector thresholds. Crossing it drains the connection (GOAWAY + close).
+//! Consolidated HTTP/2 "glitches" abuse counter (HAProxy 3.0 `tune.h2.fe.glitches-threshold`): one
+//! weighted rolling-window score across all H2 detectors, because operators cannot tune six
+//! independent thresholds. Crossing it drains the connection (GOAWAY + close).
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -35,8 +34,7 @@ pub enum GlitchKind {
 }
 
 impl GlitchKind {
-    /// HAProxy-published per-kind cost, tuned so "noisy but legitimate" traffic lands at about
-    /// half the threshold. Changing any weight is a public-API break — pinned by
+    /// HAProxy-published per-kind cost. Changing any weight is a public-API break — pinned by
     /// `weights_match_haproxy_table`.
     #[must_use]
     pub const fn weight(self) -> u32 {
@@ -104,8 +102,7 @@ impl GlitchesCounter {
         self.sum_in_window
     }
 
-    /// Record one event at `now`, pruning the window first. Drains only on a STRICT `>` — a score
-    /// exactly equal to the threshold still allows.
+    /// Record one event at `now`, pruning first. Drains only on a STRICT `>`; equal still allows.
     pub fn record(&mut self, kind: GlitchKind, now: Instant) -> GlitchOutcome {
         self.prune(now);
 
@@ -162,7 +159,6 @@ mod tests {
     fn under_threshold_allows() {
         let mut c = GlitchesCounter::new(50, Duration::from_secs(60));
         let t0 = Instant::now();
-        // Exactly at threshold → still allowed.
         for i in 0..10 {
             let r = c.record(GlitchKind::RapidReset, t0 + Duration::from_secs(i));
             assert_eq!(r, GlitchOutcome::Allow, "event #{i} should be allowed");

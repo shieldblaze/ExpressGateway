@@ -31,15 +31,10 @@ use std::sync::Arc;
 
 pub use lb_core::BackendState;
 
-/// A backend as the scheduler sees it.
-///
-/// `lb_core::BackendState` (Arc'd atomics) is CANONICAL; the plain `u64` fields below are a
-/// snapshot cache the hot loop reads. They drift unless [`Self::sync_from_state`] republishes the
-/// atomic into the cache — which is how the scheduler and the admin endpoint used to report
-/// different values.
-///
-/// KNOWN GAP: `sync_from_state` has NO production caller (only `tests/balancer_counter_sync.rs`),
-/// so in the running binary the cache is only ever what the constructor put there.
+/// A backend as the scheduler sees it. `lb_core::BackendState` (Arc'd atomics) is CANONICAL; the
+/// plain `u64` fields below are a snapshot cache that drifts unless [`Self::sync_from_state`]
+/// republishes them. KNOWN GAP: `sync_from_state` has NO production caller, so in the running
+/// binary the cache is only ever what the constructor put there.
 #[derive(Debug, Clone)]
 pub struct Backend {
     /// Unique identifier for this backend.
@@ -50,16 +45,12 @@ pub struct Backend {
     pub active_connections: u64,
     /// Cached `state.active_requests()`; same staleness caveat.
     pub active_requests: u64,
-    /// EWMA latency in nanoseconds.
-    ///
-    /// NEVER WRITTEN IN PRODUCTION: nothing outside this crate and `lb-core` assigns to it or
-    /// calls `set_latency_ns`, so it is 0 for every backend at runtime. [`ewma::Ewma::pick`] then
-    /// takes its cold-start branch for all of them and the score collapses to
-    /// `active_connections + 1` — i.e. selecting `LbPolicy::Ewma` silently gives you
-    /// least-connections. Feeding this from the response-completion path is unimplemented.
+    /// EWMA latency in nanoseconds. NEVER WRITTEN IN PRODUCTION: nothing outside this crate and
+    /// `lb-core` assigns to it or calls `set_latency_ns`, so it is 0 for every backend,
+    /// [`ewma::Ewma::pick`] takes its cold-start branch for all of them, and selecting
+    /// `LbPolicy::Ewma` silently gives you least-connections.
     pub latency_ewma_ns: u64,
-    /// Canonical atomic state, shared with the admin/metrics endpoint. `None` is the test-only
-    /// path where the snapshot fields are the sole source.
+    /// Canonical atomic state shared with the admin endpoint; `None` is the test-only path.
     pub state: Option<Arc<BackendState>>,
 }
 
@@ -77,8 +68,7 @@ impl Backend {
         }
     }
 
-    /// Bind the atomic `BackendState` so the scheduler and metrics gauge cannot diverge. The
-    /// snapshot is pre-seeded, so a backend built mid-traffic has a consistent first pick.
+    /// Bind the atomic `BackendState` so scheduler and metrics cannot diverge; snapshot pre-seeded.
     #[must_use]
     pub fn with_state(id: impl Into<String>, weight: u32, state: Arc<BackendState>) -> Self {
         let active_connections = state.active_connections();
@@ -94,9 +84,7 @@ impl Backend {
         }
     }
 
-    /// Refresh the cached snapshot from the atomics; `true` if anything changed.
-    ///
-    /// NO PRODUCTION CALLER — see the note on [`Backend`].
+    /// Refresh the cached snapshot from the atomics; `true` if anything changed. NO PRODUCTION CALLER.
     pub fn sync_from_state(&mut self) -> bool {
         let Some(state) = self.state.as_ref() else {
             return false;
@@ -120,8 +108,7 @@ pub trait LoadBalancer: Send + Sync {
     fn pick(&mut self, backends: &[Backend]) -> Result<usize, BalancerError>;
 }
 
-/// Order-sensitive identity hash over a backend slice. Maglev and ring-hash use it to detect a
-/// swapped backend set whose COUNT is unchanged, which a length check would miss.
+/// Order-sensitive identity hash: detects a swapped backend set whose COUNT is unchanged.
 #[must_use]
 #[allow(clippy::cast_possible_truncation)]
 pub fn backend_identity_hash(backends: &[Backend]) -> u64 {
@@ -134,7 +121,6 @@ pub fn backend_identity_hash(backends: &[Backend]) -> u64 {
                 .wrapping_mul(0x0100_0000_01b3)
                 .wrapping_add(u64::from(byte));
         }
-        // Mix in position to make the hash order-dependent.
         h = h.wrapping_add(i as u64);
         h ^= h >> 33;
         h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);

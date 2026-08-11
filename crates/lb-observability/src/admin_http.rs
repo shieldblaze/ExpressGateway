@@ -1,9 +1,7 @@
 //! Admin HTTP listener: `GET` on `/metrics`, `/healthz`, `/livez`, `/readyz`, `/startupz`.
-//!
 //! NO TLS and NO mTLS. Bearer-token auth is OPTIONAL — [`serve_with_auth`] enforces it on
-//! information-bearing endpoints, while [`serve_with_probes`] serves everything anonymously. Even
-//! with a token the transport is plaintext, so the expected posture is a loopback bind behind a
-//! reverse proxy or a management VPN.
+//! information-bearing endpoints, [`serve_with_probes`] serves everything anonymously; even with a
+//! token the transport is plaintext, so expect a loopback bind behind a proxy or management VPN.
 
 use std::future::Future;
 use std::io;
@@ -31,8 +29,7 @@ use crate::prometheus_exposition::{CONTENT_TYPE, render_text};
 struct AdminService {
     registry: Arc<MetricsRegistry>,
     probes: Arc<ProbeRegistry>,
-    /// When present, requests need a matching bearer token. Probe endpoints stay EXEMPT so the
-    /// kubelet can verify liveness without the admin token.
+    /// When present, requests need a bearer token; probes stay EXEMPT so the kubelet can reach them.
     auth: Option<Arc<AdminAuthGate>>,
 }
 
@@ -123,8 +120,7 @@ fn startupz_response(probes: &ProbeRegistry) -> Response<Full<Bytes>> {
 }
 
 fn json_status(status: StatusCode, state: ProbeState) -> Response<Full<Bytes>> {
-    // Hand-formatted to avoid a serde_json dep for one key. Escaping is unnecessary ONLY because
-    // `ProbeState::body_token` is a closed vocabulary.
+    // Hand-formatted to avoid a serde_json dep; escaping is safe ONLY because `body_token` is closed.
     let body = format!("{{\"status\":\"{}\"}}\n", state.body_token());
     Response::builder()
         .status(status)
@@ -145,8 +141,7 @@ fn plain(status: StatusCode, body: &'static str) -> Response<Full<Bytes>> {
 }
 
 fn fallback_500() -> Response<Full<Bytes>> {
-    // Unreachable — the inputs are static strings — but returned rather than unwrapped because
-    // the crate denies `unwrap_used`.
+    // Unreachable (static inputs), but returned rather than unwrapped: the crate denies `unwrap_used`.
     let mut r = Response::new(Full::new(Bytes::from_static(
         b"internal error building response\n",
     )));
@@ -154,9 +149,7 @@ fn fallback_500() -> Response<Full<Bytes>> {
     r
 }
 
-/// Serve the admin endpoints until `shutdown` fires. The caller keeps a `probes` clone to flip
-/// state on bind/drain. Per-connection failures are logged at debug and never take the listener
-/// down.
+/// Serve the admin endpoints until `shutdown` fires; a per-connection failure never stops the listener.
 pub async fn serve_with_probes(
     registry: Arc<MetricsRegistry>,
     probes: Arc<ProbeRegistry>,
@@ -166,9 +159,8 @@ pub async fn serve_with_probes(
     serve_with_auth(registry, probes, None, addr, shutdown).await
 }
 
-/// [`serve_with_probes`] with optional bearer-token enforcement on information-bearing endpoints;
-/// probes stay anonymous. This function does NOT check the bind address — the caller must have
-/// run [`AdminAuthGate::validate_bind`] first.
+/// [`serve_with_probes`] with optional bearer-token enforcement; probes stay anonymous. Does NOT
+/// check the bind address — the caller must have run [`AdminAuthGate::validate_bind`] first.
 pub async fn serve_with_auth(
     registry: Arc<MetricsRegistry>,
     probes: Arc<ProbeRegistry>,
@@ -224,8 +216,7 @@ pub async fn serve_with_auth(
     Ok(local)
 }
 
-/// Back-compat wrapper that synthesises its own [`ProbeRegistry`]. Readiness can never be flipped
-/// through this entry point — use [`serve_with_probes`] and hold the registry.
+/// Back-compat wrapper with its own [`ProbeRegistry`]; readiness can never be flipped through it.
 pub async fn serve(
     registry: Arc<MetricsRegistry>,
     addr: SocketAddr,
@@ -252,13 +243,10 @@ mod tests {
             .unwrap();
         assert!(local.port() > 0);
         cancel.cancel();
-        // Give the accept loop a tick to notice the cancellation.
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 
-    // SEC-2-06 Wave 2c-2: /livez stays anonymously accessible even
-    // with the bearer-token gate enforced. /metrics returns 403
-    // without the right token.
+    // SEC-2-06: /livez stays anonymous even with the bearer gate on; /metrics 403s without a token.
     #[tokio::test(flavor = "current_thread")]
     async fn test_admin_403_without_token() {
         use http::HeaderValue;
@@ -274,7 +262,6 @@ mod tests {
         let local = serve_with_auth(Arc::clone(&reg), probes, Some(gate), addr, cancel.clone())
             .await
             .unwrap();
-        // Hit /metrics without a token — should 403.
         let stream = tokio::net::TcpStream::connect(local).await.unwrap();
         let io = hyper_util::rt::TokioIo::new(stream);
         let (mut sender, h1_conn) =

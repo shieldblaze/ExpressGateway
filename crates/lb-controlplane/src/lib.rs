@@ -45,8 +45,7 @@ pub trait ConfigBackend: Send + Sync + std::fmt::Debug {
     fn store(&self, config: &str) -> Result<(), ControlPlaneError>;
 }
 
-/// File-backed storage. Writes go to a temp file in the SAME directory and are renamed into
-/// place — a cross-directory temp would break the atomicity.
+/// File-backed storage; the temp file is in the SAME directory, or the rename is not atomic.
 #[derive(Debug)]
 pub struct FileBackend {
     path: PathBuf,
@@ -151,8 +150,7 @@ impl ConfigManager {
         })
     }
 
-    /// Reload from the backend; `true` if the config changed. A successful change saves the old
-    /// config for [`Self::rollback_to_previous`].
+    /// Reload from the backend; `true` if it changed, saving the old one for rollback.
     pub fn reload(&mut self) -> Result<bool, ControlPlaneError> {
         let new_config = self.backend.load()?;
         if new_config == self.current_config {
@@ -294,7 +292,6 @@ mod tests {
         let backend = InMemoryBackend::new("key = \"v1\"");
         let mut mgr = ConfigManager::new(Box::new(backend)).unwrap();
 
-        // Simulate an external config change via the backend.
         mgr.backend.store("key = \"v2\"").unwrap();
         assert!(mgr.reload().unwrap());
         assert_eq!(mgr.current_config(), "key = \"v2\"");
@@ -311,7 +308,6 @@ mod tests {
         assert!(mgr.reload().unwrap());
         assert_eq!(mgr.current_config(), "key = \"v2\"");
 
-        // Rollback to v1.
         assert!(mgr.rollback_to_previous().unwrap());
         assert_eq!(mgr.current_config(), "key = \"v1\"");
         assert_eq!(mgr.version(), 3);
@@ -322,7 +318,6 @@ mod tests {
         let backend = InMemoryBackend::new("key = \"v1\"");
         let mut mgr = ConfigManager::new(Box::new(backend)).unwrap();
 
-        // No previous config yet.
         assert!(!mgr.rollback_to_previous().unwrap());
     }
 
@@ -364,11 +359,9 @@ host = "localhost"
         let loaded = backend.load().unwrap();
         assert_eq!(loaded, "key = \"value\"");
 
-        // Verify the temp file was cleaned up (rename removes it).
         let tmp_path = dir.join(".test-config.toml.tmp");
         assert!(!tmp_path.exists());
 
-        // Clean up.
         let _ = std::fs::remove_dir_all(&dir);
     }
 
