@@ -2181,6 +2181,10 @@ async fn async_main() -> anyhow::Result<()> {
         });
     }
 
+    // S37-C/R6: installed ONCE outside the loop. Re-installing per iteration LOSES a
+    // SIGTERM/SIGINT that lands while a non-terminal SIGHUP/SIGUSR1 is being serviced —
+    // a persistent stream latches it. Non-terminal signals are handled and `continue`d,
+    // so an operator can re-signal after a rejected reload.
     #[cfg(unix)]
     let mut lifecycle_signals = LifecycleSignals::install()?;
     let signal_kind = loop {
@@ -4713,7 +4717,11 @@ mod tests {
         let _ = tokio::time::timeout(Duration::from_secs(5), listener.shutdown()).await;
     }
 
-    /// **Client stream-FIN (no WS Close frame) → abnormal close.** The client closes its WS send half by FINning the H3 tunnel stream WITHOUT a WS Close frame.
+    /// **Client stream-FIN (no WS Close frame) → abnormal close.** The client closes its WS
+    /// send half by FINning the H3 tunnel stream without a WS Close frame.
+    /// `conn_actor::ws_handle_client_fin` must map that FIN to a clean EOF, NOT a Reset:
+    /// per RFC 6455 §7.1.5 the only clean close is the Close-frame handshake, so the
+    /// gateway must not fabricate one from a bare FIN.
     #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
     async fn ws_over_h3_client_stream_fin_without_close_is_abnormal() {
         let lb_certs = modeb_e2e_gen_certs(H3H1_E2E_SNI, "wsh3-fin");
