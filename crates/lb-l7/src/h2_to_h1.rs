@@ -1,18 +1,14 @@
 //! HTTP/2 → HTTP/1.1 bridge: pseudo-headers back to a request line + `Host`.
 //!
-//! SEC-2-01 runs [`lb_security::SmuggleDetector::check_h2_downgrade`] BEFORE
-//! the H1 request line is materialised. The downgrade path is the highest-risk
-//! smuggle vector: H2 forbids hop-by-hop headers on the wire, but a malformed
-//! frame can still carry them in the header block, and once the H1 line exists
-//! the upstream H1 parser sees the forbidden header — a desynced response queue
-//! is one hop away. Detection returns [`L7Error::BridgeError`], rendered as 400.
+//! SEC-2-01 runs `check_h2_downgrade` BEFORE the H1 request line is
+//! materialised: a malformed H2 frame can still carry hop-by-hop headers, and
+//! once the H1 line exists the upstream parser sees them — a desynced response
+//! queue is one hop away.
 
 use crate::{Bridge, BridgeRequest, BridgeResponse, L7Error, Protocol, check_header_count};
 
-/// Hop-by-hop headers that must not appear in a forwarded HTTP/1.1 response
-/// when the upstream was HTTP/2. `pub(crate)` so the STREAMING H1←H2 relay
-/// (`h1_proxy::upstream_response_to_h1`) strips the SAME authoritative set as
-/// the buffering `H2ToH1Bridge::bridge_response` — one source of truth.
+/// Hop-by-hop headers barred from a forwarded H1 response. `pub(crate)` so the
+/// STREAMING H1←H2 relay strips the SAME set as the buffering bridge.
 pub(crate) const RESPONSE_HOP_BY_HOP: &[&str] = &[
     "connection",
     "keep-alive",
@@ -36,7 +32,6 @@ impl Bridge for H2ToH1Bridge {
         let mut authority: Option<String> = None;
         let mut regular_headers: Vec<(String, String)> = Vec::new();
 
-        // Extract values from pseudo-headers, collect regular headers.
         for (k, v) in &req.headers {
             match k.as_str() {
                 ":method" => method.clone_from(v),
@@ -44,7 +39,6 @@ impl Bridge for H2ToH1Bridge {
                 ":scheme" => { /* Dropped in HTTP/1.1 -- scheme is implicit. */ }
                 ":authority" => authority = Some(v.clone()),
                 _ if k.starts_with(':') => {
-                    // Skip any unknown pseudo-headers.
                 }
                 _ => {
                     regular_headers.push((k.to_lowercase(), v.clone()));
@@ -52,29 +46,22 @@ impl Bridge for H2ToH1Bridge {
             }
         }
 
-        // SEC-2-01 — run the downgrade detector against the REGULAR
-        // (non-pseudo) header block, AFTER the pseudo-headers were extracted.
-        // On the raw inbound list it would over-fire: `check_h2_downgrade`
-        // treats any `:`-prefixed name as a smuggle attempt, and pseudo-headers
-        // are how H2 legitimately carries method/path/scheme/authority. The
-        // `is_h2_origin = true` arm rejects forbidden hop-by-hop headers and
-        // non-`trailers` TE per RFC 9113 §8.2.2. Fires BEFORE the H1 request
-        // line is materialised below.
+        // SEC-2-01 — run the detector on the REGULAR headers only, AFTER the
+        // pseudo-headers were extracted: on the raw list it over-fires, since
+        // `check_h2_downgrade` treats any `:`-prefixed name as a smuggle
+        // attempt. Fires BEFORE the H1 request line is materialised.
         lb_security::SmuggleDetector::check_all(&regular_headers, /* is_h2_origin = */ true)
             .map_err(|e| L7Error::BridgeError(format!("h2->h1 downgrade smuggle: {e}")))?;
 
-        // `:authority` is required for a well-formed H2 request; an empty value
-        // would produce an invalid empty `Host` downstream.
+        // An empty `:authority` would produce an invalid empty `Host`.
         let auth = authority
             .filter(|a| !a.is_empty())
             .ok_or_else(|| L7Error::MissingPseudoHeader(":authority".to_owned()))?;
 
-        // PROTO-2-01 / RFC 9113 §8.3.1: `:authority` and a regular `Host` MUST
-        // agree — a mismatch is host-confusion smuggling against backends that
-        // authorise on `Host` (the bridge would otherwise silently replace
-        // `Host` with `:authority`). Duplicated here because the bridge is a
-        // separate entry point from `H2Proxy::handle`, so direct users (test
-        // harnesses, future filter chains) get the guard too.
+        // PROTO-2-01 / RFC 9113 §8.3.1: a mismatch is host-confusion smuggling
+        // against backends that authorise on `Host` (the bridge would otherwise
+        // silently replace it). Duplicated from `H2Proxy::handle` because the
+        // bridge is a separate entry point.
         if let Some((idx, (_, existing_host))) = regular_headers
             .iter()
             .enumerate()
@@ -85,8 +72,7 @@ impl Bridge for H2ToH1Bridge {
                     "h2->h1 :authority/Host disagree (RFC 9113 §8.3.1)".to_owned(),
                 ));
             }
-            // Drop the existing Host so the inserted one below is the
-            // sole entry. Keeps subsequent code unchanged.
+            // Drop the existing Host so the inserted one is the sole entry.
             regular_headers.remove(idx);
         }
 
@@ -141,12 +127,8 @@ impl Bridge for H2ToH1Bridge {
     }
 }
 
-/// PROTO-2-01 — compare a `:authority` value against a `Host` header
-/// value per RFC 9113 §8.3.1 + RFC 3986 §3.2.2.
-///
-/// Host case-insensitive; ports compared when both are explicit.
-/// Either side eliding a port is accepted (default-port latitude).
-/// Empty host on either side rejects.
+/// PROTO-2-01 — compare `:authority` against `Host` (RFC 9113 §8.3.1 + RFC 3986
+/// §3.2.2). Ports compare only when both are explicit; an empty host rejects.
 fn authority_host_components_agree(authority: &str, host: &str) -> bool {
     let (a_host, a_port) = split_host_port(authority);
     let (h_host, h_port) = split_host_port(host);
@@ -162,10 +144,8 @@ fn authority_host_components_agree(authority: &str, host: &str) -> bool {
     }
 }
 
-/// Split `host[:port]` honouring bracketed IPv6 literals. See
-/// `crate::h2_proxy::split_host_port` for the same shape used by the
-/// listener-level check; duplicated here to keep `h2_to_h1.rs`
-/// independent of the proxy module.
+/// Split `host[:port]`, IPv6-bracket aware. Duplicated from
+/// `crate::h2_proxy::split_host_port` to keep this module proxy-independent.
 fn split_host_port(s: &str) -> (&str, Option<&str>) {
     if let Some(stripped) = s.strip_prefix('[') {
         if let Some(end) = stripped.find(']') {

@@ -1,12 +1,5 @@
-//! Upstream backend dispatch for the L7 proxies (PROTO-001).
-//!
-//! The proxies historically dialed every backend over [`lb_io::pool::TcpPool`]
-//! and spoke HTTP/1.1 on the upstream wire. PROTO-001 branches on a
-//! per-backend protocol selector to reach H2 and H3 backends. This module
-//! ships the public types expressing it: [`UpstreamProto`],
-//! [`UpstreamBackend`], [`BackendInfoPicker`], the [`SingleProtoPicker`]
-//! adapter for the H1-only call sites that pre-date PROTO-001, and
-//! [`RoundRobinUpstreams`].
+//! Upstream backend dispatch for the L7 proxies (PROTO-001): a per-backend
+//! protocol selector so a dial can reach H1, H2 or H3.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -18,8 +11,7 @@ use crate::h1_proxy::BackendPicker;
 /// Upstream wire protocol for a backend dial.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UpstreamProto {
-    /// HTTP/1.1 over plain TCP (matches `Backend::protocol = "tcp"` and
-    /// `"h1"` — both treated identically by the L7 proxies).
+    /// HTTP/1.1 over plain TCP (`Backend::protocol` `"tcp"` or `"h1"`).
     H1,
     /// HTTP/2 over plain TCP, via [`lb_io::http2_pool::Http2Pool`].
     H2,
@@ -27,15 +19,14 @@ pub enum UpstreamProto {
     H3,
 }
 
-/// Resolved upstream backend descriptor: peer address, wire protocol, and an
-/// optional SNI for H3 (whose TLS handshake demands a server-name authority).
+/// Resolved upstream backend: address, wire protocol, and an SNI for H3.
 #[derive(Debug, Clone)]
 pub struct UpstreamBackend {
     /// Peer socket address.
     pub addr: SocketAddr,
     /// Wire protocol the proxy must speak to this backend.
     pub proto: UpstreamProto,
-    /// SNI string. Required for `H3`, ignored for `H1`/`H2` — hence `Option`.
+    /// SNI: required for `H3`, ignored for `H1`/`H2`.
     pub sni: Option<String>,
 }
 
@@ -77,9 +68,8 @@ pub trait BackendInfoPicker: Send + Sync {
     fn pick_info(&self) -> Option<UpstreamBackend>;
 }
 
-/// Adapter wrapping a single-protocol [`BackendPicker`] and tagging every pick
-/// with a fixed protocol / SNI, for call sites not yet migrated to the
-/// multi-proto surface.
+/// Tags every pick from a single-protocol [`BackendPicker`] with a fixed
+/// protocol / SNI, for call sites predating the multi-proto surface.
 pub struct SingleProtoPicker {
     inner: Arc<dyn BackendPicker>,
     proto: UpstreamProto,
@@ -113,8 +103,7 @@ impl BackendInfoPicker for SingleProtoPicker {
     }
 }
 
-/// Round-robin picker over a fixed `Vec<UpstreamBackend>`. Mirror of
-/// [`crate::h1_proxy::RoundRobinAddrs`] for the multi-protocol path.
+/// Round-robin picker over a fixed `Vec<UpstreamBackend>`.
 pub struct RoundRobinUpstreams {
     backends: Vec<UpstreamBackend>,
     counter: Mutex<usize>,

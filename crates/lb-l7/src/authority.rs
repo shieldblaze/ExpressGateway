@@ -1,39 +1,29 @@
-//! ROUND8-L7-09 / ROUND8-L7-16 — protocol-neutral authority validator: the
-//! hyper/`http`-version-specific request wrapper around `lb_core::authority`.
+//! ROUND8-L7-09 / L7-16 — the `http::Request` wrapper around
+//! `lb_core::authority`.
 //!
-//! A `,` / whitespace / control byte inside an authority value can desync
-//! upstream routing or punch through a Host-based ACL (HAProxy
-//! `BUG/MAJOR: http: forbid comma character in authority value`, and
-//! `BUG/MEDIUM: h1: Enforce the authority validation during H1 request
-//! parsing`, where the H1 parser was missing the check H2/H3 already had).
+//! A `,` / whitespace / control byte in an authority value can desync upstream
+//! routing or punch through a Host-based ACL (HAProxy `BUG/MAJOR: http: forbid
+//! comma character in authority value`; `BUG/MEDIUM: h1: Enforce the authority
+//! validation during H1 request parsing`).
 //!
-//! ROUND8-L7-16 hoisted the byte-level predicate into `lb-core` so the H3/QUIC
-//! datapath shares the EXACT implementation. Re-deriving it per protocol is
-//! precisely the H1-vs-H2-vs-H3 divergence the HAProxy `BUG/MEDIUM` fix warns
-//! about, so the predicate is re-exported verbatim here.
+//! The predicate is re-exported from `lb-core` verbatim, never re-derived:
+//! per-protocol copies are exactly the divergence that `BUG/MEDIUM` was about.
 
 // ROUND8-L7-16: single source of truth lives in `lb-core`.
 pub use lb_core::authority::{AuthorityError, validate};
 
-/// ROUND8-L7-09 choke point — validate every authority value carried by an
-/// inbound request, whatever downstream path it takes (plain, WebSocket
-/// upgrade, H2 extended-CONNECT, gRPC).
+/// ROUND8-L7-09 choke point — validate every authority value on an inbound
+/// request, whatever downstream path it takes.
 ///
-/// Both the H1 and H2 dispatchers call this at the very top of `handle_inner`,
-/// BEFORE the fork into the upgrade / CONNECT / gRPC handlers: hoisting it
-/// above the fork means a fork added later inherits the check for free. Both
-/// the URI authority and the `Host` header are validated when present.
-///
-/// An absent or empty value is NOT rejected here — PROTO-2-01 owns the
-/// missing-authority gate; this only sanitises a present value.
+/// Called at the very TOP of both `handle_inner`s, BEFORE the upgrade /
+/// CONNECT / gRPC fork, so a fork added later inherits the check for free. An
+/// absent or empty value is NOT rejected here — PROTO-2-01 owns that gate.
 ///
 /// There is deliberately NO loopback exemption: that carve-out belongs to the
-/// SNI-vs-Host AGREEMENT check only. Applying it here would make the upgrade
-/// path looser than the plain path — the exact divergence HAProxy's
-/// `BUG/MEDIUM` fix was about.
+/// SNI-vs-Host AGREEMENT check only, and applying it here would make the
+/// upgrade path looser than the plain path.
 ///
 /// # Errors
-///
 /// The first offending value together with its [`AuthorityError`].
 pub fn validate_request<B>(req: &http::Request<B>) -> Result<(), (String, AuthorityError)> {
     for candidate in [
@@ -58,13 +48,12 @@ pub fn validate_request<B>(req: &http::Request<B>) -> Result<(), (String, Author
 mod tests {
     use super::*;
 
-    // The predicate's own unit tests live in `lb_core::authority`; these pin
-    // the `http::Request` wrapper behaviour the QUIC path does not share.
+    // The predicate's own tests live in `lb_core::authority`; these pin the
+    // `http::Request` wrapper the QUIC path does not share.
 
     #[test]
     fn predicate_reexport_is_lb_core() {
-        // Must be byte-identical to the shared predicate (same rejects, same
-        // loopback policy: none).
+        // Must match the shared predicate exactly (loopback policy: none).
         assert_eq!(validate("a,b"), Err(AuthorityError::Comma));
         assert_eq!(validate("a b"), Err(AuthorityError::Whitespace));
         assert!(validate("example.com:8080").is_ok());
@@ -103,7 +92,6 @@ mod tests {
 
     #[test]
     fn request_absent_and_empty_authority_skipped() {
-        // Nothing to sanitise — PROTO-2-01's gate, not this predicate's.
         let req = http::Request::builder().uri("/p").body(()).unwrap();
         assert_eq!(validate_request(&req), Ok(()));
     }

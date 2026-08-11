@@ -1,45 +1,33 @@
-//! CODE-2-01 — `SecurityHooks` re-export façade so the rest of `lb-l7` can
-//! program against `SecurityHooks` / `SecurityReject` / `ConnPermit` without
-//! naming `lb_security` at every call site. The binary constructs an
-//! [`lb_security::HooksBundle`] and threads it in via `with_hooks`.
+//! CODE-2-01 — `SecurityHooks` re-export façade for `lb-l7`.
 //!
-//! [`NoopHooks`] is the default wired into the proxy constructors; it accepts
-//! every request and connection. It is deliberately NOT `#[cfg(test)]`-gated,
-//! contrary to the original brief: the production constructors need a non-test
-//! default for the `hooks` field.
+//! [`NoopHooks`] is the default wired into the proxy constructors and accepts
+//! everything. Deliberately NOT `#[cfg(test)]`-gated: the production
+//! constructors need a non-test default for the `hooks` field.
 
 use std::net::IpAddr;
 use std::sync::Arc;
 
 pub use lb_security::{ConnGate, ConnPermit, SecurityHooks, SecurityReject};
 
-/// Object-safe sibling of [`SecurityHooks`]. The upstream trait carries a
-/// generic `B` on `inspect_request<B>`, which makes it NOT dyn-compatible —
-/// `Arc<dyn SecurityHooks>` does not compile. The proxy hot path only inspects
-/// headers + version, so this local trait pins `B = ()`.
+/// Object-safe sibling of [`SecurityHooks`]: the upstream trait's generic `B`
+/// on `inspect_request<B>` makes `Arc<dyn SecurityHooks>` uncompilable, so this
+/// pins `B = ()` (the hot path only inspects headers + version).
 pub trait DynSecurityHooks: Send + Sync + 'static {
     /// Inspect a parsed request before hop-by-hop strip / upstream acquire.
-    /// The hot path reconstructs a `Request<()>` from the destructured parts.
     ///
     /// # Errors
-    ///
-    /// Returns [`SecurityReject`] on rejection (smuggle / over-cap /
-    /// rate-limit / slow-handshake).
+    /// [`SecurityReject`] on rejection.
     fn inspect_request(&self, req: &http::Request<()>, peer: IpAddr) -> Result<(), SecurityReject>;
 
     /// Admit a new connection.
     ///
     /// # Errors
-    ///
-    /// Returns [`SecurityReject::OverCap`] when the per-IP /
-    /// per-listener counters saturate.
+    /// [`SecurityReject::OverCap`] when the per-IP / per-listener counters
+    /// saturate.
     fn admit_connection(&self, peer: IpAddr) -> Result<ConnPermit, SecurityReject>;
 }
 
-/// Blanket impl bridging [`SecurityHooks`] into the object-safe
-/// [`DynSecurityHooks`] surface, so any implementor (including
-/// [`lb_security::HooksBundle`] and [`NoopHooks`]) is usable as
-/// `Arc<dyn DynSecurityHooks>`.
+/// Blanket impl bridging [`SecurityHooks`] into [`DynSecurityHooks`].
 impl<T: SecurityHooks> DynSecurityHooks for T {
     fn inspect_request(&self, req: &http::Request<()>, peer: IpAddr) -> Result<(), SecurityReject> {
         <T as SecurityHooks>::inspect_request(self, req, peer)
@@ -50,11 +38,8 @@ impl<T: SecurityHooks> DynSecurityHooks for T {
     }
 }
 
-/// Always-accept [`SecurityHooks`] impl, the default for proxy constructors
-/// that pre-date the CODE-2-01 wire-up; replaced by
-/// [`lb_security::HooksBundle`] via `H{1,2}Proxy::with_hooks`.
-/// `admit_connection` admits through an internal effectively-unbounded
-/// [`ConnGate`]; the permit drops harmlessly when the connection ends.
+/// Always-accept [`SecurityHooks`] impl — the proxy-constructor default until
+/// [`lb_security::HooksBundle`] is wired via `H{1,2}Proxy::with_hooks`.
 pub struct NoopHooks {
     gate: ConnGate,
 }
@@ -72,8 +57,7 @@ impl std::fmt::Debug for NoopHooks {
 }
 
 impl NoopHooks {
-    /// Build a [`NoopHooks`] with an effectively-unbounded [`ConnGate`] so the
-    /// default proxy path never rejects an admission.
+    /// Build a [`NoopHooks`] whose [`ConnGate`] never rejects an admission.
     #[must_use]
     pub fn new() -> Self {
         Self {

@@ -1,7 +1,4 @@
-//! HTTP/2 to HTTP/3 bridge (pass-through).
-//!
-//! HTTP/2 and HTTP/3 share the same pseudo-header scheme, so this bridge
-//! performs only lowercase normalization on regular headers.
+//! HTTP/2 → HTTP/3 pass-through; only lowercase-normalises regular headers.
 
 use crate::{Bridge, BridgeRequest, BridgeResponse, L7Error, Protocol, check_header_count};
 
@@ -30,7 +27,6 @@ impl Bridge for H2ToH3Bridge {
             headers,
             body: req.body.clone(),
             scheme: req.scheme.clone(),
-            // PROTO-2-12: forward request trailers.
             trailers: req.trailers.clone(),
         })
     }
@@ -48,7 +44,6 @@ impl Bridge for H2ToH3Bridge {
             status: resp.status,
             headers,
             body: resp.body.clone(),
-            // PROTO-2-12: forward response trailers.
             trailers: resp.trailers.clone(),
         })
     }

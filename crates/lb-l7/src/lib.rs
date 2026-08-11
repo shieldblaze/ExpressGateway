@@ -29,8 +29,7 @@ pub mod h3_to_h3;
 pub mod security_hooks;
 pub mod sni_authority;
 pub mod stripped_request;
-/// ROUND8-OPS-06 / REL-2-07: L7 wire-in for the W3C trace-context
-/// propagation library (`lb_observability::tracing_propagation`).
+/// ROUND8-OPS-06 / REL-2-07: L7 wire-in for W3C trace-context propagation.
 pub mod trace_ctx;
 pub mod upstream;
 pub mod ws_proxy;
@@ -47,8 +46,7 @@ use h3_to_h3::H3ToH3Bridge;
 
 use bytes::Bytes;
 
-/// Maximum number of headers allowed through any bridge — header-flood
-/// protection, enforced by every bridge in both directions.
+/// Header-flood cap, enforced by every bridge in both directions.
 pub const MAX_HEADERS: usize = 256;
 
 /// HTTP protocol version for bridging.
@@ -62,25 +60,21 @@ pub enum Protocol {
     Http3,
 }
 
-/// Protocol-neutral HTTP request IR that every bridge works with: each bridge
-/// converts from its source protocol into this form.
+/// Protocol-neutral HTTP request IR that every bridge converts into.
 #[derive(Debug, Clone)]
 pub struct BridgeRequest {
     /// HTTP method (e.g., "GET", "POST").
     pub method: String,
     /// Request URI / path.
     pub uri: String,
-    /// Header list. May contain pseudo-headers (prefixed with `:`) for HTTP/2
-    /// and HTTP/3 representations.
+    /// Header list; may contain `:`-prefixed pseudo-headers for H2/H3.
     pub headers: Vec<(String, String)>,
     /// Request body bytes (ref-counted, zero-copy clone).
     pub body: Bytes,
-    /// URI scheme (e.g. "https"). Used by the H1→H2 / H1→H3 bridges to
-    /// populate `:scheme`; `None` is interpreted as `"https"`.
+    /// URI scheme; `None` is interpreted as `"https"` when minting `:scheme`.
     pub scheme: Option<String>,
-    /// PROTO-2-12 — trailer fields (RFC 9110 §6.6), threaded through each
-    /// bridge so the destination protocol can re-emit them via
-    /// [`hyper::body::Frame::trailers`]. Defaults to empty.
+    /// PROTO-2-12 — trailer fields (RFC 9110 §6.6), threaded through so the
+    /// destination protocol can re-emit them.
     pub trailers: Vec<(String, String)>,
 }
 
@@ -106,8 +100,7 @@ pub struct BridgeResponse {
     pub headers: Vec<(String, String)>,
     /// Response body bytes (ref-counted, zero-copy clone).
     pub body: Bytes,
-    /// PROTO-2-12 — Trailer fields (RFC 9110 §6.6). See
-    /// [`BridgeRequest::trailers`].
+    /// PROTO-2-12 — trailer fields; see [`BridgeRequest::trailers`].
     pub trailers: Vec<(String, String)>,
 }
 
@@ -169,17 +162,13 @@ pub trait Bridge: Send + Sync {
     /// Transform a request from the source to the destination representation.
     ///
     /// # Errors
-    ///
-    /// [`L7Error`] if it cannot be bridged (e.g. a missing pseudo-header when
-    /// converting HTTP/2 → HTTP/1.1).
+    /// [`L7Error`] if it cannot be bridged.
     fn bridge_request(&self, req: &BridgeRequest) -> Result<BridgeRequest, L7Error>;
 
-    /// Transform a response from the destination protocol representation back
-    /// to the source protocol representation.
+    /// Transform a response back to the source protocol representation.
     ///
     /// # Errors
-    ///
-    /// Returns [`L7Error`] if the response cannot be bridged.
+    /// [`L7Error`] if it cannot be bridged.
     fn bridge_response(&self, resp: &BridgeResponse) -> Result<BridgeResponse, L7Error>;
 
     /// The protocol this bridge accepts as input.
@@ -189,8 +178,7 @@ pub trait Bridge: Send + Sync {
     fn dest_protocol(&self) -> Protocol;
 }
 
-/// Create a bridge for the given source/destination protocol pair. All 9
-/// combinations of HTTP/1.1, HTTP/2 and HTTP/3 are supported.
+/// Create a bridge for a source/destination pair; all 9 combinations exist.
 #[must_use]
 pub fn create_bridge(source: Protocol, dest: Protocol) -> Box<dyn Bridge> {
     match (source, dest) {

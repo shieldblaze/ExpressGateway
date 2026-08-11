@@ -1,18 +1,7 @@
-//! WebSocket upstream path.
-//!
-//! `WsProxy` is not a listener mode — it is a capability that
-//! [`crate::h1_proxy::H1Proxy`] and [`crate::h2_proxy::H2Proxy`] delegate to
-//! when an inbound request carries a WebSocket handshake (RFC 6455 §4.1 H1
-//! upgrade, or RFC 8441 §4 H2 extended CONNECT). Detection is a pure predicate
-//! ([`is_h1_upgrade_request`], [`is_h2_extended_connect`]); the caller owns the
-//! dispatch and the response shape.
-//!
-//! After the handshake, [`WsProxy::proxy_frames`] runs a bidirectional frame
-//! forwarder. `Ping` is forwarded, never answered on the proxy — tungstenite
-//! auto-replies on the RECEIVING side. On idle elapse both peers get
-//! `Close 1001 Going Away` (RFC 6455 §7.4.1).
-//!
-//! Per-message compression (RFC 7692) is deliberately NOT negotiated.
+//! WebSocket upstream path — a capability the H1/H2 proxies delegate to, not a
+//! listener mode. `Ping` is forwarded, never answered here: tungstenite
+//! auto-replies on the RECEIVING side. Per-message compression (RFC 7692) is
+//! deliberately NOT negotiated.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -29,42 +18,32 @@ use tokio_tungstenite::tungstenite::Utf8Bytes;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::protocol::{CloseFrame, Role, WebSocketConfig};
 
-/// Default client-originated Ping budget per rolling window; above it the proxy
-/// emits `Close 1008` to the abusive client.
+/// Client-originated Ping budget per window; above it, `Close 1008`.
 pub const DEFAULT_PING_RATE_LIMIT_PER_WINDOW: u32 = 50;
 
 /// Default rolling window for the WebSocket client-Ping rate limit.
 pub const DEFAULT_PING_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(10);
 
-/// Default per-direction read-frame watchdog (WS-002): a single silent
-/// direction gets `Close 1008` and its upstream half shut. Distinct from
-/// [`WsConfig::idle_timeout`], which fires only when BOTH directions are silent.
+/// Per-direction read-frame watchdog (WS-002). Distinct from
+/// [`WsConfig::idle_timeout`], which fires only when BOTH are silent.
 pub const DEFAULT_READ_FRAME_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Per-listener WebSocket knobs. Every field has a canonical default so
-/// operators only set the knob they want to tune.
+/// Per-listener WebSocket knobs; every field has a canonical default.
 #[derive(Debug, Clone, Copy)]
 pub struct WsConfig {
-    /// Idle budget (no frames in EITHER direction) before the proxy emits a
-    /// `1001 Going Away` close. Default 60 s.
+    /// Idle budget (no frames in EITHER direction) → `1001 Going Away`.
     pub idle_timeout: Duration,
-    /// Upper bound on a single incoming message (bytes). Fragmented
-    /// messages are summed. Default 16 MiB.
+    /// Upper bound on one incoming message; fragments are summed.
     pub max_message_size: usize,
-    /// When false the upgrade detector short-circuits to "not a WS request"
-    /// even when the headers match. Default true.
+    /// When false the upgrade detector short-circuits to "not a WS request".
     pub enabled: bool,
-    /// Max client-originated `Ping` frames per [`Self::ping_rate_limit_window`]
-    /// before the proxy treats the stream as a flood amplifier and emits
-    /// `Close 1008` (WS-001). Default [`DEFAULT_PING_RATE_LIMIT_PER_WINDOW`].
+    /// WS-001: client `Ping` budget per [`Self::ping_rate_limit_window`]
+    /// before the proxy treats the stream as a flood amplifier.
     pub ping_rate_limit_per_window: u32,
     /// Rolling-window duration for the client-Ping rate limit.
-    /// Default [`DEFAULT_PING_RATE_LIMIT_WINDOW`].
     pub ping_rate_limit_window: Duration,
-    /// Per-direction read-frame watchdog, bounding the per-peer
-    /// kernel-TCP/tungstenite-buffer dwell (WS-002). Distinct from
-    /// [`Self::idle_timeout`]: idle fires when BOTH halves are silent, this
-    /// one when ANY half is. Default [`DEFAULT_READ_FRAME_TIMEOUT`].
+    /// Per-direction read-frame watchdog (WS-002). Distinct from
+    /// [`Self::idle_timeout`]: idle needs BOTH halves silent, this one ANY.
     pub read_frame_timeout: Duration,
 }
 
@@ -82,35 +61,25 @@ impl Default for WsConfig {
 }
 
 impl WsConfig {
-    /// Render the tungstenite configuration for this block. `max_frame_size`
-    /// tracks `max_message_size` so the operator surface stays one knob.
+    /// Render the tungstenite configuration for this block.
     ///
-    /// F-S27-2 — `max_write_buffer_size` is BOUNDED rather than left at
-    /// tungstenite's `usize::MAX`. SCOPE (measured, see
-    /// audit/websockets/s27-fs27-2-proof): this is defensive hardening, NOT the
-    /// full fix. The relay's `send().await` already PARKS on the underlying
-    /// write's `WouldBlock`, so raw TCP (the shipped H1 path) backpressures
-    /// regardless; the bound only changes behaviour AT the cap on a socket that
-    /// accepts SOME bytes then wedges. It does NOT bound the WS-over-H2 tunnel,
-    /// where the upgraded stream buffers inside the `h2` crate's `SendStream`
-    /// below this layer.
+    /// F-S27-2 — `max_write_buffer_size` is BOUNDED, not tungstenite's
+    /// `usize::MAX`. SCOPE (measured): defensive hardening, NOT the full fix —
+    /// it does NOT bound the WS-over-H2 tunnel, where the upgraded stream
+    /// buffers inside the `h2` crate's `SendStream` below this layer.
     ///
-    /// tungstenite 0.24 invariants the value MUST satisfy (confirmed against
-    /// the vendored source): `frame::buffer_frame` errors `WriteBufferFull` when
-    /// `frame.len() + out_buffer.len() > max_write_buffer_size`, so a single
-    /// legal max-size frame must fit (cap `>= max_frame_size`); and
+    /// tungstenite invariants the value MUST satisfy: a single legal max-size
+    /// frame must fit (cap `>= max_frame_size`, else `WriteBufferFull`), and
     /// `assert_valid` PANICS unless `max_write_buffer_size > write_buffer_size`.
-    /// `max_message_size + write_buffer_size` satisfies both for any input.
     #[must_use]
     pub fn tungstenite_config(self) -> WebSocketConfig {
         let defaults = WebSocketConfig::default();
-        // tungstenite 0.29 made `WebSocketConfig` `#[non_exhaustive]`, so the
-        // struct literal is no longer permitted; the chaining setters start
-        // from `default()` and produce a byte-identical configuration.
+        // `WebSocketConfig` is `#[non_exhaustive]` since tungstenite 0.29, so
+        // the chaining setters replace the struct literal.
         defaults
             .max_message_size(Some(self.max_message_size))
             .max_frame_size(Some(self.max_message_size))
-            // Saturating so a `max_message_size` near `usize::MAX` cannot wrap.
+            // Saturating: a `max_message_size` near `usize::MAX` must not wrap.
             .max_write_buffer_size(
                 self.max_message_size
                     .saturating_add(defaults.write_buffer_size),
@@ -118,11 +87,9 @@ impl WsConfig {
     }
 }
 
-/// Predicate: does `req` carry a valid RFC 6455 §4.1 handshake — `Upgrade:
-/// websocket`, `Connection` containing `Upgrade`, version 13, non-empty key?
+/// Does `req` carry a valid RFC 6455 §4.1 handshake?
 #[must_use]
 pub fn is_h1_upgrade_request<B>(req: &Request<B>) -> bool {
-    // GET is the only valid method for the RFC 6455 handshake.
     if req.method() != Method::GET {
         return false;
     }
@@ -145,8 +112,8 @@ pub fn is_h1_upgrade_request<B>(req: &Request<B>) -> bool {
         .is_some_and(|s| !s.trim().is_empty())
 }
 
-/// Predicate: does `req` carry an RFC 8441 extended CONNECT for WebSocket?
-/// hyper 1.x exposes `:protocol` via the [`hyper::ext::Protocol`] extension.
+/// Does `req` carry an RFC 8441 extended CONNECT for WebSocket? hyper exposes
+/// `:protocol` via the [`hyper::ext::Protocol`] extension.
 #[must_use]
 pub fn is_h2_extended_connect<B>(req: &Request<B>) -> bool {
     if req.method() != Method::CONNECT {
@@ -175,14 +142,12 @@ impl WsProxy {
         self.cfg
     }
 
-    /// Frame-level proxy loop. Both halves must already be post-handshake
-    /// (server-role and client-role respectively). Close codes are forwarded
-    /// faithfully; on idle elapse both sides get `1001 Going Away`.
+    /// Frame-level proxy loop; both halves must already be post-handshake
+    /// (server-role and client-role respectively).
     ///
     /// # Errors
-    ///
-    /// The first tungstenite error observed on either half. Idle-timeout is a
-    /// clean close, not an error.
+    /// The first tungstenite error on either half. An idle-timeout is a clean
+    /// close, NOT an error.
     pub async fn proxy_frames<C, B>(
         self: Arc<Self>,
         client_ws: WebSocketStream<C>,
@@ -199,14 +164,11 @@ impl WsProxy {
         let read_frame = self.cfg.read_frame_timeout;
         let ping_window = self.cfg.ping_rate_limit_window;
         let ping_max: usize = self.cfg.ping_rate_limit_per_window as usize;
-        // Sliding window of client-originated Ping timestamps, over wall-clock
-        // `Instant`s (the loop is already async-runtime driven).
         let mut client_ping_log: VecDeque<Instant> = VecDeque::new();
 
         loop {
             // `idle` is the both-sides-silent envelope; the inner per-direction
-            // `read_frame` covers the single-direction-stuck case (WS-002) and
-            // fires even while the other half is producing data.
+            // `read_frame` (WS-002) fires even while the other half produces.
             let step = tokio::time::timeout(idle, async {
                 tokio::select! {
                     biased;
@@ -226,7 +188,6 @@ impl WsProxy {
 
             match step {
                 Err(_) => {
-                    // Idle elapsed — emit 1001 Going Away to both sides.
                     let away = CloseFrame {
                         code: CloseCode::Away,
                         reason: Utf8Bytes::from_static("idle timeout"),
@@ -236,8 +197,7 @@ impl WsProxy {
                     return Ok(());
                 }
                 Ok(Direction::ReadFrameTimeout) => {
-                    // Per-direction watchdog tripped (WS-002): Close 1008 to
-                    // the client, clean Close to the upstream half.
+                    // WS-002: Close 1008 to the client, clean Close upstream.
                     let frame = CloseFrame {
                         code: CloseCode::Policy,
                         reason: Utf8Bytes::from_static("ws read frame timeout"),
@@ -249,9 +209,9 @@ impl WsProxy {
                     return Ok(());
                 }
                 Ok(Direction::ClientToBackend(Ok(Some(msg)))) => {
-                    // WS-001: rate-limit client-originated Pings so the gateway
-                    // cannot amplify a flood at the backend. Backend→client
-                    // Pings are NOT gated — the backend is the would-be victim.
+                    // WS-001: rate-limit client Pings so the gateway cannot
+                    // amplify a flood at the backend. Backend→client Pings are
+                    // NOT gated — the backend is the would-be victim.
                     if matches!(msg, Message::Ping(_)) {
                         let now = Instant::now();
                         client_ping_log.push_back(now);
@@ -275,29 +235,24 @@ impl WsProxy {
                         }
                     }
                     let is_close = matches!(msg, Message::Close(_));
-                    // F-S27-2 — bound the FORWARDING send too. With
-                    // `max_write_buffer_size` capped, this `send().await` can
-                    // PARK when the backend stops draining; left unbounded it
-                    // would hang the relay task forever (bounded memory, but
-                    // the connection is never reclaimed — a different DoS).
-                    // Reuse the per-direction `read_frame` budget so a wedged
-                    // WRITE is reclaimed exactly like a wedged READ.
+                    // F-S27-2 — bound the FORWARDING send too: with
+                    // `max_write_buffer_size` capped this `send().await` can
+                    // PARK, and unbounded it would hang the relay forever
+                    // (bounded memory, unreclaimed connection — a different
+                    // DoS). Reuse the `read_frame` budget so a wedged WRITE is
+                    // reclaimed exactly like a wedged READ.
                     match tokio::time::timeout(read_frame, backend_tx.send(msg)).await {
                         Ok(res) => res?,
                         Err(_) => return close_backpressure(&mut client_tx, &mut backend_tx).await,
                     }
                     if is_close {
-                        // Half-close the other side; `backend_rx` surfaces the
-                        // peer's final Close (if any) on the next iteration.
                         let _ = client_tx.close().await;
                         return Ok(());
                     }
                 }
                 Ok(Direction::BackendToClient(Ok(Some(msg)))) => {
                     let is_close = matches!(msg, Message::Close(_));
-                    // F-S27-2 — symmetric bound on the client-facing forward:
-                    // the exact direction the verifier proved (backend floods,
-                    // client stops reading).
+                    // F-S27-2 — symmetric bound on the client-facing forward.
                     match tokio::time::timeout(read_frame, client_tx.send(msg)).await {
                         Ok(res) => res?,
                         Err(_) => return close_backpressure(&mut client_tx, &mut backend_tx).await,
@@ -308,8 +263,7 @@ impl WsProxy {
                     }
                 }
                 Ok(Direction::ClientToBackend(Ok(None))) => {
-                    // Client half closed without a Close frame — forward
-                    // `Close(None)` so the backend does not wait forever.
+                    // No Close frame — forward one so the backend can finish.
                     let _ = backend_tx.send(Message::Close(None)).await;
                     return Ok(());
                 }
@@ -328,17 +282,14 @@ impl WsProxy {
 enum Direction<T> {
     ClientToBackend(T),
     BackendToClient(T),
-    /// Per-direction read-frame watchdog elapsed on the half it guarded
-    /// (WS-002).
+    /// WS-002 per-direction read-frame watchdog elapsed.
     ReadFrameTimeout,
 }
 
 /// F-S27-2 — clean teardown when a FORWARDING `send().await` backpressures past
-/// the per-direction budget (the peer stopped draining). Mirrors the
-/// `ReadFrameTimeout` arm so a wedged WRITE is reclaimed exactly like a wedged
-/// READ instead of hanging the relay task. Best-effort: the very peer that
-/// backpressured may also reject this Close — the point is that we stop polling
-/// the producer and return, releasing the connection.
+/// the per-direction budget, so a wedged WRITE is reclaimed like a wedged READ.
+/// Best-effort: the peer that backpressured may reject this Close too — the
+/// point is to stop polling the producer and release the connection.
 async fn close_backpressure<C, B>(
     client_tx: &mut C,
     backend_tx: &mut B,
@@ -358,8 +309,7 @@ where
     Ok(())
 }
 
-/// Wrap a post-upgrade IO into a server-role [`WebSocketStream`]. Exposed so
-/// binary wiring need not have the tungstenite crate in scope.
+/// Wrap a post-upgrade IO into a server-role [`WebSocketStream`].
 pub async fn server_ws<IO>(io: IO, cfg: &WsConfig) -> WebSocketStream<IO>
 where
     IO: AsyncRead + AsyncWrite + Unpin,
@@ -367,8 +317,7 @@ where
     WebSocketStream::from_raw_socket(io, Role::Server, Some(cfg.tungstenite_config())).await
 }
 
-/// Wrap an already-handshaked client stream into a client-role
-/// [`WebSocketStream`], for the backend side of the frame forwarder.
+/// Wrap a handshaked client stream into a client-role [`WebSocketStream`].
 pub async fn client_ws<IO>(io: IO, cfg: &WsConfig) -> WebSocketStream<IO>
 where
     IO: AsyncRead + AsyncWrite + Unpin,
@@ -377,18 +326,11 @@ where
 }
 
 /// WS-over-H3 (RFC 9220) — drive the upstream RFC 6455 client handshake over an
-/// already-dialed backend `stream`, returning the established client-role
-/// [`WebSocketStream`] and the upstream-selected `sec-websocket-protocol`.
-///
-/// Lives here rather than in `lb-quic`: the H3 datapath cannot import the H1
-/// path's private `dial_upstream_ws`, and keeping `tokio-tungstenite` next to
-/// the single-sourced [`WsProxy::proxy_frames`] avoids pulling it into the
-/// binary. Each `subprotocols` value is forwarded so a real RFC 6455
-/// negotiation happens on the H1 leg. The dial timeout (→ 504) is the caller's;
-/// a handshake refusal here maps to the returned `Err` (→ 502).
+/// already-dialed backend `stream`, returning the client-role stream and the
+/// upstream-selected `sec-websocket-protocol`. The dial timeout (→ 504) is the
+/// caller's; a handshake refusal here maps to the returned `Err` (→ 502).
 ///
 /// # Errors
-///
 /// A human-readable message if the URI is malformed or the handshake fails.
 pub async fn dial_backend_ws(
     stream: tokio::net::TcpStream,
@@ -416,8 +358,7 @@ pub async fn dial_backend_ws(
     )
     .await
     .map_err(|e| format!("upstream handshake failed: {e}"))?;
-    // RFC 6455 §1.3 / RFC 8441 §5: surface the upstream-selected subprotocol
-    // so the caller can echo it in the extended CONNECT 200 response.
+    // RFC 8441 §5: the caller echoes this in the extended CONNECT 200.
     let negotiated = resp
         .headers()
         .get("sec-websocket-protocol")
@@ -426,13 +367,10 @@ pub async fn dial_backend_ws(
     Ok((backend_ws, negotiated))
 }
 
-// ── helpers ────────────────────────────────────────────────────────────
-
 static SEC_WEBSOCKET_VERSION: HeaderName = HeaderName::from_static("sec-websocket-version");
 static SEC_WEBSOCKET_KEY: HeaderName = HeaderName::from_static("sec-websocket-key");
 
-/// Case-insensitive containment in a comma-separated header value, tolerating
-/// whitespace around each token (RFC 7230 §7 list).
+/// Case-insensitive token containment in an RFC 7230 §7 comma-separated list.
 fn header_contains_token(headers: &hyper::HeaderMap, name: &HeaderName, token: &str) -> bool {
     for v in headers.get_all(name) {
         let Ok(s) = v.to_str() else { continue };
@@ -445,10 +383,8 @@ fn header_contains_token(headers: &hyper::HeaderMap, name: &HeaderName, token: &
     false
 }
 
-/// Build the response header block for a successful RFC 6455 handshake, or
-/// `None` if `Sec-WebSocket-Key` is missing or malformed (caller rejects 400).
-/// The caller is responsible for calling [`hyper::upgrade::on`] on the REQUEST
-/// to obtain the post-upgrade IO.
+/// Response header block for a successful RFC 6455 handshake; `None` if
+/// `Sec-WebSocket-Key` is missing or malformed (the caller then rejects 400).
 #[must_use]
 pub fn build_handshake_response_headers<B>(
     req: &Request<B>,
@@ -551,7 +487,6 @@ mod tests {
 
     #[test]
     fn connection_token_list_accepts_additional_tokens() {
-        // Real clients send `Connection: keep-alive, Upgrade`; still accept.
         let req = Request::builder()
             .method("GET")
             .uri("/")
@@ -566,8 +501,6 @@ mod tests {
 
     #[test]
     fn rfc8441_extended_connect_detected() {
-        // hyper 1.x expresses `:protocol` via the typed extension, so the
-        // detector path is exercisable without driving a full H2 handshake.
         let mut req: Request<Empty<Bytes>> = Request::builder()
             .method(Method::CONNECT)
             .uri("example.com")
@@ -580,7 +513,7 @@ mod tests {
 
     #[test]
     fn plain_connect_not_websocket() {
-        // CONNECT without :protocol is a plain H2 tunnel, not a WS bootstrap.
+        // CONNECT without `:protocol` is a plain tunnel, not a WS bootstrap.
         let req: Request<Empty<Bytes>> = Request::builder()
             .method(Method::CONNECT)
             .uri("example.com")
@@ -591,7 +524,6 @@ mod tests {
 
     #[test]
     fn handshake_response_headers_includes_accept() {
-        // RFC 6455 §1.3 sample key → expected Sec-WebSocket-Accept.
         let req = Request::builder()
             .method("GET")
             .uri("/")
@@ -610,11 +542,9 @@ mod tests {
         assert_eq!(accept, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
     }
 
-    // Idle-timeout: neither side ever produces a frame; the proxy must return
-    // Ok(()) within budget and the observer must receive Close(1001).
+    // Idle path: neither side produces a frame → Ok(()) plus Close(1001).
     #[tokio::test]
     async fn close_code_1001_on_idle_timeout() {
-        // Two duplex pairs so we can observe what the proxy sends OUT.
         let (client_proxy_io, client_observer_io): (DuplexStream, DuplexStream) = duplex(4096);
         let (backend_proxy_io, _backend_observer_io): (DuplexStream, DuplexStream) = duplex(4096);
 
@@ -624,13 +554,11 @@ mod tests {
             enabled: true,
             ping_rate_limit_per_window: DEFAULT_PING_RATE_LIMIT_PER_WINDOW,
             ping_rate_limit_window: DEFAULT_PING_RATE_LIMIT_WINDOW,
-            // Watchdog above `idle_timeout` so this exercises the idle path;
-            // WS-002 is covered by tests/ws_proxy_e2e.rs.
+            // Watchdog above `idle_timeout` so this exercises the idle path.
             read_frame_timeout: Duration::from_secs(30),
         };
         let proxy = Arc::new(WsProxy::new(cfg));
 
-        // Post-handshake wrappers; no handshake bytes on the wire.
         let client_ws_proxy = server_ws(client_proxy_io, &cfg).await;
         let backend_ws_proxy = client_ws(backend_proxy_io, &cfg).await;
         let client_observer_ws = client_ws(client_observer_io, &cfg).await;
@@ -656,20 +584,13 @@ mod tests {
         let _ = handle.await;
     }
 
-    /// F-S27-2 — load-bearing proof that the `max_write_buffer_size` bound in
-    /// `tungstenite_config` produces real end-to-end backpressure. A flooding
-    /// backend pushes at a client that NEVER reads; with the bound the relay's
-    /// `client_tx.send().await` parks, so it stops reading the backend and the
-    /// backend's pushed count PLATEAUS far below the flood. Reverting the bound
-    /// flips this RED. It is the deterministic lever the e2e tests cannot
-    /// isolate on the H2 transport, where an `h2`-crate send queue buffers
-    /// below this layer.
+    /// F-S27-2 — a flooding backend pushes at a client that NEVER reads; with
+    /// the `max_write_buffer_size` bound the relay parks and the backend's
+    /// pushed count PLATEAUS. Reverting the bound flips this RED.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn backpressure_plateaus_producer_when_consumer_stalls() {
         use std::sync::atomic::{AtomicU64, Ordering};
 
-        // Small messages + small pipe so the in-flight bound is a handful of
-        // messages; the 4 KiB pipe fills fast once the consumer stalls.
         const MSG_BYTES: usize = 1024;
         const FLOOD: u64 = 4_096;
         const CEILING: u64 = 256; // decisive vs 4096; far above the true plateau.
@@ -682,17 +603,14 @@ mod tests {
             ..WsConfig::default()
         };
 
-        // client_proxy_io ↔ client_observer_io = client; backend pair likewise.
         let (client_proxy_io, client_observer_io): (DuplexStream, DuplexStream) = duplex(4096);
         let (backend_proxy_io, backend_observer_io): (DuplexStream, DuplexStream) = duplex(4096);
 
         let proxy = Arc::new(WsProxy::new(cfg));
         let client_ws_proxy = server_ws(client_proxy_io, &cfg).await;
         let backend_ws_proxy = client_ws(backend_proxy_io, &cfg).await;
-        // The real backend speaks Role::Server on its end.
         let mut backend = server_ws(backend_observer_io, &cfg).await;
-        // The client observer NEVER reads — it only holds the socket open so
-        // the relay's client half stays writable-until-full.
+        // The client observer NEVER reads — that is what fills the write buffer.
         let _client_observer = client_ws(client_observer_io, &cfg).await;
 
         let relay = tokio::spawn(async move {
@@ -718,8 +636,7 @@ mod tests {
             }
         });
 
-        // With an UNBOUNDED write buffer the relay would drain the whole flood
-        // in this window; bounded, the producer stalls early.
+        // Unbounded, the relay would drain the whole flood in this window.
         tokio::time::sleep(Duration::from_secs(2)).await;
         let n = pushed.load(Ordering::Relaxed);
         eprintln!("F-S27-2 duplex plateau: backend pushed {n} / {FLOOD} (ceiling {CEILING})");
@@ -738,25 +655,17 @@ mod tests {
         relay.abort();
     }
 
-    /// R10 — the write-wedge liveness guard `close_backpressure`, reached via
-    /// the forwarding-`send().await` timeout arm. Single-direction WEDGED-WRITE
-    /// mirror of the read-frame watchdog: when a peer stops draining so a
-    /// forward `send()` cannot complete within `read_frame_timeout`, the relay
-    /// must emit `Close 1008 ("ws backpressure/write timeout")` to the OTHER
-    /// side and tear down `Ok(())` rather than hang the task forever. (This is
-    /// the always-on liveness guard, NOT the gated F-S27-2 H2 DoS surface.)
+    /// R10 — the write-wedge liveness guard `close_backpressure`: a peer that
+    /// stops draining must get `Close 1008` and an `Ok(())` teardown, not a
+    /// hung task.
     ///
-    /// DETERMINISM: the backend NEVER reads and its pipe is tiny, so the
-    /// client's flood wedges `backend_tx.send()` well past the SHORT
-    /// `read_frame_timeout` (200 ms) — and the generous `idle_timeout` (30 s)
-    /// guarantees the idle envelope cannot fire first, so the Close we observe
-    /// is the write-timeout 1008, not the 1001 idle close.
+    /// DETERMINISM: the SHORT `read_frame_timeout` (200 ms) against a generous
+    /// `idle_timeout` (30 s) guarantees the Close observed is the write-timeout
+    /// 1008, not the 1001 idle close.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn close_backpressure_1008_on_forward_write_timeout() {
         // SHORT read-frame budget (the trigger) + GENEROUS idle (so the
-        // both-silent envelope cannot pre-empt it) + SMALL max_message_size so
-        // the bounded write buffer is small and a flood past it makes
-        // `backend_tx.send()` actually PARK rather than just buffer.
+        // both-silent envelope cannot pre-empt it) + SMALL max_message_size.
         let cfg = WsConfig {
             idle_timeout: Duration::from_secs(30),
             read_frame_timeout: Duration::from_millis(200),
@@ -765,34 +674,25 @@ mod tests {
             ..WsConfig::default()
         };
 
-        // A TINY backend pipe so a couple of forwarded messages fill it and the
-        // relay's `backend_tx.send()` cannot complete (the backend never reads)
-        // → exceeds read_frame_timeout → close_backpressure.
+        // A TINY backend pipe so `backend_tx.send()` cannot complete.
         let (client_proxy_io, client_observer_io): (DuplexStream, DuplexStream) = duplex(4096);
         let (backend_proxy_io, backend_observer_io): (DuplexStream, DuplexStream) = duplex(256);
 
         let proxy = Arc::new(WsProxy::new(cfg));
         let client_ws_proxy = server_ws(client_proxy_io, &cfg).await;
         let backend_ws_proxy = client_ws(backend_proxy_io, &cfg).await;
-        // The client observer floods toward the backend AND reads back the
-        // relay's frames, so the 1008 is observable. Role::Client so its frames
-        // are MASKED (RFC 6455) — the relay's client half is Role::Server and
-        // rejects unmasked client frames. `backend_observer_io` is intentionally
-        // NEVER read: that is what wedges the forward `backend_tx.send()`.
+        // Role::Client so its frames are MASKED (RFC 6455) — the relay's client
+        // half is Role::Server and rejects unmasked frames. `backend_observer_io`
+        // is intentionally NEVER read: that is what wedges the forward send.
         let client_observer = client_ws(client_observer_io, &cfg).await;
-        // Split so the flood and the Close-observe run CONCURRENTLY on the one
-        // client socket.
         let (mut obs_tx, mut obs_rx) = client_observer.split();
 
         let relay_done = tokio::spawn(async move {
-            // Returns Ok(()) from the close_backpressure arm.
             proxy.proxy_frames(client_ws_proxy, backend_ws_proxy).await
         });
 
-        // Flood far past the relay's bounded write buffer (16 KiB +
-        // default ≈ 144 KiB). With the backend never draining its 256 B pipe,
-        // `backend_tx.send()` PARKS > read_frame_timeout → close_backpressure.
-        // The eventual `feed` wedge is expected, not a failure.
+        // Flood far past the relay's bounded write buffer; the eventual `feed`
+        // wedge is expected, not a failure.
         let flood = tokio::spawn(async move {
             let payload = vec![0xABu8; 1024];
             for _ in 0..4096u32 {
@@ -807,8 +707,6 @@ mod tests {
             }
         });
 
-        // Read back the relay's 1008. close_backpressure writes a
-        // Close(Policy, "ws backpressure/write timeout") to the client side.
         let observe = tokio::spawn(async move {
             loop {
                 match obs_rx.next().await {
@@ -819,19 +717,15 @@ mod tests {
             }
         });
 
-        // DELAYED backend drainer: it must NOT read during the flood (so the
-        // send wedges and trips close_backpressure at ~200 ms) but MUST drain
-        // shortly after, so close_backpressure's own best-effort
-        // `backend_tx.send(Close(None))` — not timeout-wrapped — can complete.
-        // 500 ms > the 200 ms budget makes that order deterministic.
+        // DELAYED drainer: it must NOT read during the flood (so the send
+        // wedges at ~200 ms) but MUST drain shortly after, so
+        // `close_backpressure`'s own un-timed `send(Close(None))` completes.
         let backend_drainer = tokio::spawn(async move {
             tokio::time::sleep(Duration::from_millis(500)).await;
             let mut backend = server_ws(backend_observer_io, &cfg).await;
             while let Some(Ok(_)) = backend.next().await {}
         });
 
-        // The relay must finish within a window << idle_timeout (30 s) but
-        // consistent with the 200 ms write budget having fired.
         let result = tokio::time::timeout(Duration::from_secs(8), relay_done)
             .await
             .expect("proxy_frames must return within the bound (close_backpressure tears down)")
@@ -844,8 +738,8 @@ mod tests {
         flood.abort();
         backend_drainer.abort();
 
-        // The client must have received Close 1008 with the write-timeout
-        // reason — proving close_backpressure fired, not the idle 1001 path.
+        // 1008 with the write-timeout reason proves `close_backpressure` fired,
+        // not the idle 1001 path.
         let frame = tokio::time::timeout(Duration::from_secs(2), observe)
             .await
             .expect("observer task must finish")
