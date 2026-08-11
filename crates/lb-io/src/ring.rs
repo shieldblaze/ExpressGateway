@@ -1,9 +1,6 @@
-//! `io_uring` operations used by the lb-io runtime.
-//!
-//! Every helper builds a fresh ring for ONE op and tears it down — deliberately synchronous, with
-//! no registered files or buffer pools. That synchronicity is what makes the `unsafe` pushes below
-//! sound: the caller's stack storage outlives `submit_and_wait`. Do NOT make these async without
-//! rewriting the buffer ownership.
+//! `io_uring` operations used by the lb-io runtime. Every helper builds a fresh ring for ONE op and
+//! tears it down. That synchronicity is what makes the `unsafe` pushes below sound: the caller's
+//! stack storage outlives `submit_and_wait`. Do NOT make these async without rewriting ownership.
 
 use std::io;
 use std::mem::MaybeUninit;
@@ -22,18 +19,13 @@ pub struct UringNopResult {
     pub user_data: u64,
 }
 
-/// Submit a single `NOP` and reap the completion.
-///
-/// # Errors
-/// [`io::Error`] from any stage. Failure is EXPECTED pre-5.1, under
+/// Submit a single `NOP` and reap the completion. Failure is EXPECTED pre-5.1, under
 /// `kernel.io_uring_disabled=1`, or behind a seccomp filter — callers treat it as "use epoll".
 pub fn nop_roundtrip() -> io::Result<UringNopResult> {
     let mut ring = IoUring::new(8)?;
     let nop = opcode::Nop::new().build().user_data(NOP_USER_DATA);
 
-    // SAFETY: a NOP opcode references no caller-owned memory, so there is
-    // nothing for the kernel to outlive. The ring was just constructed
-    // with 8 entries so a single push cannot overflow.
+    // SAFETY: a NOP references no caller-owned memory, and the fresh 8-entry ring cannot overflow.
     unsafe { push_sqe(&mut ring, &nop)? };
 
     ring.submit_and_wait(1)?;
@@ -64,20 +56,16 @@ pub fn accept_one(listener_fd: RawFd) -> io::Result<(RawFd, SocketAddr)> {
     .build()
     .user_data(0xACCE_7700_u64);
 
-    // SAFETY: `addr_storage` and `addr_len` outlive `submit_and_wait`
-    // below (both are stack locals of this function). The pointers are
-    // writable, correctly typed for the accept opcode, and do not alias.
+    // SAFETY: `addr_storage` and `addr_len` are stack locals that outlive `submit_and_wait`; both
+    // pointers are writable, correctly typed for the accept opcode, and do not alias.
     unsafe { push_sqe(&mut ring, &entry)? };
 
     ring.submit_and_wait(1)?;
     let cqe = reap_cqe(&mut ring)?;
     let fd = check_cqe(&cqe)?;
 
-    // SAFETY: on a successful accept the kernel has written a
-    // `sockaddr_in` / `sockaddr_in6` into `addr_storage` and set
-    // `addr_len` to the number of valid bytes. We only read via the
-    // typed sockaddr_in / sockaddr_in6 views below after checking the
-    // family tag.
+    // SAFETY: a successful accept means the kernel wrote a `sockaddr_in`/`sockaddr_in6` into
+    // `addr_storage` and set `addr_len`; the typed views below are read only after the family check.
     let addr = unsafe { sockaddr_storage_to_socketaddr(&addr_storage, addr_len)? };
 
     Ok((fd, addr))
@@ -92,10 +80,8 @@ pub fn recv(fd: RawFd, buf: &mut [u8]) -> io::Result<usize> {
         .build()
         .user_data(0x2ECC_0000_u64);
 
-    // SAFETY: `buf` is a caller-supplied slice that outlives this call
-    // because this function is synchronous — the kernel finishes writing
-    // before `submit_and_wait` returns. `len_u32` is bounded by the slice
-    // length, so the kernel cannot write past the slice end.
+    // SAFETY: this call is synchronous, so `buf` outlives the kernel write, and `len_u32` is
+    // bounded by the slice length so the kernel cannot write past its end.
     unsafe { push_sqe(&mut ring, &entry)? };
 
     ring.submit_and_wait(1)?;
@@ -113,9 +99,7 @@ pub fn send(fd: RawFd, buf: &[u8]) -> io::Result<usize> {
         .build()
         .user_data(0x5EDD_0000_u64);
 
-    // SAFETY: `buf` outlives the synchronous `submit_and_wait` below.
-    // `len_u32` is bounded by the slice length so the kernel cannot read
-    // past the slice end.
+    // SAFETY: `buf` outlives the synchronous `submit_and_wait`, and `len_u32` is bounded by its length.
     unsafe { push_sqe(&mut ring, &entry)? };
 
     ring.submit_and_wait(1)?;
@@ -132,9 +116,7 @@ pub fn splice(from: RawFd, to: RawFd, len: u32) -> io::Result<u32> {
         .build()
         .user_data(0x5917_CE00_u64);
 
-    // SAFETY: Splice carries no caller-owned memory — the fds are the
-    // only inputs and they remain owned by the caller for the duration
-    // of this synchronous call.
+    // SAFETY: splice carries no caller-owned memory; the fds stay owned by the caller throughout.
     unsafe { push_sqe(&mut ring, &entry)? };
 
     ring.submit_and_wait(1)?;
@@ -146,11 +128,8 @@ pub fn splice(from: RawFd, to: RawFd, len: u32) -> io::Result<u32> {
 /// Push a single SQE.
 ///
 /// # Safety
-/// The caller must ensure that any memory referenced by `entry` lives at
-/// least until `submit_and_wait` returns. For the helpers in this module
-/// that invariant is upheld because every one of them is synchronous —
-/// the buffer / addr storage is on the caller's stack and the call does
-/// not return until the kernel is done.
+/// Memory referenced by `entry` must live until `submit_and_wait` returns. Every helper here is
+/// synchronous, so its caller's stack storage does.
 unsafe fn push_sqe(ring: &mut IoUring, entry: &squeue::Entry) -> io::Result<()> {
     let mut sq = ring.submission();
     // SAFETY: forwarded from the caller of this function.
@@ -193,9 +172,8 @@ fn u32_from_nonneg_i32(n: i32) -> u32 {
 /// Interpret the `sockaddr_storage` the kernel wrote during ACCEPT.
 ///
 /// # Safety
-/// `storage` must hold at least `addr_len` initialised bytes matching
-/// one of the supported address families (`AF_INET`, `AF_INET6`). This
-/// is guaranteed by a successful `IORING_OP_ACCEPT` completion.
+/// `storage` must hold `addr_len` initialised bytes of `AF_INET`/`AF_INET6`, as guaranteed by a
+/// successful `IORING_OP_ACCEPT` completion.
 unsafe fn sockaddr_storage_to_socketaddr(
     storage: &MaybeUninit<libc::sockaddr_storage>,
     addr_len: libc::socklen_t,
@@ -212,8 +190,7 @@ unsafe fn sockaddr_storage_to_socketaddr(
                     "AF_INET sockaddr truncated",
                 ));
             }
-            // SAFETY: family tag is AF_INET and addr_len covers at least
-            // sizeof(sockaddr_in); the storage is `repr(C)`-compatible.
+            // SAFETY: family is AF_INET, addr_len covers sizeof(sockaddr_in), storage is repr(C).
             let sin = unsafe { &*core::ptr::from_ref(storage_ref).cast::<libc::sockaddr_in>() };
             let ip = std::net::Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr));
             let port = u16::from_be(sin.sin_port);
@@ -228,8 +205,7 @@ unsafe fn sockaddr_storage_to_socketaddr(
                     "AF_INET6 sockaddr truncated",
                 ));
             }
-            // SAFETY: family tag is AF_INET6 and addr_len covers at
-            // least sizeof(sockaddr_in6).
+            // SAFETY: family is AF_INET6 and addr_len covers sizeof(sockaddr_in6).
             let sin6 = unsafe { &*core::ptr::from_ref(storage_ref).cast::<libc::sockaddr_in6>() };
             let ip = std::net::Ipv6Addr::from(sin6.sin6_addr.s6_addr);
             let port = u16::from_be(sin6.sin6_port);
@@ -309,7 +285,6 @@ mod tests {
         let (server, _) = listener.accept().unwrap();
         let fd = server.as_raw_fd();
 
-        // Receive "PING".
         let mut buf = [0u8; 4];
         match recv(fd, &mut buf) {
             Ok(n) => {
@@ -324,7 +299,6 @@ mod tests {
             }
         }
 
-        // Echo back "PONG".
         match send(fd, b"PONG") {
             Ok(n) => assert_eq!(n, 4),
             Err(e) => eprintln!("skipping send path: {e}"),
@@ -335,9 +309,7 @@ mod tests {
 
     #[test]
     fn splice_rejects_non_pipe_or_succeeds() {
-        // splice(2) requires one side to be a pipe; splicing between two
-        // TCP sockets should either succeed (kernel synthesises it) or
-        // return EINVAL. Either way, no panic.
+        // splice(2) needs one side to be a pipe; socket-to-socket either works or EINVALs, never panics.
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let _client_thread = std::thread::spawn(move || {

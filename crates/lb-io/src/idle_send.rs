@@ -1,11 +1,8 @@
-//! Two-phase idle/head deadline for request-egress send futures (CF-BODY-WALLCLOCK).
-//!
-//! A fixed wall-clock cap on an opaque hyper `send_request` 504-truncates slow-but-PROGRESSING
-//! uploads. So Phase A watches for no-forward-progress instead (re-armed on every pump bump), and
-//! Phase B switches to a fixed `head_timeout` once the upload is done — the post-upload head-wait
-//! cannot be idle-watched from outside the opaque send.
-//!
-//! Generic over the wrapped future so the H1-client and H2-pool paths share ONE loop body.
+//! Two-phase idle/head deadline for request-egress send futures (CF-BODY-WALLCLOCK). A fixed
+//! wall-clock cap on an opaque hyper `send_request` 504-truncates slow-but-PROGRESSING uploads, so
+//! Phase A watches for no-forward-progress (re-armed on every pump bump) and Phase B switches to a
+//! fixed `head_timeout` once the upload is done — the post-upload head-wait cannot be idle-watched
+//! from outside the opaque send.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -16,8 +13,7 @@ use std::time::Duration;
 
 use tokio::time::Instant;
 
-/// Which phase timed out. Split so callers can log it, though the pool wrapper collapses both
-/// onto [`crate::http2_pool::Http2PoolError::Timeout`].
+/// Which phase timed out; the pool wrapper collapses both onto `Http2PoolError::Timeout`.
 #[derive(Debug, thiserror::Error)]
 pub enum IdleSendError {
     /// Phase A: no forward progress for the carried `idle` duration.
@@ -30,17 +26,10 @@ pub enum IdleSendError {
 
 /// Drive `send_fut` under the two-phase deadline; `idle` and `head_timeout` must both be > 0.
 ///
-/// Caller contract for the two atomics: the pump stores millis-since-`epoch` into
-/// `last_progress` (Relaxed) after each successful `tx.send`, and flips `upload_complete` exactly
-/// once at the terminal frame with `Release`. The helper's `Acquire` load pairs with that flip so
-/// it always sees the FINAL progress bump before observing completion.
-///
-/// `epoch` is a [`tokio::time::Instant`], not `SystemTime`, so tests can drive it under
-/// `tokio::time::pause`.
-///
-/// # Errors
-///
-/// [`IdleSendError`]. On success the wrapped future's `Output` passes through unchanged.
+/// Caller contract for the two atomics: the pump stores millis-since-`epoch` into `last_progress`
+/// (Relaxed) after each `tx.send` and flips `upload_complete` once at the terminal frame with
+/// `Release`; the `Acquire` load pairs with that flip so the FINAL bump is always seen first.
+/// `epoch` is a [`tokio::time::Instant`] so tests can drive it under `tokio::time::pause`.
 pub async fn idle_bounded_send<F, T>(
     send_fut: F,
     last_progress: Arc<AtomicU64>,
@@ -52,12 +41,10 @@ pub async fn idle_bounded_send<F, T>(
 where
     F: Future<Output = T>,
 {
-    // Owned by value then pinned in place and only ever polled via `Pin::as_mut()`, which is what
-    // satisfies the pinning contract for a non-`Unpin` `F`.
+    // Owned by value, pinned in place, polled only via `Pin::as_mut()` — the non-`Unpin` `F` contract.
     tokio::pin!(send_fut);
 
-    // Set on the FIRST tick that observes completion and never recomputed, so a slow head fires
-    // at `head_timeout` past the upload-done observation rather than sliding.
+    // Set on the FIRST tick that observes completion and never recomputed, so the head cannot slide.
     let mut head_deadline_anchor: Option<Instant> = None;
 
     loop {
@@ -71,8 +58,7 @@ where
         };
 
         tokio::select! {
-            // Load-bearing: when the send future and the timer resolve at the same virtual
-            // instant, success MUST win over a spurious timeout. Arm (iv) depends on it.
+            // Load-bearing: at the same virtual instant success MUST win over a spurious timeout (arm iv).
             biased;
 
             out = poll_fn_send(&mut send_fut) => {
@@ -82,10 +68,9 @@ where
                 if complete {
                     return Err(IdleSendError::HeadTimeout(head_timeout));
                 }
-                // MUST re-load: `complete` from the top of the iteration may be stale after the
-                // sleep. Without this re-load a small body whose bump lands at `lp_ms ≈ 0` with
-                // the completion flip just after misfires IdleTimeout, making Phase B — and so
-                // `head_timeout` — silently unreachable for small bodies (S14 CFBW-RECHECK).
+                // MUST re-load: `complete` from the top of the iteration may be stale after the sleep.
+                // Without it a small body bumping at `lp_ms ≈ 0` misfires IdleTimeout and Phase B —
+                // so `head_timeout` — becomes unreachable for small bodies (S14 CFBW-RECHECK).
                 if upload_complete.load(Ordering::Acquire) {
                     continue;
                 }
@@ -135,7 +120,6 @@ mod tests {
         last_progress.store(ms, Ordering::Relaxed);
     }
 
-    // (i) Chunk-by-chunk progress completes within idle.
     #[tokio::test(start_paused = true)]
     async fn arm_i_chunked_progress_completes() {
         let (last_progress, upload_complete, epoch) = fresh();
@@ -171,7 +155,6 @@ mod tests {
         );
     }
 
-    // (ii) Wedge from the start → Err(IdleTimeout) at idle.
     #[tokio::test(start_paused = true)]
     async fn arm_ii_immediate_wedge_idle() {
         let (last_progress, upload_complete, epoch) = fresh();
@@ -198,7 +181,6 @@ mod tests {
         );
     }
 
-    // (iii) THE two-phase proof: complete-then-slow-head must fire HeadTimeout, not Idle.
     #[tokio::test(start_paused = true)]
     async fn arm_iii_complete_then_slow_head_fires_head() {
         let (last_progress, upload_complete, epoch) = fresh();
@@ -234,15 +216,13 @@ mod tests {
             elapsed > Duration::from_secs(1),
             "fired too early — idle, not head: {elapsed:?}",
         );
-        // The anchor is set on the idle tick AFTER the flip (~500 ms), not at the flip itself,
-        // so the fire lands near 5500 ms rather than 5200 ms.
+        // The anchor is set on the idle tick AFTER the flip (~500 ms), so the fire is ~5500, not 5200.
         assert!(
             elapsed >= Duration::from_millis(5_000) && elapsed < Duration::from_millis(6_000),
             "head fire instant out of band: {elapsed:?}",
         );
     }
 
-    // (iv) Upload-complete then fast head → Ok(T).
     #[tokio::test(start_paused = true)]
     async fn arm_iv_complete_then_fast_head_succeeds() {
         let (last_progress, upload_complete, epoch) = fresh();
@@ -273,7 +253,6 @@ mod tests {
         assert!(matches!(res, Ok(7)), "got {res:?}");
     }
 
-    // (v) A different `idle` must scale the deadline, not fire off a hardcoded epoch.
     #[tokio::test(start_paused = true)]
     async fn arm_v_zero_bump_scaled_idle() {
         let (last_progress, upload_complete, epoch) = fresh();
@@ -300,7 +279,6 @@ mod tests {
         );
     }
 
-    // (vi) Regression guard for the re-arm `continue` path.
     #[tokio::test(start_paused = true)]
     async fn arm_vi_late_bump_rearms() {
         let (last_progress, upload_complete, epoch) = fresh();
@@ -335,7 +313,6 @@ mod tests {
         );
     }
 
-    // (vii) A bump landing in the timer gap must be absorbed by the post-fire re-check.
     #[tokio::test(start_paused = true)]
     async fn arm_vii_tick_race_recheck() {
         let (last_progress, upload_complete, epoch) = fresh();
@@ -369,8 +346,7 @@ mod tests {
         );
     }
 
-    // (ix) Non-vacuity proof for the CFBW-RECHECK re-load: FAILS pre-fix (IdleTimeout at
-    // t≈500 ms), PASSES post-fix (HeadTimeout at t≈5500 ms).
+    // Non-vacuity for the CFBW-RECHECK re-load: FAILS pre-fix (IdleTimeout), passes post-fix.
     #[tokio::test(start_paused = true)]
     async fn arm_ix_lp_zero_bump_then_complete_fires_head_not_idle() {
         let (last_progress, upload_complete, epoch) = fresh();

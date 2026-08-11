@@ -1,9 +1,7 @@
-//! RED metrics label budget. The `prometheus` crate registers unbounded label sets happily, and
-//! one stray `{path = <request URI>}` saturates a scrape endpoint with millions of series.
-//!
-//! Two gates, because they cover different label kinds: [`LabelBudget::check`] is a startup-only
-//! worst-case product check, adequate for CLOSED-set labels; [`EnforcedLabelBudget`] is the
-//! per-emission guard for OPEN-set labels whose cardinality is driven by request data.
+//! RED metrics label budget: `prometheus` registers unbounded label sets happily, and one stray
+//! `{path = <request URI>}` saturates a scrape with millions of series. Two gates for two label
+//! kinds — [`LabelBudget::check`] is a startup worst-case product check for CLOSED sets, and
+//! [`EnforcedLabelBudget`] is the per-emission guard for OPEN sets driven by request data.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -12,12 +10,11 @@ use std::sync::{Mutex, PoisonError};
 /// Per-family worst-case series ceiling; text exposition degrades around a few hundred thousand.
 pub const DEFAULT_MAX_LABEL_CARDINALITY: usize = 10_000;
 
-/// Worst-case routes per listener. BOTH gates must use this same value, or the startup product
-/// no longer matches the runtime ceiling and the startup check under-counts.
+/// Worst-case routes per listener. BOTH gates must use this value or the startup check under-counts.
 pub const MAX_ROUTES_BUDGET: usize = 64;
 
-/// Canonical `(family, label_keys)` vocabulary. `tests/red_label_budget.rs` diffs the live
-/// registry against this table, so anything not listed here is a regression.
+/// Canonical `(family, label_keys)` vocabulary; `tests/red_label_budget.rs` diffs the live registry
+/// against it, so anything unlisted is a regression.
 pub const CANONICAL_LABELS: &[(&str, &[&str])] = &[
     (
         "http_requests_total",
@@ -69,8 +66,7 @@ impl fmt::Display for LabelBudgetError {
 
 impl std::error::Error for LabelBudgetError {}
 
-/// Worst-case series counts from the static config shape. Deliberately NOT a full cross-product:
-/// the RED layout keeps `backend` off request metrics and `status_class` off duration histograms.
+/// Worst-case series counts from the static config shape; deliberately NOT a full cross-product.
 #[derive(Copy, Clone, Debug)]
 pub struct LabelBudget {
     /// `cfg.listeners.len()` from the live config.
@@ -152,14 +148,9 @@ impl LabelBudget {
     }
 }
 
-/// Per-emission open-set cardinality guard for `route` / `backend` / `listener`, whose runtime
-/// cardinality comes from request data — a misconfigured route extractor can register millions of
-/// tuples between scrapes.
-///
-/// A refused tuple is DROPPED, not folded into an `"other"` bucket, because a placeholder masks
-/// the bug class. Callers bump `metrics_cardinality_refused_total{family}` instead.
-///
-/// Hashing happens outside the lock to keep the critical section tiny.
+/// Per-emission open-set cardinality guard for `route` / `backend` / `listener`: a misconfigured
+/// route extractor can register millions of tuples between scrapes. A refused tuple is DROPPED, not
+/// folded into an `"other"` bucket, because a placeholder masks the bug class.
 pub struct EnforcedLabelBudget {
     family: &'static str,
     ceiling: usize,
@@ -319,8 +310,7 @@ mod tests {
 
     #[test]
     fn canonical_label_table_covers_red_families() {
-        // Re-asserted here so a rebase that drops these fails at unit-test time, not only in the
-        // integration test.
+        // Re-asserted here so a rebase dropping these fails at unit-test time, not only integration.
         let names: Vec<&str> = CANONICAL_LABELS.iter().map(|(n, _)| *n).collect();
         for required in [
             "http_requests_total",
