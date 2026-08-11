@@ -130,13 +130,13 @@ pub struct WsProxy {
 }
 
 impl WsProxy {
-    /// Construct a [`WsProxy`] with the supplied configuration.
+    /// Construct with the supplied configuration.
     #[must_use]
     pub const fn new(cfg: WsConfig) -> Self {
         Self { cfg }
     }
 
-    /// Return the [`WsConfig`] in effect.
+    /// The [`WsConfig`] in effect.
     #[must_use]
     pub const fn config(&self) -> WsConfig {
         self.cfg
@@ -688,6 +688,7 @@ mod tests {
         let (mut obs_tx, mut obs_rx) = client_observer.split();
 
         let relay_done = tokio::spawn(async move {
+            // Returns Ok(()) from the close_backpressure arm.
             proxy.proxy_frames(client_ws_proxy, backend_ws_proxy).await
         });
 

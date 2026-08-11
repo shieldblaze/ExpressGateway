@@ -52,7 +52,6 @@ pub(crate) type ClientRespBody = BoxBody<Bytes, Box<dyn std::error::Error + Send
 /// INDEPENDENT retained-memory ceiling the R8 memory proof asserts.
 const H1_REQ_CHANNEL_DEPTH: usize = 8;
 
-/// Maximum size of one chunk pumped through the in-flight channel.
 const H1_REQ_CHUNK_MAX: usize = 8 * 1024;
 
 /// F-MD-4 — request-smuggling guard, H1 mirror of `h2_proxy::PumpAbort`.
@@ -98,10 +97,10 @@ fn validate_h1_request_trailers(trailers: &hyper::HeaderMap) -> Result<(), Proxy
     Ok(())
 }
 
-/// Configuration for the `Alt-Svc` advertisement injected into responses.
+/// `Alt-Svc` advertisement injected into responses.
 #[derive(Debug, Clone, Copy)]
 pub struct AltSvcConfig {
-    /// UDP port hosting the H3 listener that should be advertised.
+    /// UDP port of the advertised H3 listener.
     pub h3_port: u16,
     /// `max-age` in seconds.
     pub max_age: u32,
@@ -202,30 +201,20 @@ pub struct H1Proxy {
     alt_svc: Option<AltSvcConfig>,
     timeouts: HttpTimeouts,
     is_https: bool,
-    /// When `Some`, RFC 6455 handshakes route through the WebSocket proxy.
     ws: Option<Arc<WsProxy>>,
-    /// Optional H2 upstream pool (H1→H2 path).
     h2_upstream: Option<Arc<Http2Pool>>,
-    /// Optional H3 upstream pool (H1→H3 path).
     h3_upstream: Option<Arc<QuicUpstreamPool>>,
-    /// Security-hook surface; defaults to [`NoopHooks`].
     hooks: Arc<dyn DynSecurityHooks>,
-    /// Slowloris / slow-POST watchdog; `None` leaves only the timeouts.
     watchdog: Option<Watchdog>,
     /// Combined with the peer IP as the [`Watchdog`] key, so two concurrent
     /// NAT-egress connections stay distinct.
     conn_seq: Arc<parking_lot::Mutex<u64>>,
-    /// When `true` the smuggle check runs in [`SmuggleMode::H1Strict`].
     smuggle_strict: bool,
-    /// ROUND8-L7-05: policy for `_` in inbound header names, default `Reject`.
     header_underscore_policy: HeaderUnderscorePolicy,
-    /// Default expected SNI; `None` disables the check unless
-    /// [`Self::serve_connection_with_cancel_sni`] supplies a per-connection one.
     expected_sni: Option<String>,
-    /// ROUND8-L7-06: requests per keep-alive connection (`0` disables); the
-    /// cap-th response carries `Connection: close`. Default `100`.
+    /// `0` disables; the cap-th response carries `Connection: close`.
     max_keepalive_requests: u32,
-    /// ROUND8-L7-06: cap-triggered-close counter (lb-l7 has no metrics dep).
+    /// An atomic, not a metric handle — lb-l7 has no metrics-registry dep.
     keepalive_cap_terminations: Arc<std::sync::atomic::AtomicU64>,
 }
 
@@ -342,13 +331,13 @@ impl H1Proxy {
         self
     }
 
-    /// Whether an H2 upstream pool has been wired for this proxy.
+    /// Has an H2 upstream pool been wired?
     #[must_use]
     pub const fn has_h2_upstream(&self) -> bool {
         self.h2_upstream.is_some()
     }
 
-    /// Whether an H3 upstream pool has been wired for this proxy.
+    /// Has an H3 upstream pool been wired?
     #[must_use]
     pub const fn has_h3_upstream(&self) -> bool {
         self.h3_upstream.is_some()
@@ -501,11 +490,8 @@ impl H1Proxy {
 struct ProxyService {
     inner: Arc<H1Proxy>,
     peer: SocketAddr,
-    /// SNI captured at TLS-accept time; `None` on plain TCP.
     expected_sni: Option<String>,
-    /// Per-connection request counter (shared across per-request clones).
     served: Arc<std::sync::atomic::AtomicU32>,
-    /// ROUND8-L7-06: per-connection request cap (`0` disables).
     cap: u32,
     /// Notified once at the cap so the driver issues `graceful_shutdown`.
     close_signal: Arc<tokio::sync::Notify>,
@@ -794,7 +780,7 @@ impl H1Proxy {
             UpstreamProto::H2 => Box::pin(self.proxy_h1_to_h2(backend.addr, stripped)).await,
             UpstreamProto::H3 => Box::pin(self.proxy_h1_to_h3(&backend, stripped)).await,
         };
-        // Deregister here; the sweeper covers the abandoned-future case.
+        // The sweeper covers the abandoned-future case.
         if let (Some(wd), Some(id)) = (self.watchdog.as_ref(), watch_id) {
             wd.deregister(id);
         }
@@ -858,7 +844,6 @@ impl H1Proxy {
         .map_err(|e| ProxyErr::Upstream(format!("h1 client handshake: {e}")))?;
 
         let conn_handle = tokio::spawn(async move {
-            // An upstream half-close surfaces on the response side instead.
             let _ = conn.await;
         });
 

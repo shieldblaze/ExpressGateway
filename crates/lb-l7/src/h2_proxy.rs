@@ -90,22 +90,13 @@ pub struct H2Proxy {
     timeouts: HttpTimeouts,
     is_https: bool,
     security: H2SecurityThresholds,
-    /// When `Some`, RFC 8441 `:protocol = websocket` streams route to WS.
     ws: Option<Arc<WsProxy>>,
-    /// When `Some`, `application/grpc[+ext]` streams route to the gRPC proxy.
     grpc: Option<Arc<GrpcProxy>>,
-    /// Optional H2 upstream pool (H2→H2 path).
     h2_upstream: Option<Arc<Http2Pool>>,
-    /// Optional H3 upstream pool (H2→H3 path).
     h3_upstream: Option<Arc<QuicUpstreamPool>>,
-    /// Security-hook surface; defaults to [`NoopHooks`].
     hooks: Arc<dyn DynSecurityHooks>,
-    /// Slowloris / slow-POST watchdog (mirrors `H1Proxy::watchdog`).
     watchdog: Option<Watchdog>,
-    /// Monotonic per-listener sequence used as the [`Watchdog`] entry key.
     conn_seq: Arc<parking_lot::Mutex<u64>>,
-    /// Default expected SNI; `None` disables the check unless
-    /// [`Self::serve_connection_with_cancel_sni`] supplies a per-connection one.
     expected_sni: Option<String>,
     /// ROUND8-L7-05: policy for `_` in inbound H2 header names. hyper's H2
     /// codec does NOT reject underscores — this is the only H2 enforcement point.
@@ -113,7 +104,6 @@ pub struct H2Proxy {
     /// ROUND8-L7-07 / L7-12 — HAProxy `tune.h2.fe.glitches-threshold` analogue;
     /// crossing it drains the connection via the two-step GOAWAY (RFC 9113 §6.8).
     glitches_threshold: Option<u32>,
-    /// Optional registry for `h2_glitches_total`; the binary wires it in.
     glitches_metrics: Option<Arc<lb_observability::MetricsRegistry>>,
     /// CF-S27-2 — per-listener opt-in for RFC 8441 WebSocket-over-HTTP/2. OFF
     /// by default: the H2 upgraded-stream write path lacks end-to-end
@@ -136,11 +126,8 @@ pub struct H2Proxy {
 /// [`CleanCloseIo::LINGER_DEADLINE`] so a flooding client cannot pin a worker.
 struct CleanCloseIo<IO> {
     inner: IO,
-    /// Inbound bytes we will still drain after the FIN (hard bound).
     drain_budget: usize,
-    /// Set once the inner FIN has been delegated.
     fin_done: bool,
-    /// Set once the post-FIN drain finished (EOF, cap, error, or deadline).
     drained: bool,
     /// Armed with the FIN; bounds the wait for the peer's reciprocal FIN so a
     /// silent client cannot pin the worker.
@@ -244,7 +231,7 @@ impl<IO: AsyncWrite + AsyncRead + Unpin> AsyncWrite for CleanCloseIo<IO> {
 }
 
 impl H2Proxy {
-    /// Construct an [`H2Proxy`] with the default [`H2SecurityThresholds`].
+    /// Construct with the default [`H2SecurityThresholds`].
     #[must_use]
     pub fn new(
         pool: TcpPool,
@@ -263,7 +250,7 @@ impl H2Proxy {
         )
     }
 
-    /// Construct an [`H2Proxy`] with an explicit [`H2SecurityThresholds`].
+    /// Construct with an explicit [`H2SecurityThresholds`].
     #[must_use]
     pub fn with_security(
         pool: TcpPool,
@@ -395,13 +382,13 @@ impl H2Proxy {
         self
     }
 
-    /// Whether an H2 upstream pool has been wired for this proxy.
+    /// Has an H2 upstream pool been wired?
     #[must_use]
     pub const fn has_h2_upstream(&self) -> bool {
         self.h2_upstream.is_some()
     }
 
-    /// Whether an H3 upstream pool has been wired for this proxy.
+    /// Has an H3 upstream pool been wired?
     #[must_use]
     pub const fn has_h3_upstream(&self) -> bool {
         self.h3_upstream.is_some()
@@ -562,7 +549,7 @@ impl H2Proxy {
 #[derive(Clone)]
 struct GlitchConnState {
     counter: Arc<parking_lot::Mutex<GlitchesCounter>>,
-    /// `h2_glitches_total` handle; `None` still drains, just unobserved.
+    /// `None` still drains, just unobserved.
     metric: Option<lb_observability::IntCounter>,
     /// Cancelling this triggers the two-step GOAWAY select arm.
     drain: tokio_util::sync::CancellationToken,
@@ -588,14 +575,12 @@ impl GlitchConnState {
     }
 }
 
-/// Service implementation carrying the [`H2Proxy`] plus the peer address.
+/// The [`H2Proxy`] plus per-connection state, cloned by hyper per stream.
 #[derive(Clone)]
 struct ProxyService {
     inner: Arc<H2Proxy>,
     peer: SocketAddr,
-    /// Per-connection SNI captured from the rustls handshake.
     expected_sni: Option<String>,
-    /// Per-connection glitches counter; `None` when not enabled.
     glitch: Option<GlitchConnState>,
 }
 

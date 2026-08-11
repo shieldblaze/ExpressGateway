@@ -22,16 +22,16 @@ pub enum UpstreamProto {
 /// Resolved upstream backend: address, wire protocol, and an SNI for H3.
 #[derive(Debug, Clone)]
 pub struct UpstreamBackend {
-    /// Peer socket address.
+    /// Peer address.
     pub addr: SocketAddr,
-    /// Wire protocol the proxy must speak to this backend.
+    /// Wire protocol to speak to this backend.
     pub proto: UpstreamProto,
     /// SNI: required for `H3`, ignored for `H1`/`H2`.
     pub sni: Option<String>,
 }
 
 impl UpstreamBackend {
-    /// Construct a plain H1 backend with no SNI.
+    /// Plain H1 backend, no SNI.
     #[must_use]
     pub const fn h1(addr: SocketAddr) -> Self {
         Self {
@@ -41,7 +41,7 @@ impl UpstreamBackend {
         }
     }
 
-    /// Construct a plain H2 backend with no SNI.
+    /// Plain H2 backend, no SNI.
     #[must_use]
     pub const fn h2(addr: SocketAddr) -> Self {
         Self {
@@ -51,7 +51,7 @@ impl UpstreamBackend {
         }
     }
 
-    /// Construct an H3 backend with the given SNI.
+    /// H3 backend with the given SNI.
     #[must_use]
     pub fn h3(addr: SocketAddr, sni: impl Into<String>) -> Self {
         Self {
@@ -77,7 +77,7 @@ pub struct SingleProtoPicker {
 }
 
 impl SingleProtoPicker {
-    /// Wrap `picker`, tagging every pick with `proto` and an optional SNI.
+    /// Wrap `picker`, tagging every pick with `proto` and an SNI.
     #[must_use]
     pub const fn new(
         picker: Arc<dyn BackendPicker>,
@@ -110,7 +110,7 @@ pub struct RoundRobinUpstreams {
 }
 
 impl RoundRobinUpstreams {
-    /// Construct a picker; returns `None` if `backends` is empty.
+    /// `None` if `backends` is empty.
     #[must_use]
     pub fn new(backends: Vec<UpstreamBackend>) -> Option<Self> {
         if backends.is_empty() {

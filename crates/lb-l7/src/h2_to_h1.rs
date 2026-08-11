@@ -39,6 +39,7 @@ impl Bridge for H2ToH1Bridge {
                 ":scheme" => { /* Dropped in HTTP/1.1 -- scheme is implicit. */ }
                 ":authority" => authority = Some(v.clone()),
                 _ if k.starts_with(':') => {
+                    // Unknown pseudo-header: dropped, not forwarded.
                 }
                 _ => {
                     regular_headers.push((k.to_lowercase(), v.clone()));

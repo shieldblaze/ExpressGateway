@@ -23,7 +23,7 @@ use lb_grpc::{DEFAULT_MAX_MESSAGE_SIZE, GrpcDeadline, GrpcStatus, decode_grpc_fr
 /// Per-listener gRPC knobs.
 #[derive(Debug, Clone, Copy)]
 pub struct GrpcConfig {
-    /// Master switch. Default `true` when the block is present.
+    /// Master switch.
     pub enabled: bool,
     /// Upper bound on an accepted `grpc-timeout`; also bounds the gateway-side
     /// `DEADLINE_EXCEEDED` timer.
@@ -57,7 +57,7 @@ pub struct GrpcProxy {
 }
 
 impl GrpcProxy {
-    /// Construct a [`GrpcProxy`] consuming the backend [`TcpPool`].
+    /// Construct over the backend [`TcpPool`].
     #[must_use]
     pub const fn new(cfg: GrpcConfig, pool: TcpPool) -> Self {
         Self {
@@ -74,7 +74,7 @@ impl GrpcProxy {
         self
     }
 
-    /// Return the [`GrpcConfig`] in effect.
+    /// The [`GrpcConfig`] in effect.
     #[must_use]
     pub const fn config(&self) -> GrpcConfig {
         self.cfg
