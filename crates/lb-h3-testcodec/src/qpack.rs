@@ -240,19 +240,15 @@ impl QpackEncoder {
                     encode_qstring(&mut buf, value);
                 }
                 None => {
-                    // Literal Field Line with Literal Name (RFC 9204
-                    // §4.5.6): first byte `001NHxxx` where xxx is the
-                    // 3-bit-prefix NAME length (N=0 not-never-indexed,
-                    // H=0 raw — the codec does not Huffman-encode). The
-                    // name bytes follow inline; the VALUE is a normal
-                    // 7-bit-prefix string.
+                    // RFC 9204 §4.5.6 literal-literal-name: first byte
+                    // `001NHxxx`, where xxx is the 3-BIT-PREFIX NAME length
+                    // (N=0 not-never-indexed, H=0 raw). The name bytes follow
+                    // inline; the VALUE is a normal 7-bit-prefix string.
                     //
-                    // SESSION 22 FIX (paired with the decoder, h3spec
-                    // #14/#15): the prior code wrote `0x20` then a
-                    // SEPARATE 7-bit-prefix name string, which a conformant
-                    // QPACK decoder mis-parses. Encoder + decoder are fixed
-                    // together so the gateway interops with conformant H3
-                    // peers without breaking its own round-trips.
+                    // SESSION 22 FIX (h3spec #14/#15): the prior code wrote
+                    // `0x20` then a SEPARATE 7-bit-prefix name string, which a
+                    // conformant decoder mis-parses. Encoder and decoder are
+                    // fixed together so interop and self round-trips both hold.
                     encode_qint(&mut buf, name.len(), 3, 0x20);
                     buf.put_slice(name.as_bytes());
                     encode_qstring(&mut buf, value);
@@ -342,24 +338,18 @@ impl QpackDecoder {
                     "post-base name references not supported".to_string(),
                 ));
             } else if first & 0xE0 == 0x20 {
-                // Literal Field Line with Literal Name (RFC 9204 §4.5.6):
-                //   0 0 1 N H | Name Length (3+) |
-                // The NAME length is the 3-bit prefix of THIS first byte
-                // (with the standard varint continuation) — NOT a separate
-                // length byte. `N` (0x10, never-indexed) is ignored; `H`
-                // (0x08, Huffman) is left raw, mirroring `decode_qstring`'s
-                // raw-only posture (the codec does not Huffman-encode —
-                // SESSION 22: a conformant peer that Huffman-encodes a
-                // literal NAME is a carry-forward, CF-S22-QPACK-HUFFMAN).
+                // RFC 9204 §4.5.6 literal-literal-name (`001NH | NameLen(3+)`):
+                // the NAME length is the 3-BIT PREFIX of THIS first byte (with
+                // varint continuation), NOT a separate length byte. `N` is
+                // ignored; `H` is left raw, mirroring `decode_qstring` (a
+                // conformant peer that Huffman-encodes a literal NAME is the
+                // carry-forward CF-S22-QPACK-HUFFMAN).
                 //
                 // SESSION 22 FIX (h3spec #14/#15): the prior code did
-                // `pos += 1` then read a fresh 7-bit-prefix length byte,
-                // which mis-parsed every RFC-conformant peer's
-                // literal-literal-name field (e.g. a prohibited `:foo`
-                // pseudo-header or a `foo` field before a late pseudo).
-                // Decoder + encoder are fixed together so the gateway's own
-                // H3 round-trips stay consistent AND interop with conformant
-                // peers. See `audit/h3spec/s22-findings.md`.
+                // `pos += 1` then read a fresh 7-bit-prefix length byte, which
+                // mis-parsed every conformant peer's literal-literal-name field
+                // (e.g. a prohibited `:foo` pseudo-header). Decoder + encoder
+                // fixed together. See `audit/h3spec/s22-findings.md`.
                 let slice = buf.get(pos..).ok_or(H3Error::Incomplete)?;
                 let (name_len, consumed) = decode_qint(slice, 3)?;
                 pos += consumed;
@@ -445,13 +435,12 @@ mod tests {
 
     // ── SESSION 22 (h3spec #14/#15): RFC 9204 §4.5.6 literal-literal-name ──
 
-    /// Decode a hand-built **conformant** (externally produced) header
-    /// block whose literal-literal-name fields put the NAME length in the
-    /// first byte's 3-bit prefix — exactly the encoding h3spec sends. The
-    /// pre-fix decoder mis-parsed this (it skipped the first byte then read
-    /// a fresh 7-bit length), so a prohibited `:foo` / late pseudo was never
-    /// surfaced to the validator. This is the regression lock for the
-    /// interop direction (conformant peer → gateway).
+    /// Decode a hand-built CONFORMANT (externally produced) header block whose
+    /// literal-literal-name fields put the NAME length in the first byte's
+    /// 3-bit prefix — exactly what h3spec sends. The pre-fix decoder mis-parsed
+    /// it (skipped the first byte, then read a fresh 7-bit length), so a
+    /// prohibited `:foo` / late pseudo never reached the validator. Regression
+    /// lock for the conformant-peer → gateway direction.
     #[test]
     fn decode_conformant_literal_literal_name() {
         // 00 00            RIC=0, Base=0

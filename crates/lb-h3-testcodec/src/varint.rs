@@ -1,13 +1,6 @@
-//! QUIC variable-length integer encoding/decoding (RFC 9000 §16).
-//!
-//! The encoding uses 1, 2, 4, or 8 bytes depending on the value:
-//!
-//! | 2-bit prefix | Length | Usable bits | Maximum value        |
-//! |--------------|--------|-------------|----------------------|
-//! | 00           | 1      | 6           | 63                   |
-//! | 01           | 2      | 14          | 16383                |
-//! | 10           | 4      | 30          | 1073741823           |
-//! | 11           | 8      | 62          | 4611686018427387903  |
+//! QUIC variable-length integer encoding/decoding (RFC 9000 §16): a 2-bit
+//! prefix selects a 1/2/4/8-byte form carrying 6/14/30/62 usable bits, so the
+//! maximum encodable value is 4611686018427387903.
 
 use bytes::{BufMut, BytesMut};
 

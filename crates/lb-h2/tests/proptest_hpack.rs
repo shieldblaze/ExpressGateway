@@ -1,16 +1,11 @@
-//! CODE-2-11 — HPACK round-trip + decode_frame no-panic harness.
+//! CODE-2-11 — HPACK round-trip + `decode_frame` no-panic harness.
 //!
-//! Two invariants:
+//! Two invariants: HPACK encode→decode is the identity over the generated
+//! header list (names normalise to lowercase per RFC 7541 §6.2.1), and
+//! `decode_frame` on random bytes never panics — the catch-unwind safety net
+//! the round-2 review calls for on the smuggling-risk parsers.
 //!
-//! 1. HPACK encode→decode is the identity over the generated
-//!    `Vec<(HeaderName, HeaderValue)>` (string-equivalence on lowercased
-//!    names per RFC 7541 §6.2.1).
-//! 2. `decode_frame` on a random `Vec<u8>` never panics — it returns
-//!    `Result` for any input. This is the catch-unwind safety net the
-//!    round-2 review §CODE-2-11 calls out for the smuggling-risk
-//!    parsers.
-//!
-//! Sanity budget; CI raises to 200 000 cases via PROPTEST_CASES env.
+//! Sanity budget; CI raises it to 200 000 cases via `PROPTEST_CASES`.
 
 #![cfg(feature = "proptest")]
 
@@ -48,9 +43,7 @@ proptest! {
         let mut dec = HpackDecoder::new(4096);
         let decoded = dec.decode(&encoded).expect("decode HPACK");
 
-        // Names normalise to lowercase per RFC 7541; values are byte-
-        // identical. We compare against the input directly since
-        // arb_header_name() already produces lowercase.
+        // `arb_header_name()` already produces lowercase, so compare directly.
         prop_assert_eq!(decoded.len(), headers.len());
         for (a, b) in decoded.iter().zip(headers.iter()) {
             prop_assert_eq!(&a.0, &b.0);

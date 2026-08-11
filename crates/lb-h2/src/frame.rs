@@ -126,13 +126,12 @@ pub enum H2Frame {
     },
 }
 
-/// Strip the PADDED-frame envelope: first byte is `Pad Length`, the
-/// trailing `Pad Length` bytes are padding. Returns the inner slice.
+/// Strip the PADDED-frame envelope (first byte is `Pad Length`, the trailing
+/// `Pad Length` bytes are padding) and return the inner slice.
 ///
-/// References ROUND8-L7-11 / HAProxy `BUG/MEDIUM: mux-h2: Properly
-/// consume padding for DATA frames`. Per RFC 9113 §6.1:
-/// - PADDED flag with zero-byte payload is malformed.
-/// - `Pad Length + 1 > payload.len()` is malformed.
+/// ROUND8-L7-11 / HAProxy `BUG/MEDIUM: mux-h2: Properly consume padding for
+/// DATA frames`. Per RFC 9113 §6.1 a PADDED flag with a zero-byte payload, or
+/// `Pad Length + 1 > payload.len()`, is malformed.
 fn strip_padding(payload: &[u8]) -> Result<&[u8], H2Error> {
     let pad_len = usize::from(
         *payload
@@ -212,11 +211,9 @@ fn decode_frame_low(
 ) -> Result<H2Frame, H2Error> {
     match frame_type {
         FRAME_DATA => {
-            // ROUND8-L7-11: RFC 9113 §6.1 — when PADDED is set the
-            // payload is `Pad Length (1) | Data | Padding (PadLength)`.
-            // The decoder MUST strip both ends; failing to do so is
-            // the HAProxy `BUG/MEDIUM: mux-h2: Properly consume
-            // padding for DATA frames` smuggling primitive.
+            // ROUND8-L7-11 / RFC 9113 §6.1: with PADDED the payload is
+            // `Pad Length (1) | Data | Padding`. Failing to strip BOTH ends is
+            // the HAProxy `Properly consume padding` smuggling primitive.
             let data_slice = if flags & FLAG_PADDED != 0 {
                 strip_padding(payload)?
             } else {
@@ -707,23 +704,18 @@ mod tests {
 
     #[test]
     fn unknown_frame_type_ignored() {
-        // RFC 9113 §4.1: implementations MUST ignore unknown frame types.
-        // Build a raw frame with type 0xFF, stream_id=7, flags=0x42, payload "xyz".
+        // RFC 9113 §4.1: unknown frame types MUST be ignored. Raw frame:
+        // type 0xFF, stream_id 7, flags 0x42, payload "xyz".
         let payload = b"xyz";
         let mut buf = BytesMut::new();
-        // 3-byte length
         #[allow(clippy::cast_possible_truncation)]
         let len = payload.len() as u32;
         buf.put_u8(((len >> 16) & 0xFF) as u8);
         buf.put_u8(((len >> 8) & 0xFF) as u8);
         buf.put_u8((len & 0xFF) as u8);
-        // type
         buf.put_u8(0xFF);
-        // flags
         buf.put_u8(0x42);
-        // stream id
         buf.put_u32(7);
-        // payload
         buf.put_slice(payload);
 
         let (frame, consumed) = decode_frame(&buf, DEFAULT_MAX_FRAME_SIZE).unwrap();

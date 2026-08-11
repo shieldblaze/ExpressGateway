@@ -103,14 +103,14 @@ async fn drive_handshake_and_request(
     // 64 KiB duplex is plenty for the request + response.
     let (server_io, client_io) = tokio::io::duplex(64 * 1024);
 
-        // Accept TLS, capture SNI, hand the stream to the PROTO-2-18 entry.
+    // Accept TLS, capture SNI, hand the stream to the PROTO-2-18 entry.
     let server_task = tokio::spawn(async move {
         let acceptor = TlsAcceptor::from(server_cfg);
         let tls_stream = acceptor.accept(server_io).await.expect("TLS accept");
         let sni = tls_stream.get_ref().1.server_name().map(str::to_owned);
         let proxy = build_proxy();
         let cancel = CancellationToken::new();
-            // 5 s upper bound; the proxy should answer well inside that.
+        // 5 s upper bound; the proxy should answer well inside that.
         let _ = tokio::time::timeout(
             Duration::from_secs(5),
             proxy.serve_connection_with_cancel_sni(tls_stream, proxy_peer, cancel, sni),
@@ -118,7 +118,7 @@ async fn drive_handshake_and_request(
         .await;
     });
 
-        // TLS handshake, send the malicious request, read the response head.
+    // TLS handshake, send the malicious request, read the response head.
     let connector = TlsConnector::from(client_cfg);
     let server_name = ServerName::try_from(SERVER_SNI).unwrap();
     let mut tls_client = connector

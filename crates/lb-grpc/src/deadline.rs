@@ -11,21 +11,13 @@ use crate::GrpcError;
 pub struct GrpcDeadline;
 
 impl GrpcDeadline {
-    /// Parse a `grpc-timeout` header value into milliseconds.
-    ///
-    /// # Examples
-    ///
-    /// - `"5S"` -> 5000 ms
-    /// - `"100m"` -> 100 ms
-    /// - `"1H"` -> 3,600,000 ms
-    /// - `"2M"` -> 120,000 ms
-    /// - `"1000000u"` -> 1000 ms
-    /// - `"1000000000n"` -> 1000 ms
+    /// Parse a `grpc-timeout` header value into milliseconds (`"5S"` → 5000,
+    /// `"100m"` → 100, `"1000000n"` → 1).
     ///
     /// # Errors
     ///
-    /// Returns [`GrpcError::InvalidTimeout`] if the value does not match the
-    /// expected format.
+    /// [`GrpcError::InvalidTimeout`] if the value does not match
+    /// `Timeout = 1*DIGIT TimeUnit`.
     pub fn parse_timeout(value: &str) -> Result<u64, GrpcError> {
         if value.is_empty() {
             return Err(GrpcError::InvalidTimeout(value.to_owned()));
@@ -42,9 +34,8 @@ impl GrpcDeadline {
             .parse()
             .map_err(|_| GrpcError::InvalidTimeout(value.to_owned()))?;
 
-        // Convert to milliseconds based on unit.
-        // For sub-millisecond units (microseconds, nanoseconds), use ceiling
-        // division so that a non-zero value never truncates to 0ms.
+        // Sub-millisecond units use CEILING division so a non-zero value never
+        // truncates to 0 ms.
         let ms = match unit_char {
             "H" => digits.saturating_mul(3_600_000),
             "M" => digits.saturating_mul(60_000),

@@ -14,19 +14,16 @@ use std::time::{Duration, Instant};
 
 use crate::H2Error;
 
-/// Detects rapid-reset attacks by counting `RST_STREAM` frames using a
-/// sliding-window approximation (two-bucket algorithm).
+/// Detects rapid-reset attacks by counting `RST_STREAM` frames over a
+/// two-bucket sliding-window approximation (the nginx rate-limiting
+/// technique), O(1) memory and integer-only.
 ///
-/// A single fixed-window counter can be bypassed by concentrating events
-/// at a window boundary (~2x the threshold across two adjacent windows).
-/// This implementation keeps a previous-window count and weights it by the
-/// fraction of overlap, identical to the technique used by nginx rate
-/// limiting.
+/// THE CATCH: a single fixed-window counter is bypassable by concentrating
+/// events at a window boundary — ~2x the threshold across two adjacent
+/// windows. Keeping the previous-window count, weighted by overlap, closes it.
 ///
-/// Uses O(1) memory and integer-only arithmetic (no floating point).
-///
-/// The window is measured in arbitrary "ticks" provided by the caller.
-/// In production, pass `Instant::now()` converted to a monotonic counter.
+/// The window is in caller-defined "ticks": a monotonic counter in production,
+/// synthetic values in tests.
 /// For testing, pass synthetic tick values.
 #[derive(Debug)]
 pub struct RapidResetDetector {
@@ -63,9 +60,8 @@ impl RapidResetDetector {
         let elapsed = tick.saturating_sub(self.window_start);
 
         if elapsed > self.window_ticks {
-            // Current tick is outside the window — rotate.
-            // If the tick jumped more than two windows, prev_count is zero
-            // because the previous window had no events we can attribute.
+            // Outside the window — rotate. A jump of more than two windows
+            // leaves prev_count zero: nothing attributable remains.
             if elapsed > self.window_ticks.saturating_mul(2) {
                 self.prev_count = 0;
             } else {
@@ -77,15 +73,12 @@ impl RapidResetDetector {
             self.count_in_window += 1;
         }
 
-        // Sliding-window estimate using integer math (scaled by 1000).
-        //
-        // The standard two-bucket formula (nginx, Cloudflare, etc.):
+        // Sliding-window estimate, integer math scaled by 1000. The standard
+        // two-bucket formula (nginx, Cloudflare):
         //   estimated = prev_count * (1 - elapsed_fraction) + count_in_window
-        //
-        // `count_in_window` is taken at full weight because those events
-        // definitely occurred within the current observation interval.
-        // `prev_count` is scaled down by how far we are into the current
-        // window — the further in, the less the previous window overlaps.
+        // `count_in_window` is FULL weight — those events definitely occurred
+        // in the current interval — while `prev_count` decays with how far we
+        // are into the window.
         let elapsed_in_current = tick.saturating_sub(self.window_start);
         let elapsed_fraction_x1000 = elapsed_in_current
             .saturating_mul(1000)
@@ -227,17 +220,13 @@ pub const DEFAULT_CONTROL_FRAME_WINDOW: Duration = Duration::from_secs(10);
 /// Default stall timeout for `ZeroWindowStallDetector`.
 pub const DEFAULT_ZERO_WINDOW_STALL_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Detects `SETTINGS` frame flooding using a fixed rolling window.
+/// Detects `SETTINGS` frame flooding over a fixed rolling window.
 ///
 /// Pingora and nginx both rate-limit control frames because each `SETTINGS`
-/// forces the peer to allocate and transmit an ACK. A sustained stream of
-/// SETTINGS frames amplifies the attacker's send cost into many times
-/// more CPU and bandwidth on the defender side.
-///
-/// The detector uses `Instant` timestamps supplied by the caller and
-/// integer arithmetic throughout. When the current observation falls
-/// outside the window, the counter rotates: `count_in_window` is reset
-/// to 1 and `window_start` is advanced to `now`.
+/// obliges the peer to allocate and transmit an ACK, amplifying the attacker's
+/// send cost into far more CPU and bandwidth on the defender. Outside the
+/// window the counter rotates: `count_in_window` resets to 1 and
+/// `window_start` advances.
 #[derive(Debug)]
 pub struct SettingsFloodDetector {
     max_per_window: u32,
@@ -300,11 +289,9 @@ impl SettingsFloodDetector {
     }
 }
 
-/// Detects `PING` frame flooding using the same rolling-window strategy as
-/// `SettingsFloodDetector`.
-///
-/// Every `PING` obliges an ACK reply, so a flood forces the peer to
-/// both read and write at attacker-controlled rates.
+/// Detects `PING` frame flooding with the same rolling-window strategy as
+/// [`SettingsFloodDetector`]. Every `PING` obliges an ACK, so a flood forces
+/// the peer to both read and write at attacker-controlled rates.
 #[derive(Debug)]
 pub struct PingFloodDetector {
     max_per_window: u32,
@@ -364,14 +351,11 @@ impl PingFloodDetector {
     }
 }
 
-/// Detects streams that cannot make progress because the peer never grants
-/// additional receive-window credit.
-///
-/// Each stream has a `last_progress` timestamp. Every `WINDOW_UPDATE`
-/// observation refreshes the entry's presence, but only a *non-zero*
-/// `increment` is treated as real progress and advances the timestamp.
-/// `check_stalled` returns true once the timestamp is older than
-/// `stall_timeout`.
+/// Detects streams that cannot progress because the peer never grants more
+/// receive-window credit. THE CATCH: every `WINDOW_UPDATE` refreshes the
+/// entry's presence, but only a NON-ZERO `increment` counts as real progress
+/// and advances `last_progress`; `check_stalled` fires once that timestamp is
+/// older than `stall_timeout`.
 #[derive(Debug)]
 pub struct ZeroWindowStallDetector {
     stall_timeout: Duration,
@@ -394,11 +378,9 @@ impl ZeroWindowStallDetector {
         Self::new(DEFAULT_ZERO_WINDOW_STALL_TIMEOUT)
     }
 
-    /// Record a `WINDOW_UPDATE` observation for a stream.
-    ///
-    /// The stream entry is created on first contact. A non-zero `increment`
-    /// is treated as progress and advances the stored timestamp so the
-    /// stall watchdog starts over.
+    /// Record a `WINDOW_UPDATE` for a stream, creating the entry on first
+    /// contact. Only a NON-ZERO `increment` counts as progress and restarts
+    /// the stall watchdog.
     pub fn on_window_update(&mut self, stream_id: u32, increment: u32, now: Instant) {
         let entry = self.last_progress.entry(stream_id).or_insert(now);
         if increment > 0 {
@@ -433,11 +415,8 @@ mod tests {
     #[test]
     fn rapid_reset_under_threshold() {
         let mut det = RapidResetDetector::new(5, 100);
-        // All events at tick 0 — count_in_window grows but prev_count is 0.
-        // At tick 0, elapsed_in_current = 0, so weight_current = 0, weight_prev = 1000.
-        // estimated = prev_count * 1000 + count * 0 = 0.
-        // That means the very first window only uses prev_count for the estimate
-        // at tick 0 itself. We need to spread ticks across the window.
+        // Ticks must be spread across the window: the estimate weights
+        // `prev_count` by how far into the current window we are.
         for i in 1..=5 {
             assert!(det.record(i * 20).is_ok());
         }
@@ -466,20 +445,17 @@ mod tests {
 
     #[test]
     fn rapid_reset_boundary_attack_detected() {
-        // Boundary attack: with a fixed-window counter, an attacker sends
-        // `threshold` events at the end of one window and another burst at
-        // the start of the next, achieving 2x the allowed rate because the
-        // counter resets to 0.
-        //
-        // The sliding window carries over prev_count, so the first event in
-        // the new window pushes the weighted estimate above threshold.
+        // Boundary attack: against a FIXED-window counter an attacker sends
+        // `threshold` events at the end of one window and another burst at the
+        // start of the next, achieving 2x the allowed rate. The sliding window
+        // carries prev_count over, so the first event after rotation already
+        // pushes the weighted estimate above threshold.
         let threshold = 10u64;
         let window = 100u64;
         let mut det = RapidResetDetector::new(threshold, window);
 
-        // Fill the first window with exactly `threshold` events evenly spaced.
         // In the first window prev_count = 0, so the estimate equals
-        // count_in_window, which reaches exactly threshold (not exceeded).
+        // count_in_window and reaches exactly threshold without exceeding it.
         for i in 1..=threshold {
             assert!(
                 det.record(i * 10).is_ok(),
@@ -488,13 +464,9 @@ mod tests {
             );
         }
 
-        // Window rotates at tick 101. prev_count becomes 10.
-        // estimated = prev_count * weight_prev + count_in_window * 1000
-        //           = 10 * 1000 + 1 * 1000  (at elapsed_in_current = 0)
-        //           = 11000 > threshold * 1000 = 10000
-        //
-        // The very first event after rotation is detected because the
-        // previous window was at capacity.
+        // Rotation at tick 101 makes prev_count = 10, so the estimate is
+        // 10*1000 + 1*1000 = 11000 > 10*1000 — the very first event after
+        // rotation is detected because the previous window was at capacity.
         assert!(
             det.record(101).is_err(),
             "first event after a full window should be detected by the \
@@ -504,9 +476,8 @@ mod tests {
 
     #[test]
     fn rapid_reset_sliding_window_decays() {
-        // Verify that the previous window's influence decays as we progress
-        // through the current window. Early in the window the carry-over is
-        // strong; later it fades and allows more room.
+        // The previous window's influence must DECAY across the current one:
+        // strong early, fading later to allow more headroom.
         let threshold = 10u64;
         let window = 100u64;
         let mut det = RapidResetDetector::new(threshold, window);
@@ -516,24 +487,14 @@ mod tests {
             det.record(i * 20).ok();
         }
 
-        // Rotate into the second window with a single event at tick 101.
-        // prev_count = 5. estimated = 5*1000 + 1*1000 = 6000 <= 10000. OK.
+        // Rotate into the second window: prev_count = 5, estimate 6000. OK.
         assert!(det.record(101).is_ok());
 
-        // Now skip to tick 180 — 79 ticks into the second window.
-        // elapsed_in_current = 79, weight_prev = 1000 - 790 = 210.
-        // count_in_window = 2. estimated = 5 * 210 + 2 * 1000 = 1050 + 2000 = 3050. OK.
+        // 79 ticks in, prev weight has decayed to 210: estimate 3050. OK.
         assert!(det.record(180).is_ok());
 
-        // Continue bursting from tick 181. The low prev weight allows more events.
-        // tick 181: count=3, elapsed=80, wp=200. est = 5*200 + 3*1000 = 4000. OK.
-        // tick 182: count=4, elapsed=81, wp=190. est = 5*190 + 4*1000 = 4950. OK.
-        // tick 183: count=5, elapsed=82, wp=180. est = 5*180 + 5*1000 = 5900. OK.
-        // tick 184: count=6, elapsed=83, wp=170. est = 5*170 + 6*1000 = 6850. OK.
-        // tick 185: count=7, elapsed=84, wp=160. est = 5*160 + 7*1000 = 7800. OK.
-        // tick 186: count=8, elapsed=85, wp=150. est = 5*150 + 8*1000 = 8750. OK.
-        // tick 187: count=9, elapsed=86, wp=140. est = 5*140 + 9*1000 = 9700. OK.
-        // tick 188: count=10,elapsed=87, wp=130. est = 5*130 + 10*1000 = 10650. ERR.
+        // Burst from tick 181: the decayed prev weight lets 8 events through
+        // before tick 188 crosses the threshold.
         for tick in 181..=187 {
             assert!(det.record(tick).is_ok(), "tick {tick} should be allowed");
         }
@@ -542,9 +503,8 @@ mod tests {
             "at tick 188 the estimate exceeds threshold",
         );
 
-        // Compare: at the start of the window (tick 101-106), we could only
-        // fit 5 events before detection. Late in the window (tick 180-187)
-        // we fit 8 events — the decay allowed more headroom.
+        // Early in the window only 5 events fit before detection; late in it, 8
+        // — the decay is what created the extra headroom.
     }
 
     #[test]

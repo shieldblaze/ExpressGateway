@@ -1,13 +1,11 @@
-//! ROUND8-L7-11 — DATA / HEADERS PADDED flag handling.
+//! ROUND8-L7-11 — DATA / HEADERS PADDED flag handling (RFC 9113 §6.1, §6.2).
 //!
-//! Reference: HAProxy `BUG/MEDIUM: mux-h2: Properly consume padding
-//! for DATA frames` — without consuming the trailing padding the
-//! decoder parses the next frame out of phase, creating a smuggling
-//! primitive. RFC 9113 §6.1 (DATA), §6.2 (HEADERS).
+//! HAProxy `BUG/MEDIUM: mux-h2: Properly consume padding for DATA frames`:
+//! without consuming the trailing padding the decoder parses the NEXT frame
+//! out of phase — a smuggling primitive.
 //!
-//! Status caveat: `lb-h2::frame::decode_frame` is test-only today
-//! (hot path uses hyper). This is the "lesson-not-yet-paid-for" find:
-//! the bug is fixed before live wire-in.
+//! Caveat: `lb-h2::frame::decode_frame` is test-only today (the hot path uses
+//! hyper), so this is a lesson fixed BEFORE live wire-in.
 
 use lb_h2::{DEFAULT_MAX_FRAME_SIZE, H2Frame, decode_frame};
 
