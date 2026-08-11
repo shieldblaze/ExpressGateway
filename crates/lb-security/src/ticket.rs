@@ -1,12 +1,7 @@
-//! TLS session-ticket-key rotator (Pingora EC-11).
-//!
-//! A long-lived ticket key collapses forward secrecy on every session resumed under it: steal the
-//! key later and all of that recorded traffic decrypts. Hence scheduled rotation with a short
-//! overlap — encrypt with the fresh key, still decrypt with the previous one for one overlap
-//! window, then drop it.
-//!
-//! [`TicketKey`] is an opaque `Arc<dyn ProducesTickets>` rather than the spec's `[u8; 80]` layout
-//! because rustls 0.23 does not expose that layout — the handle is the version-stable shape.
+//! TLS session-ticket-key rotator (Pingora EC-11). A long-lived ticket key collapses forward
+//! secrecy on every session resumed under it — steal it later and all recorded traffic decrypts —
+//! hence scheduled rotation with a short decrypt-only overlap. [`TicketKey`] is an opaque
+//! `Arc<dyn ProducesTickets>`, not the spec's `[u8; 80]`, because rustls 0.23 hides that layout.
 
 use std::fmt;
 use std::io::BufReader;
@@ -66,8 +61,7 @@ impl fmt::Debug for TicketKey {
     }
 }
 
-/// A rotating pool of TLS session-ticket keys. There is no timer thread — something must call
-/// [`rotate_if_due`](Self::rotate_if_due) periodically or keys never rotate.
+/// A rotating pool of ticket keys. NO timer thread: poll [`rotate_if_due`](Self::rotate_if_due).
 pub struct TicketRotator {
     current: Arc<TicketKey>,
     previous: Option<Arc<TicketKey>>,
@@ -119,10 +113,8 @@ impl TicketRotator {
         self.rotated_at
     }
 
-    /// Drive the rotator to `now`, leaving it UNCHANGED on error. Both the rotate check and the
-    /// previous-key expiry run on every call, so an infrequently polled rotator still erases
-    /// stale key material on its next poll. `Ok(true)` only for an actual rotation — expiring the
-    /// previous key alone does not count.
+    /// Drive the rotator to `now`, leaving it UNCHANGED on error. Rotation and previous-key expiry
+    /// both run every call; `Ok(true)` means an actual rotation, not a mere expiry.
     pub fn rotate_if_due(&mut self, now: Instant) -> Result<bool, TicketError> {
         let elapsed = now.saturating_duration_since(self.rotated_at);
         let rotated = if elapsed >= self.rotation_interval {
@@ -175,8 +167,7 @@ impl fmt::Debug for TicketRotator {
     }
 }
 
-/// rustls [`ProducesTickets`] backed by a [`TicketRotator`]: encrypt with `current`, decrypt with
-/// `current` then `previous`.
+/// rustls [`ProducesTickets`] over a [`TicketRotator`]: encrypt `current`, decrypt `current` then `previous`.
 pub struct RotatingTicketer {
     rot: Arc<Mutex<TicketRotator>>,
 }
@@ -224,9 +215,8 @@ impl ProducesTickets for RotatingTicketer {
     }
 }
 
-/// Terminating [`rustls::ServerConfig`] whose tickets come from the shared [`TicketRotator`].
-/// Empty `alpn_protocols` disables ALPN advertisement. Pins the `ring` provider explicitly so the
-/// result does not depend on whichever provider is installed as the process default.
+/// Terminating [`rustls::ServerConfig`] whose tickets come from the shared [`TicketRotator`]; empty
+/// `alpn_protocols` disables ALPN. Pins `ring` so the result ignores the installed process default.
 pub fn build_server_config(
     rotator: Arc<Mutex<TicketRotator>>,
     cert_chain: Vec<CertificateDer<'static>>,
@@ -236,8 +226,7 @@ pub fn build_server_config(
     build_server_config_with_policy(rotator, cert_chain, key_der, alpn_protocols, false)
 }
 
-/// [`build_server_config`] with an explicit `tls13_only` flag (PROTO-2-14): `true` refuses TLS 1.2
-/// ClientHellos, `false` keeps the rustls default set.
+/// [`build_server_config`] with an explicit `tls13_only` flag (PROTO-2-14).
 pub fn build_server_config_with_policy(
     rotator: Arc<Mutex<TicketRotator>>,
     cert_chain: Vec<CertificateDer<'static>>,
@@ -266,11 +255,10 @@ pub fn build_server_config_with_policy(
     Ok(Arc::new(cfg))
 }
 
-// REL-2-03 hot-reloadable TLS cert bundle. Three contracts a reader would otherwise break:
-// a FAILED reload must keep the old bundle live, so a botched cert push cannot blackhole the
-// listener; the chain-depth cap (≤6) rejects, but near-expiry `not_after` is WARN-ONLY because
-// refusing near-expiry certs is exactly wrong during an emergency rotation; and in-flight
-// handshakes keep the bundle they snapshotted at accept while new ones pick up the swap.
+// REL-2-03 hot-reloadable TLS cert bundle, three contracts a reader would otherwise break: a FAILED
+// reload keeps the old bundle live (a botched push must not blackhole the listener); the chain-depth
+// cap (≤6) rejects, but near-expiry `not_after` is WARN-ONLY because refusing near-expiry certs is
+// exactly wrong during an emergency rotation; in-flight handshakes keep the bundle they snapshotted.
 
 /// Errors raised when loading or rebuilding a [`TlsConfigBundle`].
 #[derive(Debug, thiserror::Error)]
@@ -316,8 +304,7 @@ pub enum TlsBundleError {
 }
 
 impl TlsBundleError {
-    /// Short, low-cardinality reason string for the
-    /// `cert_rotation_failed_total{reason}` metric.
+    /// Short, low-cardinality reason string for `cert_rotation_failed_total{reason}`.
     #[must_use]
     pub const fn reason(&self) -> &'static str {
         match self {
@@ -374,8 +361,7 @@ impl TlsConfigBundle {
         Self::load_from_paths_with(cert, key, alpn, DEFAULT_MAX_CHAIN_DEPTH, None)
     }
 
-    /// [`Self::load_from_paths`] with an explicit depth cap and a `ticketer` to carry the
-    /// session-ticket rotator across a cert swap (REL-2-03).
+    /// [`Self::load_from_paths`] with an explicit depth cap and a `ticketer` carried across a swap.
     pub fn load_from_paths_with(
         cert: &Path,
         key: &Path,
@@ -413,8 +399,7 @@ impl TlsConfigBundle {
             })?
             .ok_or_else(|| TlsBundleError::NoKey(key.to_path_buf()))?;
 
-        // Left unparsed on purpose: an x509 crate is a heavy supply-chain edge for one warn-only
-        // field, so observability computes the expiry gauge from the exposed cert DER instead.
+        // Left unparsed on purpose: an x509 crate is a heavy supply-chain edge for one warn-only field.
         let not_after = SystemTime::UNIX_EPOCH;
 
         // rustls's own cert-vs-key match check — catches the mismatched-upload mistake.
@@ -462,8 +447,8 @@ impl TlsConfigBundle {
     }
 }
 
-/// Atomically swap in a freshly-loaded bundle. A FAILED reload leaves the old bundle live.
-/// `ticketer` carries the rotator across the swap; `None` forces full handshakes afterwards.
+/// Atomically swap in a freshly-loaded bundle; a FAILED reload leaves the old bundle live and
+/// `ticketer: None` forces full handshakes afterwards.
 pub fn reload_tls_bundle(
     bundle: &SharedTlsBundle,
     cert: &Path,
