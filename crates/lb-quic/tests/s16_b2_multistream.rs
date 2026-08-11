@@ -1,21 +1,9 @@
-//! Mode B — B2 MULTI-STREAM byte-identical wire proof: MULTIPLE concurrent
-//! client bidi streams, each carrying a DISTINCT multi-KiB BINARY payload, must
-//! all arrive back byte-identical with a clean FIN.
-//!
-//! What makes it load-bearing beyond the smoke test:
-//! * **no cross-talk** — 5 streams in flight at once, so a bug that merged or
-//!   swapped per-stream pending buffers makes at least one payload mismatch;
-//! * **multi-turn carry** — at least one payload EXCEEDS
-//!   [`STREAM_RELAY_WINDOW`], so it CANNOT be carried in a single relay turn
-//!   and the backpressure carry-over path (pending tail held, FIN deferred
-//!   until drained) runs for real on the happy path;
-//! * **distinct binary content** — a different seed per stream, so a
-//!   correct-length but wrong-bytes relay (zero-fill, stale-buffer reuse) is
-//!   caught;
-//! * **clean FIN per stream** — a lost or mis-ordered FIN hangs (budget) or
-//!   delivers short (length assert).
-//!
-//! Driven with `--features test-gauges` so the test hook is reachable.
+//! Mode B — B2 MULTI-STREAM byte-identical wire proof: MULTIPLE concurrent client bidi streams,
+//! each carrying a DISTINCT multi-KiB BINARY payload, must all arrive back byte-identical with a
+//! clean FIN. Load-bearing beyond the smoke test: 5 streams in flight catch a merged/swapped
+//! per-stream pending buffer; at least one payload EXCEEDS [`STREAM_RELAY_WINDOW`], so the
+//! backpressure carry-over path (pending tail held, FIN deferred until drained) runs for real; a
+//! different seed per stream catches a correct-length but wrong-bytes relay.
 
 #![cfg(feature = "test-gauges")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -42,13 +30,8 @@ const TEST_SNI: &str = "expressgateway.test";
 const H3_ALPN: &[u8] = b"h3";
 const MAX_UDP: usize = 65_535;
 const HANDSHAKE_BUDGET: Duration = Duration::from_secs(5);
-/// Generous: the largest payload (>256 KiB) must traverse
-/// client→LB→backend→LB→client over many relay turns at the 2 ms tick.
 const RELAY_BUDGET: Duration = Duration::from_secs(25);
 
-// ─────────────────────────────────────────────────────────────────────
-// Cert plumbing (mirrors s16_b2_stream_relay_smoke.rs).
-// ─────────────────────────────────────────────────────────────────────
 
 static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -105,8 +88,7 @@ fn random_scid() -> [u8; quiche::MAX_CONN_ID_LEN] {
     scid
 }
 
-/// A deterministic, per-stream-DISTINCT pseudo-random payload: a different seed
-/// per stream means two same-length streams still carry different bytes, which
+/// A different seed per stream means two same-length streams still carry different bytes, which
 /// catches a cross-stream buffer mix-up.
 fn make_payload(seed: u64, len: usize) -> Vec<u8> {
     let mut state = seed
@@ -122,9 +104,8 @@ fn make_payload(seed: u64, len: usize) -> Vec<u8> {
     out
 }
 
-/// CLIENT-facing SERVER config (the LB-as-server leg). Generous flow
-/// control so the CLIENT can buffer whole payloads; the relay window
-/// (256 KiB) is the bound under test, not these.
+/// Generous flow control so the CLIENT can buffer whole payloads; the 256 KiB relay window is the
+/// bound under test, not these.
 fn lb_server_config(certs: &TestCerts) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
     cfg.set_application_protos(&[H3_ALPN]).unwrap();
@@ -146,7 +127,6 @@ fn lb_server_config(certs: &TestCerts) -> quiche::Config {
     cfg
 }
 
-/// The real downstream CLIENT config — verifies the LB's cert.
 fn client_config(certs: &TestCerts) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
     cfg.set_application_protos(&[H3_ALPN]).unwrap();
@@ -167,9 +147,7 @@ fn client_config(certs: &TestCerts) -> quiche::Config {
     cfg
 }
 
-/// The pool's per-dial CLIENT config factory (LB → backend leg). Installs
-/// a deliberately-wrong ALPN so the actor must MIRROR the client's `h3`.
-/// Generous flow control so the backend grants the LB-as-client room.
+/// Pool dial config factory: a deliberately-wrong ALPN, so the actor must MIRROR the client's `h3`.
 fn upstream_config_factory(
     ca: PathBuf,
 ) -> Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> {
@@ -194,8 +172,7 @@ fn upstream_config_factory(
     })
 }
 
-/// A throwaway BACKEND that ECHOes received STREAM bytes back on the SAME
-/// stream id, FINing each once it has fully echoed the peer FIN.
+/// ECHOes STREAM bytes back on the SAME stream id, FINing each once it has fully echoed the FIN.
 fn spawn_echo_backend(certs: &TestCerts) -> SocketAddr {
     let std_sock = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     std_sock.set_nonblocking(true).unwrap();
@@ -333,15 +310,14 @@ async fn try_recv_one(
     }
 }
 
-/// THE B2 headline verify: N concurrent bidi streams, each a distinct
-/// multi-KiB binary payload (one >256 KiB relay window), all round-trip
-/// client→LB→backend(echo)→LB→client byte-identically + clean FIN.
+/// THE B2 headline verify: N concurrent bidi streams, one payload over the 256 KiB relay window,
+/// all round-tripping byte-identically with a clean FIN.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn s16_b2_multistream_byte_identical_round_trip() {
     let certs = generate_loopback_certs();
 
-    // Stream plan: lengths span small multi-packet, ~window, and one OVER the
-    // relay window so it needs many turns (the multi-turn carry path).
+    // Lengths span small multi-packet, ~window, and one OVER the relay window so it needs many
+    // turns (the multi-turn carry path).
     let plan: Vec<(u64, usize)> = vec![
         (0, 9_000),    // > 1 packet (~1350 B), small
         (4, 60_000),   // many packets
@@ -413,9 +389,8 @@ async fn s16_b2_multistream_byte_identical_round_trip() {
     }
     assert_eq!(client_conn.application_proto(), H3_ALPN);
 
-    // Open every stream up front. Each `stream_send` may be a SHORT write, so
-    // the client driver keeps sending the unsent tail until the whole payload +
-    // FIN is on the wire — which is what forces the relay's multi-turn carry.
+    // Each `stream_send` may be a SHORT write, so the client driver keeps sending the unsent tail
+    // until the whole payload + FIN is on the wire — which is what forces the multi-turn carry.
     let payloads: HashMap<u64, Vec<u8>> = plan
         .iter()
         .map(|&(sid, len)| (sid, make_payload(sid.wrapping_add(1), len)))
@@ -426,8 +401,6 @@ async fn s16_b2_multistream_byte_identical_round_trip() {
         "fixture: at least one payload must exceed the 256 KiB relay window"
     );
 
-    // Per-stream send cursor (how many bytes of the payload are queued into
-    // quiche so far) and whether the FIN has been queued.
     let mut send_cursor: HashMap<u64, usize> = plan.iter().map(|&(sid, _)| (sid, 0usize)).collect();
     let mut fin_queued: HashMap<u64, bool> = plan.iter().map(|&(sid, _)| (sid, false)).collect();
 
@@ -446,8 +419,7 @@ async fn s16_b2_multistream_byte_identical_round_trip() {
     }
     flush(&mut client_conn, &client_socket, &mut out).await;
 
-    // 6) Forwarder: drain the shared LB socket into the actor's inbound
-    //    mpsc (the router's job in production).
+    // 6) Forwarder: drain the shared LB socket into the actor's inbound mpsc (the router's job).
     let (tx, rx) = mpsc::channel::<InboundPacket>(256);
     let cancel = CancellationToken::new();
     let fwd_socket = Arc::clone(&lb_socket);
@@ -473,8 +445,6 @@ async fn s16_b2_multistream_byte_identical_round_trip() {
         }
     });
 
-    // Client driver: keep the client live, KEEP SENDING each unsent tail as the
-    // window opens, and collect the echoed bytes until every stream FINs.
     let (done_tx, done_rx) = tokio::sync::oneshot::channel::<HashMap<u64, Vec<u8>>>();
     let client_cancel = cancel.clone();
     let plan_for_driver = plan.clone();
@@ -514,8 +484,8 @@ async fn s16_b2_multistream_byte_identical_round_trip() {
                         Err(_) => {}
                     }
                 } else if !*fin_queued.get(&sid).unwrap() {
-                    // All bytes queued but FIN was not (cursor reached len
-                    // via a non-FIN send) — send the standalone FIN.
+                    // All bytes queued but FIN was not (the cursor reached len via a non-FIN
+                    // send) — send the standalone FIN.
                     if client_conn.stream_send(sid, &[], true).is_ok() {
                         fin_queued.insert(sid, true);
                     }
@@ -574,8 +544,6 @@ async fn s16_b2_multistream_byte_identical_round_trip() {
         pool,
         addr: backend_addr,
         sni: TEST_SNI.to_string(),
-        // B6 (R14/R12): caps now carried on RawBackend; the const
-        // defaults keep these tests byte-identical in behaviour.
         dgram_queue_cap: lb_quic::DGRAM_QUEUE_CAP,
         max_relay_streams: lb_quic::MAX_RELAY_STREAMS,
     };

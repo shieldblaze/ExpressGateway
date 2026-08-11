@@ -1,16 +1,8 @@
-//! Incremental H3→H1 request-body streaming e2e, driving the REAL
-//! [`lb_quic::QuicListener`] with a real quiche H3 client that sends HEADERS
-//! WITHOUT fin followed by DATA frames and a final fin.
-//!
-//! Coverage: multi-DATA-frame binary body reassembled byte-identical; empty
-//! body; a zero-length DATA frame producing no spurious chunk; oversized vs a
-//! tiny `max_body` ⇒ H3 413 with the upstream NOT left holding a completed
-//! request; and T5, the memory-bound proof — a body sent as ONE LARGE DATA
-//! frame (≥ 8× the in-flight window) through a STALLED upstream must keep the
-//! retained-per-stream gauge far below the body size, which FAILS on the
-//! pre-fix whole-frame-buffering decoder, then arrive byte-identical on resume.
-//!
-//! Every body carries the non-UTF-8 bytes 0xFF 0x00 0x80.
+//! Incremental H3→H1 request-body streaming e2e, driving the REAL [`lb_quic::QuicListener`] with
+//! a real quiche H3 client (HEADERS without fin, then DATA frames, then fin). T5 is the
+//! memory-bound proof: a body sent as ONE LARGE DATA frame (≥ 8× the in-flight window) through a
+//! STALLED upstream must keep the retained-per-stream gauge far below the body size, which FAILS
+//! on the pre-fix whole-frame-buffering decoder.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -36,8 +28,7 @@ const MAX_UDP: usize = 65_535;
 const REQUEST_AUTHORITY: &str = "h3-stream.test:4433";
 const REQUEST_PATH: &str = "/p1a/echo";
 
-/// Decode a RESPONSE QPACK field block with a Huffman-capable decoder; the
-/// hand-rolled `lb_h3_testcodec::QpackDecoder` is raw-only.
+/// Huffman-capable decode; the hand-rolled `lb_h3_testcodec::QpackDecoder` is raw-only.
 #[allow(dead_code)]
 fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, String> {
     use quiche::h3::NameValue;
@@ -57,7 +48,6 @@ fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, Strin
 const UPSTREAM_STATUS: u16 = 201;
 const UPSTREAM_BODY: &[u8] = b"p1a-resp-body";
 
-/// Distinctive non-UTF-8 marker every request body embeds.
 const NON_UTF8: &[u8] = &[0xFF, 0x00, 0x80];
 
 static DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -153,8 +143,7 @@ fn build_tcp_pool() -> TcpPool {
     )
 }
 
-/// Read a full HTTP/1.1 request from the backend socket, de-chunking if
-/// present. Returns the raw head string and the reassembled body.
+/// Read a full HTTP/1.1 request, de-chunking if present → (raw head string, reassembled body).
 async fn read_h1_request(sock: &mut TcpStream) -> (String, Vec<u8>) {
     let mut all = Vec::with_capacity(4096);
     let mut tmp = [0u8; 8192];
@@ -231,8 +220,7 @@ fn dechunk(buf: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Capturing backend: captures (head, body) of the first request, optionally
-/// stalling before reading the body until `resume` is notified.
+/// Captures (head, body) of the first request, optionally stalling before reading the body.
 async fn spawn_backend(
     stall: Option<Arc<Notify>>,
 ) -> (
@@ -254,15 +242,12 @@ async fn spawn_backend(
             let stall = stall.clone();
             tokio::spawn(async move {
                 if let Some(n) = &stall {
-                    // Do NOT read anything yet. The proxy writes the head plus
-                    // as many body chunks as its bounded in-flight window
-                    // allows into the socket buffer, then blocks on `write_all`
-                    // — its body channel fills, poll_h3 stops `stream_recv`,
-                    // and QUIC flow control is not extended. Stall here; after
-                    // `notified()` drain fully so the request can finish.
+                    // Do NOT read anything yet: the proxy writes the head plus as many body
+                    // chunks as its bounded in-flight window allows, then blocks on `write_all`
+                    // — its body channel fills, poll_h3 stops `stream_recv`, and QUIC flow
+                    // control is not extended.
                     n.notified().await;
-                    // From a clean socket (nothing consumed), read the
-                    // entire chunked request to completion.
+                    // From a clean socket (nothing consumed), read the entire chunked request.
                     let (_h, _b) = read_h1_request(&mut sock).await;
                     let resp = format!(
                         "HTTP/1.1 {UPSTREAM_STATUS} Created\r\nContent-Length: {}\r\n\r\n",
@@ -290,8 +275,7 @@ async fn spawn_backend(
     (addr, rx, handle)
 }
 
-/// Drive a quiche H3 client: handshake, send HEADERS (no fin) + DATA frames +
-/// fin, collect the response status and body.
+/// Drive a quiche H3 client through HEADERS (no fin) + DATA + fin → (status, body).
 #[allow(clippy::too_many_lines)]
 async fn drive_h3_body_request(
     mut conn: quiche::Connection,
@@ -394,9 +378,8 @@ async fn drive_h3_body_request(
                 match decode_frame(&rx_tail, 1 << 20) {
                     Ok((H3Frame::Headers { header_block }, c)) => {
                         rx_tail.drain(..c);
-                        // The wire client decodes the quiche-encoded response
-                        // head with a Huffman-capable decoder; the 413 path
-                        // below still uses the raw hand-rolled decoder.
+                        // Huffman-capable decode of the quiche-encoded head; the 413 path below
+                        // still uses the raw hand-rolled decoder.
                         let hdrs = decode_resp_qpack(&header_block)?;
                         for (n, v) in hdrs {
                             if n == ":status" {
@@ -443,10 +426,8 @@ async fn drive_h3_body_request(
             }
         }
 
-        // Cap the recv wait hard: quiche's `timeout()` can be the full idle
-        // timeout when nothing is pending, which would block the driver between
-        // RTTs and starve the request. The proxy is under test, not the
-        // client's pacing.
+        // Cap the recv wait hard: quiche's `timeout()` can be the full idle timeout when nothing
+        // is pending, which would block the driver between RTTs and starve the request.
         let qto = conn.timeout().unwrap_or(Duration::from_millis(20));
         let wait = qto.clamp(Duration::from_millis(2), Duration::from_millis(20));
         match tokio::time::timeout(wait, socket.recv_from(&mut in_buf)).await {
@@ -500,8 +481,7 @@ async fn t1_multi_data_frame_binary_body_forwarded_byte_identical() {
     let (backend_addr, body_rx, backend_h) = spawn_backend(None).await;
     let (listener, server, _sd) = start_listener(&certs, backend_addr).await;
 
-    // ≥3 frames, total ≥100 KB, each frame carrying the non-UTF-8
-    // marker so a lossy/string conversion would corrupt it.
+    // ≥3 frames, total ≥100 KB, each carrying the non-UTF-8 marker so a string conversion corrupts.
     let mut frames = Vec::new();
     let mut expected = Vec::new();
     for f in 0..4u8 {
@@ -517,9 +497,8 @@ async fn t1_multi_data_frame_binary_body_forwarded_byte_identical() {
     assert!(expected.len() >= 100 * 1024, "body must be ≥100 KB");
 
     let (conn, sock) = client_conn(server, &certs.ca);
-    // Generous deadline: this real-QUIC suite is CPU-heavy and tasks are
-    // starved under the parallel runner on a 2-CPU box. Correctness, not
-    // latency, is under test.
+    // Generous deadline: this real-QUIC suite is CPU-heavy and starved under the parallel runner
+    // on a 2-CPU box. Correctness, not latency, is under test.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     let res = drive_h3_body_request(conn, &sock, frames, vec![], deadline).await;
 
@@ -616,17 +595,15 @@ async fn t5_single_large_data_frame_is_memory_bounded_through_stalled_upstream()
     let (backend_addr, _rx, backend_h) = spawn_backend(Some(resume.clone())).await;
     let (listener, server, _sd) = start_listener(&certs, backend_addr).await;
 
-    // THE point: the body is ONE SINGLE LARGE DATA frame, ≥16× the in-flight
-    // window. The pre-fix decoder required the ENTIRE frame payload buffered
-    // before yielding anything, so its buffer would grow to the full body while
-    // the upstream stalls. The streaming parser must drain incrementally.
+    // THE point: ONE SINGLE LARGE DATA frame, ≥16× the in-flight window. The pre-fix decoder
+    // required the ENTIRE frame payload buffered before yielding anything, so its buffer would
+    // grow to the full body while the upstream stalls.
     let total_body = 1024 * 1024usize;
     let mut single = vec![0u8; total_body];
     for (i, b) in single.iter_mut().enumerate() {
         *b = (i % 251) as u8;
     }
-    // Embed the non-UTF-8 marker at the head, middle, and tail so a
-    // lossy conversion or an off-by-window splice would corrupt it.
+    // Marker at head, middle and tail so a lossy conversion or off-by-window splice corrupts it.
     single[..3].copy_from_slice(NON_UTF8);
     let mid = total_body / 2;
     single[mid..mid + 3].copy_from_slice(NON_UTF8);
@@ -636,8 +613,8 @@ async fn t5_single_large_data_frame_is_memory_bounded_through_stalled_upstream()
     let frames = vec![single]; // exactly ONE DATA frame.
 
     let (conn, sock) = client_conn(server, &certs.ca);
-    // Resume after a grace period long enough that a whole-frame-buffering
-    // proxy would already have tripped the gauge.
+    // Resume only after a grace period long enough that a whole-frame-buffering proxy would
+    // already have tripped the gauge.
     let resume_c = resume.clone();
     tokio::spawn(async move {
         tokio::time::sleep(Duration::from_millis(1200)).await;
@@ -651,9 +628,8 @@ async fn t5_single_large_data_frame_is_memory_bounded_through_stalled_upstream()
     backend_h.abort();
 
     let max_retained = MAX_RETAINED_BODY_BYTES.load(Ordering::SeqCst);
-    // (a) Tight bound: TOTAL retained per-stream body memory must stay within a
-    // small multiple of the in-flight window and UNCONDITIONALLY ≪ the body. A
-    // whole-frame-buffering decoder blows this.
+    // (a) Tight bound: total retained per-stream body memory stays within a small multiple of the
+    // in-flight window and UNCONDITIONALLY ≪ the body. A whole-frame-buffering decoder blows this.
     let window = H3_BODY_CHANNEL_DEPTH * H3_BODY_CHUNK_MAX; // 64 KiB
     let bound = 4 * window; // 256 KiB — small multiple of the window
     assert!(
@@ -672,14 +648,12 @@ async fn t5_single_large_data_frame_is_memory_bounded_through_stalled_upstream()
          (pre-fix whole-buffer decoder would retain ~{total_body})"
     );
 
-    // (b) Liveness + correctness: after resume the request completed AND the
-    // full body arrived byte-identical, markers included.
+    // (b) Liveness + correctness: after resume the full body arrived byte-identical.
     let (status, _) = res.expect("backpressured request never completed after resume");
     assert_eq!(status, UPSTREAM_STATUS);
 
-    // The stalled backend drains post-resume locally, so re-verify correctness
-    // through a SECOND request on a non-stalled backend with the identical
-    // single large DATA frame.
+    // The stalled backend drains post-resume locally, so re-verify through a SECOND request on a
+    // non-stalled backend with the identical single large DATA frame.
     let (backend2, body_rx2, backend_h2) = spawn_backend(None).await;
     let (listener2, server2, _sd2) = start_listener(&certs, backend2).await;
     let (conn2, sock2) = client_conn(server2, &certs.ca);

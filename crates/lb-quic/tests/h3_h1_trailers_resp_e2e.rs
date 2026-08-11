@@ -1,17 +1,12 @@
-//! H3→H1 request-trailer no-regression + large binary RESPONSE-body
-//! correctness, through the REAL [`lb_quic::QuicListener`] with a real quiche
-//! H3 client.
+//! H3→H1 request-trailer no-regression + large binary RESPONSE-body correctness, through the REAL
+//! [`lb_quic::QuicListener`].
 //!
-//! PC1 — REQUEST TRAILERS: the client sends HEADERS → DATA → a POST-DATA
-//! HEADERS frame (the RFC 9114 §4.1 trailing section) → fin, with the body
-//! embedding 0xFF/0x00/0x80. Asserts the body arrives BYTE-IDENTICAL at the H1
-//! backend (the trailer parse path neither crashes nor corrupts the DATA
-//! stream); the H1 request is well-formed and COMPLETE; the trailer fields are
-//! intentionally NOT smuggled into the H1 head or body (a documented
-//! RFC-acceptable downgrade); and the client sees the backend's real `:status`.
+//! PC1 — REQUEST TRAILERS: HEADERS → DATA → a POST-DATA HEADERS frame (RFC 9114 §4.1) → fin. The
+//! body must arrive BYTE-IDENTICAL at the H1 backend, the H1 request must be well-formed and
+//! COMPLETE, and the trailer fields must be intentionally NOT smuggled into the H1 head or body
+//! (a documented RFC-acceptable downgrade).
 //!
-//! PC2 — LARGE BINARY RESPONSE: a ≥256 KiB binary body with a correct
-//! `Content-Length` must reassemble BYTE-IDENTICAL at the client.
+//! PC2 — a ≥256 KiB binary body with a correct `Content-Length` must reassemble byte-identical.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -36,9 +31,7 @@ const MAX_UDP: usize = 65_535;
 const REQUEST_AUTHORITY: &str = "h3-trailers.test:4433";
 const REQUEST_PATH: &str = "/p1c/echo";
 
-/// SESSION 24 / INC-3: decode a RESPONSE QPACK field block emitted by
-/// the migrated egress (quiche::h3 encoder Huffman-encodes values); the
-/// hand-rolled `lb_h3_testcodec::QpackDecoder` is raw-only.
+/// Huffman-capable decode of the migrated egress; `lb_h3_testcodec::QpackDecoder` is raw-only.
 #[allow(dead_code)]
 fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, String> {
     use quiche::h3::NameValue;
@@ -56,8 +49,7 @@ fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, Strin
         .collect())
 }
 
-/// Distinctive non-UTF-8 marker embedded at head/mid/tail of every
-/// binary payload (request body and response body).
+/// Marker embedded at head/mid/tail of every binary payload (request and response body).
 const NON_UTF8: &[u8] = &[0xFF, 0x00, 0x80];
 
 static DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -153,9 +145,7 @@ fn build_tcp_pool() -> TcpPool {
     )
 }
 
-/// Read a full HTTP/1.1 request (head + body) from the backend socket,
-/// de-chunking `Transfer-Encoding: chunked` if present. Returns the raw
-/// head string and the reassembled body bytes. (Same idiom as P1-A.)
+/// Read a full HTTP/1.1 request, de-chunking if present → (raw head string, reassembled body).
 async fn read_h1_request(sock: &mut TcpStream) -> (String, Vec<u8>) {
     let mut all = Vec::with_capacity(4096);
     let mut tmp = [0u8; 8192];
@@ -228,9 +218,8 @@ fn dechunk(buf: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Mock H1 backend. Captures `(head, body)` of the first request, then
-/// replies with `status` and a fixed `resp_body` (Content-Length
-/// framed). One-shot.
+/// Captures `(head, body)` of the first request, then replies with `status` + a Content-Length
+/// framed `resp_body`. One-shot.
 async fn spawn_backend(
     status: u16,
     resp_body: Vec<u8>,
@@ -269,9 +258,8 @@ async fn spawn_backend(
     (addr, rx, handle)
 }
 
-/// Drive a quiche H3 client: handshake, send HEADERS (no fin) + DATA frames +
-/// an OPTIONAL post-DATA HEADERS (trailers) frame + fin, then collect the
-/// response `:status` and the fully-reassembled body.
+/// Drive a quiche H3 client through HEADERS (no fin) + DATA + an OPTIONAL post-DATA HEADERS
+/// (trailers) frame + fin → (`:status`, reassembled body).
 #[allow(clippy::too_many_lines)]
 async fn drive_h3(
     mut conn: quiche::Connection,
@@ -379,8 +367,6 @@ async fn drive_h3(
                 match decode_frame(&rx_tail, 1 << 20) {
                     Ok((H3Frame::Headers { header_block }, c)) => {
                         rx_tail.drain(..c);
-                        // SESSION 24 / INC-3: Huffman-capable QPACK
-                        // decode of the quiche-encoded response head.
                         let hdrs = decode_resp_qpack(&header_block)?;
                         for (n, v) in hdrs {
                             if n == ":status" {
@@ -474,9 +460,6 @@ fn client_conn(server: SocketAddr, ca: &std::path::Path) -> (quiche::Connection,
     (conn, sock)
 }
 
-// ---------------------------------------------------------------------
-// PC1 — request trailers: no-regression + intentionally-dropped proof.
-// ---------------------------------------------------------------------
 #[tokio::test]
 async fn pc1_request_with_trailing_field_section_completes_and_drops_trailers() {
     let certs = generate_loopback_certs();
@@ -501,8 +484,7 @@ async fn pc1_request_with_trailing_field_section_completes_and_drops_trailers() 
     expected_body.extend_from_slice(&f0);
     expected_body.extend_from_slice(&f1);
 
-    // A distinctive trailer field whose value MUST NOT appear anywhere
-    // in the H1 request the backend receives (intentional drop).
+    // A distinctive trailer value that MUST NOT appear anywhere in the H1 request (intentional drop).
     let trailer_sentinel = "x-p1c-trailer-sentinel-VALUE-09F1";
     let trailers = vec![
         ("x-checksum".to_string(), trailer_sentinel.to_string()),
@@ -525,9 +507,8 @@ async fn pc1_request_with_trailing_field_section_completes_and_drops_trailers() 
 
     let (head, body) = captured.expect("backend captured no request");
 
-    // (1) Request body arrives byte-identical at the H1 backend — the
-    // body-phase `BodyItem::Trailers` parser path did not crash/corrupt
-    // the DATA stream.
+    // (1) Body byte-identical at the H1 backend: the `BodyItem::Trailers` parser path neither
+    // crashed nor corrupted the DATA stream.
     assert_eq!(
         body.len(),
         expected_body.len(),
@@ -539,18 +520,16 @@ async fn pc1_request_with_trailing_field_section_completes_and_drops_trailers() 
          when a trailing field section follows the DATA frames"
     );
 
-    // (2) Well-formed COMPLETE request: no client content-length ⇒
-    // chunked egress, and read_h1_request only returns once the
-    // `0\r\n\r\n` terminator is seen (so the request is complete).
+    // (2) Well-formed COMPLETE request: no client content-length ⇒ chunked egress, and
+    // `read_h1_request` only returns once the `0\r\n\r\n` terminator is seen.
     assert!(
         head.to_ascii_lowercase()
             .contains("transfer-encoding: chunked"),
         "no client content-length ⇒ chunked egress; head:\n{head}"
     );
 
-    // (3) The H3 request trailer fields are INTENTIONALLY NOT smuggled
-    // into the H1 request. Neither the head nor the (de-chunked) body
-    // may contain the trailer sentinel or the trailer field names.
+    // (3) The H3 request trailer fields are INTENTIONALLY NOT smuggled into the H1 request:
+    // neither the head nor the de-chunked body may contain the sentinel or the field names.
     assert!(
         !head.contains(trailer_sentinel)
             && !head.to_ascii_lowercase().contains("x-checksum")
@@ -566,14 +545,10 @@ async fn pc1_request_with_trailing_field_section_completes_and_drops_trailers() 
     );
 }
 
-// ---------------------------------------------------------------------
-// PC2 — large (>=256 KiB) binary response body, reassembled identical.
-// ---------------------------------------------------------------------
 #[tokio::test]
 async fn pc2_large_binary_response_body_reassembled_byte_identical() {
-    // >= 256 KiB so it exceeds one comfortable DATA frame; embeds the
-    // non-UTF-8 marker at head, middle and tail so an off-by-window
-    // splice or a lossy conversion anywhere would corrupt it.
+    // ≥256 KiB so it exceeds one comfortable DATA frame; the markers catch an off-by-window
+    // splice or a lossy conversion.
     let total = 256 * 1024 + 777usize;
     let mut resp_body = vec![0u8; total];
     for (i, b) in resp_body.iter_mut().enumerate() {
