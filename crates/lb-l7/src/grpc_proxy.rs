@@ -1,35 +1,19 @@
-//! gRPC upstream path (Item 3 / PROMPT.md §13).
+//! gRPC upstream path — a capability attached to
+//! [`crate::h2_proxy::H2Proxy`]: inbound H2 streams whose `content-type`
+//! matches `application/grpc[+ext]` are peeled off the regular request path.
 //!
-//! `GrpcProxy` is a *capability* attached to [`crate::h2_proxy::H2Proxy`]:
-//! incoming H2 streams whose `content-type` matches
-//! `application/grpc[+ext]` are peeled off the regular H2 request path
-//! and driven through this module instead.
+//! `/grpc.health.v1.Health/Check` is answered locally when configured, so the
+//! liveness signal is not coupled to backend availability. Otherwise
+//! `grpc-timeout` is parsed, clamped at [`GrpcConfig::max_deadline`] and
+//! rewritten, and `TE: trailers` is preserved (RFC 9113 §8.2.2 forbids
+//! stripping it for gRPC). Body and trailers pass through verbatim — gRPC
+//! carries `grpc-status` / `grpc-message` / `grpc-status-details-bin` in
+//! trailers. On gateway deadline elapse, or a non-200 upstream status, the
+//! client still receives a `200 OK` with synthesised gRPC trailers, because
+//! gRPC clients do not understand bare HTTP errors.
 //!
-//! What happens on a gRPC stream:
-//!
-//! 1. The request `content-type` is matched against
-//!    `^application/grpc(\+\w+)?$` — case insensitive.
-//! 2. If the path is `/grpc.health.v1.Health/Check` and the listener
-//!    config allows it, the proxy answers `SERVING` locally without
-//!    ever dialing a backend (saves the liveness signal from being
-//!    coupled to backend availability).
-//! 3. Otherwise the proxy parses `grpc-timeout` via
-//!    [`lb_grpc::GrpcDeadline::parse_timeout`], clamps it at
-//!    [`GrpcConfig::max_deadline`], rewrites the header, and preserves
-//!    `TE: trailers` (RFC 9113 §8.2.2 forbids stripping it for gRPC).
-//! 4. The request is forwarded upstream over a fresh H2 client
-//!    connection (gRPC REQUIRES HTTP/2). Body and trailers pass
-//!    through verbatim — gRPC carries `grpc-status`, `grpc-message`,
-//!    and `grpc-status-details-bin` in trailers.
-//! 5. On gateway-side deadline elapse, the client receives a synthetic
-//!    `200 OK` with trailers `grpc-status: 4 DEADLINE_EXCEEDED`.
-//! 6. On non-200 upstream HTTP status, the proxy synthesises trailers
-//!    from the HTTP code via [`lb_grpc::GrpcStatus::from_http_status`]
-//!    — preserving client-visible gRPC semantics even when the origin
-//!    blurts back a bare HTTP error.
-//!
-//! Compression negotiation, gRPC-Web, server reflection, and upstream
-//! mTLS are deliberately post-v1.
+//! Compression negotiation, gRPC-Web, server reflection and upstream mTLS are
+//! deliberately post-v1.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -49,14 +33,12 @@ use lb_grpc::{DEFAULT_MAX_MESSAGE_SIZE, GrpcDeadline, GrpcStatus, decode_grpc_fr
 pub struct GrpcConfig {
     /// Master switch. Default `true` when the block is present.
     pub enabled: bool,
-    /// Upper bound on an accepted `grpc-timeout` value. Client-supplied
-    /// values exceeding this are clamped before forwarding; the clamp
-    /// also bounds the gateway-side timeout used to emit
-    /// `DEADLINE_EXCEEDED`. Default 300 s per gRPC spec guidance.
+    /// Upper bound on an accepted `grpc-timeout`. Client values above it are
+    /// clamped before forwarding, and the clamp also bounds the gateway-side
+    /// `DEADLINE_EXCEEDED` timer. Default 300 s per gRPC spec guidance.
     pub max_deadline: Duration,
-    /// When true, `/grpc.health.v1.Health/Check` is served locally
-    /// without forwarding — a gateway liveness signal independent of
-    /// backend health. Default true.
+    /// When true, `/grpc.health.v1.Health/Check` is served locally — a gateway
+    /// liveness signal independent of backend health. Default true.
     pub health_synthesized: bool,
 }
 
@@ -70,11 +52,8 @@ impl Default for GrpcConfig {
     }
 }
 
-/// Default upstream-side `max_header_list_size` (auditor-delta GRPC-001).
-///
-/// Mirrors
-/// [`crate::h2_security::H2SecurityThresholds::max_header_list_size`]'s
-/// default (64 KiB) so a malicious backend cannot transit oversize
+/// Default upstream-side `max_header_list_size` (GRPC-001). Mirrors the
+/// listener default (64 KiB) so a malicious backend cannot transit oversize
 /// trailers through the gateway before hyper rejects them.
 pub const DEFAULT_UPSTREAM_MAX_HEADER_LIST_SIZE: u32 = 64 * 1024;
 
@@ -82,13 +61,9 @@ pub const DEFAULT_UPSTREAM_MAX_HEADER_LIST_SIZE: u32 = 64 * 1024;
 pub struct GrpcProxy {
     cfg: GrpcConfig,
     pool: TcpPool,
-    /// Maximum decoded HPACK header-list size (bytes) accepted from
-    /// the upstream H2 client. Defaults to
-    /// [`DEFAULT_UPSTREAM_MAX_HEADER_LIST_SIZE`]; raised/lowered to
-    /// match the listener's [`H2SecurityThresholds`] when
-    /// [`crate::h2_proxy::H2Proxy::with_grpc`] is called.
-    ///
-    /// [`H2SecurityThresholds`]: crate::h2_security::H2SecurityThresholds
+    /// Max decoded HPACK header-list size accepted from the upstream H2 client;
+    /// aligned with the listener's thresholds by
+    /// [`crate::h2_proxy::H2Proxy::with_grpc`].
     pub(crate) max_header_list_size: u32,
 }
 
@@ -103,12 +78,8 @@ impl GrpcProxy {
         }
     }
 
-    /// Override the upstream H2 client's `max_header_list_size`.
-    /// Used by [`crate::h2_proxy::H2Proxy::with_grpc`] to align the
-    /// upstream client cap with the listener's
-    /// [`H2SecurityThresholds`] (auditor-delta finding GRPC-001).
-    ///
-    /// [`H2SecurityThresholds`]: crate::h2_security::H2SecurityThresholds
+    /// Override the upstream H2 client's `max_header_list_size`, aligning it
+    /// with the listener's cap (GRPC-001).
     #[must_use]
     pub const fn with_max_header_list_size(mut self, bytes: u32) -> Self {
         self.max_header_list_size = bytes;
@@ -121,27 +92,20 @@ impl GrpcProxy {
         self.cfg
     }
 
-    /// Return the upstream H2 client's `max_header_list_size` (bytes).
-    /// Exposed for diagnostics and tests; the value is normally aligned
-    /// with the listener's [`H2SecurityThresholds`].
-    ///
-    /// [`H2SecurityThresholds`]: crate::h2_security::H2SecurityThresholds
+    /// The upstream H2 client's `max_header_list_size` (bytes). Exposed for
+    /// diagnostics and tests.
     #[must_use]
     pub const fn max_header_list_size(&self) -> u32 {
         self.max_header_list_size
     }
 
-    /// Serve a gRPC request.
-    ///
-    /// The caller (`H2Proxy`'s hyper service fn) is responsible for the
-    /// `is_grpc_request` predicate; this entry point assumes the
-    /// decision has already been made.
+    /// Serve a gRPC request. The caller owns the `is_grpc_request` predicate;
+    /// this entry point assumes the decision is already made.
     ///
     /// # Errors
     ///
-    /// Never — errors are translated into gRPC trailer blocks so the
-    /// client observes them as proper gRPC failures rather than
-    /// connection resets.
+    /// Never — errors become gRPC trailer blocks so the client observes proper
+    /// gRPC failures rather than connection resets.
     pub async fn handle(
         self: Arc<Self>,
         req: Request<IncomingBody>,
@@ -156,13 +120,10 @@ impl GrpcProxy {
         self.forward(req, backend_addr).await
     }
 
-    /// Forward the gRPC request over a fresh H2 client connection.
-    ///
-    /// Deadline clamping: if the request carries `grpc-timeout`, the
-    /// value is parsed, clamped at `max_deadline`, and re-emitted
-    /// before forwarding. The gateway also wraps the upstream call in
-    /// `tokio::time::timeout` with the clamped deadline so it can
-    /// synthesise `DEADLINE_EXCEEDED` when the backend stalls.
+    /// Forward the gRPC request over a fresh H2 client connection. A present
+    /// `grpc-timeout` is clamped at `max_deadline` and re-emitted, and the
+    /// gateway wraps the upstream call in that budget so it can synthesise
+    /// `DEADLINE_EXCEEDED` when the backend stalls.
     async fn forward(
         &self,
         req: Request<IncomingBody>,
@@ -170,11 +131,9 @@ impl GrpcProxy {
     ) -> Response<BoxBody<Bytes, hyper::Error>> {
         let (mut parts, body) = req.into_parts();
 
-        // GRPC-002 (auditor-delta LOW 4.5): distinguish header-absent
-        // (no deadline, forward) from header-present-and-malformed
-        // (respond `grpc-status: 3 INVALID_ARGUMENT` without dialing
-        // the backend). Header-present-and-OK clamps + rewrites in
-        // place and returns the effective millisecond budget.
+        // GRPC-002: distinguish header-absent (no deadline, forward) from
+        // header-present-and-malformed (respond `INVALID_ARGUMENT` WITHOUT
+        // dialing the backend).
         let deadline_ms =
             match parse_and_clamp_grpc_timeout(&mut parts.headers, self.cfg.max_deadline) {
                 ParsedTimeout::Absent => None,
@@ -187,31 +146,24 @@ impl GrpcProxy {
                 }
             };
 
-        // gRPC requires `TE: trailers` per RFC 9113 §8.2.2. H2 forbids
-        // the generic hop-by-hop strip from touching it; we defensively
-        // re-insert here so future middlewares that accidentally strip
-        // it do not break gRPC.
+        // gRPC requires `TE: trailers` (RFC 9113 §8.2.2). Re-insert defensively
+        // so a future middleware that strips it cannot break gRPC.
         parts
             .headers
             .insert(TE_NAME.clone(), HeaderValue::from_static("trailers"));
 
-        // hyper's H2 client requires an absolute URI (scheme +
-        // authority). H2 server-side requests arrive with a
-        // path-only URI because :scheme/:authority live as separate
-        // pseudo-headers on that side. Rewrite before forwarding.
+        // hyper's H2 client requires an absolute URI; H2 server-side requests
+        // arrive path-only because `:scheme`/`:authority` are separate
+        // pseudo-headers on that side.
         if let Some(new_uri) = rewrite_uri_for_upstream(&parts.uri, backend_addr) {
             parts.uri = new_uri;
         }
 
-        // Box the body so hyper's H2 client accepts it as
-        // `impl Body<Data = Bytes, Error = hyper::Error>`. Passing
-        // `IncomingBody` directly triggers subtle Send/Sync bound
-        // mismatches inside hyper's generic machinery.
+        // Box the body: passing `IncomingBody` directly trips subtle Send/Sync
+        // bound mismatches inside hyper's generic machinery.
         let upstream_body: BoxBody<Bytes, hyper::Error> = body.map_err(hyper::Error::from).boxed();
         let upstream_req = Request::from_parts(parts, upstream_body);
 
-        // CODE-2-09 follow-on: async dial via the pool's
-        // `acquire_async`.
         let pooled = match self.pool.acquire_async(backend_addr).await {
             Ok(p) => p,
             Err(e) => {
@@ -225,11 +177,9 @@ impl GrpcProxy {
             return grpc_error_response(GrpcStatus::Internal, "pooled stream missing");
         };
 
-        // GRPC-001 (auditor-delta LOW 4.4): cap the upstream H2 client
-        // `max_header_list_size` at the listener-derived value so a
-        // malicious backend cannot blast oversize trailers through the
-        // gateway before hyper rejects them. hyper's `http2::Builder`
-        // is configured before driving the handshake.
+        // GRPC-001: cap the upstream client's `max_header_list_size` at the
+        // listener-derived value so a malicious backend cannot blast oversize
+        // trailers through the gateway before hyper rejects them.
         let mut h2_builder = hyper::client::conn::http2::Builder::new(TokioExecutor::new());
         h2_builder.max_header_list_size(self.max_header_list_size);
         let (mut sender, conn) = match h2_builder
@@ -293,11 +243,9 @@ pub fn is_grpc_request<B>(req: &Request<B>) -> bool {
         })
 }
 
-/// Rebuild the request URI so hyper's H2 client accepts it.
-///
-/// The client demands `:scheme` + `:authority`; we pick `http` because
-/// v1 upstream is always plaintext TCP (upstream TLS is a follow-up
-/// pillar), and we use the backend's `SocketAddr` as authority.
+/// Rebuild the request URI so hyper's H2 client accepts it (it demands
+/// `:scheme` + `:authority`). Scheme is `http` because v1 upstream is always
+/// plaintext TCP; the backend `SocketAddr` is the authority.
 fn rewrite_uri_for_upstream(
     uri: &hyper::Uri,
     backend_addr: std::net::SocketAddr,
@@ -309,22 +257,17 @@ fn rewrite_uri_for_upstream(
     rebuilt.parse().ok()
 }
 
-/// Outcome of parsing the `grpc-timeout` request header.
-///
-/// GRPC-002: distinguishes header-absent (forward without deadline),
-/// header-present-and-OK (clamp + forward with rewritten value), and
-/// header-present-but-malformed (gateway must respond with
-/// `grpc-status: 3 INVALID_ARGUMENT` per the gRPC spec).
+/// Outcome of parsing `grpc-timeout` (GRPC-002): absent (forward without a
+/// deadline), OK (clamp + forward), or malformed — which the gateway must
+/// answer with `grpc-status: 3 INVALID_ARGUMENT` per the gRPC spec.
 #[derive(Debug)]
 enum ParsedTimeout {
     /// `grpc-timeout` header not present (or non-UTF-8). Forward.
     Absent,
-    /// Parsed successfully; the header has been rewritten in place to
-    /// reflect the clamped milliseconds.
+    /// Parsed successfully; the header was rewritten to the clamped value.
     Ok(u64),
-    /// Header was present but did not parse against
-    /// `Timeout = 1*DIGIT TimeUnit`. Carries the raw header value for
-    /// the diagnostic `grpc-message` echo.
+    /// Present but not matching `Timeout = 1*DIGIT TimeUnit`; carries the raw
+    /// value for the diagnostic `grpc-message` echo.
     Malformed(String),
 }
 
@@ -351,13 +294,10 @@ fn parse_and_clamp_grpc_timeout(headers: &mut HeaderMap, max: Duration) -> Parse
     ParsedTimeout::Ok(effective)
 }
 
-/// Backwards-compatible wrapper around [`parse_and_clamp_grpc_timeout`].
-///
-/// Returns the effective deadline in milliseconds when a valid header
-/// is present (even if zero); returns `None` when the header is absent
-/// **or** malformed. Test-only — production code branches on
+/// Test-only wrapper around [`parse_and_clamp_grpc_timeout`] returning
+/// `Some(ms)` only for a valid header. Production branches on
 /// [`ParsedTimeout`] directly so the malformed case can surface as
-/// `INVALID_ARGUMENT` per gRPC spec (auditor-delta GRPC-002).
+/// `INVALID_ARGUMENT` per gRPC spec (GRPC-002).
 #[cfg(test)]
 fn clamp_grpc_timeout(headers: &mut HeaderMap, max: Duration) -> Option<u64> {
     match parse_and_clamp_grpc_timeout(headers, max) {
@@ -366,25 +306,14 @@ fn clamp_grpc_timeout(headers: &mut HeaderMap, max: Duration) -> Option<u64> {
     }
 }
 
-/// Serve the synthesized `/grpc.health.v1.Health/Check` response.
-///
-/// Decodes the request body's `HealthCheckRequest { string service = 1; }`
-/// to honour the gRPC health-check spec
-/// (<https://github.com/grpc/grpc/blob/master/doc/health-checking.md>):
-///
-/// * Empty `service` → overall server health → respond `SERVING`.
-/// * Non-empty `service` → service is not registered with this gateway
-///   (no per-service registry exists in v1) → respond
-///   `grpc-status: 5 NOT_FOUND` per the spec
-///   (auditor-delta finding GRPC-003).
-///
-/// Decode is hand-rolled (varint tag + length-delimited UTF-8) so the
-/// gateway stays prost-free, matching the response side which already
-/// hand-encodes the `HealthCheckResponse { SERVING }` payload.
+/// Serve the synthesized `/grpc.health.v1.Health/Check` response, per the gRPC
+/// health-check spec: an empty `service` is the overall server probe →
+/// `SERVING`; a non-empty one is not registered with this gateway (no
+/// per-service registry in v1) → `grpc-status: 5 NOT_FOUND` (GRPC-003).
+/// Decode is hand-rolled so the gateway stays prost-free.
 async fn handle_health_check(req: Request<IncomingBody>) -> Response<BoxBody<Bytes, hyper::Error>> {
-    // Read the request body. A zero-length body or a frame decode error
-    // is treated as "empty service" — the spec calls this the overall
-    // health probe, and we are by design always SERVING.
+    // A zero-length body or a decode error is treated as "empty service" — the
+    // overall health probe, and we are by design always SERVING.
     let body_bytes = (req.into_body().collect().await)
         .map_or_else(|_| Bytes::new(), http_body_util::Collected::to_bytes);
     let service = decode_health_check_service(&body_bytes);
@@ -398,12 +327,9 @@ async fn handle_health_check(req: Request<IncomingBody>) -> Response<BoxBody<Byt
     )
 }
 
-/// Build the `200 OK` SERVING response: gRPC frame containing the
-/// two-byte protobuf message `0x08 0x01` plus trailers
-/// `grpc-status: 0`.
+/// Build the `200 OK` SERVING response: a gRPC frame carrying the two-byte
+/// protobuf message `0x08 0x01`, plus `grpc-status: 0` trailers.
 fn health_check_serving_response() -> Response<BoxBody<Bytes, hyper::Error>> {
-    // gRPC frame header: compressed=0, length=2 (BE u32), then the
-    // two-byte protobuf message `0x08 0x01`.
     let mut frame = Vec::with_capacity(7);
     frame.push(0u8);
     frame.extend_from_slice(&2u32.to_be_bytes());
@@ -428,20 +354,11 @@ fn health_check_serving_response() -> Response<BoxBody<Bytes, hyper::Error>> {
         .unwrap_or_else(|_| empty_fallback())
 }
 
-/// Hand-decode `HealthCheckRequest { string service = 1; }` from a gRPC
-/// request body without pulling prost.
-///
-/// The wire layout is:
-///
-/// 1. 5-byte gRPC frame header (compressed flag + BE u32 length).
-/// 2. Protobuf message body containing zero or more `(tag, value)` pairs.
-/// 3. The `service` field is `tag=1 wire=2 (length-delimited)`, encoded
-///    as the single varint byte `0x0A`, then a varint length, then the
-///    UTF-8 string bytes.
-///
-/// Returns the decoded service string, or `""` if absent / malformed
-/// (the empty-string path is the "overall health" branch, which is the
-/// safest default and matches the spec).
+/// Hand-decode `HealthCheckRequest { string service = 1; }` without pulling
+/// prost: a 5-byte gRPC frame header, then protobuf fields, where `service` is
+/// `tag=1 wire=2` (the single varint byte `0x0A`, a varint length, then UTF-8
+/// bytes). Returns `""` if absent or malformed — the "overall health" branch,
+/// the safest default and what the spec asks for.
 fn decode_health_check_service(body: &[u8]) -> String {
     // Empty body = overall health probe.
     if body.is_empty() {
@@ -451,15 +368,14 @@ fn decode_health_check_service(body: &[u8]) -> String {
     let Ok((frame, _consumed)) = decode_grpc_frame(body, DEFAULT_MAX_MESSAGE_SIZE) else {
         return String::new();
     };
-    // Compressed health-check request is not part of the spec; treat
-    // as "overall health" (gateway is up regardless).
+    // Compressed health-check requests are not in the spec; treat as overall.
     if frame.compressed {
         return String::new();
     }
     let payload = frame.data;
 
-    // Walk fields. Only field #1 (`service`) is meaningful here; any
-    // other tag we encounter is skipped by reading its wire type.
+    // Only field #1 (`service`) is meaningful; other tags are skipped by wire
+    // type.
     let mut i = 0usize;
     while i < payload.len() {
         let Some((tag, n)) = read_varint(&payload, i) else {
@@ -524,9 +440,8 @@ fn decode_health_check_service(body: &[u8]) -> String {
     String::new()
 }
 
-/// Read a base-128 varint from `buf[start..]`. Returns `(value,
-/// consumed_bytes)`. Returns `None` on truncation or on a varint longer
-/// than 10 bytes (the maximum possible for a 64-bit value).
+/// Read a base-128 varint, returning `(value, consumed_bytes)`. `None` on
+/// truncation or on a varint longer than 10 bytes (the 64-bit maximum).
 fn read_varint(buf: &[u8], start: usize) -> Option<(u64, usize)> {
     let mut result: u64 = 0;
     let mut shift: u32 = 0;
@@ -552,10 +467,10 @@ fn empty_fallback() -> Response<BoxBody<Bytes, hyper::Error>> {
     )
 }
 
-/// Build a `200 OK` response whose only body frame is a gRPC trailer
-/// block carrying the given status. Used for gateway-origin errors
-/// (deadline exceeded, backend unreachable) so the client observes
-/// them as proper gRPC failures rather than a bare HTTP code.
+/// Build a `200 OK` whose only body frame is a gRPC trailer block carrying
+/// `status`. Used for gateway-origin errors (deadline exceeded, backend
+/// unreachable) so the client observes a proper gRPC failure, not a bare HTTP
+/// code.
 fn grpc_error_response(status: GrpcStatus, msg: &str) -> Response<BoxBody<Bytes, hyper::Error>> {
     let mut trailers = HeaderMap::new();
     let code = status as u32;
@@ -576,13 +491,11 @@ fn grpc_error_response(status: GrpcStatus, msg: &str) -> Response<BoxBody<Bytes,
         .unwrap_or_else(|_| empty_fallback())
 }
 
-/// Translate an upstream response into the downstream shape.
-///
-/// If the upstream HTTP status is 200, we forward the body + trailers
-/// as-is (gRPC's own `grpc-status` trailer is the source of truth). If
-/// it's non-200 the gateway synthesises a `200 OK` + gRPC trailers via
-/// the HTTP→gRPC status mapping — gRPC clients do not understand bare
-/// HTTP errors.
+/// Translate an upstream response into the downstream shape. A 200 forwards
+/// body + trailers as-is (gRPC's own `grpc-status` trailer is the source of
+/// truth); a non-200 becomes a synthesised `200 OK` + gRPC trailers via the
+/// HTTP→gRPC status mapping, because gRPC clients do not understand bare HTTP
+/// errors.
 fn finalize_upstream(resp: Response<IncomingBody>) -> Response<BoxBody<Bytes, hyper::Error>> {
     let (parts, body) = resp.into_parts();
     if parts.status == StatusCode::OK {
@@ -608,7 +521,6 @@ static TE_NAME: HeaderName = HeaderName::from_static("te");
 
 const HEALTH_CHECK_PATH: &str = "/grpc.health.v1.Health/Check";
 
-// Make the `IncomingBody` type alias usable in tests without exporting it.
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
@@ -661,18 +573,15 @@ mod tests {
 
     #[test]
     fn grpc_timeout_parse_and_clamp_at_max() {
-        // Client says "600S" (600 s); max_deadline = 300 s. The header
-        // is rewritten in place. `GrpcDeadline::format_timeout` prefers
-        // the coarsest unit that evenly divides the milliseconds, so
-        // 300_000 ms renders as "5M"; the value is still the same
-        // deadline, just expressed in minutes.
+        // Client says 600S; max is 300 s. `format_timeout` prefers the coarsest
+        // unit that divides evenly, so 300_000 ms renders as "5M" — the same
+        // deadline, expressed in minutes.
         let mut h = HeaderMap::new();
         h.insert(GRPC_TIMEOUT.clone(), HeaderValue::from_static("600S"));
         let ms = clamp_grpc_timeout(&mut h, Duration::from_secs(300)).unwrap();
         assert_eq!(ms, 300_000);
         let rewritten = h.get(&GRPC_TIMEOUT).unwrap().to_str().unwrap().to_owned();
-        // Re-parse to prove the round-trip: whatever format was chosen,
-        // it must still decode back to 300_000 ms.
+        // Re-parse to prove the round-trip regardless of the chosen format.
         assert_eq!(GrpcDeadline::parse_timeout(&rewritten).unwrap(), 300_000);
     }
 

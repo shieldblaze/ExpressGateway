@@ -1,43 +1,25 @@
 //! HTTP/2 security thresholds surfaced to hyper's `http2::Builder`.
 //!
-//! The six detector types in `lb-h2::security` carry the canonical
-//! thresholds for the HTTP/2 flood / bomb attacks the gateway must
-//! mitigate:
+//! Attack → knob: Rapid Reset (CVE-2023-44487) →
+//! `max_pending_accept_reset_streams`; rapid reset after a local error
+//! (RUSTSEC-2024-0003) → `max_local_error_reset_streams`; HPACK bomb →
+//! `max_header_list_size`; SETTINGS/stream explosion →
+//! `max_concurrent_streams`; zero-window stall → `keep_alive_timeout` +
+//! `max_send_buf_size`. CONTINUATION flood (CVE-2024-27316) and PING flood are
+//! enforced inside `h2` itself and are not configurable here.
 //!
-//! | Attack / CVE                                  | Detector type                  | Hyper knob                              |
-//! |-----------------------------------------------|--------------------------------|-----------------------------------------|
-//! | Rapid Reset (CVE-2023-44487)                  | [`RapidResetDetector`]         | `max_pending_accept_reset_streams`      |
-//! | Rapid Reset after local error (RUSTSEC-2024-0003)| —                           | `max_local_error_reset_streams`         |
-//! | CONTINUATION Flood (CVE-2024-27316)           | [`ContinuationFloodDetector`]  | enforced inside `h2 ≥ 0.4.5`            |
-//! | HPACK Bomb                                    | [`HpackBombDetector`]          | `max_header_list_size`                  |
-//! | SETTINGS flood (stream explosion)             | [`SettingsFloodDetector`]      | `max_concurrent_streams`                |
-//! | PING flood                                    | [`PingFloodDetector`]          | enforced by `h2` (unconfigurable, safe) |
-//! | Zero-window stall                             | [`ZeroWindowStallDetector`]    | `keep_alive_timeout` + `max_send_buf_size` |
-//!
-//! Hyper is the **wire enforcer**; the lb-h2 detector types remain the
-//! single source of truth for threshold values so a change to one
-//! `DEFAULT_*` constant propagates to the live listener without config
-//! drift.
-//!
-//! [`RapidResetDetector`]: ../../lb_h2/security/struct.RapidResetDetector.html
-//! [`ContinuationFloodDetector`]: ../../lb_h2/security/struct.ContinuationFloodDetector.html
-//! [`HpackBombDetector`]: ../../lb_h2/security/struct.HpackBombDetector.html
-//! [`SettingsFloodDetector`]: ../../lb_h2/security/struct.SettingsFloodDetector.html
-//! [`PingFloodDetector`]: ../../lb_h2/security/struct.PingFloodDetector.html
-//! [`ZeroWindowStallDetector`]: ../../lb_h2/security/struct.ZeroWindowStallDetector.html
+//! Hyper is the wire ENFORCER; the `lb-h2` detector types remain the single
+//! source of truth for threshold VALUES, so changing one `DEFAULT_*` constant
+//! propagates to the live listener without config drift.
 
 use std::time::Duration;
 
-/// Batched thresholds for the live HTTP/2 listener.
-///
-/// Built via [`Self::default`] from the `lb-h2::security` constants.
-/// Threaded into [`crate::h2_proxy::H2Proxy::new`] and applied to
-/// hyper's `http2::Builder` inside `serve_connection`.
+/// Batched thresholds for the live HTTP/2 listener, built from the
+/// `lb-h2::security` constants and applied to hyper's `http2::Builder`.
 #[derive(Debug, Clone, Copy)]
 pub struct H2SecurityThresholds {
-    /// Maximum number of server-initiated / client-initiated `RST_STREAM`
-    /// pairs hyper will queue before sending GOAWAY `ENHANCE_YOUR_CALM`.
-    /// Mirrors `RapidResetDetector` threshold.
+    /// Max queued `RST_STREAM` pairs before hyper sends GOAWAY
+    /// `ENHANCE_YOUR_CALM`. Mirrors the `RapidResetDetector` threshold.
     pub max_pending_accept_reset_streams: usize,
     /// Maximum `RST_STREAM` frames emitted due to local (app-layer) errors
     /// before GOAWAY. Separate knob added for `RUSTSEC-2024-0003`.
@@ -51,15 +33,13 @@ pub struct H2SecurityThresholds {
     /// Maximum per-stream send buffer. Caps the memory an attacker can
     /// pin by advertising a zero window and refusing to read.
     pub max_send_buf_size: usize,
-    /// Interval between server-initiated H2 keep-alive PINGs. `None`
-    /// disables the keep-alive mechanism. When set together with
-    /// `keep_alive_timeout`, the connection is closed if the peer
-    /// fails to ACK within the timeout.
+    /// Interval between server-initiated keep-alive PINGs; `None` disables.
+    /// Paired with `keep_alive_timeout`.
     pub keep_alive_interval: Option<Duration>,
-    /// Close a connection whose peer has not `ACK`ed a PING within this
-    /// period. Fires the zero-window stall on an attacker that holds a
-    /// stream open without granting credit. Only takes effect when
-    /// `keep_alive_interval` is `Some`.
+    /// Close a connection whose peer has not ACKed a PING within this period —
+    /// the zero-window-stall reap against an attacker holding a stream open
+    /// without granting credit. Only effective when `keep_alive_interval` is
+    /// `Some`.
     pub keep_alive_timeout: Duration,
     /// Initial per-stream receive window. Default matches RFC 9113
     /// (`SETTINGS_INITIAL_WINDOW_SIZE` = `65_535`).
@@ -71,23 +51,18 @@ pub struct H2SecurityThresholds {
 
 impl Default for H2SecurityThresholds {
     fn default() -> Self {
-        // The lb-h2 constants are `u32`/`Duration`; widen to `usize`
-        // where hyper wants `usize`. The rapid-reset threshold is drawn
-        // from the same flood defaults — 100 per 10s window. We
-        // deliberately reuse that number for both reset-stream knobs
-        // because they model the same DoS posture.
+        // Both reset-stream knobs reuse the same flood default because they
+        // model the same DoS posture.
         Self {
             max_pending_accept_reset_streams: lb_h2::DEFAULT_SETTINGS_MAX_PER_WINDOW as usize,
             max_local_error_reset_streams: lb_h2::DEFAULT_SETTINGS_MAX_PER_WINDOW as usize,
             max_concurrent_streams: 256,
-            // 64 KiB HPACK cap — matches Pingora and conservative
-            // production deployments. Absolute cap; per-header limits
-            // are enforced inside h2's decoder.
+            // 64 KiB HPACK cap — matches Pingora. Absolute cap; per-header
+            // limits are enforced inside h2's decoder.
             max_header_list_size: 64 * 1024,
             // 64 KiB per-stream send buffer.
             max_send_buf_size: 64 * 1024,
-            // Ping every 30 s; close if no ACK in 30 s — matches the
-            // `ZeroWindowStallDetector` default.
+            // Ping every 30 s; close if no ACK in 30 s.
             keep_alive_interval: Some(lb_h2::DEFAULT_ZERO_WINDOW_STALL_TIMEOUT),
             keep_alive_timeout: lb_h2::DEFAULT_ZERO_WINDOW_STALL_TIMEOUT,
             initial_stream_window_size: 65_535,
@@ -97,17 +72,15 @@ impl Default for H2SecurityThresholds {
 }
 
 impl H2SecurityThresholds {
-    /// Build a threshold set with the project-default values. Thin
-    /// wrapper over [`Default::default`] that reads as an explicit
+    /// Build a threshold set with the project defaults. Reads as an explicit
     /// "pull from the `lb-h2` security defaults" at call sites.
     #[must_use]
     pub fn from_detector_defaults() -> Self {
         Self::default()
     }
 
-    /// Apply this threshold set to hyper's `http2::Builder`. The
-    /// generic over `E` lets us stay agnostic about which executor the
-    /// caller wired (today always `hyper_util::rt::TokioExecutor`).
+    /// Apply this threshold set to hyper's `http2::Builder`. Generic over `E`
+    /// so we stay agnostic about which executor the caller wired.
     pub fn apply<E>(self, builder: &mut hyper::server::conn::http2::Builder<E>) {
         builder
             .max_pending_accept_reset_streams(self.max_pending_accept_reset_streams)
@@ -142,14 +115,11 @@ mod tests {
 
     #[test]
     fn apply_does_not_panic_with_defaults() {
-        // Regression: the hyper Builder setters consume `Into<Option<_>>`
-        // so a `0` or `u32::MAX` could look valid but still produce
-        // weird wire behavior. Cheap smoke test that the chain accepts
-        // our defaults.
+        // The hyper setters take `Into<Option<_>>`, so a bad value can look
+        // valid; smoke-test that the chain accepts our defaults.
         use hyper_util::rt::{TokioExecutor, TokioTimer};
         let mut builder = hyper::server::conn::http2::Builder::new(TokioExecutor::new());
-        // `keep_alive_interval` requires a timer; wire the tokio one
-        // for parity with h2_proxy.rs.
+        // `keep_alive_interval` requires a timer (parity with h2_proxy.rs).
         builder.timer(TokioTimer::new());
         H2SecurityThresholds::default().apply(&mut builder);
     }

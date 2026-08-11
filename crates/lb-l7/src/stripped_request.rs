@@ -1,40 +1,21 @@
-//! PROTO-2-07 — `StrippedRequest<B>` newtype: compile-time guarantee
-//! that an `http::Request` has already had its hop-by-hop headers
-//! removed (RFC 9110 §7.6.1 plus Connection-listed extras).
+//! PROTO-2-07 — `StrippedRequest<B>` newtype: a compile-time guarantee that an
+//! `http::Request` has already had its hop-by-hop headers removed
+//! (RFC 9110 §7.6.1 plus `Connection`-listed extras).
 //!
-//! Per lead-approved L-007: the hot-path bridge code in
-//! [`crate::h1_proxy`] / [`crate::h2_proxy`] / [`crate::h2_to_h1`]
-//! historically takes raw `http::Request<B>` arguments. A caller can
-//! pass an un-stripped request by accident and the proxy will then
-//! emit hop-by-hop headers across the H1↔H2/H3 boundary, defeating
-//! RFC 9110 §7.6.1. Wrapping the request in a `#[repr(transparent)]`
-//! newtype that can ONLY be constructed via [`strip_hop_by_hop`] makes
-//! the invariant a type-system property: any function taking
-//! `StrippedRequest<B>` is statically guaranteed that the strip ran
-//! exactly once.
-//!
-//! This is an internal-API guarantee — the newtype is `pub` so
-//! integration tests can pin the bridge surface, but the constructor
-//! is `pub(crate)` so external callers cannot fabricate a
-//! `StrippedRequest` without invoking the strip.
-//!
-//! `#[repr(transparent)]` keeps the layout identical to
-//! `http::Request<B>` so the wrapper has zero runtime cost.
+//! The hot-path bridge code historically took raw `http::Request<B>`, so a
+//! caller could pass an un-stripped request by accident and the proxy would
+//! then emit hop-by-hop headers across the H1↔H2/H3 boundary. A
+//! `#[repr(transparent)]` newtype constructible ONLY via [`strip_hop_by_hop`]
+//! makes the invariant a type-system property at zero runtime cost. The type is
+//! `pub` so integration tests can pin the bridge surface, but the constructor
+//! is `pub(crate)` so external callers cannot fabricate one.
 
 use http::Request;
 
-/// A request whose hop-by-hop headers have been stripped per
-/// RFC 9110 §7.6.1.
-///
-/// Construct only via [`strip_hop_by_hop`]. The hop-by-hop strip is
-/// thereby tracked at the type level: any function taking
-/// `&StrippedRequest<B>` or `StrippedRequest<B>` can rely on the
-/// invariant without re-running the strip.
-///
-/// # Layout
-///
-/// `#[repr(transparent)]` guarantees the wrapper has the same memory
-/// layout as the underlying `http::Request<B>`. Cost is zero.
+/// A request whose hop-by-hop headers have been stripped per RFC 9110 §7.6.1.
+/// Construct only via [`strip_hop_by_hop`]; any function taking one can rely on
+/// the invariant without re-running the strip. `#[repr(transparent)]`, so the
+/// wrapper costs nothing at runtime.
 #[repr(transparent)]
 #[derive(Debug)]
 pub struct StrippedRequest<B>(Request<B>);
@@ -46,21 +27,17 @@ impl<B> StrippedRequest<B> {
         &self.0
     }
 
-    /// Mutable access to the inner header map. The hop-by-hop strip
-    /// is a one-shot invariant: adding `X-Forwarded-*` / `Via` after
-    /// the strip is fine (those are end-to-end). Mutating to
-    /// re-introduce a hop-by-hop name is the caller's responsibility
-    /// to avoid — the invariant only says "the strip ran", not "the
-    /// header set is forever sealed".
+    /// Mutable access to the inner header map. The strip is a ONE-SHOT
+    /// invariant: adding `X-Forwarded-*` / `Via` afterwards is fine (they are
+    /// end-to-end), but re-introducing a hop-by-hop name is the caller's
+    /// responsibility to avoid — the invariant says "the strip ran", not "the
+    /// header set is sealed".
     pub fn headers_mut(&mut self) -> &mut http::HeaderMap {
         self.0.headers_mut()
     }
 
-    /// Consume the wrapper and yield the inner [`Request`]. Callers
-    /// that need to mutate the request (e.g. append `X-Forwarded-*`,
-    /// `Via`) unwrap here. The newtype only encodes the
-    /// "hop-by-hop already stripped" invariant; it does not freeze
-    /// the request shape.
+    /// Consume the wrapper and yield the inner [`Request`]. The newtype encodes
+    /// only "hop-by-hop already stripped"; it does not freeze the shape.
     #[must_use]
     pub fn into_inner(self) -> Request<B> {
         self.0
@@ -74,32 +51,20 @@ impl<B> StrippedRequest<B> {
     }
 }
 
-/// Run the RFC 9110 §7.6.1 hop-by-hop strip on `req`'s header map
-/// exactly once and return the result wrapped in [`StrippedRequest`].
-///
-/// The strip removes the eight canonical hop-by-hop field names plus
-/// every name listed inside the `Connection` header value. See
-/// [`crate::h1_proxy::strip_hop_by_hop`] for the underlying
-/// implementation.
-///
-/// Constructor is `pub(crate)` so only the in-crate hot path can mint
-/// a `StrippedRequest`. External integration tests construct via the
-/// `crate::h1_proxy::strip_hop_by_hop_into` shim instead.
+/// Run the RFC 9110 §7.6.1 hop-by-hop strip exactly once and wrap the result:
+/// the eight canonical field names plus every name listed inside `Connection`.
+/// `pub(crate)` so only the in-crate hot path can mint a [`StrippedRequest`];
+/// integration tests go through [`strip_for_test`].
 pub(crate) fn strip_hop_by_hop<B>(mut req: Request<B>) -> StrippedRequest<B> {
     crate::h1_proxy::strip_hop_by_hop(req.headers_mut());
     StrippedRequest(req)
 }
 
-/// Test-only constructor surface so the PROTO-2-07 integration tests
-/// can produce a `StrippedRequest` from outside the crate. The
-/// production proxy hot path uses the `pub(crate)` factory above.
-///
+/// Test-only constructor so the PROTO-2-07 integration tests can produce a
+/// `StrippedRequest` from outside the crate.
 /// # Compile-time invariants
 ///
-/// A raw `http::Request<B>` cannot be passed where
-/// `&StrippedRequest<B>` is expected — the type system rejects the
-/// mismatch:
-///
+/// A raw `http::Request<B>` cannot stand in for `&StrippedRequest<B>`:
 /// ```compile_fail
 /// use http::Request;
 /// use lb_l7::stripped_request::StrippedRequest;
@@ -110,9 +75,7 @@ pub(crate) fn strip_hop_by_hop<B>(mut req: Request<B>) -> StrippedRequest<B> {
 /// takes_stripped(&raw);
 /// ```
 ///
-/// And `StrippedRequest::<B>(req)` cannot be constructed by tuple
-/// initialisation because the inner field is private:
-///
+/// And the tuple struct cannot be initialised directly (private field):
 /// ```compile_fail
 /// use http::Request;
 /// use lb_l7::stripped_request::StrippedRequest;

@@ -1,48 +1,28 @@
-//! ROUND8-OPS-06 / REL-2-07 — L7 wire-in for the W3C trace-context
-//! propagation library.
+//! ROUND8-OPS-06 / REL-2-07 — L7 wire-in for the W3C trace-context codec in
+//! `lb_observability::tracing_propagation`, which shipped with ZERO L7
+//! callsites (hence REL-2-07 sitting at `Verified-Fixed-Partial`).
 //!
-//! `lb_observability::tracing_propagation` shipped the full
-//! `traceparent` / `tracestate` codec in author-sha `1d462c7` but had
-//! **zero** L7 callsites. The Round-2 reliability review (REL-2-07)
-//! flagged this as `Verified-Fixed-Partial` precisely because
-//! "library committed" was indistinguishable from "library + callsite
-//! committed" in the audit register.
+//! This module is that callsite: a [`HeaderBag`] adapter over hyper's
+//! `HeaderMap`, plus [`RequestTrace::open`], which extracts the inbound
+//! context, mints a fresh child span-id (W3C §3.2 "always update the
+//! parent-id"), opens the request span, and hands back the child context for
+//! injection upstream — including the ROUND8-L7-01 WebSocket-upgrade dial.
 //!
-//! This module is that callsite. It provides:
-//!
-//! 1. A [`HeaderBag`] adapter over hyper's [`hyper::HeaderMap`] so the
-//!    codec can read the inbound `traceparent` / `tracestate` and
-//!    write a refreshed context onto the outbound (upstream) request
-//!    without lb-l7 depending on any single HTTP crate's header type.
-//! 2. [`RequestTrace::open`] — extract the inbound context, mint a
-//!    fresh child span-id (so the upstream sees *our* span as parent,
-//!    per W3C §3.2 "always update the parent-id"), open a
-//!    `tracing::info_span!` with the canonical
-//!    `lb_observability::tracing_propagation::span_name` vocabulary,
-//!    and hand back the child [`TraceContext`] for injection onto the
-//!    upstream request (including the WebSocket-upgrade dial — the
-//!    ROUND8-L7-01 path).
-//!
-//! Span-id minting note: we are never the trace *root* on the proxy
-//! hot path — when the client omits `traceparent` we synthesise a
-//! trace-id once so the child-id derivation has a stable anchor, but
-//! the common case is an inbound trace-id that already carries the
-//! entropy. The child-id is a process-startup nonce XOR-folded with a
-//! monotonic per-process counter; this is unique within a process
-//! lifetime without pulling a CSPRNG dep edge onto the L7 hot path
-//! (span-ids are not a security boundary — the trace-id is the
-//! correlation key and it is client/honoured-upstream supplied).
+//! Span-id minting: we are never the trace ROOT on the hot path — when the
+//! client omits `traceparent` we synthesise a trace-id once so child-id
+//! derivation has a stable anchor. The child-id is a process-startup nonce
+//! XOR-folded with a monotonic counter: unique within a process lifetime with
+//! no CSPRNG dep edge. Span-ids are NOT a security boundary — the trace-id is
+//! the correlation key and it is client/upstream supplied.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use lb_observability::tracing_propagation::{self, ExtractedContext, HeaderBag, TraceContext};
 
-/// Adapter so the W3C codec can operate over hyper's `HeaderMap`.
-///
-/// `get_first` returns the first value parsed as UTF-8 (a non-UTF-8
-/// `traceparent` is invalid per W3C §3.2 anyway and falls through to
-/// "absent"). `append` / `remove` mutate in place; `inject_into`
-/// calls `remove` then `append` so the "always update" rule holds.
+/// Adapter so the W3C codec can operate over hyper's `HeaderMap`. `get_first`
+/// parses the first value as UTF-8 (a non-UTF-8 `traceparent` is invalid per
+/// W3C §3.2 anyway and falls through to "absent"); `inject_into` calls
+/// `remove` then `append` so the "always update" rule holds.
 pub struct HyperHeaders<'a>(pub &'a mut hyper::HeaderMap);
 
 impl HeaderBag for HyperHeaders<'_> {
@@ -77,18 +57,15 @@ impl HeaderBag for HyperHeadersRef<'_> {
             .get(name)
             .and_then(|v| std::str::from_utf8(v.as_bytes()).ok())
     }
-    // The codec never calls `append` / `remove` through `extract_parent`;
-    // these are unreachable for the read path but the trait requires
-    // them. Keep them total (no panic) so a future codec change that
-    // mutates during extraction degrades to a no-op rather than a crash.
+    // The codec never mutates through `extract_parent`; keep these total (no
+    // panic) so a future codec change degrades to a no-op rather than a crash.
     fn append(&mut self, _name: &str, _value: &str) {}
     fn remove(&mut self, _name: &str) {}
 }
 
-/// Process-startup nonce. Re-seeded once per process so two replicas
-/// minting span-ids for the same inbound trace-id do not collide. The
-/// seed is derived from the process start instant + pid so we avoid a
-/// `rand`/`getrandom` dep edge onto the L7 crate.
+/// Process-startup nonce, re-seeded once per process so two replicas minting
+/// span-ids for the same inbound trace-id do not collide. Derived from the
+/// process start instant + pid, avoiding a `rand`/`getrandom` dep edge.
 fn startup_nonce() -> u64 {
     use std::sync::OnceLock;
     static NONCE: OnceLock<u64> = OnceLock::new();
@@ -98,9 +75,8 @@ fn startup_nonce() -> u64 {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos() as u64)
             .unwrap_or(0);
-        // splitmix64 finaliser over (pid<<32 ^ nanos) — good avalanche
-        // without a crypto dep; uniqueness across replicas comes from
-        // the wall-clock nanos + pid, not unpredictability.
+        // splitmix64 finaliser — good avalanche without a crypto dep;
+        // uniqueness comes from wall-clock nanos + pid, not unpredictability.
         let mut z = (pid << 32) ^ since;
         z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
         z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
@@ -121,9 +97,8 @@ fn mint_span_id() -> [u8; 8] {
     v.to_be_bytes()
 }
 
-/// Synthesised trace-id when the client omits `traceparent`. All-zero
-/// is invalid per W3C, so fold the startup nonce + counter into 16
-/// bytes. We only become the trace *root* in this branch.
+/// Synthesised trace-id when the client omits `traceparent` (all-zero is
+/// invalid per W3C). This is the only branch where we are the trace ROOT.
 fn synth_trace_id(seed: u64) -> [u8; 16] {
     let hi = startup_nonce().wrapping_mul(0xff51_afd7_ed55_8ccd) ^ seed;
     let lo = seed.rotate_left(32).wrapping_mul(0xc4ce_b9fe_1a85_ec53) ^ startup_nonce();
@@ -136,8 +111,7 @@ fn synth_trace_id(seed: u64) -> [u8; 16] {
     out
 }
 
-/// Hex helper for the span fields (lower-case, no allocation churn on
-/// the hot path beyond the single `String`).
+/// Lower-case hex helper for the span fields.
 fn hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
@@ -147,8 +121,7 @@ fn hex(bytes: &[u8]) -> String {
     s
 }
 
-/// The per-request trace state: the request `tracing::Span` (already
-/// opened with `trace_id` / `parent_id` fields) plus the child
+/// Per-request trace state: the opened request `tracing::Span` plus the child
 /// [`TraceContext`] that must be injected onto the upstream request.
 pub struct RequestTrace {
     /// Opened request span. Callers `.instrument(span)` any spawned
@@ -163,15 +136,10 @@ pub struct RequestTrace {
 }
 
 impl RequestTrace {
-    /// Extract the inbound context from `headers`, open the request
-    /// span named `lb.l7.request` (the canonical `otel.name` field
-    /// carries the `lb.l7.<proto>.request` vocabulary), and derive
-    /// the child context to inject upstream.
-    ///
-    /// `proto` is one of `h1`, `h2`, `ws`, `grpc` (the
-    /// `tracing_propagation::span_name` vocabulary). `method` /
-    /// `target` / `listener` / `sni` populate the OTLP-schema span
-    /// fields div-ops's exporter expects (`http.method`,
+    /// Extract the inbound context from `headers`, open the request span, and
+    /// derive the child context to inject upstream. `proto` is one of `h1` /
+    /// `h2` / `ws` / `grpc`; `method` / `target` / `listener` / `sni` populate
+    /// the OTLP-schema span fields the exporter expects.
     /// `http.target`, `net.sni`).
     #[must_use]
     pub fn open(
@@ -192,8 +160,7 @@ impl RequestTrace {
         let span_seed = SPAN_COUNTER.load(Ordering::Relaxed);
         let (trace_id, inbound_parent, flags) = match parsed {
             Some(ctx) => (ctx.trace_id, Some(ctx.parent_id), ctx.flags),
-            // No inbound context: we are the root. Synthesise a
-            // trace-id; sample bit on so the span is exported.
+            // No inbound context: we are the root. Sample bit on so it exports.
             None => (synth_trace_id(span_seed), None, 0x01),
         };
         let span_id = mint_span_id();
@@ -215,9 +182,8 @@ impl RequestTrace {
             http.status_code = tracing::field::Empty,
         );
 
-        // The child context the upstream must see: same trace-id,
-        // OUR span-id as the new parent-id (W3C "always update"),
-        // flags carried through.
+        // Child context: same trace-id, OUR span-id as the new parent-id (W3C
+        // "always update"), flags carried through.
         let child = TraceContext {
             trace_id,
             parent_id: span_id,
@@ -231,19 +197,16 @@ impl RequestTrace {
         }
     }
 
-    /// Inject the child `traceparent` (+ forwarded `tracestate`) onto
-    /// an outbound request's header map. Used right before the
-    /// upstream dial — including the ROUND8-L7-01 WebSocket-upgrade
-    /// dial.
+    /// Inject the child `traceparent` (+ forwarded `tracestate`) onto an
+    /// outbound request's header map, right before the upstream dial.
     pub fn inject_upstream(&self, headers: &mut hyper::HeaderMap) {
         let mut bag = HyperHeaders(headers);
         tracing_propagation::inject_into(&mut bag, &self.child, self.tracestate.as_deref());
     }
 
-    /// W3C `traceparent` header value for the child context (used by
-    /// upstream paths that build a fresh request — e.g. the
-    /// tungstenite WS client builder, which takes header pairs rather
-    /// than a `HeaderMap`).
+    /// W3C `traceparent` value for the child context, for upstream paths that
+    /// build a fresh request — e.g. the tungstenite WS client builder, which
+    /// takes header pairs rather than a `HeaderMap`.
     #[must_use]
     pub fn child_traceparent(&self) -> String {
         self.child.to_header()
