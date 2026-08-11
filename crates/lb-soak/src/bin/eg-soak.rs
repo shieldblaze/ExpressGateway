@@ -1,9 +1,5 @@
-//! `eg-soak` — the chaos/soak scenario orchestrator.
+//! `eg-soak` — the chaos/soak scenario orchestrator. Runs ONE scenario for a fixed duration against the real `expressgateway` binary, then writes the CSV + `verdict.json` + `summary.txt` + a `soak_complete.marker`.
 //!
-//! Runs ONE scenario for a fixed duration against the real `expressgateway` binary, then
-//! writes the CSV + `verdict.json` + `summary.txt` + a `soak_complete.marker`.
-//!
-//! Usage:
 //!   eg-soak --scenario <name> --duration-secs N [--sample-secs S] [--scale K] --out <dir>
 //!   eg-soak --list        (the authoritative scenario list)
 
@@ -88,7 +84,6 @@ fn parse_args() -> anyhow::Result<Option<Args>> {
     }))
 }
 
-/// Everything a running scenario holds; dropping it tears down cleanly.
 struct Running {
     gateway: GatewayChild,
     metrics_addr: SocketAddr,
@@ -458,8 +453,7 @@ async fn setup_quic(
         client_sni = "soak-front".to_string();
         (modeb_gauges(), modeb_kinds())
     } else {
-        // Mode A: end-to-end; client trusts the BACKEND cert. F-S20-2: a short idle-flow
-        // reaper window so reclamation is visible within a bounded soak (product default 60s).
+        // Mode A: end-to-end; client trusts the BACKEND cert. F-S20-2: a short idle-flow reaper window so reclamation is visible within a bounded soak (product default 60s).
         let retry = workdir.join("retry.bin");
         let idle_ms = env_usize("QUIC_FLOW_IDLE_MS", 10_000) as u64;
         let toml =
@@ -559,13 +553,8 @@ async fn setup_413(
     })
 }
 
-/// sc7 — H3-terminate front (`quiche::h3` ingress). Sustained REAL H3 client load + an H3
-/// RST/STOP_SENDING flood against the terminating QUIC listener.
-///
-/// The config deliberately carries no backend, so what is exercised is the INGRESS + the
-/// inline-400 decoded egress + F-MD-4 + the no-backend-drop path — not a live relay. The
-/// bounded-state signal is therefore the OS footprint + `panic_total=0`: this front exposes no
-/// dedicated Prometheus state gauge (the QUIC listener does not feed `accept_inflight`).
+/// sc7 — H3-terminate front (`quiche::h3` ingress): sustained REAL H3 client load + an H3 RST/STOP_SENDING flood. The config deliberately carries NO backend, so what is exercised is the
+/// INGRESS + the inline-400 decoded egress + F-MD-4 + the no-backend-drop path — not a live relay. The bounded-state signal is therefore the OS footprint + `panic_total=0`: this front exposes no dedicated Prometheus state gauge.
 async fn setup_h3_terminate(
     args: &Args,
     bin: &std::path::Path,
@@ -625,13 +614,8 @@ async fn setup_h3_terminate(
     })
 }
 
-/// sc9_grpc_h3 (S29) — gRPC-over-HTTP/3 soak: a `quic` H3-terminate front → an H2 gRPC echo
-/// backend. Unlike sc7's backendless front, this drives the REAL backend-proxied
-/// response-trailer path the F-S29-1 fix corrected.
-///
-/// Leak-class signal: `fds` (each in-flight RPC pins a client udp + a pooled backend tcp) +
-/// RSS/VmHWM + `panic_total == 0`, under both a SUSTAINED and a CHURN driver. Every RPC
-/// verifies `grpc-status: 0` in-client, so a trailer-drop regression surfaces as `err()`.
+/// sc9_grpc_h3 (S29) — gRPC-over-HTTP/3 soak: a `quic` H3-terminate front → an H2 gRPC echo backend, driving the REAL backend-proxied response-trailer path the F-S29-1 fix corrected.
+/// Leak-class signal: `fds` (each in-flight RPC pins a client udp + a pooled backend tcp) + RSS/VmHWM + `panic_total == 0`. Every RPC verifies `grpc-status: 0` in-client, so a trailer-drop regression surfaces as `err()`.
 async fn setup_grpc_h3(
     args: &Args,
     bin: &std::path::Path,
@@ -696,15 +680,9 @@ async fn setup_grpc_h3(
     })
 }
 
-/// sc8_ws_h1 (S27) — WebSocket-over-HTTP/1.1 soak. An `h1` front with `[listeners.websocket]`
-/// enabled → a tungstenite WS echo backend, so the long-lived `WsProxy::proxy_frames` relay
-/// runs end to end (unlike sc7's backendless H3 front).
-///
-/// Two drivers create the pressure: sustained held tunnels, and open→echo→CLEAN-close churn
-/// (the F-S20-2 RECLAIM probe). Bounded-state signal: `fds` — every live tunnel pins a client
-/// fd + a backend fd + the relay task, so a leak ratchets it up monotonically and a bounded
-/// series IS the no-leak proof. (`accept_inflight` is scraped but is NOT the discriminant —
-/// see `ws_gauges`.)
+/// sc8_ws_h1 (S27) — WebSocket-over-HTTP/1.1 soak: an `h1` front with `[listeners.websocket]` enabled → a tungstenite WS echo backend, so the long-lived `WsProxy::proxy_frames` relay runs
+/// end to end. Sustained held tunnels + open→echo→CLEAN-close churn (the F-S20-2 RECLAIM probe). Bounded-state signal: `fds` — every live tunnel pins a client fd + a backend fd + the relay
+/// task, so a bounded series IS the no-leak proof. (`accept_inflight` is scraped but is NOT the discriminant — see `ws_gauges`.)
 async fn setup_ws_h1(
     args: &Args,
     bin: &std::path::Path,
@@ -716,8 +694,7 @@ async fn setup_ws_h1(
 
     let metrics = metrics_addr()?;
     let listener = tcp_addr(gateway::ephemeral_port()?);
-    // Generous WS idle close (1001) so sustained clients stay up and the churn clients control
-    // their own cadence; the read-frame watchdog still bounds a wedged half.
+    // Generous WS idle close (1001) so sustained clients stay up and the churn clients control their own cadence; the read-frame watchdog still bounds a wedged half.
     let ws_idle = env_usize("WS_IDLE_SECS", 120) as u64;
     let ws_read_frame = env_usize("WS_READ_FRAME_SECS", 30) as u64;
     let toml = config_gen::h1_front_ws(listener, backend, metrics, ws_idle, ws_read_frame);
@@ -764,12 +741,8 @@ async fn setup_ws_h1(
     })
 }
 
-/// sc8b_ws_h2 (S27) — WebSocket-over-HTTP/2 soak (RFC 8441 extended CONNECT), over an `h1s`
-/// front with `h2_extended_connect = true` (the CF-S27-2 opt-in) onto the same H1 WS backend.
-///
-/// Same leak class as sc8_ws_h1. F-S27-2 NOTE: the load client READS NORMALLY (drains DATA +
-/// releases flow-control capacity) — it intentionally does NOT exercise the gated H2
-/// unbounded-buffer DoS. Leak discriminant: `fds` + RSS + `panic_total = 0`.
+/// sc8b_ws_h2 (S27) — WebSocket-over-HTTP/2 soak (RFC 8441 extended CONNECT) over an `h1s` front with `h2_extended_connect = true` (the CF-S27-2 opt-in). Same leak class as sc8_ws_h1.
+/// F-S27-2 NOTE: the load client READS NORMALLY (drains DATA + releases flow-control capacity) — it intentionally does NOT exercise the gated H2 unbounded-buffer DoS. Discriminant: `fds` + RSS + `panic_total = 0`.
 async fn setup_ws_h2(
     args: &Args,
     bin: &std::path::Path,
@@ -834,10 +807,7 @@ async fn setup_ws_h2(
     })
 }
 
-/// sc8c_ws_h3 (S28) — WebSocket-over-HTTP/3 soak (RFC 9220 extended CONNECT): a `quic`
-/// H3-terminate front with `h3_extended_connect = true` → the same H1 WS echo backend, running
-/// the single-sourced `proxy_frames` relay over the bounded `H3WsTunnel`. Same leak class as
-/// sc8_ws_h1; signal is `fds` (each tunnel pins a client udp + backend tcp + relay task).
+/// sc8c_ws_h3 (S28) — WebSocket-over-HTTP/3 soak (RFC 9220 extended CONNECT): a `quic` H3-terminate front with `h3_extended_connect = true` → the same H1 WS echo backend, running the single-sourced `proxy_frames` relay over the bounded `H3WsTunnel`. Same leak class as sc8_ws_h1; signal is `fds`.
 async fn setup_ws_h3(
     args: &Args,
     bin: &std::path::Path,
@@ -928,23 +898,16 @@ fn tcp_gauges() -> Vec<String> {
 fn tcp_kinds() -> Vec<(String, MetricKind)> {
     vec![("panic_total".into(), MetricKind::CounterMustBeZero)]
 }
-/// sc8_ws_h1 connection-leak signal: the OS file-descriptor count (`fds`). Every live WS
-/// tunnel pins a client fd + a backend fd + the relay task, so a leak ratchets `fds` up
-/// monotonically and a bounded series IS the no-leak proof.
+/// sc8_ws_h1 connection-leak DISCRIMINANT: the OS file-descriptor count (`fds`). Every live WS tunnel pins a client fd + a backend fd + the relay task, so a bounded series IS the no-leak proof.
 ///
-/// `accept_inflight` is deliberately NOT the discriminant: under open/close churn it is a
-/// SAWTOOTH at a low integer baseline, and the relative-growth Trend analyzer mis-flags a 0→2
-/// wiggle as +200% once the first-third median lands on a trough. It is still scraped into the
-/// CSV — just not the leak DISCRIMINANT.
+/// `accept_inflight` is deliberately NOT the discriminant: under open/close churn it is a SAWTOOTH at a low integer baseline and the relative-growth Trend analyzer mis-flags a 0→2 wiggle as +200% once the first-third median lands on a trough. It is still scraped into the CSV.
 fn ws_gauges() -> Vec<String> {
     vec!["panic_total".into()]
 }
 fn ws_kinds() -> Vec<(String, MetricKind)> {
     vec![("panic_total".into(), MetricKind::CounterMustBeZero)]
 }
-/// H3-terminate has NO dedicated Prometheus state-table family (the response-retained gauge is
-/// `test-gauges`-only and the QUIC listener does not feed `accept_inflight`), so the
-/// bounded-state proof is the OS footprint plus the universal `panic_total`.
+/// H3-terminate has NO dedicated Prometheus state-table family, so the bounded-state proof is the OS footprint plus the universal `panic_total`.
 fn h3term_gauges() -> Vec<String> {
     vec!["panic_total".into()]
 }

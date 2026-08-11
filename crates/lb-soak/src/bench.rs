@@ -1,8 +1,5 @@
-//! Closed-loop latency + throughput drivers for the S39 perf characterization.
-//!
-//! Unlike [`crate::loadgen`] (ok/err counts only) this times EVERY request into a per-worker
-//! latency vector. The quiche/TLS connection patterns are COPIED from `loadgen` rather than
-//! factored out of it, so the soak path stays byte-identical (R3).
+//! Closed-loop latency + throughput drivers for the S39 perf characterization. Unlike [`crate::loadgen`] (ok/err counts only) this times EVERY request into a per-worker latency vector.
+//! The quiche/TLS connection patterns are COPIED from `loadgen` rather than factored out of it, so the soak path stays byte-identical (R3).
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -16,7 +13,6 @@ use tokio::net::{TcpStream, UdpSocket};
 
 const MAX_UDP: usize = 65_535;
 
-/// Per-worker latency samples (microseconds).
 #[derive(Default)]
 pub struct Lat {
     us: Vec<u64>,
@@ -29,7 +25,6 @@ impl Lat {
     }
 }
 
-/// One protocol/concurrency run's merged outcome.
 pub struct RunOut {
     pub lat: Lat,
     pub ok: u64,
@@ -61,7 +56,6 @@ fn pct(sorted: &[u64], p: f64) -> u64 {
     *sorted.get(idx.min(last)).unwrap_or(&0)
 }
 
-/// The headline summary for one (protocol, conns) run.
 pub struct BenchSummary {
     pub protocol: String,
     pub conns: usize,
@@ -80,7 +74,6 @@ pub struct BenchSummary {
 }
 
 impl BenchSummary {
-    /// Build the summary from a completed run + the true measured wall window.
     pub fn from_run(
         protocol: &str,
         conns: usize,
@@ -202,7 +195,6 @@ async fn join_all(workers: Vec<tokio::task::JoinHandle<RunOut>>) -> RunOut {
     acc
 }
 
-/// Closed-loop H1: each worker holds a keep-alive connection, issues GET (or POST when payload>0) one at a time, times send→full-body-collected.
 pub async fn bench_h1(
     target: SocketAddr,
     conns: usize,
@@ -229,8 +221,7 @@ pub async fn bench_h1(
                             continue;
                         }
                     };
-                // TCP_NODELAY on the LOAD CLIENT socket: without it Nagle + the ~40ms
-                // delayed-ACK timer inflate the tail — a harness artifact, not the gateway.
+                // TCP_NODELAY on the LOAD CLIENT socket: without it Nagle + the ~40ms delayed-ACK timer inflate the tail — a harness artifact, not the gateway.
                 let _ = stream.set_nodelay(true);
                 let (mut sender, conn) =
                     match hyper::client::conn::http1::handshake(TokioIo::new(stream)).await {
@@ -285,7 +276,6 @@ pub async fn bench_h1(
     join_all(workers).await
 }
 
-/// Closed-loop H2 over TLS: persistent connection, one request at a time.
 pub async fn bench_h2(
     target: SocketAddr,
     sni: String,
@@ -317,8 +307,7 @@ pub async fn bench_h2(
                         .await
                     {
                         Ok(Ok(s)) => {
-                            // TCP_NODELAY on the client socket: Nagle would hold small H2
-                            // control frames into the ~40ms delayed-ACK tail (harness artifact).
+                            // TCP_NODELAY on the client socket: Nagle would hold small H2 control frames into the ~40ms delayed-ACK tail (harness artifact).
                             let _ = s.set_nodelay(true);
                             s
                         }
@@ -458,7 +447,6 @@ fn random_cid() -> [u8; quiche::MAX_CONN_ID_LEN] {
     cid
 }
 
-/// Open a QUIC connection + complete the handshake.
 async fn quic_connect(
     target: SocketAddr,
     sni: &str,
@@ -495,7 +483,6 @@ async fn quic_connect(
     Ok((conn, socket, local))
 }
 
-/// One H3 request unit: send headers (+ optional body), pump the transport, and return when the response Finished.
 async fn h3_one_request(
     conn: &mut quiche::Connection,
     h3: &mut quiche::h3::Connection,
@@ -564,7 +551,6 @@ async fn h3_one_request(
     }
 }
 
-/// Closed-loop H3 against an H3-terminate front that proxies to a real H2 backend (config_gen::quic_h3_terminate_h2).
 pub async fn bench_h3(
     target: SocketAddr,
     sni: String,
@@ -644,8 +630,7 @@ pub async fn bench_h3(
     join_all(workers).await
 }
 
-/// One Mode A echo unit: open a bidi stream, send `payload` with FIN (re-sending the
-/// cwnd-bounded remainder per the F-S20-1 contract), then read the full echo back.
+/// One Mode A echo unit: open a bidi stream, send `payload` with FIN (re-sending the cwnd-bounded remainder per the F-S20-1 contract), then read the full echo back.
 async fn quic_echo_one(
     conn: &mut quiche::Connection,
     socket: &UdpSocket,
@@ -701,8 +686,7 @@ async fn quic_echo_one(
     }
 }
 
-/// Closed-loop QUIC Mode A passthrough. TLS is end-to-end client<->backend (the gateway
-/// never decrypts), so `sni`/`ca` are the BACKEND's.
+/// Closed-loop QUIC Mode A passthrough. TLS is end-to-end client<->backend (the gateway never decrypts), so `sni`/`ca` are the BACKEND's.
 pub async fn bench_quic_modea(
     target: SocketAddr,
     backend_sni: String,
@@ -769,7 +753,6 @@ pub async fn bench_quic_modea(
     join_all(workers).await
 }
 
-/// Closed-loop WS-over-H1: each worker holds one upgraded tunnel and times one echo round-trip (send a binary frame → read its echo) at a time.
 pub async fn bench_ws_h1(
     target: SocketAddr,
     conns: usize,

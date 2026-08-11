@@ -14,18 +14,15 @@ use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-/// SNI advertised by the client + present in the backend's leaf cert SAN.
 const TEST_SNI: &str = "passthrough-e2e.test.local";
 
 /// MAX UDP payload sized to the quiche default (1350 fits a 1500-MTU path after IP+UDP headers).
 const MAX_UDP: usize = 1350;
 
-/// Driver deadline.
 const DRIVER_BUDGET: Duration = Duration::from_secs(15);
 
 const RETRY_SECRET: [u8; RETRY_SECRET_LEN] = [0x77u8; RETRY_SECRET_LEN];
 
-/// Fresh per-process temp directory for cert + retry-secret material.
 fn make_dir() -> PathBuf {
     static N: AtomicU64 = AtomicU64::new(0);
     let dir = std::env::temp_dir().join(format!(
@@ -42,11 +39,10 @@ struct TestCerts {
     cert_path: PathBuf,
     key_path: PathBuf,
     ca_path: PathBuf,
-    /// PEM-encoded leaf cert bytes, captured for the "client sees backend cert" equality assertion in gate (i) (3).
+    /// Leaf cert bytes, captured for the "client sees the BACKEND cert" equality assertion.
     leaf_der: Vec<u8>,
 }
 
-/// Generate a self-signed rcgen cert + key whose SAN contains [`TEST_SNI`].
 fn make_certs() -> TestCerts {
     let dir = make_dir();
     let mut params =
@@ -75,7 +71,6 @@ fn make_certs() -> TestCerts {
     }
 }
 
-/// Build a quiche::Config for the backend SERVER role.
 fn build_server_config(cert_path: &std::path::Path, key_path: &std::path::Path) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).expect("quiche cfg");
     cfg.set_application_protos(&[b"lb-quic-e2e"]).expect("alpn");
@@ -96,7 +91,6 @@ fn build_server_config(cert_path: &std::path::Path, key_path: &std::path::Path) 
     cfg
 }
 
-/// Build a quiche::Config for the CLIENT role.
 fn build_client_config(ca_path: &std::path::Path) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).expect("quiche cfg");
     cfg.set_application_protos(&[b"lb-quic-e2e"]).expect("alpn");
@@ -125,7 +119,6 @@ fn random_scid() -> [u8; quiche::MAX_CONN_ID_LEN] {
     scid
 }
 
-/// Run the passthrough LB pointed at `backend_addr`.
 async fn spawn_lb(
     backend_addr: SocketAddr,
 ) -> (PassthroughListener, SocketAddr, CancellationToken) {
@@ -150,7 +143,6 @@ async fn spawn_lb(
     (listener, addr, cancel)
 }
 
-/// Spawn a real quiche backend server.
 async fn spawn_quic_echo_backend(
     cert_path: PathBuf,
     key_path: PathBuf,
@@ -277,7 +269,6 @@ async fn spawn_quic_echo_backend(
     (local_addr, join)
 }
 
-/// Drive the CLIENT through handshake, send `payload` on bidi stream 0 (FIN after the payload), read the echoed bytes back, close, and return (peer_cert_der, echoed_bytes).
 async fn drive_client(
     conn: Arc<Mutex<quiche::Connection>>,
     socket: Arc<UdpSocket>,
@@ -415,19 +406,12 @@ async fn drive_client(
     }
 }
 
-/// **Gate (i) real-QUIC wire e2e — handshake + STREAM round-trip.**
+/// **Gate (i) real-QUIC wire e2e — handshake + STREAM round-trip.** Asserts the handshake completes through the LB, a binary payload echoes back byte-faithfully (the LB does not mutate),
+/// and the client's `peer_cert` is the BACKEND's leaf — the NEVER-DECRYPTED proof at the wire.
 ///
-/// Asserts: the handshake completes through the LB, a binary payload echoes back byte-faithfully
-/// (the LB does not mutate), and the client's `peer_cert` is the BACKEND's leaf — the
-/// NEVER-DECRYPTED proof at the wire.
-///
-/// CF-S15-PASSTHROUGH-RETRY-ODCID: when the LB mints the Retry, the backend must know the
-/// client's ORIGINAL DCID (pre-Retry) to set `original_destination_connection_id`, and the
-/// LB-chosen SCID for `retry_source_connection_id`. Plain `quiche::accept(odcid)` is
-/// insufficient — it defaults the retry SCID to the server's own, which the client rejects.
-/// This fixture shares the `RetryTokenSigner` secret so the backend can recover both; in
-/// production that needs a side channel (a PROXY-protocol analogue for QUIC). The LB-mints-Retry
-/// policy itself is correct (Initial-flood defence) and stays.
+/// CF-S15-PASSTHROUGH-RETRY-ODCID: when the LB mints the Retry the backend must know the client's ORIGINAL DCID (pre-Retry) for `original_destination_connection_id` and the LB-chosen SCID
+/// for `retry_source_connection_id`. Plain `quiche::accept(odcid)` is insufficient — it defaults the retry SCID to the server's own, which the client rejects. This fixture shares the
+/// `RetryTokenSigner` secret so the backend recovers both; production needs a side channel (a PROXY-protocol analogue for QUIC). The LB-mints-Retry policy itself is correct and stays.
 #[tokio::test(flavor = "current_thread")]
 async fn passthrough_e2e_real_quiche_client_handshake_and_stream() {
     let certs = make_certs();

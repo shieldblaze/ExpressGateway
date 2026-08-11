@@ -1,11 +1,6 @@
-//! `eg-bench` — the S39 closed-loop perf characterization driver (R12).
+//! `eg-bench` — the S39 closed-loop perf characterization driver (R12). Sets up the SAME binary + backends/config the soak uses, drives one protocol path at a fixed concurrency for a fixed window, and reports achieved RPS + p50/p99/p999 + the child's RSS/fd/CPU cost.
 //!
-//! Sets up the SAME binary + backends/config the soak uses, drives one protocol path at a fixed
-//! concurrency for a fixed window, and reports achieved RPS + p50/p99/p999 + the child's
-//! RSS/fd/CPU cost.
-//!
-//! Usage:
-//!   eg-bench --protocol <P> --connections <C> --duration-secs <D> \
+//!   eg-bench --protocol <P> --connections <C> --duration-secs <D> \\
 //!            [--warmup-secs <W=5>] [--payload <bytes=0>] [--out <dir>] [--label <s>]
 //!   P ∈ { h1, h2, h3, quic_modea, ws_h1 }
 
@@ -102,7 +97,6 @@ fn tcp_addr(port: u16) -> SocketAddr {
         .expect("loopback addr parse")
 }
 
-/// One resource sample of the gateway child.
 #[derive(Clone, Copy)]
 struct ResSample {
     elapsed: f64,
@@ -113,8 +107,7 @@ struct ResSample {
     threads: u64,
 }
 
-/// Read utime+stime (clock ticks) from `/proc/<pid>/stat`. Robust to a `comm` containing
-/// spaces/parens (splits on the final `)`).
+/// Read utime+stime (clock ticks) from `/proc/<pid>/stat`. Robust to a `comm` containing spaces/parens (splits on the final `)`).
 fn read_proc_ticks(pid: u32) -> Option<u64> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let rparen = stat.rfind(')')?;

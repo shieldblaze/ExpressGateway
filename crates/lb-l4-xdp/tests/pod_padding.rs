@@ -1,9 +1,6 @@
 //! CODE-2-07 proof: the Pod constructors MUST zero-initialise their padding bytes.
 //!
-//! The hazard: a future contributor reaching for `MaybeUninit::uninit().assume_init()` would
-//! publish arbitrary stack bytes through aya into the BPF map — leaking uninit memory to the
-//! kernel AND desyncing the hash key, because the verifier treats the padding as part of the
-//! lookup key. Each test transmutes a `::new(...)` value to bytes and asserts the pad is zero.
+//! The hazard: a future contributor reaching for `MaybeUninit::uninit().assume_init()` would publish arbitrary stack bytes through aya into the BPF map — leaking uninit memory to the kernel AND desyncing the hash key, because the verifier treats the padding as part of the lookup key. Each test transmutes a `::new(...)` value to bytes and asserts the pad is zero.
 
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
@@ -13,8 +10,7 @@ use lb_l4_xdp::loader::{
     FLOWKEY_V6_SIZE, FlowKey, FlowKeyV6,
 };
 
-/// Helper: transmute `Copy` Pod-shaped value to its bytes.
-///
+/// Transmute a `Copy` Pod-shaped value to its bytes.
 /// SAFETY: every type passed here is `#[repr(C)] + Copy + Pod`; the
 /// caller statically guarantees `N == size_of::<T>()` (we check that
 /// at the call-site via `assert_eq!`).
@@ -37,8 +33,7 @@ fn test_flowkey_pad_zeroed_after_new() {
     );
     let bytes: [u8; FLOWKEY_SIZE] = to_bytes(k);
 
-    // Layout: src(4) | dst(4) | sport(2) | dport(2) | proto(1) | pad(3)
-    // Pad lives at bytes [13..16].
+    // Layout: src(4) | dst(4) | sport(2) | dport(2) | proto(1) | pad(3); pad lives at bytes [13..16].
     assert_eq!(
         &bytes[13..16],
         &[0u8; 3],
@@ -65,8 +60,7 @@ fn test_flowkeyv6_pad_zeroed_after_new() {
     );
     let bytes: [u8; FLOWKEY_V6_SIZE] = to_bytes(k);
 
-    // Layout: src(16) | dst(16) | sport(2) | dport(2) | proto(1) | pad(3)
-    // Pad lives at bytes [37..40].
+    // Layout: src(16) | dst(16) | sport(2) | dport(2) | proto(1) | pad(3); pad lives at bytes [37..40].
     assert_eq!(
         &bytes[37..40],
         &[0u8; 3],
@@ -83,9 +77,7 @@ fn test_flowkeyv6_pad_zeroed_after_new() {
 
 #[test]
 fn test_backend_entry_pad_zeroed_after_new() {
-    // ROUND8-L4-07: layout post-flags-removal is
-    //   idx(4) | bip(4) | bport(2) | pad(2) | bmac(6) | smac(6) = 24
-    // Pad lives at bytes [10..12].
+    // ROUND8-L4-07 layout post-flags-removal: idx(4) | bip(4) | bport(2) | pad(2) | bmac(6) | smac(6) = 24; pad lives at bytes [10..12].
     let v = BackendEntry::new(
         0xFFFF_FFFF, // backend_idx
         0xFFFF_FFFF, // backend_ip
@@ -109,9 +101,7 @@ fn test_backend_entry_pad_zeroed_after_new() {
 
 #[test]
 fn test_backend_entry_v6_pad_zeroed_after_new() {
-    // ROUND8-L4-07: layout post-flags-removal is
-    //   idx(4) | bip(16) | bport(2) | pad(2) | bmac(6) | smac(6) = 36
-    // Pad lives at bytes [22..24].
+    // ROUND8-L4-07 layout post-flags-removal: idx(4) | bip(16) | bport(2) | pad(2) | bmac(6) | smac(6) = 36; pad lives at bytes [22..24].
     let v = BackendEntryV6::new(
         0xFFFF_FFFF, // backend_idx
         [0xFF; 16],  // backend_ip
@@ -133,8 +123,7 @@ fn test_backend_entry_v6_pad_zeroed_after_new() {
     assert!(bytes[24..].iter().all(|&b| b == 0xFF));
 }
 
-/// CODE-2-07: `loader.rs` already const-asserts these sizes, but re-asserting from the test
-/// crate catches invocations that bypass the const_assert (e.g. dependency-only builds).
+/// CODE-2-07: `loader.rs` already const-asserts these sizes, but re-asserting from the test crate catches invocations that bypass the const_assert (e.g. dependency-only builds).
 #[test]
 fn test_struct_sizes_match_bpf_side() {
     assert_eq!(core::mem::size_of::<FlowKey>(), FLOWKEY_SIZE);

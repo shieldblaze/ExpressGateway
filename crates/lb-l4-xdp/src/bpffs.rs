@@ -1,8 +1,6 @@
 //! ROUND8-L4-11: bpffs runtime check (Linux-only).
 //!
-//! `mount -t bpf bpf /sys/fs/bpf/` is a prerequisite for pinning; without it aya pins into a
-//! regular tmpfs and the kernel rejects it deep in `bpf(BPF_OBJ_GET)` with an opaque EINVAL.
-//! An explicit `statfs(2)` before handing the path to aya turns that into an actionable error.
+//! `mount -t bpf bpf /sys/fs/bpf/` is a prerequisite for pinning; without it aya pins into a regular tmpfs and the kernel rejects it deep in `bpf(BPF_OBJ_GET)` with an opaque EINVAL. An explicit `statfs(2)` before handing the path to aya turns that into an actionable error.
 
 #![cfg(target_os = "linux")]
 
@@ -12,12 +10,10 @@ use std::path::{Path, PathBuf};
 
 use crate::loader::XdpLoaderError;
 
-/// Kernel `BPF_FS_MAGIC` (`include/uapi/linux/magic.h`). Stable kernel ABI that libc does not
-/// export, so it is redeclared next to its use site.
+/// Kernel `BPF_FS_MAGIC` (`include/uapi/linux/magic.h`). Stable kernel ABI that libc does not export, so it is redeclared next to its use site.
 pub const BPF_FS_MAGIC: i64 = 0xCAFE_4A11;
 
-/// Verify that `path` resolves to a directory backed by bpffs, returning a typed error that
-/// carries the path, the magic the kernel reported, and the remediation command.
+/// Verify that `path` resolves to a directory backed by bpffs, returning a typed error that carries the path, the magic the kernel reported, and the remediation command.
 pub fn assert_bpffs(path: &Path) -> Result<(), XdpLoaderError> {
     // libc::statfs needs a NUL-terminated C string; an interior NUL is a hard caller error.
     let c_path = CString::new(path.as_os_str().as_bytes()).map_err(|e| {
@@ -39,8 +35,7 @@ pub fn assert_bpffs(path: &Path) -> Result<(), XdpLoaderError> {
         });
     }
 
-    // `f_type` is `c_long` on 64-bit glibc — cast through the native width so the comparison
-    // holds regardless of how libc exposes the field per architecture.
+    // `f_type` is `c_long` on 64-bit glibc — cast through the native width so the comparison holds regardless of how libc exposes the field per architecture.
     #[allow(
         clippy::unnecessary_cast,
         clippy::cast_lossless,
@@ -79,12 +74,10 @@ pub fn default_pin_dir() -> PathBuf {
 mod tests {
     use super::*;
 
-    /// `assert_bpffs` on a regular tempdir (tmpfs or ext4) must return `PinPathNotBpffs`, not `Ok`.
     #[test]
     fn rejects_non_bpffs_tempdir() {
         let tmp = std::env::temp_dir();
-        // Some CI sandboxes block statfs on the temp dir; the contract under test is only
-        // no-false-positive-Ok, so skip when statfs itself fails.
+        // Some CI sandboxes block statfs; the contract under test is only no-false-positive-Ok, so skip when statfs itself fails.
         let result = assert_bpffs(&tmp);
         match result {
             Err(XdpLoaderError::PinPathNotBpffs {
@@ -97,15 +90,13 @@ mod tests {
                 );
             }
             Err(XdpLoaderError::PinPathStatFailed { .. }) => {
-                // Acceptable if the sandbox blocks statfs; the contract under test is
-                // "no false-positive Ok on non-bpffs".
+                // Acceptable if the sandbox blocks statfs; the contract under test is "no false-positive Ok on non-bpffs".
             }
             Ok(()) => panic!("tempdir cannot be bpffs but assert_bpffs returned Ok"),
             other => panic!("unexpected: {other:?}"),
         }
     }
 
-    /// Missing path returns `PinPathStatFailed` whose source kind is `NotFound` — the operator-visible message points at the missing directory.
     #[test]
     fn rejects_missing_path() {
         let path = Path::new("/nonexistent/bpf/expressgateway-test");
@@ -118,7 +109,6 @@ mod tests {
         }
     }
 
-    /// Interior-NUL in the path is also a fail-fast, not a silent truncation — defensive against accidental injection.
     #[test]
     fn rejects_interior_nul_path() {
         use std::ffi::OsString;
@@ -131,7 +121,6 @@ mod tests {
         ));
     }
 
-    /// `BPF_FS_MAGIC` matches the kernel constant byte-for-byte.
     #[test]
     fn bpf_fs_magic_constant_is_kernel_value() {
         assert_eq!(BPF_FS_MAGIC, 0xCAFE_4A11);

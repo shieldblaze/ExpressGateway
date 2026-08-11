@@ -1,10 +1,6 @@
-//! Generate the gateway's TOML config + TLS material for each soak datapath.
-//!
-//! A wrong key silently disables the datapath under test, so the block shapes are pinned here
-//! and validated by the apparatus smoke run before any long soak. Mode B is
-//! `[listeners.quic.raw_proxy]` and its `backend_ca_path` is MANDATORY for a self-signed
-//! backend (the gateway always `verify_peer`s, so omitting it makes the dial fail and the soak
-//! would test a dead path); Mode A is the top-level `[passthrough]` block.
+//! Generate the gateway's TOML config + TLS material for each soak datapath. A wrong key silently disables the datapath under test, so the block shapes are pinned here and validated by the
+//! apparatus smoke run before any long soak. Mode B is `[listeners.quic.raw_proxy]` and its `backend_ca_path` is MANDATORY for a self-signed backend (the gateway always `verify_peer`s, so
+//! omitting it makes the dial fail and the soak would test a dead path); Mode A is the top-level `[passthrough]` block.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -76,10 +72,7 @@ pub fn h1_front(
     )
 }
 
-/// `h1` front with `[listeners.websocket]` ENABLED -> an H1 WebSocket backend (sc8_ws_h1).
-///
-/// `idle_timeout_seconds` is kept generous on purpose: we are proving connection RECLAIM on
-/// clean close, not idle-reap, so the sustained echo clients must stay up.
+/// `h1` front with `[listeners.websocket]` ENABLED -> an H1 WebSocket backend (sc8_ws_h1). `idle_timeout_seconds` is generous on purpose: we are proving connection RECLAIM on clean close, not idle-reap, so the sustained echo clients must stay up.
 #[must_use]
 pub fn h1_front_ws(
     listener: SocketAddr,
@@ -103,9 +96,7 @@ pub fn h1_front_ws(
     )
 }
 
-/// `h1s` front with `[listeners.websocket]` ENABLED **and `h2_extended_connect = true`** ->
-/// an H1 WebSocket backend (sc8b_ws_h2, RFC 8441). The knob is OFF by default (CF-S27-2), so
-/// the soak must explicitly opt in to exercise the H2 path.
+/// `h1s` front with `[listeners.websocket]` ENABLED **and `h2_extended_connect = true`** -> an H1 WebSocket backend (sc8b_ws_h2, RFC 8441). The knob is OFF by default (CF-S27-2), so the soak must explicitly opt in.
 #[must_use]
 pub fn h1s_front_ws(
     listener: SocketAddr,
@@ -185,13 +176,8 @@ pub fn quic_mode_b(
     )
 }
 
-/// `quic` front in **H3-terminate** mode — the default QUIC datapath (no
-/// `[listeners.quic.raw_proxy]`, so `raw_quic_backend = None`; R3).
-///
-/// This scenario deliberately emits NO backend block, so what it exercises end to end is the
-/// `quiche::h3` ingress (handshake, control/QPACK streams, HEADERS/DATA decode, request-body
-/// cap), the inline-400 DECODED egress, F-MD-4 RST/STOP_SENDING mapping, and the no-backend
-/// stream-drop path. The full H3->{H1,H2,H3} relay is covered by the e2e harnesses, not here.
+/// `quic` front in **H3-terminate** mode (no `[listeners.quic.raw_proxy]`, so `raw_quic_backend = None`; R3). This scenario deliberately emits NO backend block, so what it exercises end to
+/// end is the `quiche::h3` ingress, the inline-400 DECODED egress, F-MD-4 RST/STOP_SENDING mapping, and the no-backend stream-drop path. The full H3->{H1,H2,H3} relay is covered by the e2e harnesses.
 #[must_use]
 pub fn quic_h3_terminate(
     listener: SocketAddr,
@@ -211,8 +197,7 @@ pub fn quic_h3_terminate(
     )
 }
 
-/// `quic` H3-terminate front with `h3_extended_connect = true` -> an H1 WebSocket backend
-/// (sc8c_ws_h3, RFC 9220). Same long-lived-relay leak class as sc8_ws_h1, over quiche.
+/// `quic` H3-terminate front with `h3_extended_connect = true` -> an H1 WebSocket backend (sc8c_ws_h3, RFC 9220). Same long-lived-relay leak class as sc8_ws_h1, over quiche.
 #[must_use]
 pub fn quic_h3_terminate_ws(
     listener: SocketAddr,
@@ -243,11 +228,7 @@ pub fn quic_h3_terminate_ws(
     )
 }
 
-/// `quic` H3-terminate front -> an HTTP/2 gRPC origin (sc9_grpc_h3).
-///
-/// Leak-class signal: per-RPC stream open/close plus the response-trailer terminal cleanup
-/// (the `drain_resp_channels` path F-S29-1 corrected) under sustained churn — `fds` (each
-/// in-flight RPC pins a client udp + a pooled backend tcp), RSS/VmHWM, and panic=0.
+/// `quic` H3-terminate front -> an HTTP/2 gRPC origin (sc9_grpc_h3). Leak-class signal: per-RPC stream open/close plus the response-trailer terminal cleanup (the `drain_resp_channels` path F-S29-1 corrected) under sustained churn — `fds`, RSS/VmHWM, and panic=0.
 #[must_use]
 pub fn quic_h3_terminate_h2(
     listener: SocketAddr,
@@ -269,13 +250,8 @@ pub fn quic_h3_terminate_h2(
     )
 }
 
-/// Mode A QUIC passthrough — a top-level `[passthrough]` block. TLS is end-to-end; the
-/// gateway never decrypts.
-///
-/// `mint_retry = false` is emitted unconditionally: with `true`, the LB-minted Retry trips
-/// CF-S15-PASSTHROUGH-RETRY-ODCID and the client is granted 0 streams, so the soak would
-/// drive a dead path. `flow_idle_timeout_ms` is the F-S20-2 reaper window, shortened so
-/// reclamation is visible within the run (product default 60 s).
+/// Mode A QUIC passthrough — a top-level `[passthrough]` block; TLS is end-to-end and the gateway never decrypts. `mint_retry = false` is emitted unconditionally: with `true`, the LB-minted
+/// Retry trips CF-S15-PASSTHROUGH-RETRY-ODCID and the client is granted 0 streams, so the soak would drive a dead path. `flow_idle_timeout_ms` is the F-S20-2 reaper window, shortened so reclamation is visible within the run.
 #[must_use]
 pub fn passthrough_mode_a(
     bind: SocketAddr,
@@ -387,8 +363,7 @@ mod tests {
         assert!(toml.contains("protocol = \"quic\""));
         assert!(toml.contains("[listeners.quic]"));
         assert!(toml.contains("retry_secret_path ="));
-        // R3 / F-S26-1: an H3-terminate front must carry NEITHER a raw_proxy block (that
-        // flips it to Mode B) NOR a backend block.
+        // R3 / F-S26-1: an H3-terminate front must carry NEITHER a raw_proxy block (that flips it to Mode B) NOR a backend block.
         assert!(
             !toml.contains("[listeners.quic.raw_proxy]"),
             "H3-terminate must have no raw_proxy block (else it's Mode B)"

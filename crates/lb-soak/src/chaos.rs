@@ -1,6 +1,4 @@
-//! Chaos injectors — clients that deliberately misbehave to stress the gateway's admission,
-//! timeout and reset-accounting paths. Each `run_*` loops until the [`CancellationToken`] fires.
-//! The question for every injector is the same R8 one: does the gateway stay BOUNDED under it?
+//! Chaos injectors — clients that deliberately misbehave to stress the gateway's admission, timeout and reset-accounting paths. The question for every injector is the same R8 one: does the gateway stay BOUNDED under it?
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -17,7 +15,6 @@ use tokio_util::sync::CancellationToken;
 
 use crate::loadgen::{LoadStats, h2_tls_connector};
 
-/// Rapid TCP connect → (optional tiny write) → close, at `concurrency` parallel loopers.
 pub async fn run_conn_flood(
     target: SocketAddr,
     concurrency: usize,
@@ -47,7 +44,6 @@ pub async fn run_conn_flood(
     }
 }
 
-/// Hold `n_conns` connections open, each having sent only a partial request header (no terminating CRLF-CRLF), dribbling a header byte every few seconds to look alive.
 pub async fn run_slowloris(target: SocketAddr, n_conns: usize, cancel: CancellationToken) {
     let mut workers = Vec::new();
     for w in 0..n_conns {
@@ -80,7 +76,6 @@ pub async fn run_slowloris(target: SocketAddr, n_conns: usize, cancel: Cancellat
     }
 }
 
-/// Send a complete header block declaring a large `Content-Length`, then trickle the body one byte at a time.
 pub async fn run_slow_post(target: SocketAddr, n_conns: usize, cancel: CancellationToken) {
     let mut workers = Vec::new();
     for _ in 0..n_conns {
@@ -112,7 +107,6 @@ pub async fn run_slow_post(target: SocketAddr, n_conns: usize, cancel: Cancellat
     }
 }
 
-/// Begin a normal request, read part of the response, then abruptly drop the socket mid-response.
 pub async fn run_mid_stream_disconnect(
     target: SocketAddr,
     concurrency: usize,
@@ -146,9 +140,7 @@ pub async fn run_mid_stream_disconnect(
     }
 }
 
-/// Over TLS (h1s front), send an over-cap request and tear the TLS connection down
-/// mid-reply — reproduces CF-S19-TLS-TEARDOWN-413 (the teardown-vs-error-head race) under
-/// sustained load. A bounded non-zero `stats.err()` is expected; a panic/leak is the finding.
+/// Over TLS (h1s front), send an over-cap request and tear the TLS connection down mid-reply — reproduces CF-S19-TLS-TEARDOWN-413 (the teardown-vs-error-head race) under sustained load. A bounded non-zero `stats.err()` is expected; a panic/leak is the finding.
 pub async fn run_oversize_teardown(
     target: SocketAddr,
     sni: String,
@@ -174,9 +166,7 @@ pub async fn run_oversize_teardown(
         let sni = sni.clone();
         let big_value = big_value.clone();
         workers.push(tokio::spawn(async move {
-            // CF-S19 (S21): a cheap oversize-HEADER 4xx flows through the SAME buffered
-            // error-response body as a 413, so it exercises the identical flush-vs-teardown
-            // window without flooding 64 MiB bodies (the S20 anti-pattern).
+            // CF-S19 (S21): a cheap oversize-HEADER 4xx flows through the SAME buffered error-response body as a 413, so it exercises the identical flush-vs-teardown window without flooding 64 MiB bodies (the S20 anti-pattern).
             let mut iter = w as u64;
             while !cancel.is_cancelled() {
                 iter = iter.wrapping_add(1);
@@ -231,8 +221,7 @@ async fn oversize_once(
     Ok(saw_head)
 }
 
-/// H2 rapid-reset churn (CVE-2023-44487 accounting): open a stream and immediately abort it.
-/// The bound under test: memory and the stream table must not grow unboundedly.
+/// H2 rapid-reset churn (CVE-2023-44487 accounting): open a stream and immediately abort it. The bound under test: memory and the stream table must not grow unboundedly.
 pub async fn run_rapid_reset(
     target: SocketAddr,
     sni: String,
@@ -317,7 +306,6 @@ pub async fn run_rapid_reset(
     }
 }
 
-/// H2 concurrent-stream flood: hold many in-flight streams open at once, pressing on `max_concurrent_streams` (default 256).
 pub async fn run_stream_flood(
     target: SocketAddr,
     sni: String,
