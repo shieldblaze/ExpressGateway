@@ -1,11 +1,6 @@
-//! Binary-side QUIC listener: bind a `UdpSocket`, load (or generate) the
-//! 32-byte retry-token secret, build the [`lb_security::RetryTokenSigner`] +
-//! [`lb_security::ZeroRttReplayGuard`] and a `quiche::Config` factory, then
-//! spawn the [`crate::router::InboundPacketRouter`].
-//!
-//! [`QuicListenerParams::new`] builds a listener with no backends (useful for
-//! transport-only smoke tests); [`QuicListenerParams::with_backends`] makes it
-//! a real reverse proxy.
+//! Binary-side QUIC listener: bind a `UdpSocket`, load (or generate) the 32-byte retry-token
+//! secret, build the [`lb_security::RetryTokenSigner`] + [`lb_security::ZeroRttReplayGuard`] and a
+//! `quiche::Config` factory, then spawn the [`crate::router::InboundPacketRouter`].
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -44,32 +39,25 @@ pub struct QuicListenerParams {
     pub max_recv_udp_payload_size: u64,
     /// Replay-guard capacity. Defaults to 1024 recent tokens.
     pub replay_capacity: usize,
-    /// Resolved backend addresses. Empty ⇒ the listener still terminates QUIC
-    /// but forwards nothing (the transport-only smoke-test shape).
+    /// Resolved backend addresses. Empty ⇒ the listener terminates QUIC but forwards nothing.
     pub backends: Vec<SocketAddr>,
     /// Shared TCP pool for H1 backend dials.
     pub pool: Option<TcpPool>,
-    /// Optional upstream H3 backend `(pool, addr, sni)` — takes precedence
-    /// over the H1 list.
+    /// Optional upstream H3 backend `(pool, addr, sni)` — takes precedence over the H1 list.
     pub h3_backend: Option<(QuicUpstreamPool, SocketAddr, String)>,
     /// Optional upstream H2 backend `(pool, addr)`.
     pub h2_backend: Option<(Http2Pool, SocketAddr)>,
-    /// Mode B: optional raw-QUIC re-origination backend. `Some` switches the
-    /// listener from H3 termination to terminate-and-re-originate.
+    /// Mode B: optional raw-QUIC re-origination backend, switching from H3 termination.
     pub raw_quic_backend: Option<crate::raw_proxy::RawBackend>,
-    /// Mode B: DATAGRAM queue length advertised to peers, single-sourced with
-    /// the relay's own queue cap.
+    /// Mode B: DATAGRAM queue length advertised to peers, single-sourced with the relay's cap.
     pub dgram_queue_cap: usize,
     /// Mode B `quic_modeb_*` metric handles.
     pub quic_modeb_metrics: Option<lb_observability::QuicModeBMetrics>,
-    /// WS-over-H3 Stage A: whether this listener accepts extended CONNECT.
-    /// `false` ⇒ `:protocol` is rejected byte-identically to a pre-WS listener.
+    /// WS-over-H3 Stage A; `false` ⇒ `:protocol` is rejected byte-identically to a pre-WS listener.
     pub ws_enabled: bool,
-    /// WS-over-H3 Stage C: the injected WebSocket relay launcher (see
-    /// [`crate::ws_tunnel::WsRelayLauncher`] for why it is injected).
+    /// WS-over-H3 Stage C: the injected relay launcher (see [`crate::ws_tunnel::WsRelayLauncher`]).
     pub ws_relay_launcher: Option<crate::ws_tunnel::WsRelayLauncher>,
-    /// S36-A: per-connection H3 request cap. Non-zero ⇒ the actor GOAWAYs and
-    /// recycles after this many requests; `0` disables recycling entirely.
+    /// S36-A: per-connection H3 request cap; `0` disables recycling entirely.
     pub max_requests_per_h3_connection: u32,
     /// S36-A: the `h3_*` recycle metric handles.
     pub h3_recycle_metrics: Option<lb_observability::QuicH3RecycleMetrics>,
@@ -217,11 +205,9 @@ pub struct QuicListener {
 }
 
 impl QuicListener {
-    /// Bind to `params.bind_addr`, load (or generate) the retry secret, and
-    /// spawn the router.
+    /// Bind to `params.bind_addr`, load (or generate) the retry secret, and spawn the router.
     ///
     /// # Errors
-    ///
     /// Bind failure, or a retry-secret load/generate/permission failure.
     pub async fn spawn(
         params: QuicListenerParams,
@@ -245,14 +231,13 @@ impl QuicListener {
             "QUIC listener bound"
         );
 
-        // A config factory, not a shared config: quiche::Config is not `Sync`
-        // and each accepted connection needs its own.
+        // A config factory, not a shared config: quiche::Config is not `Sync`.
         let cert = params.cert_pem_path.clone();
         let key = params.key_pem_path.clone();
         let idle_ms = u64::try_from(params.max_idle_timeout.as_millis()).unwrap_or(u64::MAX);
         let recv_payload = usize::try_from(params.max_recv_udp_payload_size).unwrap_or(1_350);
-        // Mode B: enable QUIC DATAGRAM only for a raw-QUIC listener, so the
-        // H3 path's advertised transport params are unchanged (R3).
+        // Mode B: enable QUIC DATAGRAM only for a raw-QUIC listener, so the H3 path's advertised
+        // transport params are unchanged (R3).
         let enable_datagrams = params.raw_quic_backend.is_some();
         let dgram_queue_cap = params.dgram_queue_cap;
         let config_factory: Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> =
@@ -267,8 +252,7 @@ impl QuicListener {
                 )
             });
 
-        // A pool is required for real traffic; without one the listener
-        // terminates QUIC but forwards nothing.
+        // A pool is required for real traffic; without one the listener forwards nothing.
         let pool = params.pool.clone().unwrap_or_else(|| {
             let runtime = lb_io::Runtime::new();
             TcpPool::new(
@@ -348,12 +332,10 @@ impl QuicListener {
     }
 }
 
-/// F-INFRA-01 — on the LOAD path, refuse (strict) or warn (lax) when an
-/// existing retry-secret file is group/world-accessible. The secret is the HMAC
-/// key behind Retry-token address validation, so a world-readable one lets any
-/// local reader forge tokens and bypass the QUIC source-address check. Mirrors
-/// the TLS-key advisory: strict on release, warn-only on debug. The generate
-/// path already writes 0600; this closes the read-path asymmetry.
+/// F-INFRA-01 — on the LOAD path, refuse (strict) or warn (lax) when an existing retry-secret file
+/// is group/world-accessible. The secret is the HMAC key behind Retry-token address validation, so
+/// a world-readable one lets any local reader forge tokens and bypass the source-address check.
+/// The generate path already writes 0600; this closes the read-path asymmetry.
 #[cfg(unix)]
 fn check_retry_secret_perms(path: &Path, strict: bool) -> std::io::Result<()> {
     match lb_security::assert_owner_only(path, strict) {
@@ -434,12 +416,9 @@ fn write_secret_file(path: &Path, secret: &[u8]) -> std::io::Result<()> {
     std::fs::write(path, secret)
 }
 
-/// Build the client-facing `quiche::Config`.
-///
-/// `enable_datagrams` is `true` ONLY for a Mode-B listener, which needs
-/// RFC 9221 DATAGRAM negotiated for the B4 relay. When `false` `enable_dgram`
-/// is NOT called at all, so the H3 path's advertised transport parameters stay
-/// byte-identical (R3); `dgram_queue_cap` is then ignored.
+/// Build the client-facing `quiche::Config`. `enable_datagrams` is `true` ONLY for a Mode-B
+/// listener, which needs RFC 9221 DATAGRAM for the B4 relay; when `false` `enable_dgram` is NOT
+/// called at all, so the H3 path's advertised transport parameters stay byte-identical (R3).
 fn build_server_config(
     cert: &Path,
     key: &Path,
@@ -474,8 +453,7 @@ fn build_server_config(
 #[cfg(test)]
 #[cfg(unix)]
 mod retry_secret_perm_tests {
-    //! F-INFRA-01 regression — the retry-secret LOAD path must perm-check an
-    //! existing file, closing the asymmetry against the 0600 generate path.
+    //! F-INFRA-01 regression — the retry-secret LOAD path must perm-check an existing file.
     use super::{RETRY_SECRET_LEN, check_retry_secret_perms, load_or_generate_retry_secret};
     use std::io::Write;
     use std::os::unix::fs::PermissionsExt;
@@ -493,8 +471,8 @@ mod retry_secret_perm_tests {
         p
     }
 
-    // NEGATIVE CONTROL: a world-readable (0644) existing secret is REJECTED in
-    // strict mode. Pre-fix this loaded silently.
+    // NEGATIVE CONTROL: a world-readable (0644) existing secret is REJECTED in strict mode.
+    // Pre-fix this loaded silently.
     #[test]
     fn world_readable_secret_rejected_strict() {
         let p = temp_secret("0644-strict", 0o644);
@@ -515,8 +493,8 @@ mod retry_secret_perm_tests {
         assert!(res.is_ok(), "lax mode must warn-and-continue, not error");
     }
 
-    // A 0600 secret passes strict AND the full load path returns a signer,
-    // proving the gate does not block the legitimate case.
+    // A 0600 secret passes strict AND the full load path returns a signer, so the gate does not
+    // block the legitimate case.
     #[test]
     fn owner_only_secret_passes_strict_and_loads() {
         let p = temp_secret("0600-strict", 0o600);

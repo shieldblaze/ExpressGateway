@@ -1,32 +1,23 @@
-//! `quiche::h3::Config` construction for the H3 front (server + upstream).
-//!
-//! The defaults deliberately match the pre-migration hand-rolled behaviour, so
-//! the re-point onto `quiche::h3` was a framing change, not a policy change:
-//!
-//! * `set_max_field_section_size(MAX_FIELD_SECTION_SIZE)` — 1 MiB, well above
-//!   any sane request-header set and below unbounded-growth DoS.
-//! * `set_qpack_max_table_capacity(0)` — QPACK stays **static-table only**;
-//!   advertising `0` tells peers not to use dynamic insertions (RFC 9204
-//!   §3.2.2), the same simplifying choice quiche itself makes.
-//! * `set_qpack_blocked_streams(0)` — with a 0-capacity dynamic table no
-//!   stream can block on a dynamic reference, so `0` is the ONLY consistent
-//!   value.
+//! `quiche::h3::Config` construction for the H3 front (server + upstream). The defaults
+//! deliberately match the pre-migration hand-rolled behaviour, so the re-point onto `quiche::h3`
+//! was a framing change, not a policy change: a 1 MiB field-section size;
+//! `set_qpack_max_table_capacity(0)`, keeping QPACK **static-table only** by telling peers not to
+//! use dynamic insertions (RFC 9204 §3.2.2); and `set_qpack_blocked_streams(0)`, the ONLY
+//! consistent value once the dynamic table has zero capacity.
 
-/// Largest uncompressed header list the server front accepts — 1 MiB,
-/// preserving the pre-migration HEADERS acceptance envelope.
+/// Largest uncompressed header list the server front accepts — 1 MiB, preserving the
+/// pre-migration HEADERS acceptance envelope.
 pub const MAX_FIELD_SECTION_SIZE: u64 = 1 << 20;
 
 /// Build the [`quiche::h3::Config`] for the **server** termination front.
 ///
-/// `ws_enabled` gates the `SETTINGS_ENABLE_CONNECT_PROTOCOL` advertisement:
-/// `true` lets a peer send an RFC 8441/9220 Extended CONNECT; `false` leaves
-/// the settings frame byte-identical to a pre-WS listener, and a client that
-/// sends Extended CONNECT anyway has its `:protocol` rejected by
-/// [`crate::h3_bridge::validate_request_pseudo_headers`] — the sole
-/// pseudo-header authority, since quiche does not validate them.
+/// `ws_enabled` gates the `SETTINGS_ENABLE_CONNECT_PROTOCOL` advertisement: `true` lets a peer
+/// send an RFC 8441/9220 Extended CONNECT; `false` leaves the settings frame byte-identical to a
+/// pre-WS listener, and a client that sends Extended CONNECT anyway has its `:protocol` rejected by
+/// [`crate::h3_bridge::validate_request_pseudo_headers`] — the sole pseudo-header authority, since
+/// quiche does not validate them.
 ///
 /// # Errors
-///
 /// Propagates [`quiche::h3::Error`] from `quiche::h3::Config::new`.
 pub fn build_server_h3_config(ws_enabled: bool) -> Result<quiche::h3::Config, quiche::h3::Error> {
     let mut cfg = quiche::h3::Config::new()?;
@@ -41,17 +32,12 @@ pub fn build_server_h3_config(ws_enabled: bool) -> Result<quiche::h3::Config, qu
     Ok(cfg)
 }
 
-/// Build the [`quiche::h3::Config`] for the **client** (upstream) front. The
-/// gateway's QPACK is static-table only in BOTH directions and the field-section
-/// envelope is the same 1 MiB. Kept as a distinct constructor rather than
-/// reusing [`build_server_h3_config`] so client and server intents read
-/// explicitly at each call site and either can be tuned without a silent
-/// coupling.
+/// Build the [`quiche::h3::Config`] for the **client** (upstream) front — static-table-only QPACK
+/// and the same 1 MiB envelope. Kept as a distinct constructor rather than reusing
+/// [`build_server_h3_config`] so either can be tuned without a silent coupling.
 ///
 /// # Errors
-///
-/// Propagates [`quiche::h3::Error`] from `quiche::h3::Config::new` rather than
-/// panicking, so the caller decides.
+/// Propagates [`quiche::h3::Error`] from `quiche::h3::Config::new` rather than panicking.
 pub fn build_client_h3_config() -> Result<quiche::h3::Config, quiche::h3::Error> {
     let mut cfg = quiche::h3::Config::new()?;
     cfg.set_max_field_section_size(MAX_FIELD_SECTION_SIZE);
@@ -69,14 +55,13 @@ mod tests {
     #[test]
     fn server_h3_config_builds_with_static_only_defaults() {
         let _cfg = build_server_h3_config(false).expect("h3::Config must build");
-        // `quiche::h3::Config` exposes no getters, so the assertion is
-        // construction-success plus the documented constants.
+        // `quiche::h3::Config` exposes no getters, so the assertion is construction-success plus
+        // the documented constants.
         assert_eq!(MAX_FIELD_SECTION_SIZE, 1 << 20);
     }
 
-    /// Flipping `ws_enabled` (extended-CONNECT advertisement) must not error.
-    /// There is no getter, so this is construction-success only; the SETTINGS
-    /// on the wire are proven by the real-wire WS suite.
+    /// Flipping `ws_enabled` must not error. There is no getter, so this is construction-success
+    /// only; the SETTINGS on the wire are proven by the real-wire WS suite.
     #[test]
     fn server_h3_config_builds_with_extended_connect_enabled() {
         let _cfg =

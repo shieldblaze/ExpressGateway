@@ -1,18 +1,13 @@
-//! Inbound packet router: owns one [`UdpSocket`] and dispatches packets by DCID
-//! to per-connection [`ConnectionActor`] mpsc channels.
+//! Inbound packet router: owns one [`UdpSocket`] and dispatches packets by DCID to per-connection
+//! [`ConnectionActor`] mpsc channels.
 //!
-//! For unknown CIDs: an Initial with **no** token gets a RETRY whose token is
-//! minted by [`lb_security::RetryTokenSigner`]; an Initial with a **valid**
-//! token spawns an actor via [`quiche::accept`] with the ODCID recovered from
-//! the token; an **invalid** token is dropped silently.
+//! For unknown CIDs: an Initial with **no** token gets a RETRY whose token is minted by
+//! [`lb_security::RetryTokenSigner`]; an Initial with a **valid** token spawns an actor via
+//! [`quiche::accept`] with the ODCID recovered from the token; an **invalid** token is dropped.
+//! 0-RTT Initials gate through [`lb_security::ZeroRttReplayGuard::check_0rtt_token`].
 //!
-//! 0-RTT Initials gate through
-//! [`lb_security::ZeroRttReplayGuard::check_0rtt_token`], keyed on the client's
-//! SCID plus a digest of the encrypted payload prefix — any repeat is dropped.
-//!
-//! The per-connection channel is bounded; a `Full` `try_send` DROPS the packet
-//! and logs. QUIC tolerates loss at the application level, which is safer than
-//! blocking the UDP recv loop.
+//! The per-connection channel is bounded; a `Full` `try_send` DROPS the packet, which QUIC
+//! tolerates at the application level and is safer than blocking the UDP recv loop.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -44,8 +39,7 @@ pub struct RouterParams {
     pub retry_signer: Arc<RetryTokenSigner>,
     /// 0-RTT early-data replay guard.
     pub replay_guard: Arc<PlMutex<ZeroRttReplayGuard>>,
-    /// Factory producing a fresh `quiche::Config` per connection —
-    /// `quiche::Config` is not `Sync`, so it cannot be shared.
+    /// Factory producing a fresh `quiche::Config` per connection — it is not `Sync`.
     pub config_factory: Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync>,
     /// Backend TCP pool for H1 backends.
     pub pool: TcpPool,
@@ -55,8 +49,7 @@ pub struct RouterParams {
     pub h3_backend: Option<(QuicUpstreamPool, SocketAddr, String)>,
     /// Optional upstream H2 backend `(pool, addr)`.
     pub h2_backend: Option<(lb_io::http2_pool::Http2Pool, SocketAddr)>,
-    /// Mode B seam. `Some` ⇒ every accepted connection is dispatched to
-    /// [`crate::raw_proxy`] instead of the H3 actor.
+    /// Mode B seam. `Some` ⇒ every accepted connection goes to [`crate::raw_proxy`], not the H3 actor.
     pub raw_quic_backend: Option<crate::raw_proxy::RawBackend>,
     /// Mode B `quic_modeb_*` observability handles.
     pub quic_modeb_metrics: Option<lb_observability::QuicModeBMetrics>,
@@ -68,18 +61,15 @@ pub struct RouterParams {
     pub max_requests_per_h3_connection: u32,
     /// S36-A: the `h3_*` recycle metric handles.
     pub h3_recycle_metrics: Option<lb_observability::QuicH3RecycleMetrics>,
-    /// Maximum concurrent QUIC connections. At the cap new Initials are
-    /// DROPPED, so a memory-exhaustion attacker finds the bound finite while
-    /// legitimate clients retry. Each connection occupies TWO dispatch entries
-    /// (`router_key` + `header_dcid_key`), so the map cap is
-    /// `2 * max_connections`. Auditor finding 2026-04-23: this was unbounded.
+    /// Maximum concurrent QUIC connections; at the cap new Initials are DROPPED, so a
+    /// memory-exhaustion attacker finds the bound finite while legitimate clients retry. Each
+    /// connection occupies TWO dispatch entries, so the map cap is `2 * max_connections`.
     pub max_connections: usize,
     /// Listener-wide cancellation.
     pub cancel: CancellationToken,
 }
 
-/// Spawned handle for the router task. Dropping it does NOT stop the router —
-/// cancel the token instead.
+/// Spawned handle for the router task. Dropping it does NOT stop the router — cancel the token.
 pub struct RouterHandle {
     pub(crate) join: tokio::task::JoinHandle<()>,
 }
@@ -104,7 +94,6 @@ pub fn spawn(params: RouterParams) -> RouterHandle {
 
 async fn router_main(params: RouterParams) -> std::io::Result<()> {
     let local_addr = params.socket.local_addr()?;
-    // Per-CID dispatch table.
     let connections: Arc<dashmap::DashMap<Vec<u8>, mpsc::Sender<InboundPacket>>> =
         Arc::new(dashmap::DashMap::new());
 
@@ -148,8 +137,7 @@ async fn dispatch_packet(
     params: &RouterParams,
     connections: &Arc<dashmap::DashMap<Vec<u8>, mpsc::Sender<InboundPacket>>>,
 ) -> Result<(), String> {
-    // Parse the header without consuming the buffer — `from_slice` copies the
-    // CID bytes it needs.
+    // Parse without consuming the buffer — `from_slice` copies the CID bytes it needs.
     let header = match Header::from_slice(pkt, quiche::MAX_CONN_ID_LEN) {
         Ok(h) => h,
         Err(e) => return Err(format!("header parse: {e}")),
@@ -162,7 +150,6 @@ async fn dispatch_packet(
         return Ok(());
     }
 
-    // New connection attempt: only an Initial is meaningful here.
     if header.ty != Type::Initial {
         return Ok(());
     }
@@ -172,7 +159,6 @@ async fn dispatch_packet(
         return send_retry(&header, peer, local, params).await;
     }
     let token = header.token.as_ref().ok_or("unreachable: token_nonempty")?;
-    // Verify + maybe spawn an actor.
     let odcid_vec = match params.retry_signer.verify(token, peer, Instant::now()) {
         Ok(v) => v,
         Err(e) => {
@@ -180,8 +166,8 @@ async fn dispatch_packet(
             return Ok(());
         }
     };
-    // 0-RTT replay check: an Initial carrying a valid retry token may also
-    // carry early data, so it must clear the dedup guard before we accept.
+    // 0-RTT replay check: an Initial carrying a valid retry token may also carry early data, so
+    // it must clear the dedup guard before we accept.
     let replay_key = build_replay_key(&header, token);
     let replay_result = params.replay_guard.lock().check_0rtt_token(&replay_key);
     if let Err(e) = replay_result {
@@ -199,11 +185,9 @@ async fn dispatch_packet(
     )
 }
 
-/// Compose a replay-guard key from a client Initial whose retry token already
-/// verified. We deliberately do NOT inspect the early-data payload (protected
-/// under a key this layer does not have); SCID + token prefix is the strongest
-/// identifier cheaply computable here, and is exactly what a replay attacker
-/// would have to duplicate.
+/// Compose a replay-guard key from a client Initial whose retry token already verified. We
+/// deliberately do NOT inspect the early-data payload (protected under a key this layer does not
+/// have); SCID + token prefix is exactly what a replay attacker would have to duplicate.
 fn build_replay_key(header: &Header<'_>, token: &[u8]) -> Vec<u8> {
     let mut key = Vec::with_capacity(header.scid.len() + 32);
     key.extend_from_slice(&header.scid);
@@ -240,11 +224,10 @@ async fn send_retry(
     _local: SocketAddr,
     params: &RouterParams,
 ) -> Result<(), String> {
-    // Mint a token bound to the peer address and the original DCID.
     let token = params.retry_signer.mint(peer, &header.dcid);
 
-    // RFC 9000 §17.2.5: the RETRY's Source Connection ID MUST differ from the
-    // client's destination CID. The client MUST echo this as its next DCID.
+    // RFC 9000 §17.2.5: the RETRY's Source Connection ID MUST differ from the client's
+    // destination CID, and the client MUST echo this as its next DCID.
     let new_scid_bytes = sample_conn_id();
     let new_scid = ConnectionId::from_ref(&new_scid_bytes);
 
@@ -276,9 +259,8 @@ fn spawn_new_connection(
     params: &RouterParams,
     connections: &Arc<dashmap::DashMap<Vec<u8>, mpsc::Sender<InboundPacket>>>,
 ) -> Result<(), String> {
-    // Memory-DoS cap: each accepted connection adds TWO dispatch entries, so
-    // the bound is `2 * max_connections`. At the cap, drop the Initial and let
-    // the peer retry — no panic, no OOM spiral.
+    // Memory-DoS cap: each accepted connection adds TWO dispatch entries, so the bound is
+    // `2 * max_connections`. At the cap, drop the Initial and let the peer retry.
     let cap_entries = params.max_connections.saturating_mul(2);
     if connections.len() >= cap_entries {
         tracing::warn!(
@@ -293,9 +275,8 @@ fn spawn_new_connection(
     let scid_bytes = sample_conn_id();
     let scid = ConnectionId::from_ref(&scid_bytes);
     let odcid = ConnectionId::from_ref(odcid_bytes);
-    // `retry_source_cid` MUST match the SCID the server sent in the RETRY. The
-    // client's second-Initial DCID is that value, and quiche explicitly blesses
-    // using it here.
+    // `retry_source_cid` MUST match the SCID the server sent in the RETRY; the client's
+    // second-Initial DCID is that value, and quiche explicitly blesses using it here.
     let retry_src_dcid = ConnectionId::from_ref(&header.dcid);
 
     let mut config = (params.config_factory)().map_err(|e| format!("config_factory: {e}"))?;
@@ -312,14 +293,13 @@ fn spawn_new_connection(
     .map_err(|e| format!("quiche::accept_with_retry: {e}"))?;
 
     let (tx, rx) = mpsc::channel::<InboundPacket>(ACTOR_CHANNEL_DEPTH);
-    // Register the new SCID, AND the header's original DCID: the client's next
-    // few flights may still use the original until it learns the server's SCID.
+    // Register the new SCID AND the header's original DCID: the client's next few flights may
+    // still use the original until it learns the server's SCID.
     let router_key: Vec<u8> = scid_bytes.to_vec();
     connections.insert(router_key.clone(), tx.clone());
     let header_dcid_key: Vec<u8> = header.dcid.to_vec();
     connections.insert(header_dcid_key.clone(), tx.clone());
 
-    // Seed the actor with the Initial we just accepted.
     let _ = tx.try_send(InboundPacket {
         data: first_packet,
         from: peer,
@@ -342,20 +322,17 @@ fn spawn_new_connection(
         max_requests_per_h3_connection: params.max_requests_per_h3_connection,
         h3_recycle_metrics: params.h3_recycle_metrics.clone(),
     };
-    // CODE-2-08: wrap the two DashMap entries in a `CidEntryGuard` so cleanup
-    // runs unconditionally — clean exit, async-cancel future-drop, OR panic
-    // unwind. Pre-fix the explicit `connections.remove(...)` calls below the
-    // await were skipped on unwind, pinning two entries per panicked actor.
-    // Dead code under `panic = "abort"`; kept for dev/test, where unwind is
-    // preserved.
+    // CODE-2-08: wrap the two DashMap entries in a `CidEntryGuard` so cleanup runs unconditionally
+    // — clean exit, async-cancel future-drop, OR panic unwind. Pre-fix the explicit
+    // `connections.remove(...)` calls below the await were skipped on unwind, pinning two entries
+    // per panicked actor. Dead code under `panic = "abort"`; kept for dev/test, where unwind is preserved.
     let guard = crate::cleanup_guard::CidEntryGuard::new(
         Arc::clone(connections),
         router_key,
         header_dcid_key,
     );
     tokio::spawn(async move {
-        // Move the guard into the task so Drop runs when the future ends —
-        // including on cancel-drop.
+        // Move the guard into the task so Drop runs when the future ends, including on cancel-drop.
         let _guard = guard;
         let _ = Box::pin(run_actor(actor)).await;
     });
@@ -386,21 +363,17 @@ fn sample_conn_id() -> [u8; quiche::MAX_CONN_ID_LEN] {
 
 #[cfg(test)]
 mod tests {
-    //! TEST-001: the cap-drop branch in [`spawn_new_connection`] had no
-    //! dedicated test. The one below fires it directly with a reduced
-    //! `max_connections`.
+    //! TEST-001: the cap-drop branch in [`spawn_new_connection`] had no dedicated test.
     use super::*;
     use lb_io::Runtime;
     use lb_io::pool::PoolConfig;
     use lb_io::sockopts::BackendSockOpts;
     use std::net::Ipv4Addr;
 
-    /// Drives the `connections.len() >= max_connections * 2` branch with a
-    /// `config_factory` that MUST NEVER be called — the cap-check returns
-    /// before factory invocation, so a call would mean the guard was skipped.
+    /// Drives the `connections.len() >= max_connections * 2` branch with a `config_factory` that
+    /// MUST NEVER be called — a call would mean the cap-check was skipped.
     #[tokio::test]
     async fn router_drops_initial_when_cap_reached() {
-        // ----- plumbing -----
         let socket = Arc::new(
             UdpSocket::bind((Ipv4Addr::LOCALHOST, 0))
                 .await
@@ -439,12 +412,9 @@ mod tests {
             cancel: CancellationToken::new(),
         };
 
-        // ----- prefill the dispatch table to the cap -----
         let connections: Arc<dashmap::DashMap<Vec<u8>, mpsc::Sender<InboundPacket>>> =
             Arc::new(dashmap::DashMap::new());
         for i in 0u8..4 {
-            // The cap check runs before any forwarding, so channel state is
-            // irrelevant here; `_rx` is dropped at the end of the iteration.
             let (tx, _rx) = mpsc::channel::<InboundPacket>(1);
             connections.insert(vec![i; 8], tx);
         }
@@ -454,7 +424,6 @@ mod tests {
             "fixture: dashmap should be at 2 * max_connections == 4"
         );
 
-        // ----- mint a real Initial packet via quiche::connect -----
         let mut client_cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).expect("client cfg new");
         client_cfg
             .set_application_protos(&[crate::LB_QUIC_TEST_ALPN])
@@ -482,7 +451,6 @@ mod tests {
         assert_eq!(header.ty, Type::Initial, "wire pkt should be Initial");
         let odcid = header.dcid.to_vec();
 
-        // ----- fire the cap-drop branch -----
         let result = spawn_new_connection(
             &header,
             &odcid,
@@ -509,11 +477,9 @@ mod tests {
         );
     }
 
-    /// A minimal but REAL server config, so `accept_with_retry` actually
-    /// completes rather than short-circuiting on a stub.
+    /// A minimal but REAL server config, so `accept_with_retry` completes rather than stubbing.
     fn flood_server_config_factory()
     -> Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> {
-        // Self-signed cert/key generated once, shared by every dial.
         let mut params =
             rcgen::CertificateParams::new(vec!["flood.test".to_string()]).expect("cert params");
         params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
@@ -560,8 +526,7 @@ mod tests {
         path.to_string_lossy().into_owned()
     }
 
-    /// Mint a fresh, DISTINCT real Initial (its own random SCID, hence a
-    /// distinct DCID/ODCID per call).
+    /// Mint a fresh, DISTINCT real Initial (its own random SCID, hence a distinct DCID per call).
     fn mint_distinct_initial() -> Vec<u8> {
         let local: SocketAddr = "127.0.0.1:4433".parse().expect("local");
         let mut client_cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).expect("client cfg");
@@ -586,13 +551,10 @@ mod tests {
         send_buf.get(..n).unwrap_or(&[]).to_vec()
     }
 
-    /// S19 B5 — flood an EMPTY router with distinct Initials under a small
-    /// `max_connections`: the table must fill to EXACTLY `2 * max_connections`
-    /// and every further Initial is DROPPED.
-    ///
-    /// Load-bearing: this exercises the admit→saturate→drop TRANSITION, not
-    /// just the steady-state drop. Remove the `connections.len() >= cap_entries`
-    /// guard and the table grows to `2 * FLOOD` — the exact-cap asserts catch it.
+    /// S19 B5 — flood an EMPTY router with distinct Initials under a small `max_connections`: the
+    /// table must fill to EXACTLY `2 * max_connections` and every further Initial is DROPPED.
+    /// Load-bearing: this exercises the admit→saturate→drop TRANSITION. Remove the
+    /// `connections.len() >= cap_entries` guard and the table grows to `2 * FLOOD`.
     #[tokio::test]
     async fn router_drops_flood_of_distinct_initials_at_cap() {
         const MAX_CONNECTIONS: usize = 4;

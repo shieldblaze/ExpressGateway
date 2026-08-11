@@ -1,19 +1,13 @@
-//! UDP datapath trait + tier-3 tokio-UDP impl — the seam between QUIC routing
-//! (Mode A passthrough / Mode B terminate) and the kernel/userspace transport.
+//! UDP datapath trait + tier-3 tokio-UDP impl — the seam between QUIC routing (Mode A passthrough
+//! / Mode B terminate) and the kernel/userspace transport. Tier ladder: v1.0 `TokioUdp` (the
+//! always-available correctness baseline); v1.1 `IoUring` and v1.2 `Xdp` are deferred stubs, with
+//! `dcid_map_fd` the reserved AF_XDP hook (CF-S15-DCID-MAP-XDP).
 //!
-//! Tier ladder: v1.0 `TokioUdp` (the always-available correctness baseline);
-//! v1.1 `IoUring` and v1.2 `Xdp` are deferred stubs, with `dcid_map_fd` the
-//! reserved AF_XDP hook (CF-S15-DCID-MAP-XDP).
-//!
-//! Correctness contract for EVERY tier:
-//! * `recv_loop` delivers each datagram EXACTLY ONCE in arrival order within a
-//!   4-tuple (cross-flow reordering is allowed, matching kernel UDP).
-//! * `send_to` either fully sends `buf` or returns `Err` — UDP is
-//!   datagram-atomic, no short writes.
-//! * Cancellation returns from `recv_loop` within one in-flight packet.
-//! * NO panic on transient OS errors; fatal errors ⇒ `Unavailable`.
-//! * **NEVER decrypt, inspect, or modify packet payloads** — bytes in, bytes
-//!   out. Only the router parses the public header.
+//! Correctness contract for EVERY tier: `recv_loop` delivers each datagram EXACTLY ONCE in arrival
+//! order within a 4-tuple; `send_to` either fully sends `buf` or returns `Err` (UDP is
+//! datagram-atomic); cancellation returns within one in-flight packet; no panic on transient OS
+//! errors, fatal ones ⇒ `Unavailable`; and **NEVER decrypt, inspect, or modify packet payloads** —
+//! only the router parses the public header.
 
 use std::future::Future;
 use std::net::SocketAddr;
@@ -23,8 +17,7 @@ use std::sync::Arc;
 use tokio::net::UdpSocket;
 use tokio_util::sync::CancellationToken;
 
-/// Maximum UDP datagram the passthrough router accepts (RFC 9000 caps a QUIC
-/// packet at one UDP payload).
+/// Maximum UDP datagram the passthrough router accepts (RFC 9000 caps a QUIC packet at one payload).
 pub const MAX_UDP_DATAGRAM_SIZE: usize = 65_535;
 
 /// One inbound UDP datagram delivered by the dataplane to the router.
@@ -34,15 +27,12 @@ pub struct Packet<'a> {
     pub data: &'a [u8],
     /// Source peer address (as observed by the kernel / NIC).
     pub from: SocketAddr,
-    /// Local bound address the datagram arrived on — needed for a
-    /// multi-address bind.
+    /// Local bound address the datagram arrived on — needed for a multi-address bind.
     pub to: SocketAddr,
 }
 
-/// Errors surfaced by a [`UdpDataplane`] implementation.
-///
-/// The router maps these to its own drop/metric/log discipline; the
-/// dataplane does not decide policy.
+/// Errors surfaced by a [`UdpDataplane`] implementation. The router maps these to its own
+/// drop/metric/log discipline; the dataplane does not decide policy.
 #[derive(Debug, thiserror::Error)]
 pub enum DataplaneError {
     /// Bind failed; the listener cannot start.
@@ -54,14 +44,12 @@ pub enum DataplaneError {
     /// Send hit a transient OS error. Router MAY drop the packet.
     #[error("dataplane send: {0}")]
     Send(#[source] std::io::Error),
-    /// Tier-specific fatal error (eBPF verifier reject, io_uring unsupported)
-    /// — fall back down the ladder.
+    /// Tier-specific fatal error (eBPF verifier reject, io_uring unsupported) — fall back a tier.
     #[error("dataplane unavailable on this kernel/NIC: {0}")]
     Unavailable(String),
 }
 
-/// Callback shape for [`UdpDataplane::recv_loop`]. `Arc` so impls can clone it
-/// into per-task closures.
+/// Callback shape for [`UdpDataplane::recv_loop`]; `Arc` so impls can clone it into per-task closures.
 pub type PacketHandler<'a> = Arc<
     dyn for<'p> Fn(Packet<'p>) -> Pin<Box<dyn Future<Output = ()> + Send + 'p>> + Send + Sync + 'a,
 >;
@@ -88,18 +76,15 @@ pub trait UdpDataplane: Send + Sync + 'static {
     /// Tier identifier for metrics + logs.
     fn tier_name(&self) -> &'static str;
 
-    /// XDP fast-path hook (v1.2 only): the eBPF DCID-routing map's fd, so the
-    /// userspace publisher can update it on flow add/remove. Other tiers
-    /// return `None` ⇒ route every packet in userspace.
+    /// XDP fast-path hook (v1.2 only): the eBPF DCID-routing map's fd, so the userspace publisher
+    /// can update it on flow add/remove. Other tiers return `None` ⇒ route in userspace.
     fn dcid_map_fd(&self) -> Option<i32> {
         None
     }
 }
 
-/// Operator policy for tier selection.
-///
-/// v1.0 ships only [`TokioUdp`]; `Auto` resolves to it and the typed
-/// variants for `IoUring` / `Xdp` return `Unavailable`.
+/// Operator policy for tier selection. v1.0 ships only [`TokioUdp`]; `Auto` resolves to it and the
+/// typed variants for `IoUring` / `Xdp` return `Unavailable`.
 pub enum TierPolicy {
     /// Walk the ladder XDP → io_uring → tokio-UDP, taking the first available.
     Auto,
@@ -117,9 +102,8 @@ pub enum TierPolicy {
 /// Select the highest-capability tier the host supports.
 ///
 /// # Errors
-///
-/// [`DataplaneError::Bind`] on bind failure, or [`DataplaneError::Unavailable`]
-/// when a higher tier was requested but is not compiled in.
+/// [`DataplaneError::Bind`] on bind failure, or [`DataplaneError::Unavailable`] when a higher tier
+/// was requested but is not compiled in.
 pub async fn select_dataplane(
     bind: SocketAddr,
     policy: TierPolicy,
@@ -139,10 +123,8 @@ pub async fn select_dataplane(
     }
 }
 
-/// Tier-3 `tokio::net::UdpSocket` dataplane.
-///
-/// This is v1.0's only impl and the correctness baseline against
-/// which v1.1/v1.2 are differentially verified.
+/// Tier-3 `tokio::net::UdpSocket` dataplane — v1.0's only impl and the correctness baseline
+/// against which v1.1/v1.2 are differentially verified.
 pub struct TokioUdp {
     socket: Arc<UdpSocket>,
     local: SocketAddr,
@@ -152,9 +134,7 @@ impl TokioUdp {
     /// Wrap an already-bound `UdpSocket`.
     ///
     /// # Errors
-    ///
-    /// The OS error from `socket.local_addr()` — surfaced rather than
-    /// `expect`ed, per the crate-wide no-`expect` discipline.
+    /// The OS error from `socket.local_addr()` — surfaced rather than `expect`ed.
     pub fn new(socket: UdpSocket) -> std::io::Result<Self> {
         let local = socket.local_addr()?;
         Ok(Self {
@@ -166,7 +146,6 @@ impl TokioUdp {
     /// Bind a new `UdpSocket` to `addr` and wrap it.
     ///
     /// # Errors
-    ///
     /// The OS bind error.
     pub async fn bind(addr: SocketAddr) -> std::io::Result<Self> {
         let socket = UdpSocket::bind(addr).await?;
@@ -205,9 +184,8 @@ impl UdpDataplane for TokioUdp {
                                 on_packet(pkt).await;
                             }
                             Err(e) => {
-                                // Transient ENOBUFS / EAGAIN — log + continue.
-                                // Hard errors (EBADF) surface as Recv on the
-                                // next iteration; the router decides policy.
+                                // Transient ENOBUFS / EAGAIN — log + continue; hard errors
+                                // (EBADF) surface as Recv next iteration and the router decides.
                                 tracing::debug!(error = %e, "tokio-udp recv_from");
                             }
                         }
@@ -279,8 +257,7 @@ mod tests {
 
     #[tokio::test]
     async fn tokio_udp_roundtrip_via_trait() {
-        // Two TokioUdp instances; a packet from A to B must reach B's handler
-        // with the right payload and peer.
+        // Two TokioUdp instances; a packet from A to B must reach B's handler intact.
         let a = TokioUdp::bind(SocketAddr::new(
             std::net::IpAddr::V4(Ipv4Addr::LOCALHOST),
             0,

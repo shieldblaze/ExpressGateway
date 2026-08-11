@@ -1,11 +1,9 @@
 //! Termination-side loopback rig + helpers, gated behind `quic-terminate`.
 //!
-//! CF-S15-PASSTHROUGH-FEATURE-GATING: everything termination-only that depends
-//! on `quiche` / `tokio-quiche` lives here — the loopback driver, [`QuicError`],
-//! [`QuicDatagram`], [`QuicStream`], [`QuicEndpoint`] and the connection-driver
-//! helpers. Keeping it in ONE gated module is what makes
-//! `--no-default-features --features quic-passthrough-only` produce a binary
-//! with zero `quiche::Connection` / BoringSSL symbols.
+//! CF-S15-PASSTHROUGH-FEATURE-GATING: everything termination-only that depends on `quiche` /
+//! `tokio-quiche` lives here, because keeping it in ONE gated module is what makes
+//! `--no-default-features --features quic-passthrough-only` produce a binary with zero
+//! `quiche::Connection` / BoringSSL symbols.
 
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -21,8 +19,7 @@ use crate::{
     RetryTokenSigner, ZeroRttReplayGuard,
 };
 
-/// Safely take the first `n` bytes of `buf`, or `&[]` if `n` is out of range —
-/// the crate denies slice indexing.
+/// First `n` bytes of `buf`, or `&[]` if out of range — the crate denies slice indexing.
 fn prefix(buf: &[u8], n: usize) -> &[u8] {
     buf.get(..n).unwrap_or(&[])
 }
@@ -66,8 +63,8 @@ pub enum QuicError {
 /// QUIC datagram — a connection-scoped, unreliable, bounded payload.
 #[derive(Debug, Clone)]
 pub struct QuicDatagram {
-    /// Connection ID this datagram belongs to — CALLER-tracked, since quiche
-    /// datagrams carry no such field on the wire.
+    /// Connection ID this datagram belongs to — CALLER-tracked, since quiche datagrams carry no
+    /// such field on the wire.
     pub connection_id: u64,
     /// Raw payload bytes.
     pub data: Vec<u8>,
@@ -87,7 +84,6 @@ pub struct QuicStream {
 /// Back-compat synchronous datagram validator. Does **no** network I/O.
 ///
 /// # Errors
-///
 /// [`QuicError::EmptyPayload`] when `dg.data` is empty.
 pub fn forward_datagram(dg: &QuicDatagram) -> Result<QuicDatagram, QuicError> {
     if dg.data.is_empty() {
@@ -99,7 +95,6 @@ pub fn forward_datagram(dg: &QuicDatagram) -> Result<QuicDatagram, QuicError> {
 /// Back-compat synchronous stream-frame validator. Does **no** network I/O.
 ///
 /// # Errors
-///
 /// [`QuicError::EmptyStreamData`] when `s.data` is empty.
 pub fn forward_stream(stream: &QuicStream) -> Result<QuicStream, QuicError> {
     if stream.data.is_empty() {
@@ -146,7 +141,6 @@ impl QuicEndpoint {
     /// Build a server endpoint on an ephemeral `127.0.0.1` port.
     ///
     /// # Errors
-    ///
     /// UDP bind failure, or a quiche config/cert-load failure.
     pub async fn server_on_loopback(
         cert_pem_path: PathBuf,
@@ -170,7 +164,6 @@ impl QuicEndpoint {
     /// Build a client endpoint on an ephemeral `127.0.0.1` port.
     ///
     /// # Errors
-    ///
     /// UDP bind failure, or a quiche config/trust-anchor failure.
     pub async fn client_on_loopback(ca_pem_path: PathBuf) -> io::Result<Self> {
         let addr = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0));
@@ -191,18 +184,16 @@ impl QuicEndpoint {
         self.local_addr
     }
 
-    /// Install a [`RetryTokenSigner`] on this (server) endpoint. quiche exposes
-    /// no `Config::enable_retry`; the RETRY handshake is driven by the
-    /// application via [`quiche::retry`] in a custom accept loop, so this is the
-    /// public surface for operator secret rotation.
+    /// Install a [`RetryTokenSigner`] on this (server) endpoint. quiche exposes no
+    /// `Config::enable_retry`; the RETRY handshake is driven by the application via
+    /// [`quiche::retry`] in a custom accept loop, so this is the surface for secret rotation.
     #[must_use]
     pub fn with_retry_signer(mut self, signer: Arc<RetryTokenSigner>) -> Self {
         self.retry_signer = Some(signer);
         self
     }
 
-    /// Install a [`ZeroRttReplayGuard`] on this (server) endpoint; the accept
-    /// loop calls it before handing any 0-RTT early data to the application.
+    /// Install a [`ZeroRttReplayGuard`]; the accept loop calls it before handing over 0-RTT data.
     #[must_use]
     pub fn with_replay_filter(mut self, filter: Arc<PlMutex<ZeroRttReplayGuard>>) -> Self {
         self.replay_filter = Some(filter);
@@ -222,12 +213,9 @@ impl QuicEndpoint {
     }
 }
 
-/// Build a fresh `quiche::Config` for the endpoint's role.
-///
-/// Servers do not verify clients (no mTLS yet); clients DO verify servers
-/// against the supplied trust anchor. `_enable_retry` is a placeholder — quiche
-/// exposes no `Config::enable_retry(bool)`, so the flag only lets the call site
-/// express intent until the custom accept loop consumes it.
+/// Build a fresh `quiche::Config` for the endpoint's role. Servers do not verify clients (no mTLS
+/// yet); clients DO verify servers against the supplied trust anchor. `_enable_retry` is a
+/// placeholder — quiche exposes no `Config::enable_retry(bool)`.
 #[allow(clippy::needless_pass_by_value)]
 fn build_config(role: &Role, _enable_retry: bool) -> Result<quiche::Config, QuicError> {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
@@ -256,17 +244,15 @@ fn build_config(role: &Role, _enable_retry: bool) -> Result<quiche::Config, Quic
                 .ok_or_else(|| QuicError::Io(io::Error::other("key path is not valid UTF-8")))?;
             cfg.load_cert_chain_from_pem_file(cert)?;
             cfg.load_priv_key_from_pem_file(key)?;
-            // No mTLS yet, and quiche's default is not to verify the peer, so
-            // the toggle is deliberately left off.
+            // No mTLS yet, and quiche's default is not to verify the peer.
         }
         Role::Client { ca_pem_path } => {
             let ca = ca_pem_path
                 .to_str()
                 .ok_or_else(|| QuicError::Io(io::Error::other("ca path is not valid UTF-8")))?;
             cfg.load_verify_locations_from_file(ca)?;
-            // Peer verification ENABLED: the rig builds a CA + leaf via rcgen
-            // with SAN + `serverAuth` EKU so BoringSSL's hostname verifier
-            // accepts the loopback peer (the old `verify_peer(false)` is gone).
+            // Peer verification ENABLED: the rig builds a CA + leaf via rcgen with SAN +
+            // `serverAuth` EKU so BoringSSL's hostname verifier accepts the loopback peer.
             cfg.verify_peer(true);
         }
     }
@@ -315,8 +301,7 @@ async fn flush_out(
     }
 }
 
-/// Best-effort flush on shutdown; errors are swallowed since the peer may be
-/// gone already.
+/// Best-effort flush on shutdown; errors are swallowed since the peer may be gone already.
 async fn flush_out_best_effort(
     conn: &Arc<Mutex<quiche::Connection>>,
     socket: &Arc<UdpSocket>,
@@ -336,8 +321,7 @@ async fn flush_out_best_effort(
     }
 }
 
-/// Drive a connection until `ready` yields `Ok(Some(v))`, it closes, or the
-/// loopback driver budget expires.
+/// Drive a connection until `ready` yields `Ok(Some(v))`, it closes, or the driver budget expires.
 #[allow(clippy::redundant_pub_crate)] // `tokio::select!` macro expansion
 async fn drive<F, T>(
     conn: &Arc<Mutex<quiche::Connection>>,
@@ -396,8 +380,7 @@ where
     }
 }
 
-/// Minimal server-side accept loop: receive one Initial, build an `accept`ed
-/// connection, return the driven handle and the peer address.
+/// Minimal server-side accept loop: receive one Initial, `accept` it, return the driven handle.
 async fn server_accept_one(
     socket: &Arc<UdpSocket>,
     local_addr: SocketAddr,
@@ -511,14 +494,11 @@ async fn server_stream_task(
     Ok(result)
 }
 
-/// Drive one unreliable-datagram roundtrip through real quiche endpoints. The
-/// returned [`QuicDatagram`] carries the bytes the server actually received
-/// plus the caller-tracked `connection_id`.
+/// Drive one unreliable-datagram roundtrip through real quiche endpoints; the returned
+/// [`QuicDatagram`] carries the bytes the server received plus the caller-tracked `connection_id`.
 ///
 /// # Errors
-///
-/// Any quiche-level failure (UDP I/O, TLS handshake, DATAGRAM send/receive) as
-/// a [`QuicError`]; an empty `dg.data` is rejected up front.
+/// Any quiche-level failure as a [`QuicError`]; an empty `dg.data` is rejected up front.
 pub async fn roundtrip_datagram(
     server: &QuicEndpoint,
     client: &QuicEndpoint,
@@ -578,14 +558,11 @@ pub async fn roundtrip_datagram(
     })
 }
 
-/// Drive one unidirectional-stream roundtrip through real quiche endpoints. The
-/// client opens a uni stream, writes `s.data` with FIN, and the server reads to
-/// EOF; the result preserves `stream_id` and `fin` from the input.
+/// Drive one unidirectional-stream roundtrip through real quiche endpoints: the client opens a uni
+/// stream, writes `s.data` with FIN, and the server reads to EOF.
 ///
 /// # Errors
-///
-/// Any quiche-level failure (UDP I/O, TLS handshake, stream I/O) as a
-/// [`QuicError`]; an empty `s.data` is rejected up front.
+/// Any quiche-level failure as a [`QuicError`]; an empty `s.data` is rejected up front.
 pub async fn roundtrip_stream(
     server: &QuicEndpoint,
     client: &QuicEndpoint,
@@ -619,9 +596,7 @@ pub async fn roundtrip_stream(
     let client_socket = Arc::clone(&client.socket);
     let client_local = client.local_addr;
 
-    // Client-initiated unidirectional streams have IDs 2, 6, 10, …
-    // under RFC 9000 §2.1. Use id=2 for the one stream this test
-    // exercises.
+    // Client-initiated unidirectional streams have IDs 2, 6, 10, … (RFC 9000 §2.1).
     let stream_id = 2u64;
     let payload = s.data.clone();
     let mut sent = false;

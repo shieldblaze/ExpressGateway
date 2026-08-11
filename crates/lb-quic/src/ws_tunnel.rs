@@ -1,31 +1,20 @@
-//! WS-over-H3 (RFC 9220) — bounded `AsyncRead + AsyncWrite` tunnel adapter over
-//! one H3 bidirectional stream.
+//! WS-over-H3 (RFC 9220) — bounded `AsyncRead + AsyncWrite` tunnel adapter over one H3 bidi
+//! stream. The WebSocket frame relay is single-sourced as `lb_l7::ws_proxy::proxy_frames`, but
+//! `lb-quic` cannot depend on `lb-l7` (that would cycle), so this module is the protocol-agnostic
+//! SEAM: one H3 bidi stream becomes a pair of bounded channels the `lb` binary can run
+//! `proxy_frames` over. No `quiche` dependency.
 //!
-//! The WebSocket frame relay is single-sourced as
-//! `lb_l7::ws_proxy::proxy_frames`, but `lb-quic` cannot depend on `lb-l7`
-//! (that would cycle). This module is the protocol-agnostic SEAM: one H3 bidi
-//! stream becomes a pair of bounded channels exposed as an
-//! `AsyncRead + AsyncWrite` ([`H3WsTunnel`]) on the relay side and a plain
-//! endpoint pair ([`H3TunnelEndpoints`]) on the actor side, so the `lb` binary
-//! — which sees both crates — can run `proxy_frames` over it. No `quiche`
-//! dependency; unit-testable in isolation.
+//! **Bounded by construction (R8).** Both directions ride a bounded channel of depth
+//! [`H3_WS_TUNNEL_DEPTH`] carrying chunks of at most [`H3_WS_TUNNEL_CHUNK_MAX`]. On the write side
+//! a [`tokio_util::sync::PollSender`] makes `poll_reserve` return `Pending` when the actor stops
+//! draining, so the writer PARKS rather than buffers — the property the WS-over-H2 path lacked
+//! (CF-S27-2). On the read side a full channel makes the actor's `try_send` fail, so it stops
+//! pulling from quiche and QUIC flow control paces the client.
 //!
-//! **Bounded by construction (R8).** Both directions ride a bounded channel of
-//! depth [`H3_WS_TUNNEL_DEPTH`] carrying chunks of at most
-//! [`H3_WS_TUNNEL_CHUNK_MAX`], so in-flight bytes per direction are
-//! `<= depth * chunk_max` regardless of how much the peer sends. On the write
-//! side a [`tokio_util::sync::PollSender`] makes `poll_reserve` return
-//! `Pending` when the actor stops draining, so the writer PARKS rather than
-//! buffers — the property the WS-over-H2 path lacked (CF-S27-2). On the read
-//! side a full channel makes the actor's `try_send` fail, so it stops pulling
-//! from quiche and QUIC flow control paces the client.
-//!
-//! **Close vs reset (RFC 9220).** An orderly FIN drops the actor's `to_reader`
-//! ⇒ the reader sees channel-closed ⇒ EOF. A stream RESET sends
-//! [`TunnelInbound::Reset`] ⇒ the reader surfaces `ConnectionReset`, which
-//! tungstenite treats as an abnormal drop — deliberately distinct from a clean
-//! WS Close. `poll_shutdown` drops the `PollSender`, closing `from_writer` so
-//! the actor FINs the stream.
+//! **Close vs reset (RFC 9220).** An orderly FIN drops the actor's `to_reader` ⇒ the reader sees
+//! channel-closed ⇒ EOF. A stream RESET sends [`TunnelInbound::Reset`] ⇒ the reader surfaces
+//! `ConnectionReset`, which tungstenite treats as an abnormal drop — deliberately distinct from a
+//! clean WS Close.
 
 use std::io;
 use std::pin::Pin;
@@ -38,13 +27,10 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_util::sync::PollSender;
 
-/// Per-direction channel depth. With [`H3_WS_TUNNEL_CHUNK_MAX`] this caps
-/// in-flight bytes per direction — the R8 bound.
+/// Per-direction channel depth; with [`H3_WS_TUNNEL_CHUNK_MAX`] this is the R8 in-flight bound.
 pub const H3_WS_TUNNEL_DEPTH: usize = 8;
 
-/// Largest chunk the actor pushes toward the reader per channel message.
-/// Mirrors `h3_bridge::H3_BODY_CHUNK_MAX` (8 KiB) so the WS tunnel reuses
-/// the proven bound.
+/// Largest chunk the actor pushes toward the reader; mirrors `h3_bridge::H3_BODY_CHUNK_MAX`.
 pub const H3_WS_TUNNEL_CHUNK_MAX: usize = 8 * 1024;
 
 /// Actor → tunnel-reader message: a chunk of stream bytes, or a reset signal.
@@ -52,25 +38,22 @@ pub const H3_WS_TUNNEL_CHUNK_MAX: usize = 8 * 1024;
 pub enum TunnelInbound {
     /// A chunk read off the H3 stream (≤ [`H3_WS_TUNNEL_CHUNK_MAX`]).
     Data(Bytes),
-    /// The H3 stream was RESET by the peer ⇒ the reader surfaces
-    /// `ConnectionReset`, never a clean EOF.
+    /// The H3 stream was RESET by the peer ⇒ the reader surfaces `ConnectionReset`, never EOF.
     Reset,
 }
 
-/// The actor-side endpoints of a tunnel: the actor pushes bytes read off the
-/// H3 stream into `to_reader` (dropping it on FIN to signal EOF) and drains
-/// `from_writer` onto the stream, FINning when it closes.
+/// The actor-side endpoints: the actor pushes bytes read off the H3 stream into `to_reader`
+/// (dropping it on FIN to signal EOF) and drains `from_writer` onto the stream, FINning on close.
 pub struct H3TunnelEndpoints {
-    /// Sender into the tunnel's read side. Bounded — a failing `try_send` is
-    /// the actor's QUIC-flow-control backpressure signal.
+    /// Sender into the tunnel's read side. Bounded — a failing `try_send` is the actor's
+    /// QUIC-flow-control backpressure signal.
     pub to_reader: mpsc::Sender<TunnelInbound>,
     /// Receiver of bytes the tunnel writer produced, for `stream_send`.
     pub from_writer: mpsc::Receiver<Bytes>,
 }
 
-/// The validated extended CONNECT target the actor hands the relay launcher.
-/// [`crate::h3_bridge::validate_request_pseudo_headers`] has already guaranteed
-/// `:method=CONNECT` + `:protocol` + `:scheme` + `:path` + `:authority`.
+/// The validated extended CONNECT target handed to the relay launcher;
+/// [`crate::h3_bridge::validate_request_pseudo_headers`] has already guaranteed the pseudo set.
 #[derive(Debug, Clone)]
 pub struct WsConnectRequest {
     /// `:authority` of the extended CONNECT (the WS target host).
@@ -81,10 +64,10 @@ pub struct WsConnectRequest {
     pub subprotocols: Option<String>,
 }
 
-/// The launcher's readiness verdict, gating the H3 response. The H3 analog of
-/// the WS-H1 GHSA fix / WS-H2 F-S27-1: the upstream RFC 6455 handshake
-/// completes (or fails) **before** any client-visible `2xx`, so a client is
-/// never committed to WS framing toward a backend that never agreed.
+/// The launcher's readiness verdict, gating the H3 response. The H3 analog of the WS-H1 GHSA fix
+/// / WS-H2 F-S27-1: the upstream RFC 6455 handshake completes (or fails) **before** any
+/// client-visible `2xx`, so a client is never committed to WS framing toward a backend that never
+/// agreed.
 #[derive(Debug)]
 pub enum WsUpstreamOutcome {
     /// The upstream handshake completed — the actor may send the `200`.
@@ -99,9 +82,8 @@ pub enum WsUpstreamOutcome {
     },
 }
 
-/// What the injected launcher returns: a readiness signal plus the relay task
-/// handle. The actor polls `ready` each tick (non-blocking) and aborts `task`
-/// on teardown, so a torn-down tunnel never leaks its relay.
+/// What the injected launcher returns: a readiness signal plus the relay task handle. The actor
+/// polls `ready` each tick and aborts `task` on teardown, so a torn-down tunnel never leaks it.
 pub struct WsRelayHandle {
     /// Upstream-handshake readiness — resolves once, before the `200`.
     pub ready: oneshot::Receiver<WsUpstreamOutcome>,
@@ -109,28 +91,21 @@ pub struct WsRelayHandle {
     pub task: JoinHandle<()>,
 }
 
-/// The dependency-inversion seam. `lb-quic` cannot import
-/// `lb_l7::ws_proxy::proxy_frames` (the `lb-l7 → lb-quic` edge would cycle), so
-/// the relay is **injected** as this closure from the `lb` binary, mirroring
-/// the existing `config_factory` threaded through the same
-/// `QuicListenerParams → RouterParams → ActorParams` chain. The closure dials
-/// the backend, completes the upstream handshake BEFORE signalling readiness,
-/// then runs the single-sourced `proxy_frames` (R12 — not duplicated here).
+/// The dependency-inversion seam. `lb-quic` cannot import `lb_l7::ws_proxy::proxy_frames` (the
+/// `lb-l7 → lb-quic` edge would cycle), so the relay is **injected** as this closure from the `lb`
+/// binary, mirroring `config_factory` through the same `QuicListenerParams → RouterParams →
+/// ActorParams` chain. The closure completes the upstream handshake BEFORE signalling readiness.
 pub type WsRelayLauncher = Arc<dyn Fn(H3WsTunnel, WsConnectRequest) -> WsRelayHandle + Send + Sync>;
 
-/// The `proxy_frames`-side handle: a bounded `AsyncRead + AsyncWrite` over one
-/// H3 bidi stream. Not `Clone` — a tunnel is owned by exactly one relay task.
+/// The `proxy_frames`-side handle. Not `Clone` — a tunnel is owned by exactly one relay task.
 pub struct H3WsTunnel {
-    /// Bounded write path. `PollSender` exposes `poll_reserve`, so
-    /// `poll_write` PARKS under backpressure instead of buffering.
+    /// Bounded write path; `PollSender::poll_reserve` makes `poll_write` PARK under backpressure.
     writer: PollSender<Bytes>,
     /// Bounded read path: chunks (or a Reset) pushed by the actor.
     reader: mpsc::Receiver<TunnelInbound>,
-    /// Unconsumed tail of the last `Data` chunk when the caller's buffer was
-    /// smaller; drained before the next recv.
+    /// Unconsumed tail of the last `Data` chunk; drained before the next recv.
     leftover: Bytes,
-    /// Sticky terminal: once EOF or a Reset is observed every later read
-    /// returns the same result.
+    /// Sticky terminal: once EOF or a Reset is observed every later read returns the same.
     read_done: bool,
     /// Set once `poll_shutdown` closed the writer; further writes error.
     write_closed: bool,
@@ -147,9 +122,7 @@ impl std::fmt::Debug for H3WsTunnel {
 }
 
 impl H3WsTunnel {
-    /// Build a tunnel + its matching actor-side endpoints, both directions
-    /// bounded to [`H3_WS_TUNNEL_DEPTH`]. `tunnel` goes to the WS relay,
-    /// `endpoints` to the per-connection H3 actor.
+    /// Build a tunnel + its matching actor-side endpoints, both directions bounded.
     #[must_use]
     pub fn new() -> (Self, H3TunnelEndpoints) {
         // actor --to_reader--> tunnel.reader  (inbound: H3 stream → relay)
@@ -176,8 +149,8 @@ impl H3WsTunnel {
             return false;
         }
         let n = self.leftover.len().min(buf.remaining());
-        // `split_to` retains the tail in `self.leftover` (cheap — `Bytes` is
-        // refcounted) and avoids a panicking slice index.
+        // `split_to` retains the tail in `self.leftover` (cheap — `Bytes` is refcounted) and
+        // avoids a panicking slice index.
         let head = self.leftover.split_to(n);
         buf.put_slice(&head);
         true
@@ -200,21 +173,19 @@ impl AsyncRead for H3WsTunnel {
         if self.read_done {
             return Poll::Ready(Ok(()));
         }
-        // 1) Serve any retained tail first.
         if self.drain_leftover(buf) {
             return Poll::Ready(Ok(()));
         }
-        // 2) Pull the next inbound message.
         match self.reader.poll_recv(cx) {
             Poll::Ready(Some(TunnelInbound::Data(bytes))) => {
                 self.leftover = bytes;
-                // Guard against a zero-length chunk producing a spurious EOF:
-                // only return here when bytes were actually placed.
+                // Guard against a zero-length chunk producing a spurious EOF: only return here
+                // when bytes were actually placed.
                 if self.drain_leftover(buf) {
                     Poll::Ready(Ok(()))
                 } else {
-                    // Empty Data chunk: re-arm by waking ourselves so the
-                    // caller polls again rather than mistaking this for EOF.
+                    // Empty Data chunk: re-arm by waking ourselves so the caller polls again
+                    // rather than mistaking this for EOF.
                     cx.waker().wake_by_ref();
                     Poll::Pending
                 }
@@ -251,9 +222,8 @@ impl AsyncWrite for H3WsTunnel {
         if data.is_empty() {
             return Poll::Ready(Ok(0));
         }
-        // Reserve a slot FIRST — this is the backpressure point (R8): when the
-        // actor is not draining `from_writer`, `poll_reserve` returns Pending
-        // and the writer parks. Only a granted slot commits a bounded chunk.
+        // Reserve a slot FIRST — the backpressure point (R8): when the actor is not draining
+        // `from_writer`, `poll_reserve` returns Pending and the writer parks.
         match self.writer.poll_reserve(cx) {
             Poll::Ready(Ok(())) => {
                 let n = data.len().min(H3_WS_TUNNEL_CHUNK_MAX);
@@ -282,14 +252,12 @@ impl AsyncWrite for H3WsTunnel {
     }
 
     fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        // `poll_write` already hands each chunk to the bounded channel, so
-        // there is nothing buffered here to flush.
+        // `poll_write` already hands each chunk to the bounded channel; nothing to flush.
         Poll::Ready(Ok(()))
     }
 
     fn poll_shutdown(mut self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        // Close the write half: dropping the `PollSender` closes
-        // `from_writer`, which is the actor's cue to FIN the H3 stream.
+        // Dropping the `PollSender` closes `from_writer`, the actor's cue to FIN the H3 stream.
         self.write_closed = true;
         self.writer.close();
         Poll::Ready(Ok(()))
@@ -302,10 +270,8 @@ mod tests {
     use std::time::Duration;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    // ── READ side ────────────────────────────────────────────────────────
 
-    /// A chunk pushed by the actor is read back byte-identically, including
-    /// across a buffer smaller than the chunk.
+    /// A chunk pushed by the actor reads back byte-identically, including across a small buffer.
     #[tokio::test]
     async fn read_chunk_byte_identical_with_small_buffer() {
         let (mut tunnel, ep) = H3WsTunnel::new();
@@ -357,8 +323,7 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::ConnectionReset);
     }
 
-    /// Data delivered BEFORE a reset is still read out, and only then does the
-    /// reset surface — no data is lost to the terminal.
+    /// Data delivered BEFORE a reset is still read out, and only then does the reset surface.
     #[tokio::test]
     async fn data_then_reset_preserves_order() {
         let (mut tunnel, ep) = H3WsTunnel::new();
@@ -374,7 +339,6 @@ mod tests {
         assert_eq!(err.kind(), io::ErrorKind::ConnectionReset);
     }
 
-    // ── WRITE side ───────────────────────────────────────────────────────
 
     /// Bytes written through the tunnel arrive on `from_writer`, chunked.
     #[tokio::test]
@@ -400,9 +364,8 @@ mod tests {
         assert_eq!(got, big, "written bytes must round-trip byte-identical");
     }
 
-    /// R8 — the load-bearing backpressure proof: with the actor NOT draining
-    /// `from_writer`, a writer exceeding the channel capacity PARKS (does not
-    /// complete, does not buffer). Resuming the drain completes it (liveness).
+    /// R8 — the load-bearing backpressure proof: with the actor NOT draining `from_writer`, a
+    /// writer exceeding the channel capacity PARKS. Resuming the drain completes it (liveness).
     #[tokio::test]
     async fn write_parks_under_backpressure_then_resumes() {
         let (mut tunnel, mut ep) = H3WsTunnel::new();
@@ -418,8 +381,7 @@ mod tests {
             tunnel
         });
 
-        // Give the writer time to fill the channel and PARK. It must NOT
-        // complete here — that is the whole proof.
+        // Give the writer time to fill the channel and PARK; it must NOT complete here.
         tokio::time::sleep(Duration::from_millis(150)).await;
         assert!(
             !writer.is_finished(),
@@ -442,14 +404,12 @@ mod tests {
         );
     }
 
-    /// After `poll_shutdown` the actor's `from_writer` closes, which is its
-    /// signal to FIN the H3 stream.
+    /// After `poll_shutdown` the actor's `from_writer` closes — its signal to FIN the H3 stream.
     #[tokio::test]
     async fn shutdown_closes_endpoint_and_blocks_further_writes() {
         let (mut tunnel, mut ep) = H3WsTunnel::new();
         tunnel.write_all(b"last").await.unwrap();
         tunnel.shutdown().await.unwrap();
-        // The single message is delivered, then the channel is closed.
         assert_eq!(ep.from_writer.recv().await.as_deref(), Some(&b"last"[..]));
         assert!(
             ep.from_writer.recv().await.is_none(),
