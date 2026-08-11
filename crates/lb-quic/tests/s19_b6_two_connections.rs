@@ -1,59 +1,26 @@
-//! SESSION 19 / Mode B — B6 AUTHORITATIVE TWO-CONNECTIONS security proof
-//! (author ≠ verifier; this is the verifier's dedicated structural proof).
+//! Mode B — the authoritative TWO-CONNECTIONS security proof. The headline
+//! property: the LB **terminates** the client connection and **re-originates** a
+//! SEPARATE one to the backend, holding TWO genuinely distinct
+//! `quiche::Connection` objects with independent TLS key schedules. A bridge
+//! would carry the client's connection — and its keys — straight through.
 //!
-//! The headline Mode-B security property: the LB **terminates** the client
-//! QUIC connection and **re-originates** a SEPARATE QUIC connection to the
-//! backend. It is NOT a CID bridge / packet forwarder — it holds TWO
-//! genuinely distinct `quiche::Connection` objects, each with its own SCID
-//! and therefore its own independent TLS key schedule. A bridge would carry
-//! the client's connection (and its keys) straight through to the backend.
+//! Proven by mechanism over the real wire: distinct SCIDs; distinct
+//! `trace_id`s (quiche derives one per `Connection`, so this proves two
+//! objects); the negotiated ALPN MIRRORED upstream (the pool factory's default
+//! ALPN is deliberately WRONG, so only mirroring lets the h3-only backend
+//! handshake); and the LOAD-BEARING independence witness — the BACKEND records
+//! the SCID it saw on the inbound Initial, which must equal the actor's
+//! `upstream_scid` and must NOT be the CLIENT's SCID nor a prefix derivation of
+//! it. That assertion FAILS on a bridge and PASSES on Mode B.
 //!
-//! Topology (real wire, mirrors `s16_b2_stream_relay_smoke.rs` /
-//! `s19_b4_datagram_verify.rs`):
+//! Structurally the architecture CANNOT hold fewer than two connections: the
+//! client-facing one comes from `quiche::accept_with_retry` in the router, and
+//! the upstream one from `QuicUpstreamPool::dial_dedicated`, which
+//! `quiche::connect`s a brand-new `Connection` on its OWN socket, un-pooled and
+//! owned solely by this actor. Both live side-by-side in
+//! `run_raw_proxy_actor_inner` and are pumped by `run_dual_pump`.
 //!
-//!   real quiche CLIENT  ⇄  Mode B actor (`run_raw_proxy_actor_for_test`)
-//!                          ⇄  real quiche BACKEND server
-//!
-//! ## What is proven here (by mechanism, not assertion)
-//!
-//! 1. `client_scid != upstream_scid` — the LB sampled an INDEPENDENT SCID
-//!    when re-originating upstream. Distinct SCIDs ⇒ distinct connections.
-//! 2. `client_trace_id != upstream_trace_id` — quiche derives `trace_id`
-//!    per `Connection` object, so two distinct trace ids prove two distinct
-//!    objects (independent key schedules, recovery state, stream tables).
-//! 3. `negotiated_alpn` is MIRRORED upstream (the upstream pool factory's
-//!    default ALPN is deliberately WRONG; only ALPN mirroring lets the
-//!    upstream handshake succeed against the h3-only backend).
-//! 4. **LOAD-BEARING independence witness**: the BACKEND records the SCID it
-//!    observed on the inbound Initial — independently of the actor's
-//!    `RawProxyOutcome`. We assert that backend-observed SCID (a) equals the
-//!    actor's reported `upstream_scid` (same upstream connection) and (b) is
-//!    NOT the CLIENT's chosen SCID nor a byte-prefix derivation of it. A
-//!    bridge would make the backend see the CLIENT's SCID; a re-origination
-//!    makes it see a freshly random one. This is the assertion that FAILS on
-//!    a bridge and PASSES on Mode B.
-//!
-//! ## Structural 1:1 (by construction — code citation)
-//!
-//! Independently of the wire test, the architecture CANNOT hold fewer than
-//! two connections:
-//! * the CLIENT-facing connection is created by `quiche::accept_with_retry`
-//!   in the router — `crates/lb-quic/src/router.rs:351` — and handed to the
-//!   actor as `ActorParams.conn`;
-//! * the UPSTREAM connection is created by `QuicUpstreamPool::dial_dedicated`
-//!   — `crates/lb-io/src/quic_pool.rs:412` — which `quiche::connect`s a
-//!   brand-new `Connection` on its OWN UDP socket (un-pooled, owned solely
-//!   by this actor). The actor calls it at
-//!   `crates/lb-quic/src/raw_proxy.rs:287`.
-//!
-//! Both objects then live side-by-side in `run_raw_proxy_actor_inner`
-//! (`params.conn` and `upstream.conn`) and are pumped by `run_dual_pump`.
-//! Two separate `quiche::Connection` allocations owned by one actor ⇒ the
-//! datapath is structurally 1:1 (one client conn : one upstream conn) and
-//! cannot collapse to a single bridged connection.
-//!
-//! Driven with `--features test-gauges` so `run_raw_proxy_actor_for_test`
-//! (gated `#[cfg(any(test, feature = "test-gauges"))]`) is reachable.
+//! Driven with `--features test-gauges` so the test hook is reachable.
 
 #![cfg(feature = "test-gauges")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -140,10 +107,9 @@ fn random_scid() -> [u8; quiche::MAX_CONN_ID_LEN] {
     scid
 }
 
-/// CLIENT-facing SERVER config (the LB-as-server leg). Serves the loopback
-/// cert; advertises `h3`. Note: NO `enable_early_data` — the Mode-B client-
-/// facing server cannot issue early-data tickets nor accept 0-RTT (the
-/// dedicated 0-RTT proof is in `s19_b6_zero_rtt_rejection.rs`).
+/// CLIENT-facing SERVER config. Note: NO `enable_early_data` — the Mode-B
+/// client-facing server can neither issue early-data tickets nor accept 0-RTT
+/// (the dedicated proof is in `s19_b6_zero_rtt_rejection.rs`).
 fn lb_server_config(certs: &TestCerts) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
     cfg.set_application_protos(&[H3_ALPN]).unwrap();
@@ -186,10 +152,9 @@ fn client_config(certs: &TestCerts) -> quiche::Config {
     cfg
 }
 
-/// The pool's per-dial CLIENT config factory (LB → backend re-origination
-/// leg). Installs a DELIBERATELY-WRONG ALPN so the test proves the actor
-/// MIRRORS the client's negotiated `h3` onto the dedicated dial (without
-/// the override the backend — which only speaks `h3` — would TLS-fail).
+/// The pool's per-dial CLIENT config factory. Installs a DELIBERATELY-WRONG
+/// ALPN, so the test proves the actor MIRRORS the client's negotiated `h3` —
+/// without the override the h3-only backend would TLS-fail.
 fn upstream_config_factory(
     ca: PathBuf,
 ) -> Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> {
@@ -214,11 +179,9 @@ fn upstream_config_factory(
     })
 }
 
-/// A throwaway BACKEND quiche server that accepts ONE connection, drives it
-/// to established, and RECORDS the SCID it observed on the inbound Initial
-/// header (= the SCID the LB-as-client chose for the upstream connection).
-/// That recorded value is the load-bearing independence witness: a bridge
-/// would make the backend see the CLIENT's SCID.
+/// A throwaway BACKEND that accepts ONE connection and RECORDS the SCID it
+/// observed on the inbound Initial — the load-bearing independence witness,
+/// since a bridge would make it see the CLIENT's SCID.
 fn spawn_backend_recording_scid(certs: &TestCerts) -> (SocketAddr, Arc<Mutex<Option<Vec<u8>>>>) {
     let std_sock = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     std_sock.set_nonblocking(true).unwrap();
@@ -258,10 +221,8 @@ fn spawn_backend_recording_scid(certs: &TestCerts) -> (SocketAddr, Arc<Mutex<Opt
             match tokio::time::timeout(timeout, socket.recv_from(&mut in_buf)).await {
                 Ok(Ok((n, from))) => {
                     if conn.is_none() {
-                        // Record the SCID the LB chose as client (the
-                        // upstream connection's SCID) straight off the
-                        // wire — BEFORE accept, independently of the
-                        // RawProxyOutcome the actor returns.
+                        // Record the SCID off the wire BEFORE accept,
+                        // independently of the actor's RawProxyOutcome.
                         if let Ok(hdr) = quiche::Header::from_slice(
                             in_buf.get_mut(..n).unwrap_or(&mut []),
                             quiche::MAX_CONN_ID_LEN,

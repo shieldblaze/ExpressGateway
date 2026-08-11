@@ -1,38 +1,22 @@
-//! SESSION 16 / Mode B — B2 VERIFIER's "reset is NOT a clean FIN" boundary
-//! proof (the F-MD-4 smuggling guard; plan §2.3 + the `pump_dir` reset/stop
-//! arms in `crates/lb-quic/src/raw_proxy.rs`).
+//! Mode B — the "reset is NOT a clean FIN" boundary proof (the F-MD-4 smuggling
+//! guard). B2 does not yet PROPAGATE a client reset to the backend (that is
+//! B3), but it MUST NOT convert one into a clean FIN: that would deliver a
+//! TRUNCATED transfer to the backend as a COMPLETE one.
 //!
-//! Author ≠ verifier. B2 does NOT yet PROPAGATE a client RESET_STREAM /
-//! STOP_SENDING to the backend (that is B3). But it MUST NOT convert a peer
-//! reset into a clean FIN: doing so would deliver a TRUNCATED transfer to
-//! the backend as a COMPLETE one — the matrix F-MD-4 smuggling/corruption
-//! class.
+//! The client sends a PARTIAL body (no FIN), waits until the backend has
+//! actually received some bytes (so the mirror stream genuinely exists), then
+//! RESET_STREAMs. The backend must NEVER observe a genuine clean end — the
+//! relay must drop the half WITHOUT synthesising `stream_send(.., fin=true)`.
 //!
-//!   real quiche CLIENT  ⇄  Mode B actor  ⇄  real quiche BACKEND (records)
+//! Load-bearing negative control: a relay that mapped `Err(StreamReset)` (or
+//! any read error) onto a clean FIN would make the backend see a clean finish
+//! on a truncated transfer, and THIS test would FAIL.
 //!
-//! The client opens bidi stream 0, sends a PARTIAL body (no FIN), waits
-//! until the backend has actually received some of those bytes (so the
-//! upstream mirror stream 0 genuinely exists), then RESET_STREAMs stream 0.
-//! The backend records whether it EVER observes a genuine CLEAN end on
-//! stream 0 (`stream_recv` returning `fin == true`). The assertion: it must
-//! NEVER see a clean FIN — the relay must drop the half WITHOUT
-//! synthesising `stream_send(.., fin=true)`. (We do NOT witness on
-//! `stream_finished()`: quiche returns `true` for an unknown/collected
-//! stream, which a correctly-reset stream becomes once B3 propagates the
-//! reset — see the in-body note.)
+//! NOTE: `stream_finished()` is NOT the witness — quiche returns `true` for an
+//! unknown/collected stream, which a correctly-reset stream becomes once B3
+//! propagates the reset.
 //!
-//! ## Why this is the load-bearing negative control
-//!
-//! A buggy relay that mapped `Err(StreamReset)` (or any read error) onto a
-//! clean `dst.stream_send(sid, &[], true)` would make the backend observe a
-//! clean stream finish on a truncated transfer — and THIS test would FAIL.
-//! The B2 code instead does `half.pending.clear(); half.done = true;`
-//! (no FIN) on the reset/stop/error arms (verified by code-read); this test
-//! is the wire-level witness of that behaviour.
-//!
-//! Driven with `--features test-gauges` so the
-//! `run_raw_proxy_actor_for_test` hook (gated
-//! `#[cfg(any(test, feature = "test-gauges"))]`) is reachable.
+//! Driven with `--features test-gauges` so the test hook is reachable.
 
 #![cfg(feature = "test-gauges")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -202,14 +186,13 @@ fn upstream_config_factory(
     })
 }
 
-/// A throwaway BACKEND that accepts ONE connection and, on stream 0,
-/// RECORDS (a) how many bytes it received and (b) whether it ever observed
-/// a genuine CLEAN end — `stream_recv` returning `fin == true`. It does NOT
-/// echo: we only care about the upstream-observed END STATE of the relayed
-/// stream. `saw_clean_fin` staying FALSE after a client reset is the
-/// load-bearing witness (no false clean FIN). We deliberately do NOT use
-/// `stream_finished()` (it returns `true` for an unknown/collected stream,
-/// which a correctly-reset stream becomes under B3 — see the in-body note).
+/// A throwaway BACKEND that accepts ONE connection and on stream 0 records how
+/// many bytes it received and whether it EVER observed a genuine clean end
+/// (`fin == true`). It does NOT echo — only the upstream-observed END STATE
+/// matters. `saw_clean_fin` staying FALSE after a client reset is the
+/// load-bearing witness. `stream_finished()` is deliberately unused: it returns
+/// `true` for an unknown/collected stream, which a correctly-reset stream
+/// becomes under B3.
 fn spawn_recording_backend(
     certs: &TestCerts,
     recv_bytes: Arc<AtomicUsize>,
@@ -256,22 +239,13 @@ fn spawn_recording_backend(
                             Err(_) => break,
                         }
                     }
-                    // NOTE (S16 B3): the genuine clean-FIN witness is
-                    // `stream_recv` returning `fin == true` (above). We must
-                    // NOT also use `stream_finished()`: in quiche 0.28 it
-                    // returns `true` for an UNKNOWN stream (`lib.rs`
-                    // `None => return true`), and a stream that has been
-                    // RESET is collected and becomes unknown. Under B2 the
-                    // upstream stream was never reset, so `stream_finished()`
-                    // happened to stay false and this guard was harmless;
-                    // under B3 the relay now correctly PROPAGATES the client
-                    // reset as a RESET_STREAM (see
-                    // `s16_b3_reset_propagation_smoke.rs`), so the upstream
-                    // stream IS reset + collected and `stream_finished()`
-                    // would FALSELY report a clean end on a correctly-reset
-                    // stream. The real FIN-frame signal is the only reliable
-                    // smuggling witness, so the `stream_finished()` check is
-                    // removed.
+                    // The genuine clean-FIN witness is `stream_recv` returning
+                    // `fin == true` (above). `stream_finished()` must NOT be
+                    // used alongside it: quiche returns `true` for an UNKNOWN
+                    // stream, and a RESET stream is collected and becomes
+                    // unknown — so under B3, which correctly PROPAGATES the
+                    // reset, it would FALSELY report a clean end on a
+                    // correctly-reset stream.
                 }
                 // Flush outbound (ACKs / flow-control updates).
                 loop {

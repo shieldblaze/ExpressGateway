@@ -1,41 +1,19 @@
-//! SESSION 16 / Mode B — B1 VERIFIER's TWO-CONNECTIONS proof (real wire).
+//! Mode B — the B1 TWO-CONNECTIONS proof over a real wire: client ⇄ Mode B
+//! actor ⇄ real quiche backend. Asserts on [`lb_quic::RawProxyOutcome`] that
+//! the LB operates TWO DISTINCT quiche connections, NOT a CID bridge.
 //!
-//! Author ≠ verifier: this is the INDEPENDENT verification of the B1
-//! headline bar (plan §5 "Two-connections proof: by mechanism — distinct
-//! SCIDs, distinct keys, two `quiche::Connection` objects in LB state;
-//! NOT a CID bridge"). The builder's self-check
-//! (`s16_raw_proxy_smoke.rs`) only proves the dedicated-dial path in
-//! isolation; THIS test stands up a REAL wire path —
+//! By mechanism: `client_scid != upstream_scid` (an independent SCID was
+//! sampled for the re-origination); `client_trace_id != upstream_trace_id`
+//! (quiche derives `trace_id` per object, so these are two distinct objects);
+//! and `negotiated_alpn` is mirrored onto the upstream dial.
 //!
-//!   real quiche CLIENT  ⇄  Mode B actor (`run_raw_proxy_actor_for_test`)
-//!                          ⇄  real quiche BACKEND server
+//! LOAD-BEARING independence: the BACKEND independently records the SCID it saw
+//! on the inbound Initial. It must equal `upstream_scid` and must NOT be — or
+//! be derived from — `client_scid`. A bridge would make the backend see the
+//! CLIENT's SCID; a true re-origination makes it see a freshly random one, so
+//! this is the assertion that FAILS on a bridge and PASSES on Mode B.
 //!
-//! — and asserts on the returned [`lb_quic::RawProxyOutcome`] that the LB
-//! operates TWO DISTINCT quiche connections, NOT a bridge of the client's
-//! connection to the backend.
-//!
-//! ## What "by mechanism" means here
-//!
-//! 1. `client_scid != upstream_scid` — the LB chose an independent SCID
-//!    when re-originating (as server it has one SCID; as client to the
-//!    backend it has a DIFFERENT one).
-//! 2. `client_trace_id != upstream_trace_id` — two genuinely separate
-//!    `quiche::Connection` objects (quiche derives `trace_id` per object).
-//! 3. `negotiated_alpn` == the ALPN the client negotiated, mirrored onto
-//!    the upstream dial (plan §2 ALPN mirroring).
-//! 4. **LOAD-BEARING independence**: the BACKEND independently records the
-//!    SCID it observed on the inbound Initial (= the SCID the LB chose as
-//!    client = the upstream SCID). We assert that backend-observed SCID
-//!    (a) equals `outcome.upstream_scid` and (b) is NOT equal to — and not
-//!    a byte-derivation of — `outcome.client_scid`. A bridge that
-//!    forwarded the client's connection would make the backend see the
-//!    CLIENT's SCID (or a value derived from it); a true re-origination
-//!    makes it see a freshly-sampled random SCID. This is the assertion
-//!    that would FAIL on a bridge and PASS on Mode B.
-//!
-//! Driven with `--features test-gauges` so the `run_raw_proxy_actor_for_test`
-//! hook (gated `#[cfg(any(test, feature = "test-gauges"))]`) is reachable
-//! from this integration-test target.
+//! Driven with `--features test-gauges` so the test hook is reachable.
 
 #![cfg(feature = "test-gauges")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -166,10 +144,9 @@ fn client_config(certs: &TestCerts) -> quiche::Config {
     cfg
 }
 
-/// The pool's per-dial CLIENT config factory (LB → backend re-origination
-/// leg). Installs a DELIBERATELY-WRONG ALPN so the test proves the actor
-/// MIRRORS the client's negotiated `h3` onto the dedicated dial (without
-/// the override the backend — which only speaks `h3` — would TLS-fail).
+/// The pool's per-dial CLIENT config factory. Installs a DELIBERATELY-WRONG
+/// ALPN, so the test proves the actor MIRRORS the client's negotiated `h3` —
+/// without the override the h3-only backend would TLS-fail.
 fn upstream_config_factory(
     ca: PathBuf,
 ) -> Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> {
@@ -194,11 +171,9 @@ fn upstream_config_factory(
     })
 }
 
-/// A throwaway BACKEND quiche server that accepts ONE connection, drives
-/// it to established, and RECORDS the SCID it observed on the inbound
-/// Initial header (= the SCID the LB-as-client chose for the upstream
-/// connection). That recorded value is the load-bearing independence
-/// witness: a bridge would make the backend see the CLIENT's SCID.
+/// A throwaway BACKEND that accepts ONE connection and RECORDS the SCID it
+/// observed on the inbound Initial — the load-bearing independence witness,
+/// since a bridge would make it see the CLIENT's SCID.
 fn spawn_backend_recording_scid(certs: &TestCerts) -> (SocketAddr, Arc<Mutex<Option<Vec<u8>>>>) {
     let std_sock = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     std_sock.set_nonblocking(true).unwrap();
@@ -238,10 +213,8 @@ fn spawn_backend_recording_scid(certs: &TestCerts) -> (SocketAddr, Arc<Mutex<Opt
             match tokio::time::timeout(timeout, socket.recv_from(&mut in_buf)).await {
                 Ok(Ok((n, from))) => {
                     if conn.is_none() {
-                        // Record the SCID the LB chose as client (the
-                        // upstream connection's SCID) straight off the
-                        // wire — BEFORE accept, independently of the
-                        // RawProxyOutcome the actor returns.
+                        // Record the SCID off the wire BEFORE accept,
+                        // independently of the actor's RawProxyOutcome.
                         if let Ok(hdr) = quiche::Header::from_slice(
                             in_buf.get_mut(..n).unwrap_or(&mut []),
                             quiche::MAX_CONN_ID_LEN,
@@ -394,10 +367,9 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
         "fixture: client must negotiate h3 with the LB"
     );
 
-    // 5) Forwarder: drain the shared LB socket into the actor's inbound
-    //    mpsc (the router's job in production). The actor only reads its
-    //    mpsc for the client leg and writes via lb_socket.send_to, so
-    //    there is no recv_from contention.
+    // Forwarder: drain the shared LB socket into the actor's inbound mpsc (the
+    // router's job in production). The actor only reads its mpsc and writes via
+    // `send_to`, so there is no recv_from contention.
     let (tx, rx) = mpsc::channel::<InboundPacket>(64);
     let cancel = CancellationToken::new();
     let fwd_socket = Arc::clone(&lb_socket);
@@ -569,11 +541,9 @@ async fn s16_b1_two_distinct_connections_not_a_bridge() {
          (server) SCID"
     );
 
-    // (5) Independence is not a trivial length coincidence: the upstream
-    //     SCID is a full-length random CID, not a truncation/derivation of
-    //     the client SCID. Assert it shares no common prefix with the
-    //     client's chosen SCID beyond what randomness would give (a
-    //     derive-from-client bridge would copy a prefix).
+    // Independence is not a length coincidence: the upstream SCID is a
+    // full-length random CID, not a truncation or derivation of the client's —
+    // a derive-from-client bridge would copy a prefix.
     let common_prefix = outcome
         .upstream_scid
         .iter()

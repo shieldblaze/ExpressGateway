@@ -1,39 +1,21 @@
-//! SESSION 16 / Mode B — B2 VERIFIER's MULTI-STREAM byte-identical wire
-//! proof (the B2 headline bar, plan §5 "multiple bidi streams + datagrams;
-//! binary byte-identical").
+//! Mode B — B2 MULTI-STREAM byte-identical wire proof: MULTIPLE concurrent
+//! client bidi streams, each carrying a DISTINCT multi-KiB BINARY payload, must
+//! all arrive back byte-identical with a clean FIN.
 //!
-//! Author ≠ verifier: the builder's self-check
-//! (`s16_b2_stream_relay_smoke.rs`) only proves ONE small (4 KiB) bidi
-//! stream round-trips. THIS test stands up the same real wire path —
+//! What makes it load-bearing beyond the smoke test:
+//! * **no cross-talk** — 5 streams in flight at once, so a bug that merged or
+//!   swapped per-stream pending buffers makes at least one payload mismatch;
+//! * **multi-turn carry** — at least one payload EXCEEDS
+//!   [`STREAM_RELAY_WINDOW`], so it CANNOT be carried in a single relay turn
+//!   and the backpressure carry-over path (pending tail held, FIN deferred
+//!   until drained) runs for real on the happy path;
+//! * **distinct binary content** — a different seed per stream, so a
+//!   correct-length but wrong-bytes relay (zero-fill, stale-buffer reuse) is
+//!   caught;
+//! * **clean FIN per stream** — a lost or mis-ordered FIN hangs (budget) or
+//!   delivers short (length assert).
 //!
-//!   real quiche CLIENT  ⇄  Mode B actor (`run_raw_proxy_actor_for_test`)
-//!                          ⇄  real quiche ECHO backend
-//!
-//! — but opens MULTIPLE concurrent client bidi streams, each carrying a
-//! DISTINCT multi-KiB BINARY payload, and asserts that every stream's
-//! echoed bytes arrive at the client BYTE-IDENTICAL and each FINs cleanly.
-//!
-//! ## What makes this load-bearing (beyond the smoke test)
-//!
-//! * **Concurrency / no cross-talk**: 5 streams in flight at once. The
-//!   identity stream-ID relay must keep each stream's bytes on its own
-//!   stream — a bug that merged/swapped per-stream pending buffers would
-//!   make at least one payload mismatch.
-//! * **Multi-turn / multi-packet**: payloads are deliberately sized so at
-//!   least one EXCEEDS [`STREAM_RELAY_WINDOW`] (256 KiB) — that stream
-//!   CANNOT be carried in a single relay turn (the read gate caps pending
-//!   at the window), so it forces the backpressure carry-over path
-//!   (pending tail held, FIN deferred until fully drained) to run for real
-//!   on the happy path. Several payloads also far exceed one UDP packet.
-//! * **Distinct binary content**: each stream gets a different
-//!   pseudo-random byte stream (different seed), so a correct length but
-//!   wrong-bytes relay (e.g. zero-fill, stale-buffer reuse) is caught.
-//! * **Clean FIN per stream**: the client reads each stream to FIN; a
-//!   relay that lost or mis-ordered a FIN would hang (caught by the budget)
-//!   or deliver short (caught by the length assert).
-//!
-//! Driven with `--features test-gauges` so `run_raw_proxy_actor_for_test`
-//! (gated `#[cfg(any(test, feature = "test-gauges"))]`) is reachable.
+//! Driven with `--features test-gauges` so the test hook is reachable.
 
 #![cfg(feature = "test-gauges")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -123,10 +105,9 @@ fn random_scid() -> [u8; quiche::MAX_CONN_ID_LEN] {
     scid
 }
 
-/// A deterministic, per-stream-DISTINCT pseudo-random binary payload. The
-/// `seed` differs per stream so two streams of the same length still carry
-/// different bytes (catches a cross-stream buffer mix-up). A simple LCG —
-/// not crypto, just a cheap full-range byte spread that is not all-ASCII.
+/// A deterministic, per-stream-DISTINCT pseudo-random payload: a different seed
+/// per stream means two same-length streams still carry different bytes, which
+/// catches a cross-stream buffer mix-up.
 fn make_payload(seed: u64, len: usize) -> Vec<u8> {
     let mut state = seed
         .wrapping_mul(0x9E37_79B9_7F4A_7C15)
@@ -213,11 +194,8 @@ fn upstream_config_factory(
     })
 }
 
-/// A throwaway BACKEND quiche server that accepts ONE connection and
-/// ECHOes any received STREAM bytes back on the SAME stream id, FINing
-/// each stream once it has fully echoed the peer FIN. Far end of the
-/// relay: client→LB→**backend (echo)**→LB→client. (Same shape as the
-/// smoke test's backend; carries N concurrent streams.)
+/// A throwaway BACKEND that ECHOes received STREAM bytes back on the SAME
+/// stream id, FINing each once it has fully echoed the peer FIN.
 fn spawn_echo_backend(certs: &TestCerts) -> SocketAddr {
     let std_sock = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     std_sock.set_nonblocking(true).unwrap();
@@ -366,10 +344,8 @@ async fn try_recv_one(
 async fn s16_b2_multistream_byte_identical_round_trip() {
     let certs = generate_loopback_certs();
 
-    // Stream plan: (client bidi stream id, payload length). Stream ids are
-    // client-initiated bidi = 0,4,8,12,16. Lengths chosen to span: small
-    // multi-packet, ~window, and one OVER the 256 KiB relay window so it
-    // needs many relay turns (the multi-turn backpressure carry path).
+    // Stream plan: lengths span small multi-packet, ~window, and one OVER the
+    // relay window so it needs many turns (the multi-turn carry path).
     let plan: Vec<(u64, usize)> = vec![
         (0, 9_000),    // > 1 packet (~1350 B), small
         (4, 60_000),   // many packets
@@ -445,12 +421,9 @@ async fn s16_b2_multistream_byte_identical_round_trip() {
     }
     assert_eq!(client_conn.application_proto(), H3_ALPN);
 
-    // 5) Build the distinct payloads and OPEN every stream up front. Each
-    //    stream_send may be a SHORT write (payload > current send window);
-    //    the client driver below keeps flushing AND keeps sending the
-    //    unsent tail until the whole payload + FIN is on the wire. This is
-    //    what forces the relay's bounded-window multi-turn carry for the
-    //    >256 KiB stream.
+    // Open every stream up front. Each `stream_send` may be a SHORT write, so
+    // the client driver keeps sending the unsent tail until the whole payload +
+    // FIN is on the wire — which is what forces the relay's multi-turn carry.
     let payloads: HashMap<u64, Vec<u8>> = plan
         .iter()
         .map(|&(sid, len)| (sid, make_payload(sid.wrapping_add(1), len)))
@@ -510,10 +483,8 @@ async fn s16_b2_multistream_byte_identical_round_trip() {
         }
     });
 
-    // 7) Client driver: keep the client live, KEEP SENDING the unsent tail
-    //    of each payload (+ FIN) as the send window opens, and collect the
-    //    echoed bytes per stream until every stream FINs. Returns the
-    //    per-stream received bytes via a oneshot.
+    // Client driver: keep the client live, KEEP SENDING each unsent tail as the
+    // window opens, and collect the echoed bytes until every stream FINs.
     let (done_tx, done_rx) = tokio::sync::oneshot::channel::<HashMap<u64, Vec<u8>>>();
     let client_cancel = cancel.clone();
     let plan_for_driver = plan.clone();

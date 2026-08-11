@@ -1,29 +1,18 @@
-//! SESSION 19 / Mode B — B6 METRICS NON-VACUITY proof (the stub trap)
-//! (author ≠ verifier; this is the verifier's independent metrics proof).
+//! Mode B — the METRICS NON-VACUITY proof (the stub trap). A metric that NEVER
+//! moves is a stub, registered for show and never wired through the datapath.
+//! This drives a REAL Mode-B relay with a REAL [`QuicModeBMetrics`] and asserts
+//! each `quic_modeb_*` handle actually MOVES:
 //!
-//! A metric that NEVER moves is a stub — registered for show, never wired
-//! through the datapath (the historical `trusted_cidrs` trap). This file
-//! drives a REAL Mode-B relay with a REAL [`QuicModeBMetrics`] registered
-//! off a fresh [`MetricsRegistry`], passed as
-//! `ActorParams.quic_modeb_metrics = Some(metrics)`, and asserts each
-//! `quic_modeb_*` handle actually MOVES under the conditions it claims to
-//! track:
+//! 1. `connections_total` increments once the two-conn relay establishes, AND
+//!    the `connections` gauge is back to 0 after the actor returns — proving
+//!    the `ActiveConnGuard` RAII dec-on-drop is live.
+//! 2. `datagrams_dropped_total` increments under a datagram flood at a STALLED
+//!    backend, so the bounded drop-newest queue's per-pass delta is surfaced.
+//! 3. `streams_active` is observed NON-ZERO during a multi-stream transfer.
+//!    Because it is set per-pass and returns to 0 at teardown, the test SAMPLES
+//!    it live via a handle clone while the transfer is in flight.
 //!
-//! 1. `quic_modeb_connections_total` increments to ≥ 1 once the two-conn
-//!    relay establishes, AND the `quic_modeb_connections` gauge is back to 0
-//!    after the actor returns — proving the `ActiveConnGuard` RAII
-//!    dec-on-drop is live (`raw_proxy.rs:352-372`).
-//! 2. `quic_modeb_datagrams_dropped_total` increments > 0 under a datagram
-//!    flood at a STALLED backend (the B4 bounded drop-newest queue overflows
-//!    and the per-pass delta is surfaced — `raw_proxy.rs:597-608`).
-//! 3. `quic_modeb_streams_active` is observed NON-ZERO during a multi-stream
-//!    transfer (the gauge is set to the B5 relay-table size each pass).
-//!    Because the gauge is set per-pass and returns to 0 at teardown, the
-//!    test SAMPLES it live via a clone of the handle while the transfer is in
-//!    flight, then confirms it returns to 0.
-//!
-//! Topology (real wire): client ⇄ Mode B actor (`run_raw_proxy_actor_for_test`)
-//! ⇄ real quiche backend. Driven with `--features test-gauges`.
+//! Driven with `--features test-gauges`.
 
 #![cfg(feature = "test-gauges")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -292,9 +281,8 @@ fn spawn_echo_backend(certs: &TestCerts) -> SocketAddr {
 }
 
 /// Datagram backend that STALLS (never reads its datagrams) so the LB→backend
-/// `dgram_send` back-pressures and the relay's bounded c2u queue drops-newest.
-/// Keeps the connection alive (handshake + timeouts). Used by the
-/// datagrams-dropped test.
+/// `dgram_send` back-pressures and the relay's bounded queue drops-newest, while
+/// keeping the connection alive.
 fn spawn_stalled_dgram_backend(certs: &TestCerts) -> SocketAddr {
     let std_sock = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     std_sock.set_nonblocking(true).unwrap();
@@ -540,12 +528,11 @@ async fn teardown(rig: Rig) {
 // CHECK 3a — connections_total increments; connections gauge → 0 on exit.
 // ─────────────────────────────────────────────────────────────────────
 
-/// Establish a Mode-B relay with a live metrics handle, do a small stream
-/// round-trip so we know both legs are up, then assert:
-/// * `connections_total` >= 1 (incremented once the upstream established);
-/// * the `connections` gauge was raised to 1 WHILE the relay was live
-///   (sampled via a handle clone), and is back to 0 AFTER the actor returns
-///   (the `ActiveConnGuard` Drop ran).
+/// Establish a relay with a live metrics handle, do a small round-trip so both
+/// legs are known up, then assert `connections_total >= 1`, that the
+/// `connections` gauge read 1 WHILE the relay was live (sampled via a clone),
+/// and that it is back to 0 AFTER the actor returns (the `ActiveConnGuard` Drop
+/// ran).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn connections_total_increments_and_gauge_returns_to_zero() {
     let certs = generate_loopback_certs();
@@ -733,10 +720,8 @@ async fn datagrams_dropped_total_increments_under_flood() {
 // CHECK 3c — streams_active is set non-zero during a multi-stream transfer.
 // ─────────────────────────────────────────────────────────────────────
 
-/// Open several concurrent bidi streams and keep them mid-flight long enough
-/// to sample the `streams_active` gauge non-zero. The relay sets the gauge to
-/// the B5 relay-table size each pass; we sample a handle clone in a tight
-/// loop while the transfer runs, then confirm it returns to 0 at teardown.
+/// Open several concurrent bidi streams and keep them mid-flight long enough to
+/// sample `streams_active` non-zero, then confirm it returns to 0 at teardown.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn streams_active_set_nonzero_during_multistream_transfer() {
     let certs = generate_loopback_certs();
@@ -810,11 +795,10 @@ async fn streams_active_set_nonzero_during_multistream_transfer() {
     let pre_teardown = streams_active.get();
     teardown(rig).await;
 
-    // The gauge MOVED to a non-zero relay-table size while streams were live.
-    // (Unlike `connections`, `streams_active` has NO RAII reset on exit — it
-    // is a per-pass `set()` to the live B5 table size — so the post-teardown
-    // value is simply whatever the final pass wrote and is not asserted here;
-    // the load-bearing claim is that it READ non-zero while streams ran.)
+    // The gauge MOVED while streams were live. Unlike `connections`,
+    // `streams_active` has NO RAII reset — it is a per-pass `set()` — so the
+    // post-teardown value is simply whatever the final pass wrote and is not
+    // asserted; the load-bearing claim is that it READ non-zero.
     assert!(
         max_seen >= 1,
         "quic_modeb_streams_active MUST read >= 1 during a multi-stream \
