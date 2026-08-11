@@ -336,3 +336,208 @@ $ git diff main -- crates/lb-io | grep -E '^-.*SAFETY'
 
 That is `idle_send.rs`, a file with **zero** `unsafe`, where the prefix was decorative; the actual
 pinning-contract fact was preserved. Lead-ruled correct.
+
+---
+
+# ROUND 2
+
+Second, harder pass over the same nine crates.
+
+## Headline
+
+| metric | value |
+|---|---|
+| comment lines on `main` | **5,927** |
+| after round 1 | 2,167 (63.4%) |
+| **after round 2** | **1,612** |
+| **total reduction vs `main`** | **72.8%** (4,315 lines removed) |
+| round-2 reduction | 25.6% of what round 1 left |
+| code changes | **none** — see the identity proof below |
+
+Measured with the brief's command over the nine crates.
+
+**I did not reach the <1,300 stretch target, and I did not delete catches to fake it.**
+The arithmetic is below — 1,084 of the remaining 1,612 lines are a structural floor.
+
+## Per-file (main → round 1 → round 2)
+
+| main | r1 | r2 | file |
+|---:|---:|---:|---|
+| 964 | 334 | **206** | lb-config/src/lib.rs |
+| 254 | 99 | **77** | lb-core/src/shutdown.rs |
+| 273 | 92 | **70** | lb-io/src/quic_pool.rs |
+| 270 | 83 | **68** | lb-security/src/ticket.rs |
+| 241 | 73 | **50** | lb-io/src/http2_pool.rs |
+| 161 | 76 | **53** | lb-config/src/reload.rs |
+| 211 | 73 | **47** | lb-io/src/pool.rs |
+| 136 | 58 | **48** | lb-observability/src/label_budget.rs |
+| 114 | 70 | **39** | lb-io/src/ring.rs |
+| 169 | 52 | **28** | lb-io/src/idle_send.rs |
+| 142 | 45 | **31** | lb-security/src/zero_rtt.rs |
+| 144 | 39 | **32** | lb-security/src/watchdog.rs |
+| 114 | 34 | **22** | lb-security/src/smuggle.rs |
+| 96 | 32 | **17** | lb-observability/src/admin_http.rs |
+| 78 | 38 | **24** | lb-balancer/src/lib.rs |
+| 84 | 34 | **28** | lb-security/src/conn_gate.rs |
+
+## What round 2 actually did
+
+1. **Multi-line `///` blocks on `pub` items → one line.** Every 4-to-9-line doc essay in the area
+   was collapsed. `lb-config/src/lib.rs` alone lost 128 lines this way with no fact dropped.
+2. **Deleted 52 single-line `///` docs on definitively PRIVATE items** that only restated the
+   signature (`/// Populate the Maglev lookup table using the permutation algorithm.` over
+   `fn populate(...)`). Classified with brace-depth tracking so no enum variant, trait method or
+   `pub` field was touched — those have a `missing_docs` floor even without a `pub` keyword.
+   108 such docs exist; I cut the 52 that were pure restatement and kept the 56 carrying a fact
+   (`MUST stay prime`, the CVE-2022-30592 floor, RFC §17.3 maxima, Katran/nginx parity).
+3. **Deleted the remaining test narration** — `mod tests` and `tests/*.rs` comments that restate
+   the test name. The `// (i) … (vii)` arm banners in `idle_send.rs` went entirely: the test
+   functions are already named `arm_i_…`, `arm_ii_…`. The `(ix)` non-vacuity note stayed.
+4. **Compressed `// SAFETY:` blocks in place** — 3-to-5-line safety arguments became 1-2 lines.
+   The blocks themselves were never removed (count unchanged, proof below).
+5. **Compressed module headers.** `lb-core/src/authority.rs` 10 → 5, `lb-security/src/watchdog.rs`
+   8 → 6, `loom_atomic_counter.rs` 7 → 3.
+6. **Deleted `# Errors` sections** whose body restated the return type; folded the fact-carrying
+   ones into the summary line.
+
+## Why 72.8% and not 90% — the arithmetic
+
+Composition of the 1,612 remaining lines:
+
+| kind | lines | blocks |
+|---|---:|---:|
+| `///` doc lines | 1,124 | across **1,005 blocks** |
+| `//!` module headers | 189 | across **79 files** |
+| plain `//` | 299 | — |
+
+**Absolute floor = 1,005 + 79 = 1,084 lines.** That is one line per documented item plus one line
+per module header, which is exactly what `#![deny(missing_docs)]` demands on nine public-API
+crates. Reaching the 1,300 target from 1,612 needs 312 lines; only 528 are above the floor, and
+they are 129 lines of doc-block excess (the second line of a two-line block, which is almost
+always where the catch lives) plus 299 plain comments that are almost entirely catches.
+
+Getting under 1,300 therefore requires deleting roughly **every remaining plain `//` comment in
+lb-security** — the smuggle defenses, the LRU-vs-FIFO note, the constant-time-compare "do not
+simplify it", the ConnGate rollback rationale. The brief forbids that, so I stopped at the real
+number.
+
+I inspected all 73 surviving two-line `///` blocks individually. In 64 of them the second line is
+the catch, not a wrap artifact. The other 9 were merged.
+
+## Mandatory proofs
+
+### 1. Code identity
+
+```
+$ python3 audit/craft/s45a-code-identity.py main
+S45A code-identity proof — 239 .rs files changed vs main
+  2 file(s) differ: TOKENS DIFFER = real code change; REFLOW ONLY = rustfmt layout
+    TOKENS DIFFER  crates/lb-observability/src/xdp_metrics.rs
+    TOKENS DIFFER  crates/lb-quic/src/h3_bridge.rs
+```
+
+- `xdp_metrics.rs` — **mine, the KNOWN/ACCEPTED round-1 `_gauge_vec_anchor` removal.**
+- `h3_bridge.rs` — **not my area** (lb-quic sweeper's).
+
+No other file of mine differs. Nine crates, comment-only.
+
+**One caught-and-reverted incident.** After round-1 removed the inline comments inside a closure
+in `lb-balancer/tests/loom_atomic_counter.rs`, my `cargo fmt` collapsed the now-commentless
+`move || { expr }` into `move || expr`. Behaviour-neutral, but it is a token-stream change and the
+identity check flagged it. I restored the braces by keeping a one-line comment inside the block
+(`// Acquire pairs with T1's Release.`), which is both fmt-stable and token-identical to `main`.
+Re-verified clean. **Worth flagging to the other sweepers: deleting every comment inside a
+single-expression block lets rustfmt collapse the block, which reads as a code change.**
+
+### 2. `missing_docs` floor — no `pub` item lost its last doc line
+
+Scripted over all nine crates, comparing against a `git archive main` checkout:
+
+```
+MAIN baseline: pub items with no immediately-preceding doc line = 30
+NOW:           pub items with no immediately-preceding doc line = 30
+```
+
+Identical count and identical set. All 30 are `pub mod` declarations documented by the module
+file's own `//!` inner doc (pre-existing and correct), plus `lb-io/src/http2_pool.rs`'s
+`send_request_idle`, whose `///` block is separated from the item by the `#[allow]`-justifying
+`//` line — also pre-existing, and lint-safe because `//` is not a token.
+
+### 3. Test-pinned strings — both verbatim
+
+```
+$ grep -n "ROUND8-L7-10 — API contract for future H1 upstream reuse" crates/lb-io/src/pool.rs
+285:    /// **ROUND8-L7-10 — API contract for future H1 upstream reuse.** No caller today, but DO NOT
+
+$ grep -n "ROUND8-L7-10 — H2 cousin of the H1 take-and-discard pattern" crates/lb-io/src/http2_pool.rs
+148:    /// **ROUND8-L7-10 — H2 cousin of the H1 take-and-discard pattern.** Every `Send`-class error and
+```
+
+Both are read by `crates/lb-l7/tests/round8_body_overread.rs` (lines 88 and 104). I read that
+test before touching either file. The h2 pin is asserted too — the brief only named the pool.rs
+one, so flagging it.
+
+### 4. lb-io `unsafe` / SAFETY
+
+```
+crates/lb-io/src/ring.rs:11   crates/lb-io/src/sockopts.rs:2
+crates/lb-io/src/lib.rs:1     crates/lb-io/tests/miri_ring.rs:1
+total SAFETY comments: 15      (brief's floor: do not go below 15)
+```
+
+Code-level `unsafe` sites, comment text excluded, compared against `main` per file:
+
+```
+ring.rs main=13 now=13 | sockopts.rs main=2 now=2 | lib.rs main=1 now=1 | miri_ring.rs main=1 now=1
+TOTAL code-level unsafe: main=17 now=17
+```
+
+Every SAFETY block was compressed in place, never deleted. A raw `grep -c unsafe` reads 18 because
+the ring.rs module doc says "the `unsafe` pushes below" in prose.
+
+### 5. Round-1 accuracy corrections — all three intact
+
+- **`retry.rs` `mint()`** — "Never panics: an over-[`RETRY_MAX_ODCID`] `odcid` is SILENTLY
+  TRUNCATED, so a caller holding untrusted bytes must reject it itself rather than rely on
+  `verify` round-tripping what it passed in." (4 lines → 3, fact unchanged.)
+- **`admin_http.rs` auth gate** — the NO-TLS / auth-is-OPTIONAL / plaintext-even-with-a-token
+  header survives (6 lines → 4).
+- **`lb-balancer` EWMA-unfed** — "NEVER WRITTEN IN PRODUCTION … selecting `LbPolicy::Ewma`
+  silently gives you least-connections" survives on the field (7 → 4) and in the `ewma.rs`
+  module header (5 → 3).
+
+The three additional round-1 corrections also survive: `sync_from_state` has no production caller,
+lb-health is never driven, lb-cp-client is a transport-less shell.
+
+### 6. Coverage-gated files — comments only
+
+`lb-balancer/src/*.rs`, `lb-security/src/{hooks,conn_gate,watchdog,ticket,smuggle}.rs` and
+`lb-observability/src/admin_http.rs` are all comment-only in the identity proof above.
+
+## What I refused to cut
+
+1. **Every attack-explaining line in lb-security.** LRU-not-FIFO and HMAC-not-multiply-shift
+   (zero_rtt), TE-must-equal-`trailers` and the pseudo-header leak reject (smuggle), the strict-TE
+   body-length-mismatch rationale, the ConnGate per-IP-overflow ROLLBACK and RST-without-response
+   (amplification lever), the constant-time compare "do not simplify it" (retry), "never render
+   key material" (ticket) and "never render the digest" (admin_auth), the REL-2-03 failed-reload
+   /`not_after`-is-WARN-ONLY contract.
+2. **`lb-config` validation-range rationale.** Compressed the narration around each bound, kept
+   the WHY of every floor and ceiling — those are what stop a future editor "simplifying" a range
+   into a foot-gun. This is the single largest surviving block in the area and it is operator-facing.
+3. **The `quic_pool.rs` HONEST LIMITATION note** (5 → 3 lines). `per_peer_max_enforced` does not
+   test what its name claims: synthetic conns are never `is_established`, so `PooledQuic::drop`
+   never runs its bound check. **Still a finding: the fix is the test, not the comment.**
+4. **`ring.rs` SAFETY arguments** — compressed hard (70 → 39 overall) but never removed.
+5. **`idle_send.rs`** `biased;` ordering note (kept directly above `biased;`) and the
+   non-`Unpin` pinning contract, per the brief.
+6. **`lb-core/src/backend.rs`** AcqRel-vs-Relaxed asymmetry — a future editor would "fix" the
+   inconsistency in either direction without it (5 → 2 lines).
+7. **`authority.rs` KNOWN GAP** — the multi-colon heuristic lets unbracketed `::1` through even
+   though RFC 3986 rejects it, and the assertion pinning that must be updated when it is tightened.
+
+## Verification run
+
+- `cargo fmt` for all nine crates — clean, and re-run after the loom fix.
+- Code-identity, pub-doc-floor, pinned-string and SAFETY checks above, all after the final commit.
+- **NOT run** (lead gates centrally): build, clippy, test.
