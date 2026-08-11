@@ -1,30 +1,15 @@
-//! ROUND8-L7-07 / L7-12 proof — the consolidated HAProxy-style
-//! "glitches" abuse counter is WIRED per H2 connection and actually
-//! terminates the connection at the threshold, with an observable
-//! Prometheus surface.
+//! ROUND8-L7-07 / L7-12 proof — the consolidated HAProxy-style "glitches" abuse
+//! counter is WIRED per H2 connection, actually terminates the connection at
+//! the threshold, and is observable in Prometheus.
 //!
-//! Reference: HAProxy 3.0 `tune.h2.fe.glitches-threshold` (`src/
-//! mux_h2.c` `h2_glitches_*`) — operators cannot tune six independent
-//! per-detector thresholds, so HAProxy sums weighted protocol-abuse
-//! events per connection and drains (GOAWAY) once the rolling sum
-//! crosses the threshold. nginx `http2_recv_timeout` is the
-//! frame-arrival sibling (the FrameRecvTimeout *timer* sub-part is
-//! deferred-with-rationale on pinned hyper 1.x — see
-//! `audit/deferred.md`; the COUNTER half, the actual HAProxy pattern,
-//! is what this test exercises).
-//!
-//! The verifier push-back (`audit/round-8/verify/l7.md`) rejected the
-//! prior commit because `GlitchesCounter` had ZERO callsites and no
-//! Prometheus surface (Theme-1 "library shipped, no caller"). This
-//! test drives a stream of protocol-abuse requests (comma-in-
-//! :authority, each a `RapidReset`-weight glitch) on ONE H2
-//! connection with a low threshold and asserts:
-//!   * `h2_glitches_total` advances once per abuse request (the
-//!     counter is on the path and observable);
-//!   * once the weighted rolling sum crosses the threshold the
-//!     connection is drained (the next request on the same
-//!     connection fails — GOAWAY emitted via the existing two-step
-//!     drain path).
+//! HAProxy 3.0 `tune.h2.fe.glitches-threshold`: operators cannot tune six
+//! independent per-detector thresholds, so weighted protocol-abuse events are
+//! summed per connection and the connection drains (GOAWAY) once the rolling
+//! sum crosses the threshold. `GlitchesCounter` previously had ZERO callsites
+//! and no Prometheus surface, so this test drives abuse requests on ONE
+//! connection and asserts `h2_glitches_total` advances per request AND that the
+//! connection is drained once the sum crosses. (The FrameRecvTimeout TIMER half
+//! is deferred-with-rationale on pinned hyper 1.x — `audit/deferred.md`.)
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -99,13 +84,11 @@ async fn glitches_counter_drains_connection_at_threshold_and_is_observable() {
             .await
             .unwrap();
     let conn_handle = tokio::spawn(async move {
-        // Resolves when the server closes the connection (GOAWAY +
-        // close after the glitch threshold trips).
+        // Resolves when the server closes the connection (GOAWAY + close).
         let _ = conn.await;
     });
 
-    // Drive abuse requests (comma in :authority — a RapidReset-weight
-    // glitch) on the SAME connection until the threshold trips.
+    // Drive abuse requests (comma in `:authority`) on the SAME connection.
     let mut accepted = 0u32;
     let mut drained = false;
     for i in 0..8 {
@@ -116,8 +99,7 @@ async fn glitches_counter_drains_connection_at_threshold_and_is_observable() {
             .unwrap();
         match tokio::time::timeout(Duration::from_secs(3), send.send_request(req)).await {
             Ok(Ok(resp)) => {
-                // The per-request response is still a 400 (abuse is
-                // rejected per-request); the *connection* is drained
+                // The per-request response is still 400; the CONNECTION drains
                 // separately once the threshold is crossed.
                 assert_eq!(
                     resp.status().as_u16(),
@@ -133,8 +115,7 @@ async fn glitches_counter_drains_connection_at_threshold_and_is_observable() {
                 break;
             }
         }
-        // ready check: if the connection went away between requests
-        // the next poll_ready / send will fail.
+        // If the connection went away between requests, the next send fails.
         if futures_poll_ready(&mut send).await.is_err() {
             drained = true;
             break;
@@ -148,20 +129,16 @@ async fn glitches_counter_drains_connection_at_threshold_and_is_observable() {
          glitches-threshold parity); accepted {accepted} abuse \
          requests without a drain"
     );
-    // 3 requests at weight 5 (15) cross the threshold of 12, so the
-    // connection should drain after ~3 accepted abuse requests (the
-    // 3rd request's response may or may not land before the GOAWAY,
-    // hyper-timing dependent — bound it generously).
+    // 3 requests × weight 5 = 15 crosses the threshold of 12. The 3rd response
+    // may or may not land before the GOAWAY, so bound generously.
     assert!(
         (1..=4).contains(&accepted),
         "expected the drain to fire within a few abuse requests at \
          weight 5 vs threshold {THRESHOLD}; accepted {accepted}"
     );
 
-    // Prometheus surface: the counter must have advanced once per
-    // recorded glitch (>= the number of abuse requests that reached
-    // the validator). Non-zero is the headline assertion the
-    // push-back demanded.
+    // The counter must have advanced once per recorded glitch — non-zero is the
+    // headline assertion the push-back demanded.
     let c = glitch_count(&registry);
     assert!(
         c >= u64::from(accepted) && c > 0,
@@ -169,15 +146,13 @@ async fn glitches_counter_drains_connection_at_threshold_and_is_observable() {
          events; got {c} (accepted {accepted})"
     );
 
-    // The server-side connection future must resolve (GOAWAY + close)
-    // within the budget — proves the drain token actually fired the
-    // existing two-step GOAWAY select arm.
+    // The server conn future must resolve (GOAWAY + close), proving the drain
+    // token fired the existing two-step GOAWAY arm.
     let _ = tokio::time::timeout(Duration::from_secs(3), conn_handle).await;
 }
 
-/// Best-effort readiness probe: send a HEAD-ish request is heavy, so
-/// instead we just attempt a cheap zero-body request and treat any
-/// transport error as "connection gone".
+/// Best-effort readiness probe: any transport error means the connection is
+/// gone.
 async fn futures_poll_ready(
     send: &mut hyper::client::conn::http2::SendRequest<Empty<Bytes>>,
 ) -> Result<(), ()> {

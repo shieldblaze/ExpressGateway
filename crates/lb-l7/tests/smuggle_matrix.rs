@@ -1,16 +1,10 @@
-//! PROTO-2-10 — Smuggle defence matrix proof tests.
+//! PROTO-2-10 — smuggle-defence matrix proof tests.
 //!
-//! Each test exercises one row of `audit/protocol/SMUGGLE-MATRIX.md`,
-//! confirming what the gateway-level `SmuggleDetector` catches in
-//! default `SmuggleMode::H1` vs. `SmuggleMode::H1Strict` vs.
-//! `SmuggleMode::H2`. Hyper-level (wire-decoder) behaviour is
-//! recorded in the matrix doc but not asserted here — those checks
-//! belong inside `hyper` itself.
-//!
-//! The proxy hot path already wires the detector (see commits
-//! `e00e85a` SEC-2-01 + `dc02517` CODE-2-01); this test surface
-//! locks the per-mode behaviour so any future detector refactor that
-//! drifts the matrix is caught at CI.
+//! Each test exercises one row of `audit/protocol/SMUGGLE-MATRIX.md`, locking
+//! the per-mode behaviour of `SmuggleDetector` (`H1` / `H1Strict` / `H2`) so a
+//! future detector refactor that drifts the matrix is caught at CI.
+//! Hyper-level wire-decoder behaviour is recorded in the matrix doc but not
+//! asserted here — those checks belong inside `hyper`.
 
 use lb_security::{SmuggleDetector, SmuggleMode};
 
@@ -23,11 +17,8 @@ fn h(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
 
 #[test]
 fn test_default_strict_te() {
-    // Cell #7 — `Transfer-Encoding: gzip, chunked` (codec chain,
-    // final chunked).
-    //   default H1 → pass (final encoding is chunked).
-    //   H1Strict  → REJECT (codec list contains a non-chunked
-    //                token).
+    // Cell #7 — `TE: gzip, chunked`: default H1 passes (final codec is
+    // chunked); H1Strict rejects (the list contains a non-chunked token).
     let headers = h(&[("Transfer-Encoding", "gzip, chunked")]);
     assert!(
         SmuggleDetector::check_all_mode(&headers, SmuggleMode::H1).is_ok(),
@@ -133,11 +124,9 @@ fn test_strict_rejects_codec_chain_with_chunked_first() {
 
 #[test]
 fn test_strict_rejects_empty_codec() {
-    // Cell #18 — leading-empty codec inside a TE codec list.
+    // Cell #18 — leading-empty codec in a TE list. Default H1 passes (final
+    // codec is `chunked`); H1Strict rejects because the first codec is empty.
     let headers = h(&[("Transfer-Encoding", " , chunked")]);
-    // Default H1 mode: the final codec is `chunked`, so this passes
-    // the `check_te_cl` final-encoding check.
     assert!(SmuggleDetector::check_all_mode(&headers, SmuggleMode::H1).is_ok());
-    // H1Strict: rejects because the first codec is empty.
     assert!(SmuggleDetector::check_all_mode(&headers, SmuggleMode::H1Strict).is_err());
 }

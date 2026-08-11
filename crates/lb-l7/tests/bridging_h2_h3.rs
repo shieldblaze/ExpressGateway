@@ -19,7 +19,6 @@ fn test_bridge_h2_to_h3() {
         trailers: Vec::new(),
     };
     let bridged = bridge.bridge_request(&req).unwrap();
-    // Pseudo-headers preserved (same scheme between H2 and H3)
     assert!(
         bridged
             .headers
@@ -44,6 +43,5 @@ fn test_bridge_h2_to_h3() {
             .iter()
             .any(|(k, v)| k == ":authority" && v == "store.example.com")
     );
-    // Regular headers preserved
     assert!(bridged.headers.iter().any(|(k, _)| k == "authorization"));
 }

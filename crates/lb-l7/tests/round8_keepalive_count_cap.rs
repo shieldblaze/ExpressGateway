@@ -1,19 +1,12 @@
 //! ROUND8-L7-06 proof — per-keep-alive-connection request cap (H1).
 //!
-//! Reference: nginx `keepalive_requests 100` default + Pingora 0.8.0
-//! `keepalive_requests` cap (Cloudflare added it after hitting
-//! per-connection accounting growth / TLS-session-age / FD-pinning
-//! pain at the edge). `ref-l7` handoff Top-10 #1.
+//! nginx `keepalive_requests 100` + Pingora 0.8.0 `keepalive_requests`
+//! (Cloudflare added it after per-connection accounting growth /
+//! TLS-session-age / FD-pinning pain at the edge).
 //!
-//! Invariants:
-//!   * `h1_nth_response_carries_connection_close` — with cap = N, the
-//!     Nth response on one keep-alive connection carries
-//!     `Connection: close` and the server closes the socket after it.
-//!   * `h1_cap_zero_disables` — with cap = 0, many sequential requests
-//!     on one connection all succeed and the cap never injects
-//!     `Connection: close`.
-//!   * `counter_increments_on_cap_close` — the cap-termination atomic
-//!     advances exactly once per cap-triggered close.
+//! Asserted: with cap = N the Nth response carries `Connection: close` and the
+//! server then closes the socket; with cap = 0 the cap never fires; and the
+//! cap-termination atomic advances exactly once per cap-triggered close.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -28,9 +21,8 @@ use lb_l7::h1_proxy::{H1Proxy, HttpTimeouts, RoundRobinAddrs};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-/// Trivial HTTP/1.1 backend that answers every request with a fixed
-/// 200 and stays keep-alive (so the *gateway* is the one that decides
-/// to close, per the cap).
+/// Trivial H1 backend answering a fixed 200 and staying keep-alive, so the
+/// GATEWAY is the side that decides to close.
 async fn spawn_echo_backend() -> SocketAddr {
     let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = l.local_addr().unwrap();
@@ -42,8 +34,8 @@ async fn spawn_echo_backend() -> SocketAddr {
             tokio::spawn(async move {
                 let mut buf = [0u8; 4096];
                 loop {
-                    // Read one request (tests send small, unpipelined
-                    // requests so a single read covers the head).
+                    // Tests send small unpipelined requests, so one read
+                    // covers the head.
                     match s.read(&mut buf).await {
                         Ok(0) | Err(_) => return,
                         Ok(_) => {}
@@ -138,8 +130,7 @@ async fn h1_nth_response_carries_connection_close() {
             "request {i} (< cap) must NOT carry Connection: close: {head:?}"
         );
     }
-    // The CAP-th request: 200 + Connection: close, then the server
-    // closes the socket.
+    // The CAP-th request: 200 + Connection: close, then the socket closes.
     let head = one_request(&mut client, "/rcap").await;
     assert!(
         head.starts_with("HTTP/1.1 200"),
@@ -149,8 +140,7 @@ async fn h1_nth_response_carries_connection_close() {
         head.to_ascii_lowercase().contains("connection: close"),
         "the cap-th (#{CAP}) response MUST carry Connection: close (nginx keepalive_requests parity): {head:?}"
     );
-    // Server closes after the cap-th response: a follow-up read
-    // returns 0 (EOF) within the budget.
+    // A follow-up read returns 0 (EOF) within the budget.
     let mut tmp = [0u8; 64];
     let eof = tokio::time::timeout(Duration::from_secs(3), client.read(&mut tmp)).await;
     assert!(

@@ -1,16 +1,13 @@
 //! F-RES-1 (S38) regression — H1 slowloris header-phase deadline.
 //!
-//! The H1 server builder must wire `header_read_timeout` via a `Timer`
-//! so hyper actually enforces the header-receipt deadline. Pre-fix the
-//! builder had no `.timer(..)`, so `header_read_timeout` was INERT and a
-//! client that opened a connection and trickled a partial request head
-//! was bounded only by the 60 s connection `total` — a slowloris hold.
+//! The H1 server builder must wire `header_read_timeout` via a `Timer` or hyper
+//! silently ignores it. Pre-fix there was no `.timer(..)`, so the deadline was
+//! INERT and a client trickling a partial request head was bounded only by the
+//! 60 s connection `total` — a slowloris hold.
 //!
-//! NEGATIVE CONTROL: boot an H1 listener with a SMALL header timeout
-//! (1 s) and a LARGE total (10 s). Open a TCP connection, send a partial
-//! request head, and stop. Assert the server closes the connection at
-//! ~header_timeout (well under the 10 s total). FAILS pre-fix (the
-//! connection stays open until `total`); PASSES post-fix.
+//! NEGATIVE CONTROL: a SMALL header timeout (1 s) with a LARGE total (10 s), a
+//! partial head, then silence. FAILS pre-fix (held until `total`); PASSES
+//! post-fix (closed at ~1 s).
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -24,8 +21,7 @@ use lb_l7::h1_proxy::{H1Proxy, HttpTimeouts, RoundRobinAddrs};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-/// A backend that accepts a connection and returns a fixed 200 — only
-/// used so a *complete* request can be proxied in the positive control.
+/// A backend returning a fixed 200, used only by the positive control.
 async fn spawn_ok_backend() -> SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -59,8 +55,7 @@ async fn spawn_ok_backend() -> SocketAddr {
     addr
 }
 
-/// Boot the H1 proxy with the given header timeout (total fixed at 10 s)
-/// pointed at `backend_addr`. Returns the proxy listen address.
+/// Boot the H1 proxy with the given header timeout (total fixed at 10 s).
 async fn spawn_proxy(backend_addr: SocketAddr, header_timeout: Duration) -> SocketAddr {
     let pool = TcpPool::new(
         PoolConfig::default(),
@@ -113,9 +108,8 @@ async fn h1_partial_head_closed_at_header_timeout_not_total() {
     client.flush().await.unwrap();
 
     let start = Instant::now();
-    // Read until EOF (server-side close) or our own ceiling. A working
-    // header timeout closes the connection shortly after 1 s; the broken
-    // (inert) build would keep it open until the 10 s `total`.
+    // A working header timeout closes shortly after 1 s; the inert build would
+    // hold the connection until the 10 s `total`.
     let mut buf = [0u8; 256];
     let closed = tokio::time::timeout(Duration::from_secs(6), async {
         loop {

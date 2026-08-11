@@ -1,25 +1,13 @@
-//! PROTO-2-07 — proof tests for the `StrippedRequest<B>` newtype.
+//! PROTO-2-07 — proof tests for the `StrippedRequest<B>` newtype, which encodes
+//! "hop-by-hop has been stripped" as a type-system invariant checked at every
+//! proxy call site.
 //!
-//! The newtype encodes "hop-by-hop has been stripped" as a type-system
-//! invariant. The proxy hot path's internal `proxy_request` /
-//! `proxy_h*_to_h*` methods take `StrippedRequest<IncomingBody>`; the
-//! invariant is therefore checked at compile time on every call site.
-//!
-//! These tests verify three things:
-//!   1. `strip_for_test` is the only public construction path
-//!      (other than the internal `pub(crate)` factory), so external
-//!      code cannot fabricate a `StrippedRequest` without running
-//!      the strip.
-//!   2. The constructor invocation actually removes the canonical
-//!      hop-by-hop set per RFC 9110 §7.6.1.
-//!   3. The `#[repr(transparent)]` layout guarantee holds (same size
-//!      as the inner `http::Request<B>`), so the newtype carries zero
-//!      runtime cost.
-//!
-//! The trybuild-style "fail to compile if you pass a raw Request"
-//! guard exists as a `compile_fail` doctest inside
-//! `stripped_request.rs::strip_for_test`'s siblings; we keep the
-//! integration-side proof to the structural assertions above.
+//! Verified here: `strip_for_test` is the only public construction path, so
+//! external code cannot fabricate one without running the strip; the
+//! constructor really removes the RFC 9110 §7.6.1 set; and the
+//! `#[repr(transparent)]` layout guarantee holds. The "fails to compile if you
+//! pass a raw Request" guard is a `compile_fail` doctest in
+//! `stripped_request.rs`.
 
 use http::Request;
 use http::header::CONNECTION;
@@ -96,10 +84,8 @@ fn repr_transparent_zero_cost() {
 
 #[test]
 fn idempotent_strip_does_not_panic_or_resurrect_headers() {
-    // Calling `strip_for_test` twice must be safe: the first strip
-    // removes the hop-by-hop set; the second is a no-op because none
-    // are present. The newtype invariant is "strip ran at least
-    // once", which the second call trivially preserves.
+    // Calling `strip_for_test` twice must be safe — the invariant is "the strip
+    // ran at least once", which a second no-op call trivially preserves.
     let req = Request::builder()
         .uri("/")
         .header(CONNECTION, "keep-alive")
@@ -113,19 +99,13 @@ fn idempotent_strip_does_not_panic_or_resurrect_headers() {
     assert!(s2.inner().headers().get("keep-alive").is_none());
 }
 
-/// PROTO-2-07 — compile-time guard via a doctest-like `compile_fail`
-/// inline assertion. If any in-crate refactor accidentally exposes the
-/// private constructor, this test surface should still compile, but
-/// re-introducing a `pub` constructor that accepts a raw `Request`
-/// would be a deliberate semver / API break and require explicit
-/// reviewer sign-off.
+/// PROTO-2-07 — there is no `pub fn new(_: Request<B>) -> StrippedRequest<B>`.
+/// Re-introducing one would be a deliberate API break needing reviewer
+/// sign-off; this asserts the only call path runs the strip.
 #[test]
 fn cannot_construct_stripped_request_without_strip() {
-    // The only public way to mint a StrippedRequest is `strip_for_test`
-    // (test-only `#[doc(hidden)]`) or the in-crate `pub(crate)`
-    // factory. There is no `pub fn new(_: Request<B>) -> StrippedRequest<B>`
-    // surface. We assert that fact by demonstrating that the only
-    // call path runs the strip:
+    // The only ways in are `strip_for_test` (test-only, `#[doc(hidden)]`) and
+    // the in-crate `pub(crate)` factory.
     let req = Request::builder()
         .uri("/")
         .header("connection", "close")

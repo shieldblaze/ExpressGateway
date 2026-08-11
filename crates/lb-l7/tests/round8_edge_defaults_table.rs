@@ -1,26 +1,20 @@
-//! ROUND8-L7-15 — Edge-defaults pinning table.
-//!
-//! Each row of `docs/edge-defaults.md` that points at a live constant
-//! in this crate is asserted here against the literal numeric value
-//! the docs claim. The point is drift detection: any future PR that
-//! changes the constant without updating the doc fails this test.
-//!
-//! See `docs/edge-defaults.md` for the cross-reference table and
-//! `audit/decisions/h2-edge-streams.md` for the rationale on the
-//! deliberate Envoy/nginx divergence at `max_concurrent_streams`.
+//! ROUND8-L7-15 — edge-defaults pinning table. Every row of
+//! `docs/edge-defaults.md` that points at a live constant in this crate is
+//! asserted against the literal the doc claims, so a PR that changes the
+//! constant without updating the doc fails here. See
+//! `audit/decisions/h2-edge-streams.md` for the deliberate Envoy/nginx
+//! divergence at `max_concurrent_streams`.
 
 use lb_l7::h2_security::H2SecurityThresholds;
 
-/// Pinned edge-defaults table. Hard-coded — do not derive from the
-/// live constant. The literal serves as the "human contract" the doc
-/// promises operators; the test fails if the constant drifts.
+/// Pinned table. Hard-coded on purpose — the literal IS the human contract the
+/// doc promises operators, so do not derive it from the live constant.
 #[test]
 fn h2_security_defaults_match_documented_table() {
     let t = H2SecurityThresholds::default();
 
-    // Row: H2 max_concurrent_streams.
-    // Deliberate divergence from Envoy 100 / nginx 128; see
-    // audit/decisions/h2-edge-streams.md.
+    // H2 max_concurrent_streams — deliberate divergence from Envoy 100 /
+    // nginx 128 (audit/decisions/h2-edge-streams.md).
     assert_eq!(
         t.max_concurrent_streams, 256,
         "edge-defaults.md row `max_concurrent_streams` says 256; \
@@ -76,11 +70,8 @@ fn h2_security_defaults_match_documented_table() {
     );
 }
 
-/// Sanity-check that the table covers every numeric field of
-/// `H2SecurityThresholds`. Future field additions force a doc update
-/// because the new field will lack an assertion above. The
-/// `Default::default()` instantiation here is purely to keep the
-/// reference compiled — the real enforcement is in
+/// The `Default::default()` below only keeps the reference compiled; it does
+/// NOT force a doc update when a field is added. The real enforcement is
 /// `h2_security_defaults_match_documented_table` plus code review.
 #[test]
 fn h2_security_thresholds_default_constructs() {

@@ -1,18 +1,12 @@
-//! PROTO-2-15 — SNI ↔ authority disagreement validator proof tests.
-//!
-//! Wave-2b-2 lands the validator function only. The TLS-accept-site
-//! wiring (capturing the SNI from rustls and threading it down to
-//! `H{1,2}Proxy::handle`) is deferred to Wave-2c because the only
-//! call site is `crates/lb/src/main.rs`, which is out of scope for
-//! Wave-2b. See `audit/deferred.md` for the deferred wiring entry.
+//! PROTO-2-15 — SNI ↔ authority disagreement validator unit proofs. The
+//! hot-path wiring is proven separately in `tests/sni_authority_421.rs`.
 
 use http::StatusCode;
 use lb_l7::sni_authority::{check_sni_authority, misdirected_response};
 
 #[test]
 fn test_421_on_mismatch() {
-    // The canonical attack: TLS opened to a benign hostname, HTTP
-    // request authority points elsewhere.
+    // Canonical attack: TLS to a benign hostname, request authority elsewhere.
     let err = check_sni_authority(Some("attacker.example"), "victim.example").unwrap_err();
     assert_eq!(err.sni, "attacker.example");
     assert_eq!(err.authority, "victim.example");
@@ -32,17 +26,14 @@ fn matching_sni_and_authority_passes() {
 
 #[test]
 fn missing_sni_does_not_falsely_reject() {
-    // Plain TCP listener or RFC 6066 §3 SNI-omitted client. The
-    // validator returns Ok; the operator's TLS configuration (or
-    // the L7 ingress) is responsible for any policy that requires
-    // SNI presence.
+    // Plain TCP or an RFC 6066 §3 SNI-omitting client: the validator returns
+    // Ok; requiring SNI presence is the operator's TLS-config policy.
     assert!(check_sni_authority(None, "example.test").is_ok());
 }
 
 #[test]
 fn port_in_authority_ignored() {
-    // SNI never carries a port (RFC 6066 §3); the authority may.
-    // We compare on host only.
+    // SNI never carries a port (RFC 6066 §3); compare on host only.
     assert!(check_sni_authority(Some("example.test"), "example.test:8443").is_ok());
 }
 

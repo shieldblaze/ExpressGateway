@@ -1,18 +1,12 @@
-//! SEC-2-01 proof — the H2→H1 bridge rejects a downgrade smuggle.
+//! SEC-2-01 proof — the H2→H1 bridge REJECTS a downgrade smuggle.
 //!
-//! Pre-Wave-2b, the bridge silently produced an H1 request whose
-//! body or header set carried RFC-9113-forbidden hop-by-hop headers
-//! (Connection, Keep-Alive, Transfer-Encoding, Upgrade,
-//! Proxy-Connection) — an H1 upstream that mis-handles them desyncs
-//! its response queue. This test fires the wired
-//! [`lb_security::SmuggleDetector::check_h2_downgrade`] call inside
-//! [`lb_l7::h2_to_h1::H2ToH1Bridge`] and asserts the bridge surfaces
-//! a structural error before the H1 line is produced.
-//!
-//! Companion to the four vectors in
-//! `crates/lb-security/src/smuggle.rs::tests::smuggle_h2_downgrade_*`
-//! — those exercise the detector in isolation; this exercises the
-//! wired call site.
+//! Pre-Wave-2b the bridge silently produced an H1 request carrying
+//! RFC-9113-forbidden hop-by-hop headers (Connection, Keep-Alive,
+//! Transfer-Encoding, Upgrade, Proxy-Connection); an H1 upstream that
+//! mis-handles them desyncs its response queue. This fires the wired
+//! `check_h2_downgrade` call inside `H2ToH1Bridge` and asserts a structural
+//! error BEFORE the H1 line is produced. The four vectors in `lb-security`
+//! exercise the detector in isolation; this exercises the call site.
 
 use bytes::Bytes;
 use lb_l7::{BridgeRequest, Protocol, create_bridge};
@@ -91,13 +85,11 @@ fn h2_to_h1_te_non_trailers_rejected() {
 
 #[test]
 fn h2_to_h1_te_trailers_ok() {
-    // Negative control: `TE: trailers` is the one allowed TE value
-    // and the bridge must succeed (no smuggle rejection).
+    // Negative control: `TE: trailers` is the one allowed value; must succeed.
     let req = req_with(vec![("te", "trailers")]);
     let bridge = create_bridge(Protocol::Http2, Protocol::Http1);
     let bridged = bridge.bridge_request(&req).expect("TE: trailers must pass");
-    // The bridge stripped the pseudo-headers and produced a Host
-    // header from `:authority`.
+    // Pseudo-headers stripped, `Host` produced from `:authority`.
     let names: Vec<&str> = bridged.headers.iter().map(|(k, _)| k.as_str()).collect();
     assert!(names.contains(&"host"), "host header synthesised");
     assert!(
@@ -108,8 +100,7 @@ fn h2_to_h1_te_trailers_ok() {
 
 #[test]
 fn h2_to_h1_clean_request_ok() {
-    // Negative control: a request with only safe headers is bridged
-    // successfully.
+    // Negative control: only-safe-headers must bridge successfully.
     let req = req_with(vec![("accept", "text/html"), ("user-agent", "test")]);
     let bridge = create_bridge(Protocol::Http2, Protocol::Http1);
     let bridged = bridge.bridge_request(&req).expect("clean H2 must pass");

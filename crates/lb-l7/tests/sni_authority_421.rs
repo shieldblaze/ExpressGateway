@@ -1,26 +1,12 @@
-//! PROTO-2-18 — `check_sni_authority` wired into the H1 hot path.
+//! PROTO-2-18 — `check_sni_authority` wired into the H1 hot path. The validator
+//! existed and was unit-tested but no proxy hot path called it, so the
+//! PROTO-2-15 421 contract was unenforced on every listener type.
 //!
-//! Round-6 proto delta finding: the validator at
-//! `lb_l7::sni_authority::check_sni_authority` existed and was unit-
-//! tested, but no proxy hot-path called it. The 421 contract from
-//! PROTO-2-15 was therefore unenforced on every listener type.
-//!
-//! These tests pin the wired-up contract:
-//!
-//! 1. `test_421_emitted_on_sni_host_mismatch_over_tls` — drive a real
-//!    TLS 1.3 handshake against `H1Proxy::serve_connection_with_cancel_sni`
-//!    with `SNI = "a.test"` + `Host: b.test` from a non-loopback peer.
-//!    The proxy MUST emit `421 Misdirected Request` (RFC 9110
-//!    §15.5.20) on the response line.
-//!
-//! 2. `test_loopback_allows_mismatch` — same shape but with a
-//!    loopback peer. Per the sec-r5 caveat, loopback ingress skips
-//!    enforcement (operator probe scripts use IP-literal Host
-//!    headers that don't match the cert's SNI; the loopback
-//!    boundary is trusted). The proxy attempts upstream dial — since
-//!    we wire a non-existent backend, the request resolves to a 502
-//!    (Bad Gateway), demonstrating that the SNI check did NOT short-
-//!    circuit the path. The key assertion is "status != 421".
+//! Pinned: a real TLS 1.3 handshake with `SNI = a.test` + `Host: b.test` from a
+//! NON-loopback peer must yield `421 Misdirected Request` (RFC 9110 §15.5.20);
+//! the same shape from a LOOPBACK peer must NOT (the sec-r5 carve-out) — it
+//! reaches the closed backend and resolves 502, proving the SNI check did not
+//! short-circuit the path. The key assertion there is "status != 421".
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -49,8 +35,8 @@ fn self_signed_for(sni: &str) -> (Vec<CertificateDer<'static>>, PrivateKeyDer<'s
     (chain, key)
 }
 
-/// Build matched server + client TLS configs (one cert pair used by
-/// both halves so the client trusts the live handshake).
+/// Matched server + client TLS configs — one cert pair, so the client trusts
+/// the live handshake.
 fn matched_tls_configs(sni: &str) -> (Arc<ServerConfig>, Arc<rustls::ClientConfig>) {
     let (chain, key) = self_signed_for(sni);
     // Server side.
@@ -88,10 +74,8 @@ fn build_proxy() -> Arc<H1Proxy> {
         BackendSockOpts::default(),
         lb_io::Runtime::new(),
     );
-    // Backend address points to a closed port — the 421 path must
-    // fire before any upstream dial; the loopback test's 502
-    // assertion exercises the dial only to prove the SNI check did
-    // not short-circuit.
+    // The backend points at a closed port: the 421 path must fire before any
+    // dial; the loopback test's 502 proves the check did not short-circuit.
     let addrs: Vec<SocketAddr> = vec!["127.0.0.1:1".parse().unwrap()];
     let picker = RoundRobinAddrs::new(addrs).unwrap();
     Arc::new(H1Proxy::new(
@@ -108,11 +92,9 @@ fn build_proxy() -> Arc<H1Proxy> {
     ))
 }
 
-/// Drive a real TLS handshake over a `tokio::io::duplex` pair so the
-/// rustls `ServerConnection::server_name()` captures `SERVER_SNI`
-/// live (PROTO-2-18 hot-path entry condition). Returns the raw
-/// response bytes the client read after sending the malicious
-/// request line + Host header.
+/// Drive a real TLS handshake over a duplex pair so rustls'
+/// `ServerConnection::server_name()` captures the SNI live (the PROTO-2-18
+/// hot-path entry condition). Returns the raw response bytes.
 async fn drive_handshake_and_request(
     server_cfg: Arc<ServerConfig>,
     client_cfg: Arc<rustls::ClientConfig>,
@@ -121,16 +103,14 @@ async fn drive_handshake_and_request(
     // 64 KiB duplex is plenty for the request + response.
     let (server_io, client_io) = tokio::io::duplex(64 * 1024);
 
-    // Server task: accept TLS, capture SNI, hand the stream to the
-    // proxy via the PROTO-2-18 entry point.
+        // Accept TLS, capture SNI, hand the stream to the PROTO-2-18 entry.
     let server_task = tokio::spawn(async move {
         let acceptor = TlsAcceptor::from(server_cfg);
         let tls_stream = acceptor.accept(server_io).await.expect("TLS accept");
         let sni = tls_stream.get_ref().1.server_name().map(str::to_owned);
         let proxy = build_proxy();
         let cancel = CancellationToken::new();
-        // 5 s upper bound — the proxy should respond with the 421
-        // (or 502 in the loopback case) well inside that.
+            // 5 s upper bound; the proxy should answer well inside that.
         let _ = tokio::time::timeout(
             Duration::from_secs(5),
             proxy.serve_connection_with_cancel_sni(tls_stream, proxy_peer, cancel, sni),
@@ -138,8 +118,7 @@ async fn drive_handshake_and_request(
         .await;
     });
 
-    // Client task: TLS handshake, send the malicious H1 request,
-    // read the response head.
+        // TLS handshake, send the malicious request, read the response head.
     let connector = TlsConnector::from(client_cfg);
     let server_name = ServerName::try_from(SERVER_SNI).unwrap();
     let mut tls_client = connector
@@ -160,9 +139,8 @@ async fn drive_handshake_and_request(
 async fn test_421_emitted_on_sni_host_mismatch_over_tls() {
     let (server_cfg, client_cfg) = matched_tls_configs(SERVER_SNI);
 
-    // Non-loopback peer (RFC 5737 TEST-NET-1) — the loopback
-    // exception MUST NOT fire here, so the 421 path is the expected
-    // response.
+    // Non-loopback peer (RFC 5737 TEST-NET-1): the loopback exception must NOT
+    // fire, so 421 is the expected response.
     let peer: SocketAddr = "192.0.2.1:54321".parse().unwrap();
     let buf = drive_handshake_and_request(server_cfg, client_cfg, peer).await;
 
@@ -181,10 +159,8 @@ async fn test_421_emitted_on_sni_host_mismatch_over_tls() {
 async fn test_loopback_allows_mismatch() {
     let (server_cfg, client_cfg) = matched_tls_configs(SERVER_SNI);
 
-    // Loopback peer — per the sec-r5 caveat the SNI/Host check is
-    // skipped. The request proceeds through the H1 hot path; the
-    // backend dial fails (port 1 on 127.0.0.1 is closed), yielding
-    // a 502 Bad Gateway. The key assertion is "status != 421".
+    // Loopback peer: the sec-r5 carve-out skips the check, so the request
+    // proceeds and the closed backend yields 502. Key assertion: not 421.
     let peer: SocketAddr = "127.0.0.1:54321".parse().unwrap();
     let buf = drive_handshake_and_request(server_cfg, client_cfg, peer).await;
 
@@ -193,8 +169,7 @@ async fn test_loopback_allows_mismatch() {
         !head.starts_with("HTTP/1.1 421"),
         "loopback peer must skip the 421 SNI/Host enforcement; got: {head:?}"
     );
-    // Sanity: SOME response landed (502 from the closed backend, or
-    // a clean close of the TLS stream — either way not 421).
+    // Sanity: SOME response landed (502, or a clean close) — either way not 421.
     assert!(
         head.starts_with("HTTP/1.1 ") || head.is_empty(),
         "unexpected response shape (loopback): {head:?}"

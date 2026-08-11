@@ -1,12 +1,8 @@
-//! ROUND8-OPS-06 / REL-2-07 proof — the W3C trace-context library now
-//! has a production L7 callsite.
-//!
-//! Reference: REL-2-07 (`audit/reliability/round-2-review.md:341`)
-//! shipped `lb_observability::tracing_propagation` in author-sha
-//! `1d462c7` and was stuck at `Verified-Fixed-Partial` because NO L7
-//! callsite extracted or injected. This test snapshots the request
-//! span the H1 proxy now opens and asserts the inbound `trace_id` is
-//! carried and the response `http.status_code` is recorded.
+//! ROUND8-OPS-06 / REL-2-07 proof — the W3C trace-context library now has a
+//! production L7 callsite. REL-2-07 was stuck at `Verified-Fixed-Partial`
+//! because NO L7 callsite extracted or injected. This snapshots the request
+//! span the H1 proxy opens and asserts the inbound `trace_id` is carried and
+//! the response `http.status_code` is recorded.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -137,9 +133,8 @@ async fn request_span_carries_trace_id_and_status() {
     let subscriber = tracing_subscriber::registry().with(layer);
     let _guard = subscriber.set_default();
 
-    // Backend address points at a closed port — the request fails
-    // upstream (502) which is irrelevant: the span + status-record
-    // happen regardless of upstream outcome.
+    // The backend is a closed port; the 502 is irrelevant — the span and the
+    // status record happen regardless of upstream outcome.
     let backend_addr: SocketAddr = "127.0.0.1:1".parse().unwrap();
     let proxy_addr = spawn_proxy(backend_addr).await;
 
@@ -191,9 +186,8 @@ async fn request_span_carries_trace_id_and_status() {
         parent_id.contains("b7ad6b7169203331"),
         "parent_id field records the inbound parent for correlation: {parent_id:?}"
     );
-    // The response status was recorded onto the span (proves the
-    // `span.record("http.status_code", ...)` on the response path
-    // runs). Upstream is a closed port so the status is 502.
+    // The response status was recorded onto the span (the `span.record` on the
+    // response path runs). Upstream is closed, so it is 502.
     let status = span_fields
         .iter()
         .find(|(_, f, _)| f == "http.status_code")
