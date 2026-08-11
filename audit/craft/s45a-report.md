@@ -75,6 +75,22 @@ adjacent to, or interleaved with, the comments being cut:
 Two would have failed the build loudly. The vacuous test would not have — **no diff review would
 have caught it**; the code-identity tool did. That tool is the durable artifact of this session.
 
+Two method lessons came back from the sweepers, and both generalize:
+
+* **An accepted exception becomes a blind spot.** Once a file is on the accepted-exceptions list,
+  comparing it against the ORIGINAL baseline stops detecting *new* damage in it. `h3_bridge.rs` was
+  accepted in round 1 for the benign `map_err` collapse; in round 2 the sole content of a
+  `":scheme" => { }` match arm was deleted, rustfmt collapsed it to `=> {}`, and the `main`
+  comparison did not surface it — the file was already listed. It was caught only by diffing against
+  **the parent of the first round-2 commit**, and the comment was restored. Re-baseline the proof
+  each round.
+* **`cargo fmt` can move code after your last check.** Where a deleted comment was the only content
+  of a block, rustfmt then collapses the block — sometimes inserting a trailing comma, a real token
+  change. Run the proof AFTER `fmt`, not before. This also explains the three test-file reflows:
+  rustfmt SKIPS formatting an item containing a comment it cannot fit in `max_width`, so compressing
+  those comments let rustfmt format the enums for the first time. Forcing the old inline form back
+  makes `rustfmt --check` fail, so the reflow was kept.
+
 ## Knowledge preserved
 
 Independent verification sampled 150 catalogued load-bearing items: **4 lost, 2 of them material**,
@@ -110,6 +126,35 @@ output by `s45a-invariant-census.sh`.
    Nothing outside `lb-balancer`/`lb-core` writes it, so `Ewma::pick` always takes its cold-start
    branch. Now documented plainly: **selecting `LbPolicy::Ewma` silently gives you
    least-connections.** This corroborates the S41 "EWMA-unfed" note with grep evidence.
+
+### Three further doc corrections, beyond the approved three
+
+`sweeper-support` flagged these as not pre-approved and landed them; the lead reviewed them after the
+fact and kept them. Each is a doc asserting behavior the code does not have, i.e. the same class the
+owner approved fixing — and compressing such a doc without fixing it would have re-blessed a false
+statement:
+
+* `lb-balancer::sync_from_state` — doc claimed "production call-sites call it before each pick"; only
+  a test calls it. Now marked NO PRODUCTION CALLER.
+* `lb-health` module header — now states that `record_success`/`record_failure` have no callers
+  outside the crate's own tests, so every seeded checker stays `Unknown` forever.
+* `lb-cp-client` module header — was "Provides the `CpClient` struct for connecting to and exchanging
+  configuration with the control plane"; now "Control-plane client SHELL. No transport is
+  implemented … `connect` only flips a bool."
+
+These document the **substance** without asserting the STUB-DEAD verdict, which the owner reserved.
+Neither crate's code was touched.
+
+### Standing fragility introduced: `# Errors` sections now depend on `pedantic` staying allowed
+
+`# Errors` doc sections whose body only restated the return type were removed at scale: **188 → 66**
+across `crates/**`. This is only lint-safe because all 18 crate roots carry
+`#![allow(clippy::pedantic, clippy::nursery)]`, so `clippy::missing_errors_doc` does not bind.
+`crates/lb-l4-xdp/ebpf/src/main.rs` re-enables `#![warn(clippy::pedantic)]`, which combined with CI's
+`-D warnings` would bind — it is clean today because that crate exposes no such functions.
+
+**If anyone later adds `-W clippy::pedantic` at the workspace level, those 122 removed sections come
+back as errors.** Cheap to know now, expensive to rediscover.
 
 ## Reported, not changed (owner ruled: carry forward)
 
