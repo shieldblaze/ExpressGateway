@@ -1,9 +1,6 @@
-//! HTTP/2 upstream connection pool for backend `protocol = "h2"`. Caches a hyper `SendRequest`
-//! per peer, not a socket, since H2 multiplexes many streams over one connection.
-//!
-//! NO retry on send failure — the caller surfaces a 502 — so the pool never has to clone or
-//! replay a body it does not own. There is also no age-based eviction; dead-peer detection is
-//! entirely hyper's keep-alive PING. Upstream TLS is not handled here.
+//! HTTP/2 upstream connection pool for backend `protocol = "h2"`: caches a hyper `SendRequest` per
+//! peer, not a socket. NO retry on send failure (the caller 502s), so the pool never replays a body
+//! it does not own; there is no age-based eviction, dead-peer detection is hyper's keep-alive PING.
 
 use std::collections::HashMap;
 use std::io;
@@ -25,10 +22,9 @@ use tokio::time::Instant;
 use crate::idle_send::{IdleSendError, idle_bounded_send};
 use crate::pool::TcpPool;
 
-/// Request-body type for the H2 upstream pool. The error is a BOXED `std::error::Error`, not
-/// `hyper::Error`, because `hyper::Error` has no public constructor — a streaming body could
-/// therefore not express a mid-body abort, and a truncated request would reach the backend as
-/// COMPLETE instead of resetting the stream.
+/// Request-body type for the H2 upstream pool. The error is a BOXED `std::error::Error` because
+/// `hyper::Error` has no public constructor, so a streaming body could not express a mid-body abort
+/// and a truncated request would reach the backend as COMPLETE.
 pub type H2ReqBody = BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>;
 
 /// Default H2 max concurrent streams per upstream connection.
@@ -42,15 +38,14 @@ pub const DEFAULT_H2_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Default upstream H2 send timeout.
 pub const DEFAULT_H2_SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Max HPACK header-list size accepted FROM a backend (F-RES-2), matching the client-facing
-/// policy so a malicious backend gets no more decode budget than a malicious client.
+/// Max HPACK header-list size accepted FROM a backend (F-RES-2): a malicious backend gets no more
+/// decode budget than a malicious client.
 pub const MAX_HEADER_LIST_SIZE: u32 = 64 * 1024;
 
 /// Configuration for an [`Http2Pool`]; Pingora-aligned defaults.
 #[derive(Debug, Clone, Copy)]
 pub struct Http2PoolConfig {
-    /// Concurrent streams per H2 connection. Applied via hyper's
-    /// `max_concurrent_reset_streams`, the closest knob hyper exposes.
+    /// Concurrent streams per H2 connection, via hyper's `max_concurrent_reset_streams`.
     pub max_concurrent_streams: u32,
     /// Initial stream window in bytes.
     pub initial_stream_window: u32,
@@ -151,15 +146,10 @@ impl Http2Pool {
     }
 
     /// Forward `request` to `addr`, dialing fresh when the cached connection is missing or dead.
-    ///
-    /// **ROUND8-L7-10 — H2 cousin of the H1 take-and-discard pattern.** Every `Send`-class error
-    /// and every timeout evicts the whole cached `PeerEntry`. The breadth is deliberate: hyper
-    /// surfaces all H2 framing faults (PROTOCOL_ERROR, FRAME_SIZE_ERROR, mid-body STREAM_CLOSED,
-    /// body-length over/under-read) as `SendRequest` errors, and one corrupted stream on a
-    /// multiplexed connection can corrupt every other stream on the same peer. Pingora shipped
-    /// this upstream-smuggling bug class in 0.6.0 and again in 0.8.0.
-    ///
-    /// `Send` and `Timeout` errors evict the cached entry before returning.
+    /// **ROUND8-L7-10 — H2 cousin of the H1 take-and-discard pattern.** Every `Send`-class error and
+    /// every timeout evicts the whole cached `PeerEntry`: hyper surfaces all H2 framing faults as
+    /// `SendRequest` errors, and one corrupted stream can corrupt every other stream on that peer
+    /// (Pingora shipped this upstream-smuggling class in 0.6.0 and again in 0.8.0).
     pub async fn send_request(
         &self,
         addr: SocketAddr,
@@ -180,15 +170,11 @@ impl Http2Pool {
         }
     }
 
-    /// [`Self::send_request`] under [`crate::idle_send::idle_bounded_send`]'s two-phase deadline
-    /// instead of a fixed wall-clock, so a slow-but-progressing upload is not 504-truncated.
-    ///
-    /// The caller OWNS and drives `last_progress` and `upload_complete`; the pool only reads them.
-    /// Both [`IdleSendError`] variants collapse onto [`Http2PoolError::Timeout`] to keep the enum
-    /// stable — the firing phase survives only in the warn log. ROUND8-L7-10 eviction applies to
-    /// both error arms.
-    // Over clippy's seven-arg limit, but each argument is load-bearing for the deadline contract
-    // and none has a sensible per-pool default.
+    /// [`Self::send_request`] under [`crate::idle_send::idle_bounded_send`]'s two-phase deadline, so
+    /// a slow-but-progressing upload is not 504-truncated. The caller OWNS and drives
+    /// `last_progress` and `upload_complete`. Both [`IdleSendError`] variants collapse onto
+    /// [`Http2PoolError::Timeout`] — the firing phase survives only in the warn log.
+    // Over clippy's seven-arg limit, but every argument is load-bearing for the deadline contract.
     #[allow(clippy::too_many_arguments)]
     pub async fn send_request_idle(
         &self,
@@ -272,15 +258,11 @@ impl Http2Pool {
         peers.remove(&addr);
     }
 
-    /// Tear down the cached connection to `addr`, resetting every stream on it (F-MD-4).
-    ///
-    /// Call this when an inbound request was truncated mid-body. Injecting a body error into
-    /// hyper's `SendStream` does NOT work here: on a multiplexed connection hyper may END_STREAM
-    /// the upstream — presenting the truncated body as COMPLETE — before it ever polls the
-    /// injected error. Dropping the `PeerEntry` aborts the driver task, which closes the
-    /// connection and deterministically resets the in-flight streams. Connection-scoped teardown
-    /// is the deliberate trade: an L7 abort is rare, a smuggled-complete request is not
-    /// recoverable.
+    /// Tear down the cached connection to `addr`, resetting every stream on it (F-MD-4) — call this
+    /// when an inbound request was truncated mid-body. Injecting a body error into hyper's
+    /// `SendStream` does NOT work: hyper may END_STREAM the upstream, presenting the truncated body
+    /// as COMPLETE, before it polls the injected error. Connection-scoped teardown is the deliberate
+    /// trade: an L7 abort is rare, a smuggled-complete request is not recoverable.
     pub fn reset_peer(&self, addr: SocketAddr) {
         let _evicted = self.inner.peers.lock().remove(&addr);
     }
@@ -368,8 +350,7 @@ mod tests {
         assert_eq!(pool.peer_count(), 0);
     }
 
-    /// Only checks that `send_request_idle` keeps `send_request`'s dial-failure path; deadline
-    /// behaviour itself is covered in `idle_send::tests`.
+    /// Only checks `send_request_idle` keeps the dial-failure path; deadlines live in `idle_send`.
     #[tokio::test]
     async fn send_request_idle_dial_fail_smoke() {
         use http_body_util::Empty;
@@ -419,8 +400,7 @@ mod tests {
         );
     }
 
-    /// In-process H2 backend for the arms below. The acceptor is never shut down explicitly —
-    /// the `#[tokio::test]` runtime teardown is the only stop signal.
+    /// In-process H2 backend; the `#[tokio::test]` runtime teardown is the only stop signal.
     async fn spawn_h2_backend<F, R>(handler: F) -> SocketAddr
     where
         F: Fn(Request<Incoming>) -> R + Send + Sync + 'static,

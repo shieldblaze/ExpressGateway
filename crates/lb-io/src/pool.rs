@@ -1,10 +1,7 @@
 //! TCP connection pool with per-peer LRU and a Pingora-style liveness probe.
-//!
-//! Idle sockets are parked as `std::net::TcpStream`, not tokio streams: a tokio stream cannot
-//! cleanly unregister from the reactor to sleep.
-//!
-//! Reaping is acquire-driven with NO background task, which keeps the pool usable outside a tokio
-//! runtime — nothing expires while the pool sits untouched.
+//! Idle sockets are parked as `std::net::TcpStream`: a tokio stream cannot cleanly unregister from
+//! the reactor to sleep. Reaping is acquire-driven with NO background task, so nothing expires
+//! while the pool sits untouched.
 
 use std::collections::VecDeque;
 use std::io;
@@ -42,8 +39,8 @@ pub struct PoolConfig {
     pub idle_timeout: Duration,
     /// Connections older than this (since original dial) are discarded.
     pub max_age: Duration,
-    /// Dial deadline for [`TcpPool::acquire_async`]. IGNORED by the blocking [`TcpPool::acquire`]
-    /// path, which inherits the kernel's minute-plus `connect(2)` default.
+    /// Dial deadline for [`TcpPool::acquire_async`]. IGNORED by the blocking [`TcpPool::acquire`],
+    /// which inherits the kernel's minute-plus `connect(2)` default.
     pub connect_timeout: Duration,
 }
 
@@ -118,10 +115,8 @@ impl TcpPool {
         self.inner.per_peer.get(&addr).map_or(0, |q| q.lock().len())
     }
 
-    /// Acquire a connection to `addr`, reusing a pooled entry when one validates.
-    ///
-    /// NOT for production callers (CODE-2-09) — the fresh-dial `connect(2)` blocks inline on the
-    /// calling task. Use [`TcpPool::acquire_async`]; this stays for non-tokio embedders and tests.
+    /// Acquire a connection to `addr`, reusing a pooled entry when one validates. NOT for production
+    /// (CODE-2-09) — the fresh dial blocks inline; use [`TcpPool::acquire_async`].
     pub fn acquire(&self, addr: SocketAddr) -> io::Result<PooledTcp> {
         while let Some(idle) = self.pop_idle(addr) {
             match self.validate_and_upgrade(idle, addr) {
@@ -133,8 +128,7 @@ impl TcpPool {
         self.dial_new(addr)
     }
 
-    /// [`TcpPool::acquire`] with a cancellable async dial under [`PoolConfig::connect_timeout`].
-    /// The production path — reuse, expiry and [`probe_alive`] are identical; only the dial differs.
+    /// The production [`TcpPool::acquire`]: identical reuse/expiry/probe, cancellable async dial.
     pub async fn acquire_async(&self, addr: SocketAddr) -> io::Result<PooledTcp> {
         while let Some(idle) = self.pop_idle(addr) {
             match self.validate_and_upgrade(idle, addr) {
@@ -158,8 +152,7 @@ impl TcpPool {
         idle
     }
 
-    /// Check age, idle timeout and liveness. `Discard` means try the next entry; `Fatal` must
-    /// surface to the caller.
+    /// Check age, idle timeout and liveness; `Discard` means try the next entry, `Fatal` surfaces.
     fn validate_and_upgrade(
         &self,
         idle: IdleConn,
@@ -176,8 +169,7 @@ impl TcpPool {
         if !probe_alive(&stream) {
             return Err(ValidationOutcome::Discard);
         }
-        // `probe_alive` deliberately leaves the socket non-blocking, which is what `from_std`
-        // requires — do not "restore" blocking mode here.
+        // `probe_alive` deliberately leaves the socket non-blocking, as `from_std` requires.
         match TcpStream::from_std(stream) {
             Ok(tokio_stream) => Ok(PooledTcp::new(
                 tokio_stream,
@@ -234,9 +226,8 @@ enum ValidationOutcome {
     Fatal(io::Error),
 }
 
-/// A checked-out connection; re-parks into the pool on drop unless marked non-reusable. The
-/// stream is an `Option` only so `Drop` can steal it — it is `Some` until exactly one of
-/// `take_stream` or `drop` runs.
+/// A checked-out connection; re-parks into the pool on drop unless marked non-reusable. The stream
+/// is an `Option` only so `Drop` can steal it.
 pub struct PooledTcp {
     stream: Option<TcpStream>,
     addr: SocketAddr,
@@ -297,11 +288,9 @@ impl PooledTcp {
     }
 
     /// Mark this connection non-reusable so a broken socket is not parked.
-    ///
-    /// **ROUND8-L7-10 — API contract for future H1 upstream reuse.** No production caller today
-    /// (H1 upstreams `take_stream` and are single-use), but DO NOT DELETE: Pingora paid for the
-    /// body-length-mismatch upstream-smuggling bug twice (0.6.0 and 0.8.0), and this call on any
-    /// over/under-read before drop is the fix. Deleted as dead, it gets silently reinvented wrong.
+    /// **ROUND8-L7-10 — API contract for future H1 upstream reuse.** No caller today, but DO NOT
+    /// DELETE: Pingora shipped the body-length-mismatch upstream-smuggle twice (0.6.0, 0.8.0) and
+    /// this call before drop is the fix; deleted as dead, it gets silently reinvented wrong.
     pub const fn set_reusable(&mut self, reusable: bool) {
         self.reusable = reusable;
     }
@@ -383,9 +372,8 @@ impl Drop for PooledTcp {
     }
 }
 
-/// Liveness probe (Pingora EC-01). `WouldBlock` is HEALTHY — the peer simply has nothing to say.
-/// `Ok(0)` is a half-close and `Ok(n)` is protocol desync; both are unusable. Leaves the stream
-/// non-blocking for [`tokio::net::TcpStream::from_std`].
+/// Liveness probe (Pingora EC-01). `WouldBlock` is HEALTHY — the peer has nothing to say; `Ok(0)`
+/// is a half-close and `Ok(n)` protocol desync. Leaves the stream non-blocking for `from_std`.
 fn probe_alive(stream: &StdTcpStream) -> bool {
     use std::io::Read;
 
@@ -393,8 +381,7 @@ fn probe_alive(stream: &StdTcpStream) -> bool {
         return false;
     }
     let mut buf = [0u8; 1];
-    // `impl Read for &TcpStream` reads through a shared reference; the binding exists only to
-    // satisfy the trait's `&mut self`.
+    // `impl Read for &TcpStream` reads through a shared ref; the binding only satisfies `&mut self`.
     let mut reader: &StdTcpStream = stream;
     matches!(reader.read(&mut buf), Err(ref e) if e.kind() == io::ErrorKind::WouldBlock)
 }
@@ -492,7 +479,6 @@ mod tests {
         assert_eq!(pool.idle_count(), 1);
         assert_eq!(pool.idle_count_for(addr), 1);
 
-        // Reuse must yield the same local port.
         let mut c2 = pool.acquire(addr).unwrap();
         let local_second = c2.stream_mut().unwrap().local_addr().unwrap();
         assert_eq!(local_first, local_second);
@@ -513,7 +499,6 @@ mod tests {
         }
         assert_eq!(pool.idle_count(), 1);
 
-        // Simulate the peer half-closing while the socket sat idle.
         shutdown_first_idle(&pool, addr);
 
         let mut c2 = pool.acquire(addr).unwrap();
@@ -599,7 +584,6 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(120)).await;
 
         let _c2 = pool.acquire(addr).unwrap();
-        // Expired entry discarded on acquire, fresh one dialed.
         assert_eq!(pool.idle_count(), 0);
     }
 
@@ -741,8 +725,7 @@ mod tests {
 
         assert!(res.is_err(), "expected timeout error, got {res:?}");
         let err = res.unwrap_err();
-        // Either our TimedOut or an early routing error is fine; what matters is that the call
-        // never falls through to the kernel's minute-plus default.
+        // What matters is that the call never falls through to the kernel's minute-plus default.
         assert!(
             elapsed < Duration::from_secs(2),
             "async dial took {elapsed:?}, expected <2s (timeout {err:?})"
