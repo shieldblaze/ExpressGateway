@@ -1,10 +1,5 @@
-//! REL-2-13 proof test: every one of the `NUM_SLOTS` kernel
-//! `StatSlot` entries in `lb_l4_xdp::stats_export` has a
-//! corresponding row in the exported Prometheus text under
-//! `xdp_packets_total{action}`.
-//!
-//! This is the "STATS map → userspace mirror" contract that
-//! ebpf/proto/rel signed off on in the EBPF-2-08 cross-review §2.
+//! Every kernel `StatSlot` must have an `xdp_packets_total{action}` row — the STATS-map-to-
+//! userspace mirror contract.
 
 use lb_l4_xdp::stats_export::NUM_SLOTS;
 use lb_observability::prometheus_exposition::render_text;
@@ -19,7 +14,6 @@ fn all_stat_slots_are_exported_at_zero() {
     let body = render_text(&reg);
     let labels = stat_slot_labels();
 
-    // The labels table MUST cover every slot the eBPF side ships.
     assert_eq!(
         labels.len(),
         NUM_SLOTS,
@@ -40,11 +34,6 @@ fn deltas_apply_per_slot() {
     let reg = MetricsRegistry::new();
     let m = XdpMetrics::register(&reg).unwrap();
 
-    // Deltas in the order of stat_slot_labels(): pass=1, drop=2,
-    // ct_hit_v4=3, l7_divert=4, parse_fail=5, tx_v4=6, ct_hit_v6=7,
-    // tx_v6=8, vlan_stripped=9, v6_ext_unsupported=10,
-    // backend_unpopulated=11, v4_fragment=12, v6_fragment=13,
-    // ct_rst_prune=14, ct_fin_prune=15, new_flow_rate_cap=16.
     let deltas: Vec<u64> = (1..=NUM_SLOTS as u64).collect();
     apply_packet_deltas(&m, &deltas);
 
@@ -62,9 +51,7 @@ fn deltas_apply_per_slot() {
 
 #[test]
 fn label_key_is_action_not_result() {
-    // Locked in REL-2-13 / EBPF-2-08 cross-review §2. The label key
-    // `action` (not `result`) appears in operator recording rules;
-    // a silent rename would break every dashboard.
+    // The key is `action`, not `result` — recording rules depend on it.
     let reg = MetricsRegistry::new();
     let _m = XdpMetrics::register(&reg).unwrap();
     let body = render_text(&reg);

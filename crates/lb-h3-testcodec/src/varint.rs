@@ -1,13 +1,5 @@
-//! QUIC variable-length integer encoding/decoding (RFC 9000 §16).
-//!
-//! The encoding uses 1, 2, 4, or 8 bytes depending on the value:
-//!
-//! | 2-bit prefix | Length | Usable bits | Maximum value        |
-//! |--------------|--------|-------------|----------------------|
-//! | 00           | 1      | 6           | 63                   |
-//! | 01           | 2      | 14          | 16383                |
-//! | 10           | 4      | 30          | 1073741823           |
-//! | 11           | 8      | 62          | 4611686018427387903  |
+//! QUIC variable-length integers (RFC 9000 §16): a 2-bit prefix selects a
+//! 1/2/4/8-byte form carrying 6/14/30/62 usable bits.
 
 use bytes::{BufMut, BytesMut};
 
@@ -16,14 +8,10 @@ use crate::H3Error;
 /// Maximum value that can be encoded as a QUIC variable-length integer.
 pub const MAX_VARINT: u64 = (1 << 62) - 1;
 
-/// Decode a QUIC variable-length integer from `buf`.
-///
-/// Returns `(value, bytes_consumed)`.
+/// Decode a QUIC varint into `(value, bytes_consumed)`.
 ///
 /// # Errors
-///
-/// Returns `H3Error::Incomplete` if the buffer is too short.
-/// Returns `H3Error::InvalidVarint` on malformed encoding.
+/// `H3Error::Incomplete` on a short buffer, `InvalidVarint` if malformed.
 pub fn decode_varint(buf: &[u8]) -> Result<(u64, usize), H3Error> {
     let first = *buf.first().ok_or(H3Error::Incomplete)?;
     let prefix = first >> 6;
@@ -60,11 +48,10 @@ pub fn decode_varint(buf: &[u8]) -> Result<(u64, usize), H3Error> {
     }
 }
 
-/// Encode a QUIC variable-length integer into `buf`.
+/// Encode a QUIC varint into `buf`.
 ///
 /// # Errors
-///
-/// Returns `H3Error::InvalidVarint` if `value > MAX_VARINT`.
+/// `H3Error::InvalidVarint` if `value > MAX_VARINT`.
 pub fn encode_varint(buf: &mut BytesMut, value: u64) -> Result<usize, H3Error> {
     if value > MAX_VARINT {
         return Err(H3Error::InvalidVarint);

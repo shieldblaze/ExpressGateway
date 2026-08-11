@@ -1,61 +1,7 @@
-//! CODE-2-03 — process-wide graceful drain primitive.
-//!
-//! `Shutdown` bundles a [`CancellationToken`] (cooperative
-//! stop-the-world signal) with a [`TaskTracker`] (count of live spawn
-//! sites that opted into the drain). One instance is constructed in
-//! `main`; every long-lived spawn site clones it and runs
-//! `tracker().spawn(...)` so the orchestrator can `drain(deadline)`
-//! at SIGTERM time and observe whether everything settled.
-//!
-//! Wave 1 (CODE-2-03 module-only) shipped the type + tests. Wave 2 is
-//! the accept-site / per-spawn plumbing in `crates/lb/src/main.rs` and
-//! across the L7 / QUIC / IO crates.
-//!
-//! Round-8 OPS-04+L4-12 — the single drain coordinator: [`Shutdown::run_drain`]
-//! enumerates the 15-case state matrix the previous round-2 "drain
-//! sequence" missed. See `audit/round-8/fixes/OPS-04-L4-12.md` for the
-//! case table; each case is regression-tested in
-//! `tests/round8_drain_15case.rs`.
-//!
-//! ## Drain semantics — legacy `Shutdown::drain(deadline)`
-//!
-//! Performs four steps in order:
-//!
-//! 1. `tracker.close()` — refuses any *new* `tracker.spawn(...)`. The
-//!    accept loop is expected to break out of its loop on the same
-//!    `token` so no new connection-handler tasks are accepted.
-//! 2. `token.cancel()` — wakes every cooperative `select!` arm. Each
-//!    task is responsible for cleaning up its own state and exiting.
-//! 3. `tokio::time::timeout(deadline, tracker.wait())` — bounded wait
-//!    for everything to settle.
-//! 4. Return `Clean` if all tasks exited inside `deadline`, otherwise
-//!    `TimedOut { remaining }` with the live-task count at deadline.
-//!
-//! Retained as a thin wrapper over [`Shutdown::run_drain`] so the
-//! existing tests + per-conn drain proof continue to compile.
-//!
-//! ## Round-8 — `Shutdown::run_drain(spec)`
-//!
-//! The legacy `drain` was a phase-less 4-step sequence. The new
-//! `run_drain` enumerates six explicit phases (`Pre`, `MarkDraining`,
-//! `ReadinessSettle`, `ListenerCancel`, `InFlightDrain`, `XdpDetach`,
-//! `Done`) and returns a [`DrainReport`] capturing per-phase
-//! durations + listener / XDP outcomes. The caller (`crates/lb/src/main.rs`)
-//! observes the report into the `shutdown_drain_seconds` histogram
-//! family per the OPS-03 contract.
-//!
-//! The coordinator is idempotent — a second call returns the first
-//! call's report without re-running any phase (handles case C-10 /
-//! C-11: SIGTERM-twice and admin-drain-then-SIGTERM).
-//!
-//! ## Why not `JoinSet`?
-//!
-//! `TaskTracker` lets us `wait()` for the *trailing fan-out* without
-//! holding owned `JoinHandle`s. That matters because per-connection
-//! handlers spawn helper futures (read/write halves, idle reapers)
-//! that need to be tracked alongside the parent — `JoinSet` would
-//! require we plumb the handle back to the parent which the
-//! per-listener accept loop doesn't have a place to store.
+//! Process-wide graceful drain: a [`CancellationToken`] plus a [`TaskTracker`] of every opted-in
+//! spawn site. `TaskTracker` NOT `JoinSet`: per-connection handlers spawn their own helper futures
+//! that must be tracked alongside the parent, with no accept loop to hold the handles.
+//! [`Shutdown::run_drain`] is the IDEMPOTENT coordinator (C-10 / C-11); `drain` is a legacy shim.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -67,21 +13,14 @@ use parking_lot::Mutex;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-/// Cloneable graceful-drain handle. One instance per process; every
-/// long-lived spawn site clones and runs `tracker().spawn(...)`.
+/// Cloneable graceful-drain handle; every long-lived spawn site clones it and uses `tracker()`.
 #[derive(Clone, Debug)]
 pub struct Shutdown {
     token: CancellationToken,
     tracker: TaskTracker,
-    /// OPS-04+L4-12: the listener-cancel token. A *child* of `token`
-    /// so cancelling `token` also cancels listeners, but the
-    /// coordinator can cancel listeners *first* (phase 4) without
-    /// disturbing per-connection tasks (which select on `token`).
+    /// Listener-cancel token, a CHILD of `token`, so listeners stop without cancelling per-conn tasks.
     listener_token: CancellationToken,
-    /// OPS-04+L4-12: idempotency latch + first-call report cache. The
-    /// coordinator may be entered from multiple SIGTERMs or from the
-    /// `/admin/drain` knob; only the first call runs the phases. All
-    /// subsequent callers see a clone of the cached report.
+    /// Idempotency latch + first-call report cache; only the first caller runs the phases.
     drain_state: Arc<DrainState>,
 }
 
@@ -93,8 +32,7 @@ struct DrainState {
 }
 
 impl Shutdown {
-    /// Fresh shutdown handle. The token starts un-cancelled and the
-    /// tracker starts un-closed.
+    /// Fresh handle; token un-cancelled, tracker un-closed.
     #[must_use]
     pub fn new() -> Self {
         let token = CancellationToken::new();
@@ -107,39 +45,26 @@ impl Shutdown {
         }
     }
 
-    /// The cancellation token. Cooperative select arms in
-    /// per-connection tasks should poll `token().cancelled()` first
-    /// (use `biased;` in the `select!`).
+    /// The cancellation token; poll it FIRST in a `biased;` select arm.
     #[must_use]
     pub const fn token(&self) -> &CancellationToken {
         &self.token
     }
 
-    /// OPS-04+L4-12: the *listener-cancel* token — a child of
-    /// [`Self::token`]. Listener accept loops select on this so
-    /// phase 4 of [`Self::run_drain`] can stop accepts without
-    /// triggering per-conn cancel (which fires in phase 5 via the
-    /// parent `token`). Cancelling the parent `token` also cancels
-    /// this child (confirmed in [`tokio_util::sync::CancellationToken`]
-    /// `child_token` docs), so a process-wide cancel via any path
-    /// still tears listeners down.
+    /// Listener-cancel token. Accept loops MUST select on this, not [`Self::token`], or stopping
+    /// accepts also cancels in-flight connections.
     #[must_use]
     pub const fn listener_token(&self) -> &CancellationToken {
         &self.listener_token
     }
 
-    /// The task tracker. Spawn long-lived tasks via
-    /// `shutdown.tracker().spawn(async move { ... })` so they show up
-    /// in `drain()`'s count.
+    /// Spawn long-lived tasks through this or they are invisible to the drain.
     #[must_use]
     pub const fn tracker(&self) -> &TaskTracker {
         &self.tracker
     }
 
-    /// Derive a per-listener / per-subsystem child handle that shares
-    /// the same drain orchestration. The child gets its own
-    /// child-token for the per-conn arm but shares the tracker +
-    /// listener_token + drain_state.
+    /// Per-subsystem child handle: own per-conn token, SHARED tracker, listener token and state.
     #[must_use]
     pub fn child(&self) -> Self {
         Self {
@@ -150,15 +75,7 @@ impl Shutdown {
         }
     }
 
-    /// Legacy four-step drain (CODE-2-03 Wave 2c). Refuse new spawns,
-    /// signal cancel, wait for outstanding tasks up to `deadline`.
-    /// Returns [`DrainOutcome`] reporting whether all tasks finished
-    /// cleanly or how many remained at the deadline.
-    ///
-    /// Round-8: this is now a thin shim over [`Self::run_drain`] with
-    /// no readiness settle, no listener-cancel phase, and no XDP
-    /// detach phase — the legacy callers (lb-core unit tests, the
-    /// per-conn drain proof) exercise only the tracker-drain phase.
+    /// Legacy drain shim over [`Self::run_drain`]: NO readiness settle, listener-cancel or XDP phase.
     pub async fn drain(self, deadline: Duration) -> DrainOutcome {
         let spec = DrainSpec {
             readiness_settle: Duration::ZERO,
@@ -179,37 +96,21 @@ impl Shutdown {
         }
     }
 
-    /// OPS-04+L4-12 drain coordinator. Single orchestration entry
-    /// point for the 15-case state matrix documented in
-    /// `audit/round-8/fixes/OPS-04-L4-12.md`. Returns a
-    /// [`DrainReport`] capturing per-phase durations + listener/XDP
-    /// outcomes.
-    ///
-    /// Idempotent: a second call returns the first call's cached
-    /// report without re-running any phase. This covers C-10 (two
-    /// SIGTERMs in quick succession) and C-11 (admin /drain followed
-    /// by SIGTERM).
+    /// The drain coordinator; returns per-phase durations and listener/XDP outcomes. IDEMPOTENT —
+    /// a second call returns the cached report (C-10 two SIGTERMs, C-11 admin-drain-then-SIGTERM).
     pub async fn run_drain(&self, mut spec: DrainSpec) -> DrainReport {
-        // Idempotency latch (cases C-10, C-11): the first caller wins;
-        // every subsequent caller waits for completion and returns the
-        // cached report. We use a simple CAS + sleep-loop because the
-        // expected concurrency here is at most 2 (one SIGTERM + one
-        // /admin/drain) so a more elaborate primitive isn't justified.
+        // CAS + sleep-loop rather than a notifier: expected concurrency here is at most 2.
         if self
             .drain_state
             .started
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_err()
         {
-            // Lost the race — wait for the first caller to publish.
             while !self.drain_state.completed.load(Ordering::Acquire) {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
-            // SAFETY: completed=true is only set AFTER `report` is
-            // populated below (see end of run_drain). The Some-match
-            // preserves lb-core's no-`expect_used` policy; the None
-            // fallthrough is structurally unreachable but materialises
-            // a zero-duration stub instead of panicking.
+            // `completed` is set only AFTER `report` is populated, so the None arm is unreachable;
+            // it stubs rather than panics because the crate denies `expect_used`.
             if let Some(r) = self.drain_state.report.lock().clone() {
                 return r;
             }
@@ -253,18 +154,9 @@ impl Shutdown {
             in_flight_remaining: 0,
         };
 
-        // OPS-04+L4-12 C-12 safety net: even on a panic mid-drain, run
-        // an XDP detach so the kernel-side program is not stranded. We
-        // can't carry the closure across the panic boundary easily, so
-        // the call site is responsible for unconditionally calling
-        // `XdpLoader::detach()` in its own panic-recovery path
-        // (e.g. via a scopeguard around the entire `run_drain` call).
-        // This module documents the contract; the integration test
-        // `panic_in_phase_still_detaches_xdp` enforces it.
+        // C-12 CONTRACT: a panic mid-drain must still detach XDP. The closure cannot cross the
+        // panic boundary, so the CALL SITE must scopeguard `run_drain` with its own detach.
 
-        // Phase 2 — MarkDraining. The `mark_draining` closure flips
-        // /readyz to 503 (or any other operator-visible draining
-        // signal). Synchronous + idempotent at the call site.
         let t = Instant::now();
         if let Some(mark) = spec.mark_draining.take() {
             (mark)();
@@ -274,9 +166,6 @@ impl Shutdown {
             obs.observe(&report.mark_draining, None);
         }
 
-        // Phase 3 — ReadinessSettle. Sleep for `spec.readiness_settle`
-        // so upstream LBs / kubelets observe the 503 before we tear
-        // down connections.
         let t = Instant::now();
         if spec.readiness_settle > Duration::ZERO {
             tokio::time::sleep(spec.readiness_settle).await;
@@ -286,22 +175,11 @@ impl Shutdown {
             obs.observe(&report.readiness_settle, None);
         }
 
-        // Phase 4 — ListenerCancel. Fire the listener-cancel token.
-        // Per-listener accept loops select on this token (OPS-04 fix)
-        // and exit cleanly. The bounded wait via the tracker is
-        // captured in phase 5; here we only signal + clamp the budget
-        // to the deadline. A `Duration::ZERO` deadline disables the
-        // signal (legacy `drain(deadline)` path).
+        // Signal only; the bounded wait is phase 5. A `Duration::ZERO` deadline disables it.
         let t = Instant::now();
         let listener_outcome = if spec.listener_cancel_deadline > Duration::ZERO {
             self.listener_token.cancel();
-            // Listeners are expected to exit *cooperatively*. We do
-            // not own their JoinHandles here — the budget is a
-            // *liveness* observation, not a forced abort. If the
-            // listener doesn't exit, the parent process keeps running
-            // (the tracker still tracks per-conn tasks). The call
-            // site is responsible for any `JoinHandle::abort` fallback
-            // — this coordinator only sets the cooperative signal.
+            // An OBSERVATION, not a forced abort — this coordinator owns no JoinHandles.
             ListenerOutcome::Clean
         } else {
             ListenerOutcome::Clean
@@ -318,10 +196,7 @@ impl Shutdown {
             obs.observe(&report.listener_cancel.timing, None);
         }
 
-        // Phase 5 — InFlightDrain. Apply per-conn jitter (OPS-02) by
-        // sleeping a random sub-budget BEFORE cancelling, so 1000s of
-        // listener replicas in the same statefulset don't all cancel
-        // at the exact same wall-clock instant.
+        // Jitter BEFORE cancelling, or every replica cancels at the same wall-clock instant.
         if spec.jitter_max > Duration::ZERO {
             let jitter_ms = jitter_millis(spec.jitter_max);
             if jitter_ms > 0 {
@@ -359,12 +234,7 @@ impl Shutdown {
             obs.observe(&report.in_flight_drain.timing, None);
         }
 
-        // Phase 6 — XdpDetach. If the call site provided a detach
-        // closure, run it with its own bounded timeout. Outcome flows
-        // into `xdp_detach_total{result}` via the closure itself
-        // (per OPS-01+L4-12+L4-04 §B.2 step 4). On timeout we proceed
-        // — the stale-self recovery path in OPS-01+L4-12+L4-04 §B.2
-        // picks up the linger on next startup.
+        // A detach timeout PROCEEDS: stale-self recovery picks the lingering program up next boot.
         let t = Instant::now();
         let xdp_outcome = if let (Some(detach), Some(deadline)) =
             (spec.xdp_detach.take(), spec.xdp_detach_deadline)
@@ -394,7 +264,6 @@ impl Shutdown {
             obs.observe(&report.xdp_detach.timing, None);
         }
 
-        // Phase 7 — Done.
         report.total = PhaseTiming::with_outcome(
             DrainPhase::Total,
             started_at.elapsed(),
@@ -413,8 +282,7 @@ impl Shutdown {
             obs.observe(&report.total, None);
         }
 
-        // Publish the cached report for any concurrent idempotent
-        // caller, then mark complete.
+        // Publish BEFORE marking complete — the latch above depends on that order.
         *self.drain_state.report.lock() = Some(report.clone());
         self.drain_state.completed.store(true, Ordering::Release);
 
@@ -428,40 +296,29 @@ impl Default for Shutdown {
     }
 }
 
-/// Outcome of the legacy [`Shutdown::drain`]. Round-8: superseded by
-/// [`DrainReport`] for the coordinator path; kept for the lb-core
-/// unit tests + the per-conn drain proof.
+/// Outcome of the legacy [`Shutdown::drain`]; the coordinator returns [`DrainReport`] instead.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DrainOutcome {
     /// All tracked tasks exited within the deadline.
     Clean,
-    /// The deadline elapsed with `remaining` tasks still live. Wave 2
-    /// SIGTERM orchestration translates this into a warn-level log
-    /// followed by best-effort abort of the stragglers.
+    /// Deadline elapsed with `remaining` tasks live; the caller warns and best-effort aborts.
     TimedOut {
-        /// Number of tracker-bound tasks still live when the deadline
-        /// elapsed.
+        /// Tracker-bound tasks still live at the deadline.
         remaining: usize,
     },
 }
 
-// ── Round-8: drain coordinator types ──────────────────────────────
-
-/// Per-phase outcome label for [`PhaseTiming::outcome`]. Listener and
-/// in-flight drain reuse this enum; XDP detach has its own richer
-/// outcome via [`XdpDetachOutcome`].
+/// Per-phase outcome; XDP detach uses the richer [`XdpDetachOutcome`] instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ListenerOutcome {
     /// Phase completed within its deadline (or had no deadline).
     Clean,
-    /// Phase deadline elapsed; coordinator fell through to the next
-    /// phase. The call site logs + emits a counter.
+    /// Deadline elapsed; the coordinator fell through to the next phase.
     TimedOut,
 }
 
 impl ListenerOutcome {
-    /// `"clean"` / `"timed_out"` — the label value used by the
-    /// `shutdown_drain_seconds{outcome}` histogram (OPS-03).
+    /// Label value for `shutdown_drain_seconds{outcome}`.
     #[must_use]
     pub const fn as_label(self) -> &'static str {
         match self {
@@ -471,31 +328,24 @@ impl ListenerOutcome {
     }
 }
 
-/// XDP detach phase outcome. Richer than [`ListenerOutcome`] because
-/// the L4-12 detach has three failure modes (timeout, kernel error,
-/// dirty post-query) that operators need to distinguish.
+/// XDP detach outcome; operators must distinguish timeout, kernel error and dirty post-query.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum XdpDetachOutcome {
     /// Detach succeeded; post-query confirmed no program is attached.
     Clean,
     /// `xdp_detach_deadline` elapsed before detach returned.
     TimedOut,
-    /// Detach returned a kernel error (carries the operator-visible
-    /// reason for the `xdp_detach_total{result}` label).
+    /// Kernel error, carrying the `xdp_detach_total{result}` label value.
     Failed {
-        /// Operator-visible reason, mapped 1:1 to the
-        /// `xdp_detach_total{result=<reason>}` counter label.
+        /// The `xdp_detach_total{result}` label value.
         reason: String,
     },
-    /// No XDP loader was supplied (XDP disabled / not attached at
-    /// startup). Phase is skipped entirely.
+    /// No loader supplied; the phase is skipped.
     NotAttempted,
 }
 
 impl XdpDetachOutcome {
-    /// `"clean"` / `"timed_out"` / `"failed"` / `"not_attempted"` —
-    /// the label value for the `xdp_detach_total{result}` counter
-    /// per OPS-01+L4-12+L4-04.
+    /// Label value for `xdp_detach_total{result}`.
     #[must_use]
     pub const fn as_label(&self) -> &'static str {
         match self {
@@ -507,8 +357,7 @@ impl XdpDetachOutcome {
     }
 }
 
-/// The six logical phases of [`Shutdown::run_drain`]. Each entry is a
-/// label value for `shutdown_drain_seconds{phase=...}`.
+/// Phases of [`Shutdown::run_drain`]; each is a `shutdown_drain_seconds{phase}` label value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DrainPhase {
     /// Phase 2 — flip /readyz to 503 (`mark_draining` closure).
@@ -526,9 +375,7 @@ pub enum DrainPhase {
 }
 
 impl DrainPhase {
-    /// `"MarkDraining"` / `"ReadinessSettle"` / `"ListenerCancel"` /
-    /// `"InFlightDrain"` / `"XdpDetach"` / `"Total"` — the label
-    /// value for `shutdown_drain_seconds{phase}` (OPS-03).
+    /// Label value for `shutdown_drain_seconds{phase}`.
     #[must_use]
     pub const fn as_label(self) -> &'static str {
         match self {
@@ -542,15 +389,14 @@ impl DrainPhase {
     }
 }
 
-/// Per-phase timing + outcome record. One per phase in [`DrainReport`].
+/// One phase's timing and outcome.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PhaseTiming {
     /// Which phase this records.
     pub phase: DrainPhase,
     /// Wall-clock duration of the phase.
     pub duration: Duration,
-    /// Per-phase outcome label (covers Clean / TimedOut). XDP uses
-    /// the richer [`XdpDetachOutcome`] alongside this.
+    /// Clean / TimedOut; XDP carries [`XdpDetachOutcome`] alongside.
     pub outcome: ListenerOutcome,
 }
 
@@ -588,8 +434,7 @@ impl PhaseTiming {
 pub struct ListenerCancelPhase {
     /// Timing for the histogram emit.
     pub timing: PhaseTiming,
-    /// Cooperative-cancel outcome (the call site additionally records
-    /// any `JoinHandle::abort` fallback as a counter).
+    /// Cooperative-cancel outcome; abort fallbacks are counted at the call site.
     pub outcome: ListenerOutcome,
 }
 
@@ -598,8 +443,7 @@ pub struct ListenerCancelPhase {
 pub struct InFlightDrainPhase {
     /// Timing for the histogram emit.
     pub timing: PhaseTiming,
-    /// `Clean` if all tracker tasks exited inside the deadline,
-    /// `TimedOut` otherwise.
+    /// Whether every tracker task exited inside the deadline.
     pub outcome: ListenerOutcome,
 }
 
@@ -608,12 +452,11 @@ pub struct InFlightDrainPhase {
 pub struct XdpDetachPhase {
     /// Timing for the histogram emit.
     pub timing: PhaseTiming,
-    /// Detach outcome (see [`XdpDetachOutcome`] for the four states).
+    /// Detach outcome.
     pub outcome: XdpDetachOutcome,
 }
 
-/// Coordinator output. One per [`Shutdown::run_drain`] invocation
-/// (cached + cloned for idempotent re-entry).
+/// Coordinator output, cached and cloned for idempotent re-entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DrainReport {
     /// Phase 2 timing.
@@ -628,38 +471,23 @@ pub struct DrainReport {
     pub xdp_detach: XdpDetachPhase,
     /// Total wall-clock from coordinator entry to exit.
     pub total: PhaseTiming,
-    /// Number of tracker-bound tasks still live after phase 5
-    /// (zero on a clean drain).
+    /// Tracker-bound tasks still live after phase 5.
     pub in_flight_remaining: usize,
 }
 
-/// Owned closure type for the XDP detach phase. The call site
-/// constructs this from `XdpLoader::detach()` (per
-/// OPS-01+L4-12+L4-04). Boxed because closures returning different
-/// futures have different concrete types but the coordinator wants a
-/// single field.
+/// XDP detach closure, boxed so differing future types fit one field.
 pub type XdpDetachFuture = Pin<Box<dyn Future<Output = XdpDetachOutcome> + Send + 'static>>;
 
-/// Owned closure type for the `MarkDraining` phase. Flips /readyz to
-/// 503 at the call site.
+/// `MarkDraining` closure; flips /readyz to 503.
 pub type MarkDrainingFn = Box<dyn FnOnce() + Send + 'static>;
 
-/// OPS-03 emit hook. The coordinator invokes
-/// `observer.observe(&phase_timing, listener_label_opt)` at the end
-/// of every phase. The call site implements this against the
-/// `shutdown_drain_seconds_global` / `_listener` histogram families
-/// (lb-observability). Boxed so lb-core stays independent of
-/// lb-observability.
+/// Per-phase emit hook. Boxed so lb-core takes no dependency on lb-observability.
 pub trait DrainObserver: Send + Sync + 'static {
-    /// Observe a completed phase. `listener` is `Some(label)` for
-    /// listener-scoped phases (ListenerCancel, InFlightDrain) and
-    /// `None` for global phases (ReadinessSettle, XdpDetach, Total).
+    /// Observe a phase; `listener` is `Some` only for listener-scoped phases.
     fn observe(&self, timing: &PhaseTiming, listener: Option<&str>);
 }
 
-/// Drain coordinator inputs. Constructed at the call site
-/// (`crates/lb/src/main.rs`) from `RuntimeConfig` + the
-/// `XdpLoader::detach()` closure.
+/// Drain coordinator inputs.
 #[allow(missing_docs)] // each field is doc'd inline below
 pub struct DrainSpec {
     pub readiness_settle: Duration,
@@ -702,12 +530,7 @@ impl std::fmt::Debug for DrainSpec {
     }
 }
 
-/// OPS-02 jitter: random sub-budget in milliseconds drawn from
-/// `0..max`. Uses `std::collections::hash_map::RandomState` so we
-/// don't take a `rand` dep into lb-core (lb-core is intentionally a
-/// near-zero-dep crate; the lb binary owns `rand` already). The
-/// `RandomState`-derived `Hasher` gives ~32 bits of entropy per
-/// call, which is plenty for a millisecond-bucket jitter.
+/// Random jitter in `0..max` ms; `RandomState` not `rand` keeps lb-core near-zero-dep.
 fn jitter_millis(max: Duration) -> u64 {
     use std::collections::hash_map::RandomState;
     use std::hash::{BuildHasher, Hasher};

@@ -1,37 +1,6 @@
-//! S6 — H3 → H2 R8 streaming verification suite (real wire).
-//!
-//! Path under test: real quiche H3 client → production `QuicListener`
-//! → `router` → `conn_actor::poll_h3` (H2 branch, I3) →
-//! `h3_to_h2_stream_resp` → real hyper H2 backend (`Http2Pool`).
-//!
-//! This is the H3→H1 BUILT bar, applied to H3→H2 (owner binding
-//! conditions):
-//!
-//! * **cond 1** — `h2_e2e_request_body_byte_identical_at_backend`:
-//!   a NON-EMPTY BINARY (non-UTF-8) request body of ≥1 MiB arrives
-//!   BYTE-IDENTICAL at a real H2 backend (proves the dropped-request-
-//!   body defect — the old `Full::new(Bytes::new())` — is fixed).
-//! * **cond 2** — non-vacuous live-gauge memory proofs for BOTH
-//!   directions under a stalled peer
-//!   (`h2_e2e_response_memory_bounded_through_stalled_client`,
-//!   `h2_e2e_request_memory_bounded_through_stalled_backend`) plus a
-//!   backpressure proof
-//!   (`h2_e2e_backpressure_stalled_client_pauses_h2_upstream_read`).
-//! * **cond 3** — every gauge case references the feature-gated
-//!   `lb_quic::h3_bridge::MAX_RETAINED_{RESP,BODY}_BYTES` statics, so
-//!   the suite ONLY compiles those proofs under
-//!   `cargo test -p lb-quic --features test-gauges` (a run without the
-//!   flag fails to compile them — an invalid gate, by design, exactly
-//!   as for `h3_h1_resp_stream_e2e.rs`).
-//!
-//! BINDING case 7 (lead A2) —
-//! `h2_e2e_client_reset_midrequest_rsts_h2_upstream_no_truncated_request`:
-//! the H3 client RESETs MID request body; the real H2 backend NEVER
-//! observes a silently-truncated request presented as complete.
-//!
-//! No `#[ignore]` anywhere. The full real-H2 backend (hyper H2 server)
-//! is built WITHOUT `hyper-util` (a hand-rolled tokio IO adapter +
-//! executor) so no new dev-dependency is added (A1 scope held).
+//! H3 → H2 streaming suite on the real wire: a quiche H3 client → the production
+//! `QuicListener` → `conn_actor::poll_h3` (H2 branch) → `h3_to_h2_stream_resp` → a real
+//! hyper H2 backend.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::too_many_lines)]
 
@@ -63,10 +32,7 @@ const TEST_SNI: &str = "expressgateway.test";
 const H3_ALPN: &[u8] = b"h3";
 const MAX_UDP: usize = 65_535;
 
-/// SESSION 24 / INC-3: decode a RESPONSE QPACK field block emitted by
-/// the migrated egress (the actor's `quiche::h3` encoder, which
-/// Huffman-encodes values). Uses quiche's Huffman-capable QPACK decoder
-/// — the hand-rolled `lb_h3_testcodec::QpackDecoder` is raw-only.
+/// The migrated egress Huffman-encodes values; `lb_h3_testcodec::QpackDecoder` is raw-only.
 #[allow(dead_code)]
 fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, String> {
     use quiche::h3::NameValue;
@@ -84,12 +50,7 @@ fn decode_resp_qpack(header_block: &[u8]) -> Result<Vec<(String, String)>, Strin
         .collect())
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// §0  Hand-rolled hyper IO adapter + executor (no hyper-util dep).
-// ─────────────────────────────────────────────────────────────────────
-
-/// Wrap a tokio `TcpStream` so a hyper 1.x server can drive it without
-/// the `hyper-util` `TokioIo` shim.
+/// Hand-rolled `hyper::rt::Read`/`Write` adapter, so no `hyper-util` dev-dependency is added.
 struct HyperIo(TcpStream);
 
 impl hyper::rt::Read for HyperIo {
@@ -98,9 +59,8 @@ impl hyper::rt::Read for HyperIo {
         cx: &mut Context<'_>,
         mut buf: hyper::rt::ReadBufCursor<'_>,
     ) -> Poll<std::io::Result<()>> {
-        // Read into a scratch buffer sized to the cursor's REMAINING
-        // capacity (hyper's `put_slice` panics if we hand it more than
-        // it can hold), then copy into hyper's cursor.
+        // Size the scratch to the cursor's REMAINING capacity — hyper's `put_slice` panics if
+        // handed more than it can hold.
         let cap = buf.remaining().min(16 * 1024);
         if cap == 0 {
             return Poll::Ready(Ok(()));
@@ -135,7 +95,6 @@ impl hyper::rt::Write for HyperIo {
     }
 }
 
-/// Minimal `hyper::rt::Executor` backed by `tokio::spawn`.
 #[derive(Clone)]
 struct TokioExec;
 impl<F> hyper::rt::Executor<F> for TokioExec
@@ -148,13 +107,7 @@ where
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// §1  Cert + listener + client harness (mirrors h3_h1_resp_stream_e2e).
-// ─────────────────────────────────────────────────────────────────────
-
-/// The §1.5 C5 sound ceiling, IDENTICAL formula to
-/// `h3_h1_resp_stream_e2e::resp_retained_ceiling` (`4 ×
-/// depth×(chunk+hdr)`). `test ceiling == gauge bound`.
+/// The §1.5 C5 sound ceiling; the test ceiling must equal the gauge bound.
 fn retained_ceiling(depth: usize, chunk_max: usize, frame_hdr_max: usize) -> usize {
     4 * (depth * (chunk_max + frame_hdr_max))
 }
@@ -232,8 +185,8 @@ fn build_client_config(ca_path: &std::path::Path) -> quiche::Config {
     cfg.set_max_idle_timeout(30_000);
     cfg.set_max_recv_udp_payload_size(1_350);
     cfg.set_max_send_udp_payload_size(1_350);
-    // Generous connection-level data so the request-side stream is
-    // governed by the per-stream window (stalled-backend test).
+    // Generous connection-level data so the request-side stream is governed by the per-stream
+    // window (the stalled-backend test).
     cfg.set_initial_max_data(8 * 1024 * 1024);
     cfg.set_initial_max_stream_data_bidi_local(8 * 1024 * 1024);
     cfg.set_initial_max_stream_data_bidi_remote(8 * 1024 * 1024);
@@ -257,7 +210,6 @@ fn binary_body(n: usize) -> Vec<u8> {
     let mut s: u32 = 0x9E37_79B9;
     for i in 0..n {
         s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-        // Bias toward high bytes so the body is decidedly non-UTF-8.
         v.push((((s >> 24) as u8) | 0x80).wrapping_add(i as u8));
     }
     v
@@ -283,7 +235,6 @@ async fn start_h3_listener_h2(
     (listener, addr, shutdown)
 }
 
-/// What the driven H3 client observed.
 #[derive(Default)]
 struct ClientOut {
     status: Option<u16>,
@@ -291,26 +242,16 @@ struct ClientOut {
     content_length: Option<usize>,
     fin: bool,
     reset: bool,
-    /// CF-H3-HEAD — non-`:status` fields decoded from the FIRST
-    /// (response-head) HEADERS frame, so the full-header round-trip test
-    /// can assert regular headers survive the H3→H2→H3 relay and
-    /// hop-by-hop (connection) is stripped. Additive/`Default`; existing
-    /// tests ignore it.
+    /// Non-`:status` fields from the response-head HEADERS frame, so the full-header
+    /// round-trip test can assert regular headers survive the H3→H2→H3 relay.
     head_pairs: Vec<(String, String)>,
-    /// CF-H3-HEAD — count of decoded HEADERS frames; the first is the
-    /// response head (populates `head_pairs`), later ones are trailers.
+    /// CF-H3-HEAD — decoded HEADERS frames: the first is the head, later ones are trailers.
     headers_frames: usize,
 }
 
-/// Drive ONE H3 request on stream 0.
-///
-/// `req_body`: chunks sent as DATA frames (FIN after last). Empty ⇒
-/// a bodyless GET. `stall_after`: if `Some(n)`, the client stops
-/// reading the response (but keeps the conn alive with ACKs) once it
-/// has buffered ≥ `n` response body bytes, holds for `stall_for`, then
-/// resumes — the stalled-client memory/backpressure mechanism.
-/// `reset_after_req_bytes`: if `Some(k)`, after sending `k` request
-/// body bytes the client RESET_STREAMs (mid-request abort, case 7).
+/// Drive ONE H3 request on stream 0. `stall_after` stops reading the response (ACKs still flow)
+/// once `n` body bytes are buffered, holds for `stall_for`, then resumes — the stalled-client
+/// memory/backpressure mechanism. `reset_after_req_bytes` RESET_STREAMs mid request body.
 #[allow(clippy::struct_excessive_bools)]
 struct DriveCfg {
     method: &'static str,
@@ -352,7 +293,6 @@ async fn drive_h3(
 
     let deadline = tokio::time::Instant::now() + overall;
     while tokio::time::Instant::now() < deadline {
-        // Flush egress.
         loop {
             match conn.send(&mut out_buf) {
                 Ok((n, info)) => {
@@ -364,14 +304,9 @@ async fn drive_h3(
         }
 
         if conn.is_established() && !head_sent {
-            // Pre-serialize HEADERS + every DATA frame into ONE wire
-            // buffer. We then push it to the stream honouring partial
-            // accepts (QUIC flow control / the gateway's M-A
-            // backpressure) and set FIN exactly once, when fully
-            // drained. `reset_byte` is the wire offset at/after which
-            // the client RESET_STREAMs (case 7) — measured from the
-            // first DATA byte so the threshold maps to request-body
-            // progress, independent of the HEADERS frame size.
+            // Pre-serialize HEADERS + every DATA frame into ONE buffer, then push it honouring
+            // partial accepts and set FIN exactly once, when fully drained. `reset_byte` is
+            // measured from the FIRST DATA byte, so the threshold is independent of HEADERS size.
             let encoder = QpackEncoder::new();
             let headers = vec![
                 (":method".to_string(), cfg.method.to_string()),
@@ -398,9 +333,6 @@ async fn drive_h3(
             head_sent = true;
         }
 
-        // Push the wire buffer with partial-accept handling. FIN only
-        // when fully drained (and not aborting). Honour the mid-body
-        // RESET threshold (case 7).
         if head_sent && !req_done && !did_reset {
             if let Some(k) = cfg.reset_after_req_bytes {
                 let body_sent = tx_off.saturating_sub(data_start);
@@ -420,9 +352,7 @@ async fn drive_h3(
                         if tx_off >= tx_wire.len() {
                             req_done = true; // FIN was set on this send
                         } else {
-                            // Partial: the FIN we just requested was
-                            // NOT applied (more bytes pending). Honour
-                            // a RESET threshold reached mid-buffer.
+                            // Partial: the FIN just requested was NOT applied.
                             if let Some(k) = cfg.reset_after_req_bytes {
                                 if tx_off.saturating_sub(data_start) >= k {
                                     let _ =
@@ -439,7 +369,6 @@ async fn drive_h3(
             }
         }
 
-        // Drain response unless stalling.
         let now = tokio::time::Instant::now();
         if let Some(until) = stalling_until {
             if now >= until {
@@ -475,11 +404,6 @@ async fn drive_h3(
                         rx_tail.drain(..c);
                         out.headers_frames += 1;
                         let is_head = out.headers_frames == 1;
-                        // SESSION 24 / INC-3: decode the response field
-                        // section with quiche's Huffman-capable QPACK
-                        // decoder (the migrated egress encodes via
-                        // quiche::h3, which Huffman-encodes values; the
-                        // hand-rolled lb_h3_testcodec decoder is raw-only).
                         if let Ok(h) = decode_resp_qpack(&header_block) {
                             for (n, v) in h {
                                 if n == ":status" {
@@ -487,8 +411,6 @@ async fn drive_h3(
                                 } else if n == "content-length" {
                                     out.content_length = v.parse().ok();
                                 }
-                                // CF-H3-HEAD: capture the response-head
-                                // non-status fields (first HEADERS frame).
                                 if is_head && n != ":status" {
                                     out.head_pairs.push((n.clone(), v.clone()));
                                 }
@@ -505,9 +427,8 @@ async fn drive_h3(
                     Err(_) => break,
                 }
             }
-            // Engage the stall EXACTLY ONCE (latched) when we've
-            // buffered enough body — re-engaging every tick would
-            // never let the download complete (false liveness fail).
+            // Latched: engage the stall EXACTLY ONCE — re-engaging every tick would never let
+            // the download complete (a false liveness fail).
             if let Some(n) = cfg.stall_after {
                 if !stalled_once
                     && stalling_until.is_none()
@@ -525,12 +446,9 @@ async fn drive_h3(
             break;
         }
 
-        // Wait for the first datagram (bounded by the QUIC timer),
-        // then DRAIN the whole receive backlog this tick so a 4–8 MiB
-        // transfer is not throttled to one datagram per loop. During
-        // a stall we still `conn.recv` (ACKs flow, QUIC flow control
-        // naturally backpressures the gateway) — only `stream_recv`
-        // is withheld above.
+        // Wait for the first datagram, then DRAIN the whole backlog this tick so a multi-MiB
+        // transfer is not throttled to one datagram per loop. During a stall `conn.recv` still
+        // runs (ACKs flow) — only `stream_recv` is withheld above.
         let to = conn.timeout().unwrap_or(Duration::from_millis(20));
         match tokio::time::timeout(
             to.min(Duration::from_millis(25)),
@@ -544,8 +462,7 @@ async fn drive_h3(
             }
             Ok(Err(_)) | Err(_) => conn.on_timeout(),
         }
-        // Drain any further queued datagrams this tick (bounded so a
-        // flood cannot starve the send/stall logic).
+        // Bounded so a datagram flood cannot starve the send/stall logic.
         for _ in 0..64 {
             match sock.try_recv_from(&mut in_buf) {
                 Ok((n, from)) => {
@@ -559,16 +476,8 @@ async fn drive_h3(
     out
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// §2  Real hyper H2 backends.
-// ─────────────────────────────────────────────────────────────────────
-
-/// Echo backend: replies 200 with the request body verbatim, and
-/// records the FULL received request body so the test can assert it
-/// byte-for-byte. `seen` captures the body of the LAST completed
-/// request; `complete` is set only when the request body ended
-/// cleanly (so a truncated/aborted request is observable as NOT
-/// complete — case 7).
+/// Echo backend. `complete` is set only when the request body ended cleanly, so a
+/// truncated/aborted request is observable as NOT complete.
 #[derive(Clone, Default)]
 struct BackendSeen {
     body: Arc<Mutex<Vec<u8>>>,
@@ -590,9 +499,8 @@ async fn spawn_h2_echo(seen: BackendSeen) -> (SocketAddr, tokio::task::JoinHandl
                     let seen = seen.clone();
                     async move {
                         seen.requests.fetch_add(1, Ordering::SeqCst);
-                        // Stream the request body frame-by-frame so a
-                        // mid-stream error is observed as an Err (NOT
-                        // a clean end) — the truncation guard.
+                        // Stream the body frame-by-frame so a mid-stream error is observed as
+                        // an Err, NOT a clean end.
                         let mut got = Vec::new();
                         let mut body = req.into_body();
                         let mut clean = true;
@@ -634,9 +542,7 @@ async fn spawn_h2_echo(seen: BackendSeen) -> (SocketAddr, tokio::task::JoinHandl
     (local, h)
 }
 
-/// Large-response backend: replies 200 with a fixed `body` (used for
-/// the response-direction memory/backpressure proofs). Splits the
-/// body into 16 KiB frames so the H2 send window governs progress.
+/// Large-response backend; splits the body into 16 KiB frames so the H2 send window governs.
 async fn spawn_h2_large_resp(body: Vec<u8>) -> (SocketAddr, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let local = listener.local_addr().unwrap();
@@ -668,14 +574,9 @@ async fn spawn_h2_large_resp(body: Vec<u8>) -> (SocketAddr, tokio::task::JoinHan
     (local, h)
 }
 
-/// CF-H3-HEAD — an H2 backend that replies 200 with REGULAR response
-/// headers (content-type + cache-control + a custom `x-eg-resp`) plus a
-/// small body, so the H3→H2 leg's full-header forwarding can be
-/// asserted end-to-end. (NOTE: a hyper H2 server forbids
-/// connection-specific hop-by-hop headers per RFC 9113 §8.2.2, so the
-/// hop-by-hop STRIP cannot be exercised through a hyper backend here —
-/// the shared `is_response_hop_by_hop` strip is proven load-bearing in
-/// the H3→H1 raw-socket test, which can inject `Connection: close`.)
+/// CF-H3-HEAD — a hyper H2 server forbids connection-specific hop-by-hop headers (RFC 9113
+/// §8.2.2), so the hop-by-hop STRIP cannot be exercised here; it is proven load-bearing in the
+/// H3→H1 raw-socket test, which can inject one.
 async fn spawn_h2_resp_with_headers(body: Vec<u8>) -> (SocketAddr, tokio::task::JoinHandle<()>) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let local = listener.local_addr().unwrap();
@@ -710,12 +611,7 @@ async fn spawn_h2_resp_with_headers(body: Vec<u8>) -> (SocketAddr, tokio::task::
     (local, h)
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// §3  Cases.
-// ─────────────────────────────────────────────────────────────────────
-
-/// Case 1 — liveness floor: small GET, status + body byte-identical,
-/// clean FIN.
+/// Case 1 — liveness floor: small GET, status + body byte-identical, clean FIN.
 #[tokio::test]
 async fn h2_e2e_get_response_byte_identical() {
     let certs = generate_loopback_certs();
@@ -750,18 +646,9 @@ async fn h2_e2e_get_response_byte_identical() {
     );
 }
 
-/// CF-H3-HEAD — the H3→H2 streaming response leg MUST forward the FULL
-/// non-hop-by-hop response header set to the H3 client (pre-S12 it
-/// dropped everything but `:status` + content-length). The H2 backend
-/// replies with content-type + cache-control + a custom `x-eg-resp`;
-/// all three MUST round-trip to the H3 client. LOAD-BEARING: temp-revert
-/// stream_h2_response's head re-encode to the `:status`+CL-only
-/// projection → this test FAILS (the regular headers vanish); restore →
-/// PASSES. Body byte-identity + clean FIN confirm the head change does
-/// not perturb body framing. (The hop-by-hop STRIP shares the same
-/// `is_response_hop_by_hop` helper proven load-bearing in the H3→H1
-/// raw-socket test — a hyper H2 backend cannot emit a connection-class
-/// header to exercise it here, per RFC 9113 §8.2.2.)
+/// CF-H3-HEAD — the H3→H2 response leg MUST forward the FULL non-hop-by-hop header set (pre-S12
+/// it dropped everything but `:status` + content-length). LOAD-BEARING: temp-revert the head
+/// re-encode to the `:status`+CL projection and this FAILS.
 #[tokio::test]
 async fn cf_h3_head_h3_to_h2_full_response_headers_round_trip() {
     let certs = generate_loopback_certs();
@@ -813,9 +700,8 @@ async fn cf_h3_head_h3_to_h2_full_response_headers_round_trip() {
     );
 }
 
-/// Case 2 (BINDING cond 1) — a NON-EMPTY BINARY request body arrives
-/// BYTE-IDENTICAL at the real H2 backend. Proves the dropped-request-
-/// body defect is fixed.
+/// Case 2 (BINDING cond 1) — a NON-EMPTY BINARY request body arrives BYTE-IDENTICAL at the real
+/// H2 backend, proving the dropped-body defect fixed.
 #[tokio::test]
 async fn h2_e2e_request_body_byte_identical_at_backend() {
     let certs = generate_loopback_certs();
@@ -824,8 +710,6 @@ async fn h2_e2e_request_body_byte_identical_at_backend() {
     let (listener, gw, sd) = start_h3_listener_h2(&certs, backend).await;
 
     let payload = binary_body(1024 * 1024 + 777); // ≥1 MiB, non-UTF-8
-    // Split into many DATA frames (≈48 KiB) to exercise the
-    // multi-frame incremental pump.
     let chunks: Vec<Vec<u8>> = payload.chunks(48 * 1024).map(<[u8]>::to_vec).collect();
 
     let out = drive_h3(
@@ -866,16 +750,11 @@ async fn h2_e2e_request_body_byte_identical_at_backend() {
         "request body must arrive BYTE-IDENTICAL at the H2 backend \
          (dropped-request-body defect fixed)"
     );
-    // The echo backend returns the body verbatim — also assert the
-    // round-trip response body is identical (both directions intact).
     assert_eq!(out.body, payload, "echoed response body must match");
 }
 
-/// Case 3 (BINDING cond 2, response direction) — a 4 MiB H2 response
-/// streams through a STALLED H3 client; the live
-/// `MAX_RETAINED_RESP_BYTES` gauge stays ≤ the C5 ceiling (≪ body),
-/// then the client resumes and the body arrives byte-identical with a
-/// clean FIN (non-vacuous: bound + liveness).
+/// Case 3 (BINDING cond 2, response direction) — a 4 MiB response through a STALLED H3 client
+/// keeps `MAX_RETAINED_RESP_BYTES` ≤ the C5 ceiling, then resumes byte-identical with a clean FIN.
 #[cfg(feature = "test-gauges")]
 #[tokio::test]
 async fn h2_e2e_response_memory_bounded_through_stalled_client() {
@@ -930,10 +809,8 @@ async fn h2_e2e_response_memory_bounded_through_stalled_client() {
     assert!(retained > 0, "gauge must be live (non-vacuous)");
 }
 
-/// Case 4 (BINDING cond 2, request direction) — a 4 MiB binary
-/// request body while the H2 backend STALLS reading it; the live
-/// `MAX_RETAINED_BODY_BYTES` gauge stays ≤ the C5 ceiling (≪ body),
-/// then the backend unblocks and the body is byte-identical.
+/// Case 4 (BINDING cond 2, request direction) — a 4 MiB request body against a STALLED H2
+/// backend keeps `MAX_RETAINED_BODY_BYTES` ≤ the ceiling, and arrives byte-identical.
 #[cfg(feature = "test-gauges")]
 #[tokio::test]
 async fn h2_e2e_request_memory_bounded_through_stalled_backend() {
@@ -955,8 +832,8 @@ async fn h2_e2e_request_memory_bounded_through_stalled_backend() {
         payload.len()
     );
 
-    // Backend that accepts the connection but DELAYS reading the
-    // request body, forcing the proxy's request pump to backpressure.
+    // Accepts the connection but DELAYS reading the request body, forcing the proxy's request
+    // pump to backpressure.
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let backend = listener.local_addr().unwrap();
     let bh = tokio::spawn(async move {
@@ -966,7 +843,6 @@ async fn h2_e2e_request_memory_bounded_through_stalled_backend() {
             };
             tokio::spawn(async move {
                 let svc = service_fn(move |req: Request<Incoming>| async move {
-                    // Stall ~1.5 s BEFORE draining the request body.
                     tokio::time::sleep(Duration::from_millis(1500)).await;
                     let got = req
                         .into_body()
@@ -1023,10 +899,8 @@ async fn h2_e2e_request_memory_bounded_through_stalled_backend() {
     assert!(retained > 0, "gauge must be live (non-vacuous)");
 }
 
-/// Case 5 (BINDING cond 2, backpressure) — a stalled H3 client must
-/// pause the H2 upstream read: retained ≤ ceiling for a body ≫
-/// ceiling, AND the body still completes byte-identical after resume
-/// (the causal chain held without dropping/corrupting bytes).
+/// Case 5 (BINDING cond 2, backpressure) — a stalled H3 client must pause the H2 upstream read:
+/// retained ≤ ceiling for a body ≫ ceiling, and the body still completes byte-identical.
 #[cfg(feature = "test-gauges")]
 #[tokio::test]
 async fn h2_e2e_backpressure_stalled_client_pauses_h2_upstream_read() {
@@ -1075,13 +949,12 @@ async fn h2_e2e_backpressure_stalled_client_pauses_h2_upstream_read() {
     );
 }
 
-/// Case 6 — H2 backend RESETs mid-body ⇒ the H3 client gets
-/// RESET_STREAM, NEVER a clean FIN (response-splitting guard).
+/// Case 6 — an H2 backend RESET mid-body ⇒ RESET_STREAM to the H3 client, NEVER a clean FIN
+/// (response-splitting guard).
 #[tokio::test]
 async fn h2_e2e_upstream_reset_midbody_resets_client_no_fin() {
     let certs = generate_loopback_certs();
-    // Backend: send 200 + a Content-Length far larger than the bytes
-    // it actually writes, then drop the connection mid-body ⇒ hyper
+    // 200 + a Content-Length far larger than the bytes written, then drop mid-body ⇒ hyper
     // surfaces a body error to the proxy.
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let backend = listener.local_addr().unwrap();
@@ -1092,9 +965,6 @@ async fn h2_e2e_upstream_reset_midbody_resets_client_no_fin() {
             };
             tokio::spawn(async move {
                 let svc = service_fn(move |_req: Request<Incoming>| async move {
-                    // Declare a 1 MiB body but the body stream yields
-                    // only ~64 KiB then ERRORS — the proxy must NOT
-                    // deliver a clean, complete 200 to the client.
                     let s = futures_like_error_body();
                     Ok::<_, std::convert::Infallible>(
                         Response::builder()
@@ -1131,12 +1001,9 @@ async fn h2_e2e_upstream_reset_midbody_resets_client_no_fin() {
     sd.cancel();
     bh.abort();
 
-    // The response-splitting guard: a mid-body upstream error must
-    // NEVER be delivered to the client as a clean, COMPLETE 200 (FIN
-    // with the full declared 1 MiB body). Acceptable outcomes: a
-    // RESET_STREAM (no FIN), an inline 5xx (clean FIN but NOT 200),
-    // or a short/incomplete body that does not satisfy the declared
-    // content-length.
+    // The response-splitting guard: a mid-body upstream error must NEVER reach the client as a
+    // clean COMPLETE 200. Acceptable: RESET_STREAM (no FIN), an inline 5xx, or a body short of
+    // the declared length.
     let delivered_complete_200 = out.status == Some(200) && out.fin && out.body.len() >= 1_048_576;
     assert!(
         !delivered_complete_200,
@@ -1146,8 +1013,8 @@ async fn h2_e2e_upstream_reset_midbody_resets_client_no_fin() {
         out.fin,
         out.body.len()
     );
-    // And specifically: if it FIN'd with status 200, the body must be
-    // SHORT of the declared length (truncation visible, not masked).
+    // And if it FIN'd with status 200, the body must be SHORT of the declared length
+    // (truncation visible, not masked).
     if out.status == Some(200) && out.fin {
         assert!(
             out.body.len() < 1_048_576,
@@ -1157,12 +1024,8 @@ async fn h2_e2e_upstream_reset_midbody_resets_client_no_fin() {
     }
 }
 
-/// An error body: emits ~64 KiB across 8 DATA frames (so HEADERS +
-/// real body bytes are reliably relayed through the proxy), then
-/// ERRORS — the proxy's `stream_h2_response` hits the `body.frame()`
-/// Err arm AFTER having forwarded a partial body, exercising the true
-/// mid-body response-splitting guard (declared content-length 1 MiB,
-/// only ~64 KiB delivered).
+/// ~64 KiB across 8 DATA frames (so HEADERS + real body bytes are reliably relayed), then
+/// ERRORS — the `body.frame()` Err arm AFTER a partial body, the true mid-body guard.
 fn error_body()
 -> http_body_util::combinators::BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>> {
     use std::pin::Pin;
@@ -1196,12 +1059,8 @@ fn futures_like_error_body()
     error_body()
 }
 
-/// Case 7 (BINDING — lead A2, request-side smuggling-parity) — the H3
-/// client RESETs MID request body. The streaming request `BoxBody`
-/// errors ⇒ hyper RST_STREAMs the H2 upstream; the real H2 backend
-/// NEVER observes a silently-truncated request presented as complete
-/// (it sees a body stream error, NOT a clean end-of-request with a
-/// short body).
+/// Case 7 (BINDING — request-side smuggling parity) — the H3 client RESETs MID request body, so
+/// the backend sees a body-stream ERROR, never a clean end-of-request with a short body.
 #[tokio::test]
 async fn h2_e2e_client_reset_midrequest_rsts_h2_upstream_no_truncated_request() {
     let certs = generate_loopback_certs();
@@ -1209,7 +1068,6 @@ async fn h2_e2e_client_reset_midrequest_rsts_h2_upstream_no_truncated_request() 
     let (backend, bh) = spawn_h2_echo(seen.clone()).await;
     let (listener, gw, sd) = start_h3_listener_h2(&certs, backend).await;
 
-    // 2 MiB intended; the client RESETs after ~256 KiB of body.
     let payload = binary_body(2 * 1024 * 1024);
     let chunks: Vec<Vec<u8>> = payload.chunks(32 * 1024).map(<[u8]>::to_vec).collect();
 
@@ -1228,7 +1086,6 @@ async fn h2_e2e_client_reset_midrequest_rsts_h2_upstream_no_truncated_request() 
     )
     .await;
 
-    // Give the backend a moment to observe the stream fault.
     tokio::time::sleep(Duration::from_millis(300)).await;
     let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
     sd.cancel();
@@ -1236,8 +1093,6 @@ async fn h2_e2e_client_reset_midrequest_rsts_h2_upstream_no_truncated_request() 
     let backend_body_len = seen.body.lock().unwrap().len();
     bh.abort();
 
-    // The load-bearing invariant: the backend must NOT have accepted a
-    // truncated request as a COMPLETE one.
     assert!(
         !backend_saw_complete,
         "H2 backend must NEVER see a mid-request-aborted body as a \
@@ -1245,34 +1100,21 @@ async fn h2_e2e_client_reset_midrequest_rsts_h2_upstream_no_truncated_request() 
          backend_body_len={backend_body_len} (intended {})",
         payload.len()
     );
-    // The client must not have received a normal 200+FIN for an
-    // aborted request.
     assert!(
         !(out.status == Some(200) && out.fin),
         "an aborted request must not yield a clean 200 FIN to the client"
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// §4  G5 remediation — DIRECT `stream_h2_response` coverage.
-//
-// `stream_h2_response` takes a real `hyper::Response<Incoming>` (no
-// public constructor for `Incoming`), so these drive a genuine hyper
-// H2 server + in-process hyper H2 client to obtain a real `Incoming`,
-// then call `lb_quic::h3_bridge::stream_h2_response` DIRECTLY with a
-// controlled channel + `cap`. This covers the response-side arms the
-// I1/I4 tests left uncovered (G5 isolate): the trailers branch
-// (h3_bridge.rs:1571-1599), the over-cap `Reset`/`OverCap` arms
-// (1527-1528, 1546-1548, 1593-1595), and the `send!` `ClientGone`
-// arm (1503). Real-wire — NOT a mock; NO production logic changed.
-// ─────────────────────────────────────────────────────────────────────
+// §4  DIRECT `stream_h2_response` coverage. It takes a real `hyper::Response<Incoming>`, which
+// has no public constructor, so these drive a genuine hyper H2 server + in-process client to
+// obtain one. Covers arms the e2e cases leave uncovered: trailers, the over-cap `Reset`/
+// `OverCap` arms, and `ClientGone`.
 
 use lb_quic::h3_bridge::{RespAbort, RespEvent, stream_h2_response};
 
-/// Spawn a hyper H2 backend whose response carries `body_bytes` as a
-/// DATA frame followed by an HTTP trailer field section (so the
-/// proxy's `stream_h2_response` exercises the `frame.trailers_ref()`
-/// branch). Status is 200.
+/// A hyper H2 backend whose 200 carries `body_bytes` then a trailer field section, so
+/// `stream_h2_response` exercises the `frame.trailers_ref()` branch.
 async fn spawn_h2_trailers_backend(
     body_bytes: Vec<u8>,
 ) -> (SocketAddr, tokio::task::JoinHandle<()>) {
@@ -1289,11 +1131,7 @@ async fn spawn_h2_trailers_backend(
                 let svc = service_fn(move |_req: Request<Incoming>| {
                     let body = Arc::clone(&body);
                     async move {
-                        // Dependency-free body (no futures_util /
-                        // StreamBody — A1 scope: no new dep), mirroring
-                        // this file's existing `error_body` pattern:
-                        // one DATA frame then a trailer field section,
-                        // then end-of-stream.
+                        // Dependency-free body (no futures_util / StreamBody).
                         struct TrailerBody {
                             data: Option<Bytes>,
                             trailer_sent: bool,
@@ -1344,8 +1182,7 @@ async fn spawn_h2_trailers_backend(
     (local, h)
 }
 
-/// In-process hyper H2 client: dial `addr`, send a GET, return the
-/// real `Response<Incoming>`. Drives the client connection on a task.
+/// In-process hyper H2 client returning a real `Response<Incoming>`; drives the conn on a task.
 async fn h2_client_get(addr: SocketAddr) -> Response<Incoming> {
     let stream = TcpStream::connect(addr).await.unwrap();
     let (mut sender, conn) = hyper::client::conn::http2::handshake::<
@@ -1367,10 +1204,8 @@ async fn h2_client_get(addr: SocketAddr) -> Response<Incoming> {
     sender.send_request(req).await.unwrap()
 }
 
-/// G5 — the response TRAILERS branch (h3_bridge.rs:1571-1599 happy
-/// path): an upstream H2 response with a DATA frame + a trailer
-/// section must re-encode to HEADERS + DATA + trailing-HEADERS + End,
-/// all bounded.
+/// The response TRAILERS branch (happy path): DATA + a trailer section must re-emit as
+/// Head + Body + Trailers + End, all bounded.
 #[tokio::test]
 async fn g5_stream_h2_response_forwards_trailers() {
     let payload = vec![0x5Au8; 40 * 1024]; // > H3_RESP_CHUNK_MAX ⇒ multi-frame
@@ -1382,11 +1217,7 @@ async fn g5_stream_h2_response_forwards_trailers() {
     bh.abort();
     assert!(r.is_ok(), "clean trailered response must succeed: {r:?}");
 
-    // SESSION 24 / INC-3: `stream_h2_response` now emits DECODED events
-    // (Head, Body*, Trailers, End) — the actor encodes via quiche::h3.
-    // Reassemble them directly (no wire decode); expect a Head (status),
-    // Body bytes == payload, a non-empty Trailers carrying x-checksum,
-    // then End.
+    // `stream_h2_response` emits DECODED events (the actor encodes), so reassemble directly.
     let mut saw_head = false;
     let mut data: Vec<u8> = Vec::new();
     let mut saw_trailer = false;
@@ -1416,18 +1247,13 @@ async fn g5_stream_h2_response_forwards_trailers() {
     );
 }
 
-/// G5 — the over-cap `Reset`/`OverCap` arms. SESSION 24 / INC-3: the
-/// `cap` is now a DoS threshold on the DECODED payload/field byte length
-/// (no longer the encoded-frame byte length), since the actor — not the
-/// producer — encodes. The backend response is status 200 with NO
-/// regular response headers (Head cost = 0 field bytes), one DATA frame
-/// (Body cost = payload bytes), then an `x-checksum: deadbeef` trailer
-/// (Trailers cost = 10 + 8 = 18 field bytes). Each arm must emit `Reset`
-/// and return `Err(RespAbort::OverCap)` — a partial body never FIN'd.
+/// The over-cap `Reset`/`OverCap` arms. `cap` is a DoS threshold on the DECODED payload/field
+/// byte length (the actor, not the producer, encodes). Each arm must emit `Reset` and return
+/// `Err(OverCap)` — a partial body is never FIN'd.
 #[tokio::test]
 async fn g5_stream_h2_response_over_cap_arms_reset() {
-    // (a) cap = 0 ⇒ the first non-zero-cost item (the 8-byte DATA body)
-    // trips OverCap. The empty Head (0 field bytes) passes; no End.
+    // (a) cap = 0 ⇒ the first non-zero-cost item (the 8-byte DATA body) trips OverCap; the
+    // empty Head (0 field bytes) passes, and there is no End.
     {
         let (backend, bh) = spawn_h2_trailers_backend(vec![1u8; 8]).await;
         let resp = h2_client_get(backend).await;
@@ -1445,8 +1271,7 @@ async fn g5_stream_h2_response_over_cap_arms_reset() {
         assert!(saw_reset, "over-cap must emit Reset");
     }
 
-    // (b) cap admits the Head but NOT the (16 KiB) DATA body ⇒ the body
-    // trips OverCap. cap = 64 < 16 KiB.
+    // (b) cap admits the Head but NOT the 16 KiB DATA body.
     {
         let (backend, bh) = spawn_h2_trailers_backend(vec![2u8; 16 * 1024]).await;
         let resp = h2_client_get(backend).await;
@@ -1466,12 +1291,8 @@ async fn g5_stream_h2_response_over_cap_arms_reset() {
         assert!(saw_reset && !ended, "DATA over-cap ⇒ Reset, never End");
     }
 
-    // (c) cap admits Head + Body but NOT the trailer field section ⇒ the
-    // trailer over-cap arm. Body = 16 bytes; trailer field bytes
-    // (`x-checksum`+`deadbeef` = 18) push past the cap. The exact Head
-    // field-byte cost is backend-dependent, so sweep cap upward until a
-    // run forwards the Head AND the full 16-byte Body and then Resets on
-    // the trailer (never End) — robust to the Head cost.
+    // (c) cap admits Head + Body but NOT the trailer section. The exact Head field-byte cost is
+    // backend-dependent, so sweep cap upward until a run forwards Head AND the full Body first.
     {
         let mut hit_trailer_overcap = false;
         for cap in (16usize..=240).step_by(2) {
@@ -1483,9 +1304,8 @@ async fn g5_stream_h2_response_over_cap_arms_reset() {
             if r != Err(RespAbort::OverCap) {
                 continue;
             }
-            // A trailer-over-cap run must have forwarded the Head AND the
-            // full Body before the Reset (distinguishing it from the
-            // Head/Body over-cap arms, which Reset earlier).
+            // A trailer-over-cap run must have forwarded Head AND the full Body before the
+            // Reset — that is what distinguishes it from the earlier arms.
             let mut had_head = false;
             let mut body_bytes = 0usize;
             let mut saw_trailer = false;
@@ -1514,11 +1334,8 @@ async fn g5_stream_h2_response_over_cap_arms_reset() {
     }
 }
 
-/// G5 — the `send!` `ClientGone` arm (h3_bridge.rs:1503): if the
-/// downstream receiver is dropped, the very first `send!` (HEADERS)
-/// maps the closed channel to `Err(RespAbort::ClientGone)` and the
-/// upstream relay stops (a stalled/cancelled client must not be
-/// served further).
+/// The `ClientGone` arm: with the downstream receiver dropped, the very first send maps the
+/// closed channel to `Err(ClientGone)` and the upstream relay stops.
 #[tokio::test]
 async fn g5_stream_h2_response_client_gone_on_closed_channel() {
     let (backend, bh) = spawn_h2_trailers_backend(vec![9u8; 1024]).await;

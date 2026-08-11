@@ -1,12 +1,6 @@
-//! ROUND8-L4-01 proof: the userspace `BackendEntry::try_new` /
-//! `BackendEntryV6::try_new` constructors reject the zero-IP /
-//! zero-port sentinel shapes that cause silent `XDP_TX` to
-//! `0.0.0.0:0`. The eBPF-side guard (in
-//! `crates/lb-l4-xdp/ebpf/src/main.rs`) is the runtime mirror; this
-//! test covers the construction-time admission gate.
-//!
-//! Reference: Katran lesson 10 (`increment_ch_drop_real_0()`,
-//! reserve ring position 0 as uninitialised sentinel).
+//! ROUND8-L4-01 proof: `BackendEntry::try_new` / `BackendEntryV6::try_new` reject the zero-IP /
+//! zero-port sentinels that cause a silent `XDP_TX` to 0.0.0.0:0 (Katran lesson 10). The
+//! eBPF-side guard is the runtime mirror; this covers the construction-time admission gate.
 
 #![cfg(target_os = "linux")]
 
@@ -18,7 +12,6 @@ const MAC_B: [u8; 6] = [0x02, 0, 0, 0, 0, 2];
 
 #[test]
 fn userspace_try_new_rejects_zero_ip_v4() {
-    // ROUND8-L4-07: try_new no longer takes a `flags` arg.
     let r = BackendEntry::try_new(7, 0, 8080, MAC_A, MAC_B);
     match r {
         Err(XdpLoaderError::BackendUnpopulated { reason }) => {
@@ -69,10 +62,8 @@ fn userspace_try_new_rejects_zero_port_v6() {
 
 #[test]
 fn legacy_new_still_accepts_zero_for_back_compat() {
-    // `new` is the legacy infallible constructor; it MUST still
-    // accept the zero shapes (used by existing tests that exercise
-    // padding invariants). The eBPF-side runtime guard is the
-    // load-bearing defence for any production caller.
+    // `new` is the legacy infallible constructor and MUST still accept the zero shapes; the
+    // eBPF runtime guard is the load-bearing defence for any production caller.
     let entry = BackendEntry::new(0, 0, 0, MAC_A, MAC_B);
     assert_eq!(entry.backend_ip, 0);
     assert_eq!(entry.backend_port, 0);
@@ -85,9 +76,7 @@ fn stats_slot_backend_unpopulated_at_slot_10() {
     // Drift here corrupts every operator's `xdp_packets_total{result}`
     // labels.
     assert_eq!(StatSlot::BackendUnpopulated as usize, 10);
-    // NUM_SLOTS is the floor invariant — ROUND8-L4-08 bumps it to 13
-    // when fragment slots land. Assert > 10 so this test survives the
-    // L4-08 commit.
+    // Deliberately loose (`> 10`) so appending slots cannot break this test.
     let slots = NUM_SLOTS;
     assert!(
         slots > 10,

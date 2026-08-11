@@ -11,8 +11,7 @@ pub enum BalancerError {
     #[error("all backends have zero weight")]
     AllZeroWeight,
 
-    /// The pre-computed lookup table (Maglev or `RingHash`) is stale and must be
-    /// rebuilt because the backend set has changed.
+    /// The precomputed table is stale — the backend set changed and it must be rebuilt.
     #[error("lookup table is stale; rebuild required")]
     TableStale,
 

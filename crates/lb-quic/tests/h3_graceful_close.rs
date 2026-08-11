@@ -1,26 +1,6 @@
-//! PROTO-2-11 proof — the per-connection actor's graceful-shutdown
-//! helper (`graceful_h3_shutdown`) must emit an application-layer
-//! `CONNECTION_CLOSE` frame carrying `H3_NO_ERROR = 0x0100` when the
-//! listener's cancellation token fires.
-//!
-//! Coverage strategy:
-//!
-//! 1. Build a server + client `quiche::Connection` with a self-signed
-//!    cert (rcgen), the production HTTP/3 ALPN tokens, and the
-//!    in-tree `lb-quic`'s `LB_QUIC_TEST_SNI` so the handshake reaches
-//!    `is_established()` end-to-end.
-//! 2. Pump packets between two `127.0.0.1` UDP sockets until
-//!    establishment.
-//! 3. Call the exported [`lb_quic::graceful_h3_shutdown`] on the
-//!    server-side `quiche::Connection`.
-//! 4. Drive the client until its `peer_error()` becomes `Some`.
-//! 5. Assert `is_app == true` and `error_code == 0x0100` —
-//!    the bytes that left the server's UDP socket parsed back into a
-//!    proper application-layer CLOSE on the peer.
-//!
-//! The drive logic is intentionally minimal: no streams are opened,
-//! no H3 messages exchanged. PROTO-2-11 only cares that the CLOSE
-//! emission and pump-until-closed semantics are wired up correctly.
+//! PROTO-2-11 proof — `graceful_h3_shutdown` must emit an application-layer `CONNECTION_CLOSE`
+//! carrying `H3_NO_ERROR = 0x0100` when the listener's cancellation token fires: the client must
+//! see `peer_error()` with `is_app == true` and `error_code == 0x0100`. No streams are opened.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -34,23 +14,16 @@ use tokio::net::UdpSocket;
 use lb_quic::{H3_NO_ERROR, graceful_h3_shutdown};
 
 const MAX_UDP: usize = 65_535;
-/// SNI advertised by the loopback client. Mirrors `lb_quic`'s internal
-/// `LB_QUIC_TEST_SNI` constant; the cert's SAN must match.
+/// Mirrors `lb_quic`'s internal `LB_QUIC_TEST_SNI`; the cert's SAN must match.
 const TEST_SNI: &str = "expressgateway.test";
-/// Production ALPN tokens (RFC 9114 §3.1). Mirrors
-/// `lb_quic::H3_ALPN_PROTOS` so the handshake exercises the same
-/// negotiation path the listener uses in production.
+/// Production ALPN tokens (RFC 9114 §3.1), mirroring `lb_quic::H3_ALPN_PROTOS` so the handshake
+/// exercises the same negotiation path as the listener.
 const H3_ALPN_PROTOS: &[&[u8]] = &[b"h3", b"h3-29"];
-/// Upper bound on the in-process handshake pump. 2 s is well beyond
-/// any realistic loopback handshake while keeping test runtime bounded.
 const HANDSHAKE_BUDGET: Duration = Duration::from_secs(2);
-/// Upper bound on how long the client will drive after the server has
-/// shut down before we declare the test a failure.
 const POST_CLOSE_BUDGET: Duration = Duration::from_secs(1);
 
-/// RAII guard around a tempfile we wrote ourselves. We avoid the
-/// `tempfile` crate to stay within the existing dependency budget
-/// (audit/deps-added.md). The guard unlinks on drop.
+/// RAII guard around a hand-written tempfile — the `tempfile` crate is avoided to stay within
+/// the dependency budget (audit/deps-added.md). Unlinks on drop.
 struct CertTempFile(PathBuf);
 
 impl Drop for CertTempFile {
@@ -59,9 +32,8 @@ impl Drop for CertTempFile {
     }
 }
 
-/// Write a self-signed cert + key to disk and return paths usable by
-/// `quiche::Config::load_*_from_pem_file`. The cert's SAN includes
-/// [`TEST_SNI`] so `BoringSSL`'s hostname verifier accepts it.
+/// Write a self-signed cert + key whose SAN includes [`TEST_SNI`], so BoringSSL's hostname
+/// verifier accepts it.
 fn write_test_cert() -> (CertTempFile, CertTempFile) {
     let generated =
         rcgen::generate_simple_self_signed(vec![TEST_SNI.to_string()]).expect("rcgen self-signed");
@@ -73,16 +45,9 @@ fn write_test_cert() -> (CertTempFile, CertTempFile) {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
-    // F-COR-8 (foundation audit, auditor-4 LATENT note): the prior
-    // nonce was `pid * K + subsec_nanos`. `std::process::id()` is
-    // constant across every `#[test]` in this binary, so the instant
-    // a second `#[test]` is added two tests running in parallel could
-    // land on the same `subsec_nanos()` (or collide through the
-    // wrapping mul/add) and therefore the SAME cert path — one test's
-    // `CertTempFile::drop` then `remove_file`s the cert another test
-    // is still loading (the round8 parallel-flake class). A
-    // process-global monotonic counter makes every cert path unique
-    // by construction. Mirrors round8_h3_authority_enforced.rs:75-81.
+    // F-COR-8: `std::process::id()` is constant across every test in this binary, so a pid-based
+    // nonce let two parallel tests share a cert path and one's drop `remove_file` a cert another
+    // was still loading. A process-global counter makes every path unique.
     use std::sync::atomic::{AtomicU64, Ordering};
     static CERT_SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = CERT_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -96,7 +61,6 @@ fn write_test_cert() -> (CertTempFile, CertTempFile) {
     (CertTempFile(cert_path), CertTempFile(key_path))
 }
 
-/// Build a quiche::Config wired for a single H3 endpoint role.
 fn build_config(server: bool, cert_path: &str, key_path: &str) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).expect("Config::new");
     cfg.set_application_protos(H3_ALPN_PROTOS).expect("alpn");
@@ -117,16 +81,13 @@ fn build_config(server: bool, cert_path: &str, key_path: &str) -> quiche::Config
     } else {
         cfg.load_verify_locations_from_file(cert_path)
             .expect("trust cert");
-        // The server cert is self-signed and used directly as the trust
-        // anchor; turn peer verification on so BoringSSL still
-        // exercises the verify path, mirroring the production loopback
-        // rig.
+        // The self-signed cert is the trust anchor, but peer verification stays ON so BoringSSL
+        // still exercises the verify path.
         cfg.verify_peer(true);
     }
     cfg
 }
 
-/// 16-byte deterministic SCID — enough for one-conn loopback.
 fn scid_bytes() -> [u8; quiche::MAX_CONN_ID_LEN] {
     let mut b = [0u8; quiche::MAX_CONN_ID_LEN];
     let nanos = std::time::SystemTime::now()
@@ -142,8 +103,6 @@ fn scid_bytes() -> [u8; quiche::MAX_CONN_ID_LEN] {
     b
 }
 
-/// Push every queued packet on `conn` to `socket`. Returns when quiche
-/// reports `Done`.
 async fn flush(conn: &mut quiche::Connection, socket: &UdpSocket, out: &mut [u8]) {
     loop {
         match conn.send(out) {
@@ -159,7 +118,6 @@ async fn flush(conn: &mut quiche::Connection, socket: &UdpSocket, out: &mut [u8]
     }
 }
 
-/// Try to receive one packet within `wait` and feed it into `conn`.
 async fn try_recv_one(
     conn: &mut quiche::Connection,
     socket: &UdpSocket,
@@ -176,14 +134,12 @@ async fn try_recv_one(
                 Err(e) => panic!("conn.recv: {e:?}"),
             }
         }
-        // Timeout or socket error: nothing to feed.
         Ok(Err(_)) | Err(_) => false,
     }
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn test_h3_connection_close_emitted_on_cancel() {
-    // ----- cert + sockets -----
     let (cert_file, key_file) = write_test_cert();
     let cert_path = cert_file.0.to_str().unwrap().to_string();
     let key_path = key_file.0.to_str().unwrap().to_string();
@@ -201,7 +157,6 @@ async fn test_h3_connection_close_emitted_on_cancel() {
     );
     let client_local = client_socket.local_addr().expect("client local");
 
-    // ----- configs + connections -----
     let mut server_cfg = build_config(true, &cert_path, &key_path);
     let mut client_cfg = build_config(false, &cert_path, &key_path);
 
@@ -222,7 +177,6 @@ async fn test_h3_connection_close_emitted_on_cancel() {
     )
     .expect("quiche::connect");
 
-    // ----- handshake pump -----
     let mut out = vec![0u8; MAX_UDP];
     let mut in_buf = vec![0u8; MAX_UDP];
     let deadline = tokio::time::Instant::now() + HANDSHAKE_BUDGET;
@@ -237,8 +191,6 @@ async fn test_h3_connection_close_emitted_on_cancel() {
         }
         flush(&mut client_conn, &client_socket, &mut out).await;
         flush(&mut server_conn, &server_socket, &mut out).await;
-        // Tiny waits so each side has a chance to read what the other
-        // just wrote — 5 ms keeps the loop tight on loopback.
         try_recv_one(
             &mut server_conn,
             &server_socket,
@@ -259,21 +211,14 @@ async fn test_h3_connection_close_emitted_on_cancel() {
     assert!(server_conn.is_established(), "server should be established");
     assert!(client_conn.is_established(), "client should be established");
 
-    // ----- THE SUBJECT UNDER TEST -----
-    //
-    // graceful_h3_shutdown must:
-    //   1. call conn.close(true, 0x0100, b"shutdown") on the server, and
-    //   2. pump conn.send / on_timeout until quiche reports closed.
-    //
-    // The server-side socket carries the resulting outbound
-    // CONNECTION_CLOSE frame into the loopback path.
+    // THE SUBJECT UNDER TEST: `graceful_h3_shutdown` must call `conn.close(true, 0x0100, ..)`
+    // and pump send/on_timeout until quiche reports closed.
     graceful_h3_shutdown(&mut server_conn, &server_socket, &mut out).await;
     assert!(
         server_conn.is_closed() || server_conn.is_draining(),
         "server should be closed or draining after graceful_h3_shutdown"
     );
 
-    // ----- drive the client until peer_error() arrives -----
     let post_deadline = tokio::time::Instant::now() + POST_CLOSE_BUDGET;
     while client_conn.peer_error().is_none() {
         if tokio::time::Instant::now() > post_deadline {

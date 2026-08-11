@@ -1,30 +1,8 @@
-//! ROUND8-L7-09 / ROUND8-L7-16 — protocol-neutral authority value
-//! predicate.
-//!
-//! References:
-//! - HAProxy `BUG/MAJOR: http: forbid comma character in authority
-//!   value`.
-//! - HAProxy `BUG/MEDIUM: h1: Enforce the authority validation during
-//!   H1 request parsing` (the H1 parser was missing the check the
-//!   H2/H3 path had — the lesson is that the validation must run on
-//!   *every* parser, not merely exist as a library function).
-//! - RFC 9110 §4 authority component definition.
-//! - RFC 3986 §3.2 host = IP-literal / IPv4 / reg-name.
-//!
-//! This is the SINGLE byte-level predicate shared by every inbound
-//! parser. `lb-l7` (H1/H2 via hyper `http::Request`) wraps it in
-//! `validate_request`; `lb-quic` (H3 via the QPACK-decoded field list
-//! in `conn_actor`) calls [`validate`] directly on the `:authority`
-//! pseudo-header value. Living in `lb-core` (a leaf crate both
-//! depend on, no cycle) is what prevents the exact H1-vs-H2-vs-H3
-//! divergence the HAProxy `BUG/MEDIUM` fix warns about: there is one
-//! implementation, so a new protocol parser cannot silently skip it.
-//!
-//! There is deliberately NO loopback exemption and NO empty/absent
-//! gate here: the loopback carve-out applies only to the
-//! SNI-vs-Host *agreement* check, and the missing-authority gate is
-//! PROTO-2-01's concern. This predicate only sanitises a present,
-//! non-empty value.
+//! The single authority-value predicate shared by EVERY inbound parser (RFC 9110 §4, RFC 3986 §3.2).
+//! It lives in this leaf crate on purpose: HAProxy shipped `BUG/MEDIUM: h1: Enforce the authority
+//! validation during H1 request parsing` because the check existed as a function the H1 parser did
+//! not call. Deliberately NO loopback exemption and NO empty/absent gate — the loopback carve-out
+//! belongs to the SNI-vs-Host AGREEMENT check, not here.
 
 /// Reason an authority value was rejected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,23 +15,14 @@ pub enum AuthorityError {
     Whitespace,
     /// C0 control or DEL.
     Control,
-    /// IPv6 bracket balance mismatch (`[` without `]`, or vice versa,
-    /// or more than one of either).
+    /// Unbalanced or repeated IPv6 brackets.
     UnbalancedBrackets,
     /// Port suffix present but contained non-digit bytes.
     InvalidPort,
 }
 
-/// Validate an authority value against the canonical predicate.
-///
-/// Returns `Ok(())` if the value passes; `Err(AuthorityError)`
-/// otherwise. Callers MUST run this before any agreement comparison
-/// (Host vs `:authority`, SNI vs Host) and before upstream selection.
-///
-/// # Errors
-///
-/// Returns [`AuthorityError`] when the value fails any of the
-/// predicates documented on the variants.
+/// Validate an authority value. MUST run before any agreement comparison (Host vs `:authority`,
+/// SNI vs Host) and before upstream selection.
 pub fn validate(value: &str) -> Result<(), AuthorityError> {
     if value.is_empty() {
         return Err(AuthorityError::Empty);
@@ -66,18 +35,13 @@ pub fn validate(value: &str) -> Result<(), AuthorityError> {
             _ => {}
         }
     }
-    // IPv6 bracket balance: RFC 3986 §3.2.2 `IP-literal = "["
-    // (IPv6address / IPvFuture) "]"`. Exactly one bracket pair
-    // allowed; the unbracketed reg-name form has zero.
+    // RFC 3986 §3.2.2: exactly one bracket pair, or none for the reg-name form.
     let opens = value.bytes().filter(|&b| b == b'[').count();
     let closes = value.bytes().filter(|&b| b == b']').count();
     if opens != closes || opens > 1 {
         return Err(AuthorityError::UnbalancedBrackets);
     }
-    // Port suffix validation: if a `:` appears after the host
-    // portion, every byte after the LAST `:` must be a digit.
-    // (IPv6 addresses contain colons inside the brackets; only the
-    // colon after `]` is the port separator.)
+    // Only the colon after `]` is a port separator — IPv6 colons live inside the brackets.
     if let Some(port_part) = port_suffix(value) {
         if port_part.is_empty() {
             return Err(AuthorityError::InvalidPort);
@@ -89,16 +53,14 @@ pub fn validate(value: &str) -> Result<(), AuthorityError> {
     Ok(())
 }
 
-/// Return the port suffix (the substring after the last `:` that is
-/// not inside brackets), or `None` if no port is present.
+/// The port suffix after the last unbracketed `:`, if any.
 fn port_suffix(value: &str) -> Option<&str> {
     // If brackets are present, the port (if any) is what's after `]:`.
     if let Some(rb) = value.rfind(']') {
         let after = value.get(rb + 1..)?;
         return after.strip_prefix(':');
     }
-    // No brackets — port is after the LAST `:`, but only if no other
-    // colons appear (no raw IPv6 outside brackets, per RFC 3986).
+    // Unbracketed: a second colon means raw IPv6, which RFC 3986 forbids as an authority.
     let count = value.bytes().filter(|&b| b == b':').count();
     if count != 1 {
         return None;
@@ -167,12 +129,9 @@ mod tests {
 
     #[test]
     fn raw_ipv6_without_brackets_accepted_today() {
-        // `::1` (no brackets) has multiple colons. Our heuristic
-        // skips port validation when colon count > 1; the RFC 3986
-        // grammar says this is invalid as an authority, but a more
-        // expensive grammar parse is out of scope for this fix.
-        // Pinning the current behaviour so any future tightening
-        // surfaces here (e.g. via the `http::uri` authority parser).
+        // KNOWN GAP pinned deliberately: the multi-colon heuristic skips port validation, so
+        // unbracketed `::1` passes even though RFC 3986 rejects it. A future tightening must
+        // update this assertion.
         assert!(validate("::1").is_ok());
     }
 }

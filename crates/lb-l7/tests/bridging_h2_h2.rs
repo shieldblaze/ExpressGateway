@@ -19,7 +19,6 @@ fn test_bridge_h2_to_h2() {
         trailers: Vec::new(),
     };
     let bridged = bridge.bridge_request(&req).unwrap();
-    // Pseudo-headers preserved
     assert!(
         bridged
             .headers
@@ -44,8 +43,6 @@ fn test_bridge_h2_to_h2() {
             .iter()
             .any(|(k, v)| k == ":authority" && v == "api.example.com")
     );
-    // Regular headers preserved
     assert!(bridged.headers.iter().any(|(k, _)| k == "content-type"));
-    // Body preserved
     assert_eq!(bridged.body, &b"binary data"[..]);
 }

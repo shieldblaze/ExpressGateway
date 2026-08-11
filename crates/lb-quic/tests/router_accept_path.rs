@@ -1,19 +1,7 @@
-//! S1-A (task B.1) — crate-local QUIC router accept-path coverage.
-//!
-//! Closes the `audit/h3-program/s1-inventory.md` finding that
-//! `crates/lb-quic/src/router.rs` accept / RETRY / per-CID dispatch
-//! had **0 crate-local coverage** (only `router::tests::
-//! router_drops_initial_when_cap_reached` touched the cap branch).
-//!
-//! These tests spawn the REAL [`lb_quic::QuicListener`] (which spawns
-//! the REAL `router::InboundPacketRouter`) and drive REAL `quiche`
-//! clients over loopback UDP so the router's `dispatch_packet`,
-//! `send_retry`, `retry_signer.verify`, `spawn_new_connection`
-//! (per-CID DashMap insert + `CidEntryGuard`) run on the wire.
-//!
-//! Assertions are real: a router that fails to demultiplex two
-//! concurrent connections by DCID, or stops emitting RETRY on the
-//! first Initial, or never verifies the echoed token, fails here.
+//! Crate-local QUIC router accept-path coverage, closing the finding that `router.rs` accept /
+//! RETRY / per-CID dispatch had NO crate-local coverage. These spawn the REAL
+//! [`lb_quic::QuicListener`] and drive REAL `quiche` clients, so `dispatch_packet`, `send_retry`,
+//! `retry_signer.verify` and `spawn_new_connection` run on the wire.
 
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::PathBuf;
@@ -106,8 +94,6 @@ fn random_scid_bytes() -> [u8; quiche::MAX_CONN_ID_LEN] {
     scid
 }
 
-/// Drive a client connection to `is_established()` or fail with a
-/// diagnostic. Returns Ok(()) on success.
 async fn drive_to_established(
     mut conn: quiche::Connection,
     socket: &UdpSocket,
@@ -182,12 +168,6 @@ fn listener_params(certs: &TestCerts) -> QuicListenerParams {
     )
 }
 
-// ---------------------------------------------------------------------
-// 1. Two concurrent clients on ONE listener socket -> distinct per-CID
-//    actors. Exercises router::dispatch_packet new-CID path twice,
-//    spawn_new_connection (2x DashMap insert + CidEntryGuard), and the
-//    per-DCID demux of all subsequent flights.
-// ---------------------------------------------------------------------
 #[tokio::test]
 async fn two_concurrent_clients_distinct_actors() {
     let certs = generate_loopback_certs();
@@ -197,10 +177,8 @@ async fn two_concurrent_clients_distinct_actors() {
         .expect("listener spawn");
     let server_addr = listener.local_addr();
 
-    // Two independent clients, distinct SCIDs (random), distinct UDP
-    // source sockets. The single router socket must demultiplex BOTH
-    // by DCID into two separate actors concurrently. A single-actor
-    // or DCID-collision regression fails at least one handshake.
+    // Two independent clients with distinct SCIDs and distinct source sockets: the single router
+    // socket must demultiplex BOTH by DCID into two concurrent actors.
     let (c1, s1) = connect_client(server_addr, &certs.ca).await;
     let (c2, s2) = connect_client(server_addr, &certs.ca).await;
 
@@ -223,14 +201,6 @@ async fn two_concurrent_clients_distinct_actors() {
     );
 }
 
-// ---------------------------------------------------------------------
-// 2. RETRY token round-trip through the router.
-//    The router replies to the FIRST (token-less) Initial with a
-//    quiche::Type::Retry packet (send_retry -> retry_signer.mint).
-//    After the client resends its Initial echoing the token, the
-//    router verifies it (retry_signer.verify) and spawns an actor;
-//    the handshake then reaches is_established().
-// ---------------------------------------------------------------------
 #[tokio::test]
 async fn retry_token_round_trip_through_router() {
     let certs = generate_loopback_certs();
@@ -276,18 +246,14 @@ async fn retry_token_round_trip_through_router() {
         let timeout = conn.timeout().unwrap_or(Duration::from_millis(50));
         match tokio::time::timeout(timeout, sock.recv_from(&mut in_buf)).await {
             Ok(Ok((n, from))) => {
-                // Inspect the long-header type WITHOUT consuming the
-                // datagram (clone for the probe).
+                // Inspect the long-header type WITHOUT consuming the datagram.
                 let mut probe = in_buf.get(..n).unwrap_or(&[]).to_vec();
                 if let Ok(hdr) = quiche::Header::from_slice(&mut probe, quiche::MAX_CONN_ID_LEN) {
                     if hdr.ty == quiche::Type::Retry {
                         saw_retry = true;
                     } else if saw_retry {
-                        // Any non-RETRY server packet AFTER the RETRY
-                        // proves the router verified the echoed token
-                        // and advanced the connection (Initial/
-                        // Handshake), i.e. retry_signer.verify +
-                        // spawn_new_connection ran.
+                        // Any non-RETRY server packet AFTER the RETRY proves the router verified
+                        // the echoed token and advanced the connection.
                         saw_non_retry_after_retry = true;
                     }
                 }
@@ -324,33 +290,15 @@ async fn retry_token_round_trip_through_router() {
     );
 }
 
-// ---------------------------------------------------------------------
-// 3. 0-RTT replay reject — replay-guard contract through the listener.
+// DOCUMENTED REACHABILITY BOUNDARY for the 0-RTT replay reject: the wire-level replay key is
+// `client_SCID || retry_token_prefix`, computed from the client's SECOND Initial. A true wire
+// replay needs that exact datagram re-injected byte-identically, and the quiche client API does
+// not expose the raw post-RETRY Initial (`conn.send` returns coalesced bytes with no stable
+// per-Initial boundary), so byte-exact wire replay is NOT reachable without source changes.
 //
-// DOCUMENTED REACHABILITY BOUNDARY (not a fake / not a weak assertion):
-// The router's wire-level per-Initial replay key is
-// `client_SCID || retry_token_prefix`, computed in
-// `router::build_replay_key` from the client's SECOND Initial (the one
-// echoing the minted retry token — see router.rs:206-211). Reproducing
-// a true wire replay from a crate-local black-box test requires
-// capturing the EXACT second-Initial datagram the `quiche` client
-// emitted and re-injecting it byte-identically. The `quiche` client
-// API does NOT expose the raw post-RETRY Initial datagram (conn.send
-// returns coalesced/encrypted bytes without a stable per-Initial
-// boundary the test can pin), so byte-exact wire replay is NOT
-// reachable without SOURCE CHANGES to the router/listener to expose a
-// replay hook. This is the same boundary the repo-root
-// `tests/quic_listener_e2e.rs::zero_rtt_replay_dropped` documents.
-//
-// What IS reachable and asserted here: the router holds the SAME
-// `ZeroRttReplayGuard` instance the listener exposes via
-// `replay_guard()` (listener.rs:236 `Arc::clone(&replay_guard)` into
-// `RouterParams`). We assert the guard's first-use-ok /
-// second-use-rejected contract on that exact shared instance, so a
-// regression that makes the guard accept replays (or that detaches it
-// from the router) is caught. The wire-injection sub-path is reported
-// as documented-unreachable, NOT papered over.
-// ---------------------------------------------------------------------
+// What IS asserted: the router holds the SAME `ZeroRttReplayGuard` instance the listener exposes,
+// and that instance's first-use-ok / second-use-rejected contract holds — so a guard that accepts
+// replays, or that becomes detached from the router, is caught.
 #[tokio::test]
 async fn zero_rtt_replay_guard_rejects_second_use_on_shared_instance() {
     let certs = generate_loopback_certs();
@@ -359,12 +307,11 @@ async fn zero_rtt_replay_guard_rejects_second_use_on_shared_instance() {
         .await
         .unwrap();
 
-    // The exact guard instance the router uses (Arc::clone in
-    // listener.rs RouterParams construction).
+    // The exact guard instance the router uses (Arc::clone in listener.rs RouterParams).
     let guard = listener.replay_guard();
 
-    // A representative router replay key shape: SCID bytes || token
-    // prefix (see router::build_replay_key).
+    // A representative router replay key shape: SCID bytes || token prefix
+    // (router::build_replay_key).
     let key: &[u8] = b"\x01\x02\x03\x04\x05\x06\x07\x08token-prefix-bytes-0123456789";
 
     assert!(
@@ -376,8 +323,8 @@ async fn zero_rtt_replay_guard_rejects_second_use_on_shared_instance() {
         "second observation of the SAME replay key must be rejected \
          as a 0-RTT replay (router uses this exact shared guard)"
     );
-    // A different key must still be accepted (no false-positive that
-    // would break legitimate distinct connections).
+    // A different key must still be accepted — no false-positive that would break legitimate
+    // distinct connections.
     let other: &[u8] = b"\xaa\xbb\xcc\xdd\x09\x0a\x0b\x0cdifferent-token-prefix-aaaa";
     assert!(
         guard.lock().check_0rtt_token(other).is_ok(),

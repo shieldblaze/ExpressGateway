@@ -80,7 +80,6 @@ mod tests {
 
     #[test]
     fn frame_incomplete_body() {
-        // Header says 100 bytes but only 5 bytes of body present
         let mut buf = vec![0u8]; // compressed = false
         buf.extend_from_slice(&100u32.to_be_bytes()); // length = 100
         buf.extend_from_slice(&[0u8; 5]); // only 5 bytes of body
@@ -204,28 +203,22 @@ mod tests {
 
     #[test]
     fn deadline_submillisecond_rounds_up() {
-        // 500 microseconds should round up to 1ms, not truncate to 0ms.
+        // Sub-millisecond values must round UP, never truncate to 0 ms.
         assert_eq!(GrpcDeadline::parse_timeout("500u").unwrap(), 1);
-        // 1 microsecond should round up to 1ms.
         assert_eq!(GrpcDeadline::parse_timeout("1u").unwrap(), 1);
-        // 999 nanoseconds should round up to 1ms.
         assert_eq!(GrpcDeadline::parse_timeout("999n").unwrap(), 1);
-        // 1 nanosecond should round up to 1ms.
         assert_eq!(GrpcDeadline::parse_timeout("1n").unwrap(), 1);
-        // 0 microseconds stays 0 (no non-zero input to round).
+        // Zero has nothing to round up.
         assert_eq!(GrpcDeadline::parse_timeout("0u").unwrap(), 0);
-        // 0 nanoseconds stays 0.
         assert_eq!(GrpcDeadline::parse_timeout("0n").unwrap(), 0);
     }
 
     #[test]
     fn grpc_message_too_large() {
-        // Build a frame with a 10 MB length field and a small max.
         let mut buf = vec![0u8]; // compressed = false
         let big_len: u32 = 10 * 1024 * 1024;
         buf.extend_from_slice(&big_len.to_be_bytes());
-        // We don't need to actually provide the payload bytes for the size
-        // check to fire.
+        // The size check must fire without the payload bytes present.
         buf.extend_from_slice(&[0u8; 64]);
         let result = decode_grpc_frame(&buf, 4 * 1024 * 1024);
         assert!(matches!(

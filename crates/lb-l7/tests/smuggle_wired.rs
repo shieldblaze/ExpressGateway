@@ -1,27 +1,6 @@
-//! SEC-2-01 proof — `SmuggleDetector` is wired into the lb-l7 hot path.
-//!
-//! These tests exercise the **wiring** at the public surface of
-//! `lb-l7`. The underlying per-vector unit tests live in
-//! `crates/lb-security/src/smuggle.rs::tests` (commit e36b50f and
-//! prior); this file proves the detector is reachable from the proxy
-//! call sites and the H2→H1 bridge, not the detector's internal
-//! correctness.
-//!
-//! Three vectors per the SEC-2-01 plan:
-//! - `test_cl_te_rejected`              — Content-Length + Transfer-
-//!   Encoding on the same request rejected at the H2→H1 bridge.
-//! - `test_te_gzip_chunked_strict_rejected` — `Transfer-Encoding:
-//!   gzip, chunked` rejected under the strict-TE policy
-//!   (`SmuggleMode::H1Strict`) advertised on the
-//!   [`lb_security::HooksBundle`].
-//! - `test_duplicate_cl_differing_values_rejected` — duplicate
-//!   `Content-Length` headers with differing values rejected by the
-//!   H1 hot-path. The brief's original name was
-//!   `test_duplicate_cl_same_value_rejected`; same-value duplicates
-//!   are explicitly accepted by [`lb_security::SmuggleDetector::
-//!   check_duplicate_cl`] (RFC 9110 §8.6 allows merging identical
-//!   values), so the proof test exercises the genuinely-rejected
-//!   differing-values case.
+//! SEC-2-01 — `SmuggleDetector` WIRING at the public `lb-l7` surface; the
+//! detector's own correctness is tested in `lb-security`. Same-value duplicate
+//! `Content-Length` is deliberately ACCEPTED (RFC 9110 §8.6 merges them).
 
 use bytes::Bytes;
 use http::{HeaderValue, Method, Request, Version};
@@ -70,10 +49,7 @@ fn req_with(headers: &[(&'static str, &'static str)], version: Version) -> Reque
 
 #[test]
 fn test_cl_te_rejected() {
-    // The H2→H1 bridge is the hottest smuggle surface — once the H1
-    // request line is materialised, a desynced upstream parser can
-    // be smuggled. Wiring proof: the bridge must reject CL+TE before
-    // returning the translated request.
+    // The bridge must reject CL+TE BEFORE the H1 request line is materialised.
     let req = h2_bridge_request(vec![
         ("content-length", "10"),
         ("transfer-encoding", "chunked"),
@@ -89,13 +65,8 @@ fn test_cl_te_rejected() {
 
 #[test]
 fn test_te_gzip_chunked_strict_rejected() {
-    // `Transfer-Encoding: gzip, chunked` has `chunked` as the final
-    // codec, so the lenient `SmuggleMode::H1` accepts it (the
-    // explicit lenient case exists in `crates/lb-security/src/
-    // smuggle.rs::tests::smuggle_te_cl_chunked_final_ok`). The
-    // strict policy `SmuggleMode::H1Strict` rejects any codec list
-    // beyond `chunked`. The wiring proof: a `HooksBundle` advertised
-    // as strict reaches the detector under that mode and rejects.
+    // Wiring proof: a `HooksBundle` advertised as strict reaches the detector
+    // in that mode.
     let gate = ConnGate::new(8, 4, Vec::new());
     let strict = HooksBundle::new(gate, SmuggleMode::H1Strict);
     let r = req_with(&[("transfer-encoding", "gzip, chunked")], Version::HTTP_11);
@@ -105,9 +76,8 @@ fn test_te_gzip_chunked_strict_rejected() {
         "strict-TE bundle must reject `gzip, chunked`; got {err:?}"
     );
 
-    // Cross-check: the lenient bundle accepts the same request,
-    // proving the wiring honours the mode field rather than always
-    // rejecting.
+    // Negative control: the lenient bundle accepts the same request, so the
+    // wiring honours the mode field rather than always rejecting.
     let gate2 = ConnGate::new(8, 4, Vec::new());
     let lenient = HooksBundle::new(gate2, SmuggleMode::H1);
     assert!(
@@ -118,12 +88,8 @@ fn test_te_gzip_chunked_strict_rejected() {
 
 #[test]
 fn test_duplicate_cl_differing_values_rejected() {
-    // Duplicate Content-Length with differing values is the
-    // RFC 9110 §8.6 reject-as-invalid case; same-value duplicates
-    // are merged by the detector (intentional — same-value duplicates
-    // are observationally equivalent to a single header). The wiring
-    // proof routes through the production `HooksBundle` so the call
-    // path matches what `H1Proxy::handle` invokes on the hot path.
+    // Routed through the production `HooksBundle` so the call path matches
+    // what `H1Proxy::handle` invokes.
     let gate = ConnGate::new(8, 4, Vec::new());
     let bundle = HooksBundle::new(gate, SmuggleMode::H1);
     let r = req_with(
@@ -136,9 +102,7 @@ fn test_duplicate_cl_differing_values_rejected() {
         "duplicate CL with differing values must be rejected"
     );
 
-    // Sanity: `DynSecurityHooks` (the object-safe sibling lb-l7
-    // programs against) sees the same rejection, proving the trait
-    // shim does not paper over the detector.
+    // The object-safe shim must not paper over the rejection.
     let dyn_h: Arc<dyn DynSecurityHooks> = Arc::new(NoopHooks::new());
     let safe_req = req_with(&[("content-length", "10")], Version::HTTP_11);
     assert!(

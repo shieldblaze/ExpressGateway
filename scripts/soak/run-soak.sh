@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# S20 chaos/soak runner — launch every soak scenario concurrently against the
-# real expressgateway binary, each as its own eg-soak process writing its own
-# per-scenario time-series CSV + verdict.json to OUT_DIR.
+# Chaos/soak runner — every scenario runs concurrently as its own eg-soak process
+# against the real expressgateway binary, writing a per-scenario CSV + verdict.json.
 #
-# Stability soak (NOT throughput): co-located load+gateway is acceptable (owner
-# ruling). Each scenario isolates its own gateway child so per-scenario RSS/fd
-# are clean. Read the verdict ONLY from the completed run (R15).
+# This is a STABILITY soak, not a throughput one, so co-locating load and gateway is
+# acceptable (owner ruling). Each scenario isolates its own gateway child to keep
+# per-scenario RSS/fd clean. Read the verdict ONLY from a completed run (R15).
 #
 # Usage:
 #   scripts/soak/run-soak.sh <duration_secs> <out_dir> [sample_secs] [scale] [scenarios...]
@@ -35,7 +34,7 @@ echo "[run-soak] eg-soak=$EGSOAK out=$OUT"
 
 declare -a PIDS=()
 for sc in "${SCENARIOS[@]}"; do
-  # Bounded per-scenario stdout log (heartbeats); the CSV is the durable record.
+  # stdout is heartbeats only; the CSV is the durable record.
   "$EGSOAK" --scenario "$sc" --duration-secs "$DURATION" --sample-secs "$SAMPLE" \
             --scale "$SCALE" --out "$OUT" > "$OUT/$sc.stdout.log" 2>&1 &
   PIDS+=("$!")

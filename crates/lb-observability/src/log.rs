@@ -1,26 +1,6 @@
-//! REL-2-06: central tracing/log subscriber initialisation.
-//!
-//! Selects between JSON and human-readable text formatters based on
-//! the `LB_LOG_FORMAT` environment variable (default: `json`). All
-//! binaries — `lb` today, future agents tomorrow — call
-//! [`init_tracing`] once at the top of their `async_main` to get a
-//! single canonical line format that the log shipper can rely on.
-//!
-//! Output schema (JSON mode, flattened):
-//!
-//! ```json
-//! {
-//!   "timestamp":"2026-05-13T09:31:12.512Z",
-//!   "level":"INFO",
-//!   "target":"lb::main",
-//!   "message":"ExpressGateway v0.1.0",
-//!   "version":"0.1.0"
-//! }
-//! ```
-//!
-//! Span context (`trace_id`, `span_id`) is folded in once REL-2-07
-//! lands the OTLP layer; the JSON schema is forward-compatible
-//! (extra keys, no removals).
+//! Central tracing/log subscriber init; JSON or text per `LB_LOG_FORMAT` (default `json`). The JSON
+//! schema is forward-compatible by contract: keys may be ADDED, never removed or renamed, because
+//! log shippers parse it.
 
 use std::sync::OnceLock;
 
@@ -32,15 +12,12 @@ use tracing_subscriber::fmt;
 pub enum LogFormat {
     /// Newline-delimited JSON, one object per event. Default.
     Json,
-    /// Human-readable text with ANSI colour codes off (so the format
-    /// survives being piped to `journalctl` or a flat log file).
+    /// Human-readable text, ANSI off so it survives `journalctl` and flat files.
     Text,
 }
 
 impl LogFormat {
-    /// Parse a case-insensitive string token. Unknown tokens return
-    /// `None` so the caller can fall back to the configured default
-    /// rather than silently picking text.
+    /// Parse a case-insensitive token; `None` on unknown so the caller applies its own default.
     #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
@@ -72,34 +49,16 @@ impl Default for TracingConfig {
 /// Errors raised by [`init_tracing`].
 #[derive(Debug, thiserror::Error)]
 pub enum TracingError {
-    /// A previous call to [`init_tracing`] (or any other call to
-    /// `tracing::subscriber::set_global_default`) already installed a
-    /// subscriber. `tracing-subscriber` only allows one per process.
+    /// A subscriber is already installed; `tracing-subscriber` allows one per process.
     #[error("tracing subscriber already initialised")]
     AlreadyInitialised,
 }
 
-/// Marker so a second call to [`init_tracing`] from within the same
-/// process returns [`TracingError::AlreadyInitialised`] cleanly rather
-/// than calling `tracing-subscriber` again (which would panic).
+/// Guards against a second `tracing-subscriber` install, which would panic.
 static INIT: OnceLock<LogFormat> = OnceLock::new();
 
-/// Install the global tracing subscriber.
-///
-/// Resolution order for the format:
-///   1. `LB_LOG_FORMAT` env var (`json` | `text`).
-///   2. `cfg.format`.
-///
-/// Resolution order for the filter:
-///   1. `RUST_LOG` env var.
-///   2. `cfg.default_directive`.
-///
-/// Idempotent — second and subsequent calls return
-/// [`TracingError::AlreadyInitialised`].
-///
-/// # Errors
-///
-/// See [`TracingError`].
+/// Install the global subscriber. The ENV WINS over `cfg` for both format (`LB_LOG_FORMAT`) and
+/// filter (`RUST_LOG`). Idempotent.
 pub fn init_tracing(cfg: &TracingConfig) -> Result<(), TracingError> {
     let format = std::env::var("LB_LOG_FORMAT")
         .ok()
@@ -109,8 +68,7 @@ pub fn init_tracing(cfg: &TracingConfig) -> Result<(), TracingError> {
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new(&cfg.default_directive));
 
-    // `try_init()` is the fallible variant — returns an error rather
-    // than panicking when a global subscriber is already installed.
+    // The fallible variant — `init()` would panic on a second install.
     let install_result = match format {
         LogFormat::Json => fmt()
             .json()
@@ -129,7 +87,6 @@ pub fn init_tracing(cfg: &TracingConfig) -> Result<(), TracingError> {
 
     match install_result {
         Ok(()) => {
-            // Cache the choice for `current_format()` introspection.
             let _ = INIT.set(format);
             Ok(())
         }
@@ -137,8 +94,7 @@ pub fn init_tracing(cfg: &TracingConfig) -> Result<(), TracingError> {
     }
 }
 
-/// What format was eventually installed? `None` before
-/// [`init_tracing`] is called.
+/// The installed format; `None` before [`init_tracing`].
 #[must_use]
 pub fn current_format() -> Option<LogFormat> {
     INIT.get().copied()

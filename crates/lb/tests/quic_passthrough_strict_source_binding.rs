@@ -1,20 +1,5 @@
-//! S15 A2 verify gate (vi) — strict_source_binding knob proved in
-//! BOTH positions per owner ruling §9.1'.
-//!
-//! Two pools:
-//!
-//!   * **A (default, strict=false).** Short-header packet whose source
-//!     4-tuple DIFFERS from the flow's recorded peer is FORWARDED to
-//!     the backend. This is the mobile-NAT-rebind path-migration
-//!     accommodation (the default).
-//!   * **B (strict=true).** Short-header packet from a different
-//!     source 4-tuple is DROPPED at the LB (never reaches the
-//!     backend). Off-path spoofed-CID injection defence.
-//!
-//! Both knob positions must be exercised; an untested config option is
-//! worse than no option (owner ruling §9.1' "Verify case for
-//! `strict_source_binding=true` … prove the knob works in BOTH
-//! positions").
+//! S15 A2 verify gate (vi) — strict_source_binding knob proved in BOTH positions per owner ruling
+//! §9.1'.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -69,21 +54,17 @@ fn build_initial(dcid: &[u8], scid: &[u8], token: &[u8]) -> Vec<u8> {
     pkt
 }
 
-/// Build a syntactically-valid QUIC v1 short-header datagram carrying
-/// `dcid` (whose length must match the LB's `max_dcid_len_routed`). The
-/// payload is one byte; the LB only validates the public header before
-/// dispatch.
+/// Build a syntactically-valid QUIC v1 short-header datagram carrying `dcid` (whose length must
+/// match the LB's `max_dcid_len_routed`).
 fn build_short(dcid: &[u8]) -> Vec<u8> {
     let mut pkt = Vec::with_capacity(2 + dcid.len());
-    // byte0: short header (0), fixed bit (1), PN length bits low.
     pkt.push(0b0100_0000);
     pkt.extend_from_slice(dcid);
     pkt.push(0xaa);
     pkt
 }
 
-/// Spawn a backend that counts datagrams received and exposes the
-/// count via an Arc<AtomicU64>.
+/// Spawn a backend that counts datagrams received and exposes the count via an Arc<AtomicU64>.
 async fn spawn_counting_backend() -> (SocketAddr, Arc<AtomicU64>) {
     let sock = UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
         .await
@@ -135,10 +116,7 @@ async fn spawn_listener(
     (listener, lb_addr, backend, backend_count, cancel)
 }
 
-/// Install one flow into the LB via a synthetic Retry-validated
-/// Initial from `client_a`. Returns the DCID used (== short-header
-/// routing key for subsequent packets, because the same DCID becomes
-/// the per-flow table entry).
+/// Install one flow into the LB via a synthetic Retry-validated Initial from `client_a`.
 async fn install_flow(
     lb: SocketAddr,
     client_a: &UdpSocket,
@@ -155,9 +133,6 @@ async fn install_flow(
 
 #[tokio::test(flavor = "current_thread")]
 async fn ssb_false_accepts_nat_rebind() {
-    // Pool A: strict_source_binding=false. Short-header from a
-    // DIFFERENT source 4-tuple than the flow's recorded peer is
-    // forwarded to the backend (NAT-rebind path-migration accepted).
     const DCID_LEN: usize = 12;
     let dcid = [0xabu8; DCID_LEN];
     let signer = RetryTokenSigner::new_with_secret(RETRY_SECRET);
@@ -165,14 +140,12 @@ async fn ssb_false_accepts_nat_rebind() {
     let (listener, lb_addr, _backend, backend_count, cancel) =
         spawn_listener(false, DCID_LEN).await;
 
-    // Establish the flow via Initial from peer A.
     let client_a = UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
         .await
         .expect("client A bind");
     install_flow(lb_addr, &client_a, &signer, &dcid).await;
     let after_initial = backend_count.load(Ordering::Relaxed);
 
-    // Short-header from peer B (different source port).
     let client_b = UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
         .await
         .expect("client B bind");
@@ -193,8 +166,6 @@ async fn ssb_false_accepts_nat_rebind() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn ssb_true_drops_spoofed_source() {
-    // Pool B: strict_source_binding=true. Short-header from a different
-    // source 4-tuple is DROPPED at the LB (never reaches the backend).
     const DCID_LEN: usize = 12;
     let dcid = [0xcdu8; DCID_LEN];
     let signer = RetryTokenSigner::new_with_secret(RETRY_SECRET);
@@ -207,7 +178,6 @@ async fn ssb_true_drops_spoofed_source() {
     install_flow(lb_addr, &client_a, &signer, &dcid).await;
     let after_initial = backend_count.load(Ordering::Relaxed);
 
-    // Control: short-header from the ORIGINAL peer A is forwarded.
     let short = build_short(&dcid);
     let _ = client_a.send_to(&short, lb_addr).await;
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -218,8 +188,6 @@ async fn ssb_true_drops_spoofed_source() {
          before={after_initial} after={after_short_a}"
     );
 
-    // Spoof: short-header from peer B (different source port). Must be
-    // DROPPED at the LB — backend count unchanged.
     let client_b = UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
         .await
         .expect("client B bind");

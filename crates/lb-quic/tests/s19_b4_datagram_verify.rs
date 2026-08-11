@@ -1,41 +1,10 @@
-//! SESSION 19 / Mode B — B4 AUTHORITATIVE verifier wire tests
-//! (author ≠ verifier; this file is the verifier's independent proof).
-//!
-//! Topology (mirrors `s16_b2_stream_relay_smoke.rs` /
-//! `s19_b4_datagram_relay_smoke.rs`):
-//!
-//!   real quiche CLIENT  ⇄  Mode B actor (`run_raw_proxy_actor_for_test`)
-//!                          ⇄  real quiche DATAGRAM backend
-//!
-//! TWO genuinely distinct `quiche::Connection`s (the client-facing leg the
-//! LB terminates, and the re-originated dedicated upstream the pool dials)
-//! — proven by the distinct SCIDs in [`RawProxyOutcome`].
-//!
-//! What this file proves (plan §"Verification"):
-//!
-//! 1. `verify_b4_pass_through_both_directions_binary` — real-wire byte-
-//!    identical pass-through, BOTH directions, of binary / zero-length /
-//!    all-zero / non-UTF8 / near-max-writable datagrams; plus a mechanism
-//!    check that the actor used two distinct connections.
-//! 2. `verify_b4_queue_bound_under_flood_stays_healthy` — under a sustained
-//!    flood whose destination is STALLED (a backend that stops reading its
-//!    datagrams), the relay's bounded drop-newest queue holds: the
-//!    connection stays alive, nothing OOMs/panics/hangs, the test completes
-//!    within budget, and the count the destination ultimately receives is
-//!    BOUNDED (≤ what was sent — drops occurred, the queue did not grow
-//!    without bound). Observable-behaviour proof (the internal `dropped`
-//!    counter is not exported).
-//! 3. `verify_b4_drop_newest_oldest_survive_when_drained` — a flood larger
-//!    than the relay cap arrives at a backend that drains SLOWLY; the
-//!    destination receives a bounded subset and the connection stays
-//!    healthy. The which-end (drop-NEWEST not drop-oldest) proof is pinned
-//!    deterministically at the unit level (the builder's
-//!    `dgram_queue_drop_newest_negative_control`, which the verifier proved
-//!    load-bearing — see the report); on the wire we assert only what is
-//!    deterministic (bounded delivery + liveness), as documented.
-//!
-//! Driven with `--features test-gauges` so the
-//! `run_raw_proxy_actor_for_test` hook is reachable.
+//! Mode B — B4 DATAGRAM verifier wire tests: real quiche client ⇄ Mode B actor ⇄ real quiche
+//! DATAGRAM backend, over TWO genuinely distinct `quiche::Connection`s (proven by the distinct
+//! SCIDs in [`RawProxyOutcome`]). Proves byte-identical pass-through both directions, and that
+//! under flood at a stalled destination the bounded drop-newest queue holds — the internal
+//! `dropped` counter is not exported, so bounding is proven by observable behaviour. The
+//! which-end proof (drop-NEWEST, not drop-oldest) is pinned at the unit level by
+//! `dgram_queue_drop_newest_negative_control`.
 
 #![cfg(feature = "test-gauges")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -62,10 +31,6 @@ const H3_ALPN: &[u8] = b"h3";
 const MAX_UDP: usize = 65_535;
 const HANDSHAKE_BUDGET: Duration = Duration::from_secs(5);
 const RELAY_BUDGET: Duration = Duration::from_secs(12);
-
-// ─────────────────────────────────────────────────────────────────────
-// Cert plumbing (mirrors s16_b2 / s19_b4 smoke rigs).
-// ─────────────────────────────────────────────────────────────────────
 
 static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -122,10 +87,8 @@ fn random_scid() -> [u8; quiche::MAX_CONN_ID_LEN] {
     scid
 }
 
-/// CLIENT-facing SERVER config (the LB-as-server leg). Serves the loopback
-/// cert; advertises `h3`; negotiates DATAGRAM with quiche queues at 1024 —
-/// matching the production `DGRAM_QUEUE_CAP`, so the relay-layer bound is
-/// the binding one under flood.
+/// CLIENT-facing SERVER config: quiche DATAGRAM queues at 1024, matching production
+/// `DGRAM_QUEUE_CAP`, so the RELAY-layer bound is the binding one under flood.
 fn lb_server_config(certs: &TestCerts) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
     cfg.set_application_protos(&[H3_ALPN]).unwrap();
@@ -147,7 +110,6 @@ fn lb_server_config(certs: &TestCerts) -> quiche::Config {
     cfg
 }
 
-/// The real downstream CLIENT config — verifies the LB's cert.
 fn client_config(certs: &TestCerts) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
     cfg.set_application_protos(&[H3_ALPN]).unwrap();
@@ -168,7 +130,6 @@ fn client_config(certs: &TestCerts) -> quiche::Config {
     cfg
 }
 
-/// The pool's per-dial CLIENT config factory (LB → backend leg).
 fn upstream_config_factory(
     ca: PathBuf,
 ) -> Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> {
@@ -193,12 +154,9 @@ fn upstream_config_factory(
     })
 }
 
-/// Shared throwaway BACKEND quiche server. Accepts ONE connection and
-/// ECHOes any received DATAGRAM straight back — UNLESS `stall` is set, in
-/// which case it stops *reading* its datagrams (recv queue fills, then the
-/// LB→backend `dgram_send` starts returning `Done`, exercising the relay's
-/// bounded-queue backpressure path). It always keeps the connection alive
-/// (handshake + timeouts) so the test observes liveness, not a teardown.
+/// Accepts ONE connection and ECHOes any received DATAGRAM — unless `stall` is set, when it
+/// stops *reading* them so its recv queue fills and the LB→backend `dgram_send` returns `Done`,
+/// exercising the relay's bounded-queue path. It keeps the connection alive throughout.
 fn spawn_dgram_backend(certs: &TestCerts, stall: Arc<AtomicBool>) -> SocketAddr {
     let std_sock = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     std_sock.set_nonblocking(true).unwrap();
@@ -219,9 +177,8 @@ fn spawn_dgram_backend(certs: &TestCerts, stall: Arc<AtomicBool>) -> SocketAddr 
                 return;
             }
             if let Some(c) = conn.as_mut() {
-                // While stalled, deliberately do NOT drain the recv queue so
-                // it fills (and back-pressures the LB→backend leg). When not
-                // stalled, drain everything into the echo queue.
+                // While stalled, deliberately do NOT drain the recv queue so it fills and
+                // back-pressures the LB→backend leg.
                 if !stall.load(Ordering::Relaxed) {
                     loop {
                         match c.dgram_recv(&mut rd) {
@@ -313,9 +270,7 @@ async fn try_recv_one(
     }
 }
 
-/// Shared harness: handshake the client⇄LB legs, wire the forwarder + the
-/// Mode B actor against `backend_addr`, and return everything the test
-/// needs to drive the wire and read the two-connection proof.
+/// Handshake the client⇄LB legs, wire the forwarder + Mode B actor, return the live handles.
 struct Rig {
     client_conn: quiche::Connection,
     client_socket: Arc<UdpSocket>,
@@ -360,7 +315,6 @@ async fn build_rig(certs: TestCerts, backend_addr: SocketAddr) -> Rig {
     )
     .unwrap();
 
-    // Drive the client⇄LB legs to established inline.
     let mut out = vec![0u8; MAX_UDP];
     let mut in_buf = vec![0u8; MAX_UDP];
     let deadline = tokio::time::Instant::now() + HANDSHAKE_BUDGET;
@@ -389,7 +343,6 @@ async fn build_rig(certs: TestCerts, backend_addr: SocketAddr) -> Rig {
     }
     assert_eq!(client_conn.application_proto(), H3_ALPN);
 
-    // Forwarder: shared LB socket → actor inbound.
     let (tx, rx) = mpsc::channel::<InboundPacket>(4096);
     let cancel = CancellationToken::new();
     let fwd_socket = Arc::clone(&lb_socket);
@@ -415,7 +368,6 @@ async fn build_rig(certs: TestCerts, backend_addr: SocketAddr) -> Rig {
         }
     });
 
-    // Mode B actor (the system under test).
     let pool = QuicUpstreamPool::new(
         QuicPoolConfig::default(),
         upstream_config_factory(certs.ca.clone()),
@@ -424,8 +376,6 @@ async fn build_rig(certs: TestCerts, backend_addr: SocketAddr) -> Rig {
         pool,
         addr: backend_addr,
         sni: TEST_SNI.to_string(),
-        // B6 (R14/R12): caps now carried on RawBackend; the const
-        // defaults keep these tests byte-identical in behaviour.
         dgram_queue_cap: lb_quic::DGRAM_QUEUE_CAP,
         max_relay_streams: lb_quic::MAX_RELAY_STREAMS,
     };
@@ -442,7 +392,6 @@ async fn build_rig(certs: TestCerts, backend_addr: SocketAddr) -> Rig {
         h2_backend: None,
         raw_quic_backend: Some(raw_backend),
         quic_modeb_metrics: None,
-        // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
         ws_enabled: false,
         ws_relay_launcher: None,
         max_requests_per_h3_connection: 0,
@@ -461,8 +410,7 @@ async fn build_rig(certs: TestCerts, backend_addr: SocketAddr) -> Rig {
     }
 }
 
-/// Tear the rig down and read the two-connection proof. Returns the
-/// `RawProxyOutcome` if the actor produced one (it does on graceful close).
+/// Tear the rig down and read the two-connection proof (present on graceful close).
 async fn teardown(rig: Rig) -> Option<RawProxyOutcome> {
     rig.cancel.cancel();
     rig.forwarder.abort();
@@ -473,11 +421,8 @@ async fn teardown(rig: Rig) -> Option<RawProxyOutcome> {
         .and_then(Result::ok)
 }
 
-/// The pass-through datagram fixture. Varied shapes proving verbatim,
-/// binary-safe, zero-length-preserving relay. Sized to FIT the negotiated
-/// writable len (the 1350-UDP-payload configs give ~1300 writable bytes),
-/// so the "large" one (~1200B) is large but never refused with
-/// `BufferTooShort`.
+/// Varied shapes proving verbatim, binary-safe, zero-length-preserving relay. Sized to FIT the
+/// negotiated writable length, so even the large one is never refused with `BufferTooShort`.
 fn pass_through_set() -> Vec<Vec<u8>> {
     vec![
         Vec::new(),                                           // zero-length
@@ -491,15 +436,8 @@ fn pass_through_set() -> Vec<Vec<u8>> {
     ]
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// PROOF 1 — real-wire pass-through, BOTH directions, binary-safe.
-// ─────────────────────────────────────────────────────────────────────
-
-/// Client sends a varied multiset of binary datagrams; the dgram-echo
-/// backend bounces each one back; the client must receive every one
-/// byte-identical. This exercises BOTH relay directions in one round-trip
-/// (client→LB→backend is c2u; backend→LB→client is u2c). Also asserts the
-/// actor used TWO distinct `quiche::Connection`s (distinct SCIDs).
+/// The echo backend bounces each datagram back, exercising BOTH relay directions in one
+/// round-trip; every one must return byte-identical, over TWO distinct connections.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn verify_b4_pass_through_both_directions_binary() {
     let certs = generate_loopback_certs();
@@ -514,8 +452,6 @@ async fn verify_b4_pass_through_both_directions_binary() {
             .expect("client dgram_send (fits negotiated frame size)");
     }
 
-    // Drive the client: flush, recv, collect echoes until we have them all
-    // or the budget elapses.
     let expected = sent.len();
     let mut out = vec![0u8; MAX_UDP];
     let mut in_buf = vec![0u8; MAX_UDP];
@@ -547,7 +483,6 @@ async fn verify_b4_pass_through_both_directions_binary() {
         "client must receive exactly as many datagrams as it sent \
          (verbatim through the Mode B relay BOTH directions)"
     );
-    // Byte-identical multiset (datagrams are unordered).
     let mut remaining = received;
     for s in &sent {
         let pos = remaining.iter().position(|r| r == s).unwrap_or_else(|| {
@@ -560,7 +495,6 @@ async fn verify_b4_pass_through_both_directions_binary() {
     }
     assert!(remaining.is_empty(), "no extra/unexpected datagrams");
 
-    // Two-connections proof (Mode B): distinct client vs upstream SCIDs.
     let outcome = teardown(rig).await.expect("actor produced an outcome");
     assert_ne!(
         outcome.client_scid, outcome.upstream_scid,
@@ -572,26 +506,10 @@ async fn verify_b4_pass_through_both_directions_binary() {
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// PROOF 2 — bounded queue under flood (R8): the relay stays HEALTHY and
-// delivery is BOUNDED; nothing OOMs/panics/hangs.
-// ─────────────────────────────────────────────────────────────────────
-
-/// Flood the client→upstream direction at a backend that STOPS reading its
-/// datagrams (so the LB→backend `dgram_send` back-pressures and the relay's
-/// bounded c2u queue saturates and drops-newest past cap). Then prove the
-/// bound by OBSERVABLE behaviour:
-///
-/// * the client⇄LB connection stays ALIVE the whole time (no teardown,
-///   no panic) — we keep sending and the connection never closes;
-/// * the run COMPLETES well within budget (no hang / no unbounded growth);
-/// * the test process does not OOM (a bounded queue of cap×max-payload is
-///   the only relay memory; an unbounded queue under a 50k-datagram flood
-///   at ~1200B each would be ~60MB+ AND keep growing — here it cannot).
-///
-/// The flood count (50_000) is far larger than cap (1024) + both quiche
-/// queues (1024 each), so the relay MUST be dropping; if it were unbounded
-/// the queue would retain everything and grow with the flood.
+/// Flood client→upstream at a backend that STOPS reading, so the relay's bounded c2u queue
+/// saturates and drops-newest past cap. The bound is proven by OBSERVABLE behaviour: the
+/// connection stays ALIVE, the run COMPLETES within budget, and the process does not OOM — an
+/// unbounded queue under a 50k-datagram flood at ~1200 B each would be 60 MB+ and still growing.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn verify_b4_queue_bound_under_flood_stays_healthy() {
     let certs = generate_loopback_certs();
@@ -599,7 +517,6 @@ async fn verify_b4_queue_bound_under_flood_stays_healthy() {
     let backend_addr = spawn_dgram_backend(&certs, Arc::clone(&stall));
     let mut rig = build_rig(certs, backend_addr).await;
 
-    // A representative ~1000B payload (fits the negotiated writable len).
     let payload: Vec<u8> = (0..1_000usize).map(|i| (i % 251) as u8).collect();
     const FLOOD: usize = 50_000;
 
@@ -615,9 +532,8 @@ async fn verify_b4_queue_bound_under_flood_stays_healthy() {
         }
         match rig.client_conn.dgram_send(&payload) {
             Ok(()) => sent_ok += 1,
-            // Client's OWN send queue full: flush + drain a turn, then keep
-            // flooding. This is the client side back-pressuring; the relay
-            // bound is downstream of it.
+            // The client's OWN send queue is full: flush + drain a turn, then keep flooding.
+            // The relay bound is downstream of this.
             Err(quiche::Error::Done) => {
                 send_full_events += 1;
                 flush(&mut rig.client_conn, &rig.client_socket, &mut out).await;
@@ -632,8 +548,7 @@ async fn verify_b4_queue_bound_under_flood_stays_healthy() {
             }
             Err(_) => break,
         }
-        // Periodically pump the wire so the relay actually runs and the
-        // bounded queue is exercised under sustained pressure.
+        // Periodically pump the wire so the relay actually runs under sustained pressure.
         if sent_ok % 256 == 0 {
             flush(&mut rig.client_conn, &rig.client_socket, &mut out).await;
             try_recv_one(
@@ -647,9 +562,8 @@ async fn verify_b4_queue_bound_under_flood_stays_healthy() {
         }
     }
 
-    // Liveness: throughout the flood the connection never closed. (A hang
-    // or OOM would have blown the budget / aborted the process; reaching
-    // here within budget with the conn open is the bounded-behaviour proof.)
+    // Liveness: reaching here within budget with the connection open IS the bounded-behaviour
+    // proof — a hang or OOM would have blown it.
     assert!(
         !rig.client_conn.is_closed(),
         "the client⇄LB connection must stay ALIVE under the flood (the bounded \
@@ -673,35 +587,20 @@ async fn verify_b4_queue_bound_under_flood_stays_healthy() {
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// PROOF 3 — drop-newest exercised on the wire (bounded delivery under a
-// flood that exceeds cap before drain); the deterministic which-end proof
-// is the unit negative control (see report).
-// ─────────────────────────────────────────────────────────────────────
-
-/// Flood MORE than the relay cap into a backend that drains SLOWLY (it
-/// alternates stall/echo), then prove on the wire: the destination receives
-/// a BOUNDED subset (never more than were sent — drops occurred), and the
-/// connection stays healthy and eventually still flows once pressure eases.
-///
-/// Wire-level ordering across three bounded queues (client-send,
-/// LB-recv→relay, backend-recv) makes "exactly WHICH datagrams were
-/// dropped" non-deterministic, so — as the plan permits — the
-/// which-end (drop-NEWEST, not drop-oldest) is pinned deterministically by
-/// the builder's `dgram_queue_drop_newest_negative_control` unit test (the
-/// verifier proved it load-bearing). Here we assert only the deterministic
-/// wire properties: bounded delivery + liveness + recovery.
+/// Flood MORE than the relay cap into a backend that drains SLOWLY: the destination must receive
+/// a BOUNDED subset (strictly fewer than sent — drops occurred) and the connection must stay
+/// healthy and still flow once pressure eases. Ordering across three bounded queues makes
+/// "exactly WHICH datagrams were dropped" non-deterministic, so drop-NEWEST is pinned by the unit
+/// negative control, not here.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn verify_b4_drop_newest_oldest_survive_when_drained() {
     let certs = generate_loopback_certs();
-    // Start stalled so the queues build past cap, then release to let the
-    // surviving (bounded) subset flow back.
+    // Start stalled so the queues build past cap, then release the bounded subset.
     let stall = Arc::new(AtomicBool::new(true));
     let backend_addr = spawn_dgram_backend(&certs, Arc::clone(&stall));
     let mut rig = build_rig(certs, backend_addr).await;
 
-    // Index-tagged payloads so received datagrams are recognizable. Each is
-    // a fixed ~600B (fits writable len). FLOOD > cap(1024) + quiche queues.
+    // Index-tagged ~600 B payloads (fits writable len). FLOOD > cap(1024) + both quiche queues.
     const FLOOD: usize = 8_000;
     let mk = |i: usize| -> Vec<u8> {
         let mut v = vec![0u8; 600];
@@ -717,7 +616,6 @@ async fn verify_b4_drop_newest_oldest_survive_when_drained() {
     let mut sent_ok: usize = 0;
     let deadline = tokio::time::Instant::now() + RELAY_BUDGET;
 
-    // Phase A — flood while the sink is stalled (queues fill past cap).
     for i in 0..FLOOD {
         if tokio::time::Instant::now() >= deadline {
             break;
@@ -743,7 +641,6 @@ async fn verify_b4_drop_newest_oldest_survive_when_drained() {
     }
     flush(&mut rig.client_conn, &rig.client_socket, &mut out).await;
 
-    // Phase B — release the sink; collect whatever survived flowing back.
     stall.store(false, Ordering::Relaxed);
     let mut received: Vec<Vec<u8>> = Vec::new();
     let drain_deadline = tokio::time::Instant::now() + Duration::from_secs(4);
@@ -766,11 +663,8 @@ async fn verify_b4_drop_newest_oldest_survive_when_drained() {
         }
     }
 
-    // Deterministic wire properties:
-    // (1) Bounded delivery — never MORE than were handed to the wire. Under
-    //     a flood that exceeds every bounded queue, drops MUST have happened
-    //     (received strictly fewer than the flood we attempted), so the
-    //     queue is bounded, NOT unbounded.
+    // (1) Bounded delivery — never MORE than were handed to the wire, and under a flood
+    //     exceeding every bounded queue drops MUST have happened.
     assert!(
         sent_ok > 1024,
         "must have flooded past a relay-cap worth ({sent_ok})"
@@ -788,8 +682,7 @@ async fn verify_b4_drop_newest_oldest_survive_when_drained() {
         received.len(),
         sent_ok
     );
-    // (2) Liveness + recovery: the connection survived and datagrams STILL
-    //     flowed after the pressure eased (the relay is not wedged).
+    // (2) Liveness + recovery: datagrams STILL flowed after the pressure eased.
     assert!(
         !rig.client_conn.is_closed(),
         "connection stays alive across flood + drain"
@@ -798,7 +691,6 @@ async fn verify_b4_drop_newest_oldest_survive_when_drained() {
         !received.is_empty(),
         "datagrams still flow once the sink drains (relay not wedged by the flood)"
     );
-    // (3) Every delivered datagram is byte-intact (verbatim 600B, recognizable tag).
     for r in &received {
         assert_eq!(
             r.len(),

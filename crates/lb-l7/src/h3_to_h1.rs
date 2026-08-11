@@ -1,7 +1,5 @@
-//! HTTP/3 to HTTP/1.1 bridge.
-//!
-//! Identical transformation to [`crate::h2_to_h1`] since HTTP/3 uses the same
-//! pseudo-header scheme as HTTP/2.
+//! HTTP/3 → HTTP/1.1 bridge; identical to [`crate::h2_to_h1`] (same
+//! pseudo-header scheme).
 
 use crate::{Bridge, BridgeRequest, BridgeResponse, L7Error, Protocol, check_header_count};
 
@@ -30,7 +28,6 @@ impl Bridge for H3ToH1Bridge {
         let mut authority: Option<String> = None;
         let mut regular_headers: Vec<(String, String)> = Vec::new();
 
-        // Extract values from pseudo-headers, collect regular headers.
         for (k, v) in &req.headers {
             match k.as_str() {
                 ":method" => method.clone_from(v),
@@ -38,7 +35,7 @@ impl Bridge for H3ToH1Bridge {
                 ":scheme" => { /* Dropped in HTTP/1.1 -- scheme is implicit. */ }
                 ":authority" => authority = Some(v.clone()),
                 _ if k.starts_with(':') => {
-                    // Skip any unknown pseudo-headers.
+                    // Unknown pseudo-header: dropped, not forwarded.
                 }
                 _ => {
                     regular_headers.push((k.to_lowercase(), v.clone()));
@@ -46,9 +43,7 @@ impl Bridge for H3ToH1Bridge {
             }
         }
 
-        // :authority is required for a well-formed H3 request.
-        // An empty value is treated the same as missing — it would produce an
-        // invalid empty Host header in the downstream HTTP/1.1 request.
+        // An empty `:authority` would produce an invalid empty `Host`.
         let auth = authority
             .filter(|a| !a.is_empty())
             .ok_or_else(|| L7Error::MissingPseudoHeader(":authority".to_owned()))?;
@@ -62,7 +57,6 @@ impl Bridge for H3ToH1Bridge {
             headers: regular_headers,
             body: req.body.clone(),
             scheme: req.scheme.clone(),
-            // PROTO-2-12: forward request trailers.
             trailers: req.trailers.clone(),
         })
     }
@@ -89,7 +83,6 @@ impl Bridge for H3ToH1Bridge {
             status: resp.status,
             headers,
             body: resp.body.clone(),
-            // PROTO-2-12: forward response trailers.
             trailers: resp.trailers.clone(),
         })
     }

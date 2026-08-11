@@ -17,7 +17,6 @@ fn test_bridge_h1_to_h2() {
         trailers: Vec::new(),
     };
     let bridged = bridge.bridge_request(&req).unwrap();
-    // Pseudo-headers added
     assert!(
         bridged
             .headers
@@ -36,10 +35,7 @@ fn test_bridge_h1_to_h2() {
             .iter()
             .any(|(k, v)| k == ":authority" && v == "example.com")
     );
-    // Connection header removed
     assert!(!bridged.headers.iter().any(|(k, _)| k == "connection"));
-    // Host header removed (replaced by :authority)
     assert!(!bridged.headers.iter().any(|(k, _)| k == "host"));
-    // Content-type preserved
     assert!(bridged.headers.iter().any(|(k, _)| k == "content-type"));
 }

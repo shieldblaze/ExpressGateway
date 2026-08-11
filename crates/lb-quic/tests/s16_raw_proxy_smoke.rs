@@ -1,21 +1,7 @@
-//! SESSION 16 / Mode B — B1 MINIMAL smoke test (author's self-check).
-//!
-//! Scope is deliberately narrow (author ≠ verifier): this proves the
-//! NEW dedicated-dial path + the new public seam types, NOT the full
-//! two-connections client⇄LB⇄backend wire proof or the H3-regression
-//! suite (both are the VERIFIER's job, plan §5 / increment B1).
-//!
-//! What this asserts on the wire:
-//!
-//! 1. [`lb_io::quic_pool::QuicUpstreamPool::dial_dedicated`] reaches
-//!    `is_established()` against a throwaway REAL quiche server, mirrors
-//!    the requested ALPN onto the per-dial config, and returns a
-//!    [`lb_io::quic_pool::DedicatedQuic`] whose socket is a fresh
-//!    dedicated UDP socket (distinct local port). This exercises the
-//!    R12-extracted `connect_and_drive` handshake loop that `dial_new`
-//!    also uses.
-//! 2. The new [`lb_quic::RawBackend`] seam type is constructible (the
-//!    field threaded into `RouterParams` / `ActorParams`).
+//! Mode B — B1 minimal smoke (the author's self-check); the full two-connections wire proof is
+//! the verifier's. Asserts `QuicUpstreamPool::dial_dedicated` reaches `is_established()` against
+//! a throwaway REAL quiche server, mirrors the requested ALPN onto the per-dial config, and
+//! returns a `DedicatedQuic` on a FRESH dedicated UDP socket.
 
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
@@ -28,9 +14,8 @@ const TEST_SNI: &str = "expressgateway.test";
 const MAX_UDP: usize = 65_535;
 const H3_ALPN: &[u8] = b"h3";
 
-/// Generate an in-memory self-signed cert/key PEM pair (SAN = TEST_SNI,
-/// serverAuth EKU) so BoringSSL's hostname verifier accepts the
-/// loopback peer. Written to a unique temp dir; cleaned on drop.
+/// In-memory self-signed cert/key PEM pair (SAN = TEST_SNI, serverAuth EKU) so BoringSSL's
+/// hostname verifier accepts the loopback peer. Written to a unique temp dir; cleaned on drop.
 struct TestCerts {
     dir: std::path::PathBuf,
     cert: std::path::PathBuf,
@@ -74,16 +59,13 @@ fn generate_loopback_certs() -> TestCerts {
     }
 }
 
-/// Client-side config factory for the dedicated-dial pool (verifies the
-/// throwaway server's cert against the generated CA).
 fn client_config_factory(
     ca_path: std::path::PathBuf,
 ) -> Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> {
     Arc::new(move || {
         let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION)?;
-        // Factory installs a DIFFERENT ALPN on purpose so the test can
-        // prove dial_dedicated's ALPN override actually takes effect (we
-        // pass [h3] to dial_dedicated; the server only speaks h3).
+        // A DIFFERENT ALPN on purpose, so the test can prove `dial_dedicated`'s override takes
+        // effect — the server only speaks h3.
         cfg.set_application_protos(&[b"factory-default-alpn"])?;
         let ca = ca_path.to_str().ok_or(quiche::Error::TlsFail)?;
         cfg.load_verify_locations_from_file(ca)
@@ -125,10 +107,8 @@ fn server_config(certs: &TestCerts) -> quiche::Config {
     cfg
 }
 
-/// A throwaway server that accepts ONE connection and drives it to
-/// established, then idles (keeps responding to keep-alives) until the
-/// task is dropped. Returns the bound server address. No RETRY (this is
-/// a plain backend the LB dials, not the LB's own listener).
+/// Accepts ONE connection, drives it to established, then idles. No RETRY — this is a plain
+/// backend the LB dials, not the LB's own listener.
 async fn spawn_throwaway_server(certs: &TestCerts) -> SocketAddr {
     let socket = UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let addr = socket.local_addr().unwrap();
@@ -144,7 +124,6 @@ async fn spawn_throwaway_server(certs: &TestCerts) -> SocketAddr {
             if tokio::time::Instant::now() >= deadline {
                 return;
             }
-            // Flush any pending outbound on the accepted conn.
             if let Some(c) = conn.as_mut() {
                 loop {
                     match c.send(&mut out_buf) {
@@ -190,8 +169,7 @@ async fn spawn_throwaway_server(certs: &TestCerts) -> SocketAddr {
     addr
 }
 
-/// B1 smoke: `dial_dedicated` reaches established against a real quiche
-/// server, returns a dedicated socket, and mirrors the requested ALPN.
+/// B1 smoke: `dial_dedicated` reaches established, returns a dedicated socket, mirrors the ALPN.
 #[tokio::test]
 async fn dial_dedicated_reaches_established_with_mirrored_alpn() {
     let certs = generate_loopback_certs();
@@ -202,8 +180,8 @@ async fn dial_dedicated_reaches_established_with_mirrored_alpn() {
         client_config_factory(certs.ca.clone()),
     );
 
-    // Mirror ALPN [h3] — overriding the factory's "factory-default-alpn"
-    // (which the server does NOT speak; a non-override would TLS-fail).
+    // Mirror ALPN [h3], overriding the factory's "factory-default-alpn" — which the server does
+    // NOT speak, so a non-override would TLS-fail.
     let alpn: &[&[u8]] = &[H3_ALPN];
     let dialed = tokio::time::timeout(
         Duration::from_secs(8),
@@ -225,22 +203,19 @@ async fn dial_dedicated_reaches_established_with_mirrored_alpn() {
         dialed.peer, server_addr,
         "DedicatedQuic.peer must be the dialed backend address"
     );
-    // The dedicated socket is its OWN ephemeral loopback socket, distinct
-    // from the server's (one upstream conn per client conn, plan §2.1).
+    // Its OWN ephemeral loopback socket, distinct from the server's (one upstream conn per client).
     assert_ne!(
         dialed.local.port(),
         server_addr.port(),
         "dedicated dial must own a distinct UDP socket"
     );
-    // ALPN mirroring took effect: the negotiated protocol is the one we
-    // passed, NOT the factory default. (Empty until established; we are
-    // established here.)
+    // ALPN mirroring took effect: the negotiated protocol is the one we passed, NOT the factory
+    // default. (It is empty until established; we are established here.)
     assert_eq!(
         dialed.conn.application_proto(),
         H3_ALPN,
         "dial_dedicated must mirror the requested ALPN onto the wire"
     );
-    // The fresh-dial counter bumped (parity with dial_new).
     assert_eq!(
         pool.fresh_dials(),
         1,
@@ -254,8 +229,8 @@ async fn dial_dedicated_reaches_established_with_mirrored_alpn() {
     );
 }
 
-/// B1 smoke: the new `RawBackend` seam type is constructible (the field
-/// threaded into `RouterParams` / `ActorParams`). Cheap-clone + Debug.
+/// B1 smoke: the `RawBackend` seam type (threaded into `RouterParams` / `ActorParams`) is
+/// constructible, cheap-clone and Debug.
 #[tokio::test]
 async fn raw_backend_is_constructible_and_clone() {
     let certs = generate_loopback_certs();
@@ -267,8 +242,6 @@ async fn raw_backend_is_constructible_and_clone() {
         pool,
         addr: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 4433)),
         sni: TEST_SNI.to_string(),
-        // B6 (R14/R12): caps now carried on RawBackend; the const
-        // defaults keep these tests byte-identical in behaviour.
         dgram_queue_cap: lb_quic::DGRAM_QUEUE_CAP,
         max_relay_streams: lb_quic::MAX_RELAY_STREAMS,
     };

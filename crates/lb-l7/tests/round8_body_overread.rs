@@ -1,25 +1,6 @@
-//! ROUND8-L7-10 — contract test for the H2 upstream eviction guarantee
-//! plus the H1 take-and-discard doc-comment provenance.
-//!
-//! The plan asks for a regression that proves a body over-read on an
-//! H2 upstream evicts the cached connection from `Http2Pool`. A full
-//! integration test requires standing up a hyper H2 server that
-//! deliberately sends a `Content-Length: 5` response with 10 body
-//! bytes, which is substantial scaffolding for a doc-grade finding.
-//!
-//! Instead this test pins the contract at the public-API surface plus
-//! the source-of-truth doc-blocks:
-//!
-//! 1. A dial to a known-dead address fails before the cache is
-//!    populated, so `peer_count` remains 0. This pins the failure-
-//!    mode postcondition — no stale entry survives any error path.
-//! 2. The H1 take-and-discard doc-block on `H1Proxy::proxy_request`
-//!    exists and mentions the `set_reusable(false)` mitigation.
-//! 3. The `PooledTcp::set_reusable` API doc-block carries the
-//!    contract-warning so the API is not pruned as dead-code without
-//!    re-introducing the Pingora upstream-smuggling bug class.
-//!
-//! See Pingora 0.6.0 / 0.8.0 CHANGELOG for the bug class this guards.
+//! ROUND8-L7-10 — pins the H2 eviction guarantee (no stale `PeerEntry` on any
+//! error path) plus the presence of the doc-blocks carrying the Pingora
+//! upstream-smuggling lesson in lb-l7 and lb-io.
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -34,10 +15,7 @@ use lb_io::sockopts::BackendSockOpts;
 
 #[tokio::test]
 async fn h2_pool_failed_send_leaves_no_stale_entry() {
-    // Dial a port that nothing is listening on. The TCP dial fails,
-    // which exercises the `Dial` arm — the same postcondition we care
-    // about applies to every failure path: after any error,
-    // `peer_count` for this address is 0 (no stale entry).
+    // Dead port: the postcondition holds for EVERY error path.
     let tcp_cfg = PoolConfig {
         connect_timeout: Duration::from_millis(100),
         ..PoolConfig::default()
@@ -75,12 +53,6 @@ async fn h2_pool_failed_send_leaves_no_stale_entry() {
 
 #[test]
 fn h1_take_and_discard_doc_block_present() {
-    // The doc-comment block on `H1Proxy::proxy_request` is the
-    // single source of truth that warns future refactors against
-    // dropping `take_stream()` without wiring `set_reusable(false)`
-    // on body-length mismatch. Detect drift: the doc-block must
-    // mention "take-and-discard" verbatim, otherwise a doc-edit may
-    // have silently removed the contract.
     let src =
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/h1_proxy.rs")).unwrap();
     assert!(

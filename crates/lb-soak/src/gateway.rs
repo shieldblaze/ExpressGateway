@@ -1,25 +1,17 @@
-//! Launch + supervise the real `expressgateway` binary as a child process.
-//!
-//! Mirrors the proven spawn harness in `tests/reload_zero_drop.rs`
-//! (`find_binary`, `ephemeral_port`, SIGTERM delivery) but adds a uniform
-//! readiness gate (poll `/metrics` until it answers — works for every datapath
-//! including UDP-only QUIC/passthrough) and a Drop guard that SIGTERMs and
-//! REAPS the child, so a soak never leaks its gateway-under-test (R9: a soak
-//! that leaks its own processes is an irony we will not ship).
+//! Launch + supervise the real `expressgateway` binary as a child. Readiness is gated on `/metrics`
+//! answering (works for UDP-only datapaths too), and the Drop guard SIGTERMs + REAPS so a soak
+//! never leaks its own gateway-under-test.
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// Locate the `expressgateway` binary under `CARGO_TARGET_DIR` (or `./target`),
-/// preferring a release build. Returns `Err` with a build hint if absent.
 pub fn find_binary() -> anyhow::Result<PathBuf> {
     let target_dir = std::env::var("CARGO_TARGET_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
             let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
-            // crates/lb-soak -> workspace root -> target
             PathBuf::from(manifest)
                 .ancestors()
                 .nth(2)
@@ -39,8 +31,8 @@ pub fn find_binary() -> anyhow::Result<PathBuf> {
     )
 }
 
-/// Reserve an ephemeral loopback TCP port by bind-then-drop. A small race
-/// window exists before the gateway rebinds; callers retry on a lost race.
+/// Reserve an ephemeral loopback TCP port by bind-then-drop. A race window exists before the
+/// gateway rebinds; callers retry.
 pub fn ephemeral_port() -> anyhow::Result<u16> {
     let l = std::net::TcpListener::bind(("127.0.0.1", 0))?;
     let port = l.local_addr()?.port();
@@ -48,8 +40,8 @@ pub fn ephemeral_port() -> anyhow::Result<u16> {
     Ok(port)
 }
 
-/// Reserve an ephemeral loopback UDP port by bind-then-drop (for QUIC/passthrough
-/// listeners — a TCP reserve would not prove the UDP port is free).
+/// Reserve an ephemeral loopback UDP port by bind-then-drop — a TCP reserve would not prove the UDP
+/// port is free.
 pub fn ephemeral_udp_port() -> anyhow::Result<u16> {
     let l = std::net::UdpSocket::bind(("127.0.0.1", 0))?;
     let port = l.local_addr()?.port();
@@ -57,25 +49,18 @@ pub fn ephemeral_udp_port() -> anyhow::Result<u16> {
     Ok(port)
 }
 
-/// A running gateway child. Dropping it SIGTERMs + reaps the process.
 pub struct GatewayChild {
     child: Option<Child>,
     pid: u32,
-    /// Where the child's stdout/stderr were redirected (bounded log file).
     pub log_path: PathBuf,
 }
 
 impl GatewayChild {
-    /// The child PID (for `/proc` sampling).
     #[must_use]
     pub fn pid(&self) -> u32 {
         self.pid
     }
 
-    /// Spawn the binary on `config`, redirecting stdout+stderr to `log_path`
-    /// (bounded by the caller's choice of file), then poll `metrics_addr`'s
-    /// `/metrics` until it answers 200 within `boot_budget`. Returns the live
-    /// child or an error (the child is reaped on failure).
     pub async fn spawn_and_wait_ready(
         bin: &Path,
         config: &Path,
@@ -85,8 +70,6 @@ impl GatewayChild {
     ) -> anyhow::Result<Self> {
         let log = std::fs::File::create(&log_path)?;
         let log_err = log.try_clone()?;
-        // Honour a parent-set RUST_LOG (so the operator can crank verbosity for
-        // a targeted debug run); default to warn for a quiet soak.
         let rust_log = std::env::var("RUST_LOG").unwrap_or_else(|_| "warn".to_string());
         let child = Command::new(bin)
             .arg(config)
@@ -112,7 +95,6 @@ impl GatewayChild {
                     me.log_path.display()
                 );
             }
-            // If the child already exited, surface it now.
             if let Some(c) = me.child.as_mut() {
                 if let Ok(Some(status)) = c.try_wait() {
                     anyhow::bail!(
@@ -128,11 +110,9 @@ impl GatewayChild {
         }
     }
 
-    /// Deliver SIGTERM and reap (blocking briefly). Idempotent.
     pub fn terminate_and_reap(&mut self) {
         if let Some(mut child) = self.child.take() {
             send_sigterm(self.pid);
-            // Give the drain budget a moment, then hard-kill if needed.
             let deadline = Instant::now() + Duration::from_secs(10);
             loop {
                 match child.try_wait() {
@@ -158,7 +138,6 @@ impl Drop for GatewayChild {
     }
 }
 
-/// Deliver SIGTERM to `pid` via libc. ESRCH (already gone) is fine.
 fn send_sigterm(pid: u32) {
     #[cfg(unix)]
     {
@@ -186,9 +165,6 @@ mod tests {
 
     #[test]
     fn find_binary_reports_helpfully_when_absent() {
-        // With a bogus target dir, the error must name the build command.
-        // (We don't assert success — the binary may or may not be built in
-        // this environment; we assert the error shape when it's absent.)
         let prev = std::env::var("CARGO_TARGET_DIR").ok();
         // SAFETY: single-threaded test mutation of an env var local to it.
         unsafe {

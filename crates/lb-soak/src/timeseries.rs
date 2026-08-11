@@ -1,40 +1,22 @@
-//! Time-series collection + the BOUNDED/DRIFT trend analyzer.
-//!
-//! This is the heart of the soak verdict (R8): given a per-metric series
-//! sampled over the run, decide whether the metric stayed **bounded** (flat /
-//! oscillating around a level — PASS) or **drifted** upward (a leak / unbounded
-//! growth — a FINDING). It is the most verdict-critical module in the suite, so
-//! the analyzer is unit-tested on synthetic flat / rising / sawtooth / warmup
-//! series and the thresholds are documented inline.
-//!
-//! R15: the verdict is computed over the WHOLE completed series; the analyzer
-//! also surfaces every input number (medians, slope, growth) so the verdict in
-//! `verdict.json` is auditable, not a bare label.
+//! Time-series collection + the BOUNDED/DRIFT trend analyzer that produces the soak verdict (R8).
 
 use std::fmt::Write as _;
 
-/// How a metric column should be judged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MetricKind {
-    /// Should not climb over the run (RSS, fds, threads, and bounded-state
-    /// gauges that oscillate around a level). Judged by the trend test.
+    /// Should not climb over the run (RSS, fds, threads, and bounded-state gauges that oscillate
+    /// around a level).
     Trend,
-    /// Monotonic counter (drops/evictions). Never "flat"; judged by reporting
-    /// its rate. Always BOUNDED unless its rate is accelerating.
+    /// Monotonic counter (drops/evictions).
     Counter,
-    /// A counter that MUST stay zero (e.g. `panic_total`). Any positive final
-    /// value is a DRIFT/finding.
+    /// A counter that MUST stay zero (e.g. `panic_total`).
     CounterMustBeZero,
 }
 
-/// Per-column verdict.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
-    /// Bounded / flat — PASS for this metric.
     Bounded,
-    /// Upward drift — a FINDING for this metric.
     Drift,
-    /// Too few samples to judge.
     Inconclusive,
 }
 
@@ -50,18 +32,15 @@ impl Verdict {
     }
 }
 
-/// Thresholds for the trend test. Defaults are the documented soak bands.
 #[derive(Debug, Clone, Copy)]
 pub struct TrendConfig {
-    /// Fraction of leading samples discarded as warmup before judging
-    /// steady-state (post-warmup leaks are the target; warmup growth is not a
-    /// leak). Default 0.10.
+    /// Leading fraction discarded as warmup before judging steady state. Default 0.10.
     pub warmup_frac: f64,
-    /// Relative-growth band: last-third median may exceed first-third median by
-    /// up to this fraction and still be BOUNDED. Default 0.10 (10%).
+    /// Last-third median may exceed the first-third median by this fraction and stay BOUNDED.
+    /// Default 0.10.
     pub band: f64,
-    /// Minimum monotone fraction (share of non-negative consecutive deltas)
-    /// required to call a growth a consistent climb (vs. noise). Default 0.60.
+    /// Minimum monotone fraction (non-negative deltas) to call a climb consistent, not noise.
+    /// Default 0.60.
     pub monotone_min: f64,
     /// Minimum trimmed-sample count to render a verdict. Default 8.
     pub min_samples: usize,
@@ -78,7 +57,6 @@ impl Default for TrendConfig {
     }
 }
 
-/// Full evidence behind one column's verdict (serialized into `verdict.json`).
 #[derive(Debug, Clone)]
 pub struct ColumnVerdict {
     pub column: String,
@@ -89,33 +67,22 @@ pub struct ColumnVerdict {
     pub last: f64,
     pub min: f64,
     pub max: f64,
-    /// Median of the first third of the warmup-trimmed series.
     pub first_third_median: f64,
-    /// Median of the last third of the warmup-trimmed series.
     pub last_third_median: f64,
-    /// (last_third_median - first_third_median) / max(first_third_median, eps).
     pub rel_growth: f64,
-    /// Least-squares slope per sample over the trimmed series.
     pub slope_per_sample: f64,
-    /// Fraction of consecutive deltas that are >= 0 (climb consistency).
     pub monotone_frac: f64,
-    /// One-line human explanation.
     pub note: String,
 }
 
-/// A column-oriented time-series: a fixed set of named columns plus rows
-/// carrying a timestamp and one value per column.
 #[derive(Debug, Clone)]
 pub struct TimeSeries {
     columns: Vec<String>,
     t: Vec<f64>,
-    /// `rows[i][c]` is the value of column `c` at sample `i`.
     rows: Vec<Vec<f64>>,
 }
 
 impl TimeSeries {
-    /// Create an empty series with the given column names (order is the CSV
-    /// column order, after the leading `t_secs`).
     #[must_use]
     pub fn new(columns: Vec<String>) -> Self {
         Self {
@@ -125,27 +92,23 @@ impl TimeSeries {
         }
     }
 
-    /// Column names (without the leading `t_secs`).
     #[must_use]
     pub fn columns(&self) -> &[String] {
         &self.columns
     }
 
-    /// Number of samples recorded.
     #[must_use]
     pub fn len(&self) -> usize {
         self.t.len()
     }
 
-    /// Whether no samples have been recorded.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.t.is_empty()
     }
 
-    /// Append a sample. `values` must align with `columns` (extra values are
-    /// ignored; missing trailing values are filled with NaN so a transient
-    /// scrape miss does not desync the columns).
+    /// Append a sample. Missing trailing values are NaN-filled so a transient scrape miss does not
+    /// desync the columns.
     pub fn push(&mut self, t_secs: f64, mut values: Vec<f64>) {
         values.resize(self.columns.len(), f64::NAN);
         values.truncate(self.columns.len());
@@ -153,7 +116,6 @@ impl TimeSeries {
         self.rows.push(values);
     }
 
-    /// Extract one column's values (NaNs included).
     #[must_use]
     pub fn column_values(&self, col: &str) -> Option<Vec<f64>> {
         let idx = self.columns.iter().position(|c| c == col)?;
@@ -165,7 +127,6 @@ impl TimeSeries {
         )
     }
 
-    /// Render to CSV (`t_secs,<cols...>`). NaNs render as empty cells.
     #[must_use]
     pub fn to_csv(&self) -> String {
         let mut out = String::new();
@@ -190,8 +151,8 @@ impl TimeSeries {
         out
     }
 
-    /// Analyze every column under the given per-column [`MetricKind`] (a column
-    /// not present in `kinds` defaults to [`MetricKind::Trend`]).
+    /// Analyze every column under the given per-column [`MetricKind`] (a column not present in
+    /// `kinds` defaults to [`MetricKind::Trend`]).
     #[must_use]
     pub fn analyze(&self, cfg: &TrendConfig, kinds: &[(String, MetricKind)]) -> Vec<ColumnVerdict> {
         self.columns
@@ -208,7 +169,6 @@ impl TimeSeries {
     }
 }
 
-/// Median of a slice (NaNs filtered). Returns 0.0 for an empty input.
 fn median(xs: &[f64]) -> f64 {
     let mut v: Vec<f64> = xs.iter().copied().filter(|x| !x.is_nan()).collect();
     if v.is_empty() {
@@ -223,8 +183,6 @@ fn median(xs: &[f64]) -> f64 {
     }
 }
 
-/// Least-squares slope of `ys` against sample index 0..n. NaNs are skipped
-/// (their indices too). Returns 0.0 if fewer than two finite points.
 fn slope(ys: &[f64]) -> f64 {
     let pts: Vec<(f64, f64)> = ys
         .iter()
@@ -247,8 +205,6 @@ fn slope(ys: &[f64]) -> f64 {
     (n * sxy - sx * sy) / denom
 }
 
-/// Fraction of consecutive deltas that are >= 0 (climb consistency). A steady
-/// leak approaches 1.0; symmetric noise approaches 0.5.
 fn monotone_frac(ys: &[f64]) -> f64 {
     let finite: Vec<f64> = ys.iter().copied().filter(|y| !y.is_nan()).collect();
     if finite.len() < 2 {
@@ -269,7 +225,6 @@ fn monotone_frac(ys: &[f64]) -> f64 {
     }
 }
 
-/// Judge a single column.
 #[must_use]
 pub fn analyze_column(
     column: &str,
@@ -285,7 +240,6 @@ pub fn analyze_column(
     let max = finite.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     let (min, max) = if n == 0 { (0.0, 0.0) } else { (min, max) };
 
-    // CounterMustBeZero: any positive value at all is a finding.
     if kind == MetricKind::CounterMustBeZero {
         let v = if max > 0.0 {
             Verdict::Drift
@@ -315,7 +269,6 @@ pub fn analyze_column(
         };
     }
 
-    // Warmup-trim then split into thirds.
     let trim = ((n as f64) * cfg.warmup_frac).floor() as usize;
     let trimmed = if trim < n {
         &finite[trim..]
@@ -356,18 +309,11 @@ pub fn analyze_column(
 
     let (verdict, note) = match kind {
         MetricKind::Counter => {
-            // Counters only rise; the question is whether the RATE is bounded.
-            // We report it as BOUNDED (the absolute bound, e.g. drop-newest, is
-            // asserted separately by the scenario against the product cap). An
-            // accelerating counter — second half climbing much faster than the
-            // first — is flagged as DRIFT.
+            // A constant-rate counter has first/second-half slopes ~equal; 1.8x cleanly separates
+            // linear (1.0x) from quadratic (~2.4x) growth, so only an accelerating counter is
+            // DRIFT.
             let first_half = slope(&trimmed[..tn / 2]);
             let second_half = slope(&trimmed[tn / 2..]);
-            // A constant-rate counter (e.g. drop-newest under a sustained
-            // flood) has first/second-half slopes ~equal (ratio ~1.0). A
-            // genuinely unbounded/accelerating counter has a second-half slope
-            // materially steeper. 1.8x cleanly separates the two (quadratic
-            // growth is ~2.4x in a typical window; linear is 1.0x).
             if second_half > first_half * 1.8 + eps && second_half > 0.0 {
                 (
                     Verdict::Drift,
@@ -448,7 +394,6 @@ mod tests {
 
     #[test]
     fn flat_series_is_bounded() {
-        // RSS hovering around 50_000 KiB with small noise.
         let vals: Vec<f64> = (0..40)
             .map(|i| 50_000.0 + if i % 2 == 0 { 50.0 } else { -50.0 })
             .collect();
@@ -463,7 +408,6 @@ mod tests {
 
     #[test]
     fn linear_climb_is_drift() {
-        // A real leak: RSS rising ~1% per sample, steadily.
         let vals: Vec<f64> = (0..40).map(|i| 50_000.0 + (i as f64) * 500.0).collect();
         let v = analyze_column("rss_kb", &vals, MetricKind::Trend, &cfg());
         assert_eq!(
@@ -478,11 +422,8 @@ mod tests {
 
     #[test]
     fn sawtooth_around_constant_is_bounded() {
-        // Connection table under churn: a clean sawtooth rising 0..190 then
-        // resetting every 20 samples — high monotone fraction (mostly +10
-        // steps) but NO net upward trend, so first-/last-third medians match.
-        // This is the case the rel-growth gate must protect against a false
-        // leak even when the climb-consistency is high.
+        // Sawtooth: high monotone fraction but NO net trend. The rel-growth gate must keep this
+        // from reading as a leak.
         let vals: Vec<f64> = (0..60).map(|i| ((i % 20) * 10) as f64).collect();
         let v = analyze_column("conns", &vals, MetricKind::Trend, &cfg());
         assert_eq!(
@@ -495,9 +436,7 @@ mod tests {
 
     #[test]
     fn warmup_spike_then_flat_is_bounded() {
-        // High warmup then settles flat — trimming the warmup avoids a false
-        // leak. Without trimming, first-third would be low and last-third
-        // high. The warmup here is the first 10%.
+        // High warmup then flat: without trimming, first-third low / last-third high.
         let mut vals: Vec<f64> = vec![10_000.0, 80_000.0, 70_000.0, 60_000.0];
         vals.extend((0..40).map(|i| 50_000.0 + if i % 2 == 0 { 30.0 } else { -30.0 }));
         let v = analyze_column("rss_kb", &vals, MetricKind::Trend, &cfg());
@@ -511,8 +450,6 @@ mod tests {
 
     #[test]
     fn counter_constant_rate_is_bounded() {
-        // Datagram drops accumulating at a constant rate (drop-newest under a
-        // sustained flood) — bounded, not accelerating.
         let vals: Vec<f64> = (0..40).map(|i| (i as f64) * 10.0).collect();
         let v = analyze_column("drops_total", &vals, MetricKind::Counter, &cfg());
         assert_eq!(
@@ -525,7 +462,6 @@ mod tests {
 
     #[test]
     fn counter_accelerating_is_drift() {
-        // Quadratic growth — rate doubling — flags unbounded behaviour.
         let vals: Vec<f64> = (0..40).map(|i| (i as f64).powi(2)).collect();
         let v = analyze_column("growth_total", &vals, MetricKind::Counter, &cfg());
         assert_eq!(
@@ -578,12 +514,10 @@ mod tests {
 
     #[test]
     fn push_fills_missing_columns_with_nan() {
-        // A scrape miss (short row) must not desync columns.
         let mut ts = TimeSeries::new(vec!["a".into(), "b".into(), "c".into()]);
         ts.push(0.0, vec![1.0]); // only column a present
         let row = ts.column_values("c").unwrap();
         assert!(row[0].is_nan(), "missing column must be NaN, kept aligned");
-        // NaN renders as an empty cell.
         let csv = ts.to_csv();
         assert!(csv.lines().nth(1).unwrap().starts_with("0.000,1,,"));
     }

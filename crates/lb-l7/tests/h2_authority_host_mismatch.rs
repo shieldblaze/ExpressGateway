@@ -1,15 +1,6 @@
-//! PROTO-2-01 — RFC 9113 §8.3.1: H2 proxy must reject requests where
-//! `:authority` and `Host` disagree.
-//!
-//! The full proxy handle path requires a hyper H2 server connection,
-//! a backend, etc. — too heavy for a focused unit test. Instead we
-//! invoke the extracted `check_authority_host_agreement` helper
-//! (which is the exact same function called by `H2Proxy::handle`
-//! before hop-by-hop strip) with a matrix of authority/Host
-//! combinations and assert the reject set. The integration-side
-//! `test_h2_400_on_disagreement` invokes the helper with the precise
-//! shape produced by hyper's `into_parts` so a future hyper upgrade
-//! that changes `uri.authority()` semantics will trip the test.
+//! PROTO-2-01 / RFC 9113 §8.3.1 — `:authority` vs `Host` disagreement, driven
+//! through the exact function `H2Proxy::handle` calls, fed the shape hyper's
+//! `into_parts` produces (so a hyper `uri.authority()` change trips it).
 
 use http::Uri;
 use http::header::HOST;
@@ -34,8 +25,7 @@ fn uri_with_auth(auth: Option<&str>) -> Uri {
 
 #[test]
 fn test_h2_400_on_disagreement() {
-    // The canonical attack: client sets :authority to the routing
-    // victim and Host to the auth-target.
+    // The canonical attack: `:authority` routes, `Host` authorises.
     let uri = uri_with_auth(Some("victim.example"));
     let headers = hdrs(Some("attacker.example"));
     let err = check_authority_host_agreement(&uri, &headers).unwrap_err();
@@ -73,8 +63,7 @@ fn port_mismatch_when_both_explicit_rejected() {
 
 #[test]
 fn port_elision_one_side_accepted() {
-    // RFC 9113 §8.3.1 latitude: if one side elides the port (default
-    // for scheme), we accept the comparison provided the host matches.
+    // RFC 9113 §8.3.1 latitude: one side eliding the port is accepted.
     let uri = uri_with_auth(Some("example.test:443"));
     let headers = hdrs(Some("example.test"));
     assert!(check_authority_host_agreement(&uri, &headers).is_ok());
@@ -86,8 +75,7 @@ fn port_elision_one_side_accepted() {
 
 #[test]
 fn missing_authority_is_not_rejected_here() {
-    // No :authority → not a mismatch; the smuggle detector / pseudo-
-    // header layer is responsible for the missing-authority case.
+    // Missing-authority belongs to the pseudo-header layer, not here.
     let uri = uri_with_auth(None);
     let headers = hdrs(Some("example.test"));
     assert!(check_authority_host_agreement(&uri, &headers).is_ok());
@@ -95,7 +83,6 @@ fn missing_authority_is_not_rejected_here() {
 
 #[test]
 fn missing_host_is_not_rejected_here() {
-    // No Host → no mismatch (H2 clients don't need to send it).
     let uri = uri_with_auth(Some("example.test"));
     let headers = hdrs(None);
     assert!(check_authority_host_agreement(&uri, &headers).is_ok());
@@ -107,7 +94,6 @@ fn ipv6_authority_match() {
     let headers = hdrs(Some("[::1]"));
     assert!(check_authority_host_agreement(&uri, &headers).is_ok());
 
-    // Different ports must reject.
     let uri = uri_with_auth(Some("[::1]:443"));
     let headers = hdrs(Some("[::1]:8443"));
     assert!(check_authority_host_agreement(&uri, &headers).is_err());

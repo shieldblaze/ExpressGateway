@@ -2,19 +2,12 @@
 
 use crate::{Backend, BalancerError, LoadBalancer};
 
-/// Smooth weighted round-robin: produces an even interleaving of backends
-/// proportional to their weights, avoiding bursts.
-///
-/// Algorithm (per Nginx upstream):
-/// 1. For each backend, add its effective weight to its current weight.
-/// 2. Pick the backend with the highest current weight.
-/// 3. Subtract the total weight from the chosen backend's current weight.
+/// Smooth weighted round-robin (nginx upstream): interleaves proportionally instead of bursting.
 #[derive(Debug)]
 pub struct WeightedRoundRobin {
-    /// Current weights, one per backend. Grows/shrinks as the backend list changes.
+    /// Current weights, one per backend.
     current_weights: Vec<i64>,
-    /// Backend IDs corresponding to `current_weights`. Used to detect topology
-    /// changes (reorder, replacement) that a length check alone would miss.
+    /// IDs behind `current_weights`; detects a reorder or replacement a length check misses.
     backend_ids: Vec<String>,
 }
 
@@ -28,8 +21,7 @@ impl WeightedRoundRobin {
         }
     }
 
-    /// Ensure the internal weight vector matches the backend set by identity,
-    /// not just by length. Any topology change resets accumulated WRR state.
+    /// Match by IDENTITY, not length — any topology change resets accumulated WRR state.
     fn sync_weights(&mut self, backends: &[Backend]) {
         let ids_match = self.backend_ids.len() == backends.len()
             && self
@@ -64,7 +56,6 @@ impl LoadBalancer for WeightedRoundRobin {
             return Err(BalancerError::AllZeroWeight);
         }
 
-        // Step 1: add effective_weight to current_weight for each backend
         let mut best_idx = 0;
         let mut best_weight = i64::MIN;
 
@@ -79,7 +70,6 @@ impl LoadBalancer for WeightedRoundRobin {
             }
         }
 
-        // Step 2: subtract total_weight from the chosen backend
         if let Some(cw) = self.current_weights.get_mut(best_idx) {
             *cw -= total_weight;
         }
@@ -124,7 +114,6 @@ mod tests {
     fn test_backend_removal_resets_state() {
         let mut wrr = WeightedRoundRobin::new();
 
-        // Phase 1: backends [A, B, C] with weights [5, 1, 1]
         let backends_abc = vec![
             Backend::new("A", 5),
             Backend::new("B", 1),
@@ -135,7 +124,6 @@ mod tests {
             assert!(idx < 3);
         }
 
-        // Phase 2: remove B, now [A, C] with weights [5, 1]
         let backends_ac = vec![Backend::new("A", 5), Backend::new("C", 1)];
         let mut counts = [0u32; 2];
         for _ in 0..60 {
@@ -146,7 +134,6 @@ mod tests {
             }
         }
 
-        // With weights [5, 1], A should get 50/60 and C should get 10/60.
         assert_eq!(
             counts.first().copied().unwrap_or(0),
             50,

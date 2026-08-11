@@ -1,27 +1,5 @@
-//! Upstream backend dispatch for the L7 proxies (PROTO-001).
-//!
-//! [`H1Proxy`](crate::h1_proxy::H1Proxy) and [`H2Proxy`](crate::h2_proxy::H2Proxy)
-//! historically dialed every backend over [`lb_io::pool::TcpPool`] and
-//! spoke HTTP/1.1 on the upstream wire. PROTO-001 introduces three new
-//! real-wire translation paths — H1↔H2, H1↔H3, H2↔H3 — by branching on
-//! a per-backend `protocol` selector.
-//!
-//! This module ships the public types the binary uses to express that
-//! selector:
-//!
-//! * [`UpstreamProto`] — `H1` / `H2` / `H3`.
-//! * [`UpstreamBackend`] — `SocketAddr` + [`UpstreamProto`] + optional
-//!   SNI for H3 dials.
-//! * [`BackendInfoPicker`] — picker trait the proxies consume; a single
-//!   call returns the next backend's full descriptor instead of just a
-//!   `SocketAddr`.
-//! * [`SingleProtoPicker`] — adapter that wraps the existing
-//!   [`crate::h1_proxy::BackendPicker`] and tags every pick with a
-//!   fixed protocol; used by the H1-only call sites that pre-date
-//!   PROTO-001.
-//! * [`RoundRobinUpstreams`] — round-robin picker over a fixed
-//!   `Vec<UpstreamBackend>`. The mirror of
-//!   [`crate::h1_proxy::RoundRobinAddrs`] for the multi-protocol path.
+//! Upstream backend dispatch for the L7 proxies (PROTO-001): a per-backend
+//! protocol selector so a dial can reach H1, H2 or H3.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -33,37 +11,27 @@ use crate::h1_proxy::BackendPicker;
 /// Upstream wire protocol for a backend dial.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum UpstreamProto {
-    /// HTTP/1.1 over plain TCP (matches `Backend::protocol = "tcp"` and
-    /// `"h1"` — both treated identically by the L7 proxies).
+    /// HTTP/1.1 over plain TCP (`Backend::protocol` `"tcp"` or `"h1"`).
     H1,
-    /// HTTP/2 over plain TCP. Routed through
-    /// [`lb_io::http2_pool::Http2Pool`].
+    /// HTTP/2 over plain TCP, via [`lb_io::http2_pool::Http2Pool`].
     H2,
-    /// HTTP/3 over QUIC. Routed through
-    /// [`lb_io::quic_pool::QuicUpstreamPool`].
+    /// HTTP/3 over QUIC, via [`lb_io::quic_pool::QuicUpstreamPool`].
     H3,
 }
 
-/// Resolved upstream backend descriptor.
-///
-/// Carries enough information for the proxy to choose the correct dial
-/// path and bridge: the peer `SocketAddr`, the wire protocol, and an
-/// optional SNI string for H3 (whose TLS handshake demands a
-/// server-name authority).
+/// Resolved upstream backend: address, wire protocol, and an SNI for H3.
 #[derive(Debug, Clone)]
 pub struct UpstreamBackend {
-    /// Peer socket address.
+    /// Peer address.
     pub addr: SocketAddr,
-    /// Wire protocol the proxy must speak to this backend.
+    /// Wire protocol to speak to this backend.
     pub proto: UpstreamProto,
-    /// SNI string. Required for `H3`; ignored for `H1` and `H2`. The
-    /// public field type stays an `Option` because most call sites
-    /// using `H1` and `H2` will not populate it.
+    /// SNI: required for `H3`, ignored for `H1`/`H2`.
     pub sni: Option<String>,
 }
 
 impl UpstreamBackend {
-    /// Construct a plain H1 backend with no SNI.
+    /// Plain H1 backend, no SNI.
     #[must_use]
     pub const fn h1(addr: SocketAddr) -> Self {
         Self {
@@ -73,7 +41,7 @@ impl UpstreamBackend {
         }
     }
 
-    /// Construct a plain H2 backend with no SNI.
+    /// Plain H2 backend, no SNI.
     #[must_use]
     pub const fn h2(addr: SocketAddr) -> Self {
         Self {
@@ -83,7 +51,7 @@ impl UpstreamBackend {
         }
     }
 
-    /// Construct an H3 backend with the given SNI.
+    /// H3 backend with the given SNI.
     #[must_use]
     pub fn h3(addr: SocketAddr, sni: impl Into<String>) -> Self {
         Self {
@@ -94,18 +62,14 @@ impl UpstreamBackend {
     }
 }
 
-/// Multi-protocol picker. Returns the full
-/// [`UpstreamBackend`] descriptor for the next backend the proxy
-/// should dial.
+/// Multi-protocol picker returning the full [`UpstreamBackend`] descriptor.
 pub trait BackendInfoPicker: Send + Sync {
     /// Next backend, or `None` if no backend is available.
     fn pick_info(&self) -> Option<UpstreamBackend>;
 }
 
-/// Adapter that wraps a single-protocol [`BackendPicker`] (the
-/// pre-PROTO-001 type) and tags every pick with a fixed protocol /
-/// SNI. Used by call sites that have not migrated to the multi-proto
-/// surface.
+/// Tags every pick from a single-protocol [`BackendPicker`] with a fixed
+/// protocol / SNI, for call sites predating the multi-proto surface.
 pub struct SingleProtoPicker {
     inner: Arc<dyn BackendPicker>,
     proto: UpstreamProto,
@@ -113,8 +77,7 @@ pub struct SingleProtoPicker {
 }
 
 impl SingleProtoPicker {
-    /// Wrap `picker`, tagging every pick with `proto` and the optional
-    /// SNI (only meaningful for `H3`).
+    /// Wrap `picker`, tagging every pick with `proto` and an SNI.
     #[must_use]
     pub const fn new(
         picker: Arc<dyn BackendPicker>,
@@ -140,15 +103,14 @@ impl BackendInfoPicker for SingleProtoPicker {
     }
 }
 
-/// Round-robin picker over a fixed `Vec<UpstreamBackend>`. Mirror of
-/// [`crate::h1_proxy::RoundRobinAddrs`] for the multi-protocol path.
+/// Round-robin picker over a fixed `Vec<UpstreamBackend>`.
 pub struct RoundRobinUpstreams {
     backends: Vec<UpstreamBackend>,
     counter: Mutex<usize>,
 }
 
 impl RoundRobinUpstreams {
-    /// Construct a picker; returns `None` if `backends` is empty.
+    /// `None` if `backends` is empty.
     #[must_use]
     pub fn new(backends: Vec<UpstreamBackend>) -> Option<Self> {
         if backends.is_empty() {

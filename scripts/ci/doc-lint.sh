@@ -1,41 +1,24 @@
 #!/usr/bin/env bash
-# REL-2-01 + ROUND8-OPS-09 + ROUND8-L4-10: doc-lint guardrail with
-# audit-of-audit content gate.
+# doc-lint guardrail (REL-2-01) + audit-of-audit content gate (ROUND8-OPS-09,
+# ROUND8-L4-10). Invoked from the ci.yml `doc-lint` job.
 #
-# Two tiers:
+# Tier 1: stale-pattern grep on operator-facing docs. Every pattern is a regression
+# round-4 found and fixed; without the gate the doc-drift class returns silently.
 #
-#   Tier 1 (REL-2-01): stale-pattern grep on operator-facing docs.
-#     Each pattern below is a regression the round-4 audit found and
-#     fixed; without this gate, the doc-drift class returns silently.
+# Tier 2: every `Verified-Fixed(<sha>)` claim in audit/**/round-*-review.md must cite a
+# SHA whose tree actually contains what the Recommendation asked for. This exists
+# because of the EBPF-2-07 no-op: `Verified-Fixed(ffde98c)` shipped a driver script and
+# a README but NOT the per-kernel `.log.committed` baselines the Recommendation called
+# for, and nothing caught it.
 #
-#   Tier 2 (ROUND8-OPS-09 + ROUND8-L4-10): every `Verified-Fixed(<sha>)`
-#     status line in audit/**/round-*-review.md must reference a SHA
-#     whose diff actually closes the recommendation. The gate parses
-#     both the claim and the diff and asserts overlap on file paths
-#     and on identifier tokens cited inside the Recommendation block.
-#
-#     This is the explicit defense against the EBPF-2-07 no-op:
-#     `Verified-Fixed(ffde98c)` shipped the driver script and a
-#     README, but NOT the per-kernel `.log.committed` baseline files
-#     the Recommendation called for. The audit-of-audit walker
-#     detects that the recommendation-cited path
-#     `audit/ebpf/verifier-logs/<kernel-version>.log` was not added in
-#     the closure SHA's tree and fails CI.
-#
-# Run locally:
-#   ./scripts/ci/doc-lint.sh
-#   AOA=1 ./scripts/ci/doc-lint.sh                 # explicit audit-of-audit
-#   DOC_LINT_SKIP_AOA=1 ./scripts/ci/doc-lint.sh   # tier-1 only (legacy)
-#
-# CI: invoked from .github/workflows/ci.yml `doc-lint` job.
+#   DOC_LINT_SKIP_AOA=1 ./scripts/ci/doc-lint.sh   # tier-1 only; CI must not set it
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$REPO_ROOT"
 
-# Files scanned. Add new operator-facing docs here when they land.
-# S40: the operator references (RUNBOOK/DEPLOYMENT/METRICS/CONFIG) moved under
-# docs/guide/; README/CHANGELOG/SECURITY stay at root (GitHub conventions).
+# Scanned files — add new operator-facing docs here when they land. README/CHANGELOG/
+# SECURITY stay at root by GitHub convention; the rest live under docs/guide/.
 FILES=(
     "README.md"
     "docs/guide/RUNBOOK.md"
@@ -45,14 +28,12 @@ FILES=(
     "docs/guide/CONFIG.md"
     "SECURITY.md"
     "docs/features.md"
-    # S41: public-facing narrative docs (Session B).
     "docs/guide/overview.md"
     "docs/guide/getting-started.md"
     "docs/guide/capabilities.md"
     "docs/guide/comparison.md"
     "docs/guide/PERFORMANCE.md"
     "CONTRIBUTING.md"
-    # S42: task-oriented operator pages + glossary (depth/structure revision).
     "docs/guide/cookbook.md"
     "docs/guide/troubleshooting.md"
     "docs/guide/deployment-patterns.md"
@@ -60,11 +41,8 @@ FILES=(
     "docs/glossary.md"
 )
 
-# Patterns that MUST NOT appear in any of the above files. Each row is
-# `pattern || description`. The pattern is an ERE passed to `grep -E`.
-#
-# When updating: prefer narrow patterns (e.g. `/usr/local/bin/lb\b`)
-# over broad ones (`\blb\b`) to keep false positives down.
+# Rows are `<ERE> || <description>`; the description is printed on failure. Prefer
+# narrow patterns (`/usr/local/bin/lb\b`) over broad (`\blb\b`) to avoid false hits.
 STALE_PATTERNS=(
     'lb-compression||lb-compression crate (removed by L-001 in round-1)'
     '/usr/local/bin/lb([^a-z]|$)||/usr/local/bin/lb (binary is named expressgateway; REL-2-14)'
@@ -77,12 +55,8 @@ STALE_PATTERNS=(
     'ArcSwap<TlsStore>||legacy doc reference to deleted type (REL-2-01)'
 )
 
-# Quoted-out exceptions. Lines matching these substrings are dropped
-# BEFORE pattern matching. This lets us reference the stale strings
-# inside CHANGELOG entries describing the fix.
-#
-# Use very narrow markers: a literal "doc-lint-allow" substring is the
-# easiest. We also exempt scripts/ci/doc-lint.sh itself when scanned.
+# Lines carrying this marker are dropped BEFORE matching, so a CHANGELOG entry may
+# quote the very string it describes fixing.
 allow_substr='doc-lint-allow'
 
 fail=0
@@ -92,12 +66,9 @@ for f in "${FILES[@]}"; do
     if [ ! -f "$f" ]; then
         continue
     fi
-    # Filter out exempt lines first.
     while IFS= read -r row; do
         pat="${row%%||*}"
         desc="${row#*||}"
-        # grep -n returns "line:content"; we suppress the leading file
-        # since it's already in $f.
         if hits=$(grep -nE -- "$pat" "$f" | grep -v "$allow_substr" || true); [ -n "$hits" ]; then
             while IFS= read -r hit; do
                 fail_lines+=("$f:$hit  [stale: $desc]")
@@ -121,26 +92,11 @@ fi
 
 echo "doc-lint tier-1: OK"
 
-# ------------------------------------------------------------------ #
-# Tier 2 — audit-of-audit gate (ROUND8-OPS-09 + ROUND8-L4-10).        #
-#                                                                    #
-# For every `Status:   Verified-Fixed(<sha>...)` line in              #
-# audit/**/round-*-review.md, verify:                                 #
-#                                                                    #
-#   1. Each SHA exists in this repository's git history.              #
-#   2. At least one path mentioned under the `Location:` field of     #
-#      the same finding appears in the union of `git show --stat`    #
-#      across the SHAs (substring match on the file portion).        #
-#   3. If the `Recommendation:` block references files under          #
-#      `audit/**`, `crates/**`, `scripts/**`, or `packaging/**`,      #
-#      at least one of those files must exist in the closure SHA's   #
-#      tree (`git ls-tree`). This is the EBPF-2-07 case.              #
-#                                                                    #
-# The walker errors with a fail-fast exit; it lists every claim that  #
-# failed validation. The gate may be skipped at the operator's       #
-# request via DOC_LINT_SKIP_AOA=1 (used in the legacy bash-only       #
-# fallback; CI must not set it).                                     #
-# ------------------------------------------------------------------ #
+# Tier 2 — audit-of-audit. For every `Status: Verified-Fixed(<sha>...)` finding:
+#   1. every SHA exists in this repo's history;
+#   2. a `Location:` path appears in the union diffstat (advisory, see Test 1);
+#   3. every audit/crates/scripts/packaging path cited in `Recommendation:` exists in
+#      the closure SHA's tree — the EBPF-2-07 case, and the only hard failure.
 
 if [ "${DOC_LINT_SKIP_AOA:-0}" = "1" ]; then
     echo "doc-lint tier-2 (audit-of-audit): SKIPPED (DOC_LINT_SKIP_AOA=1)"
@@ -157,10 +113,9 @@ if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     exit 0
 fi
 
-# Map a finding ID prefix to the area dirs the gate accepts as a
-# legitimate file-touch under `Location:`. The map is intentionally
-# loose: the test is "did the SHA touch SOMETHING in the relevant
-# subtree" not "did it touch the exact line range".
+# Finding-ID prefix -> area dirs accepted as a legitimate `Location:` touch.
+# Intentionally loose: the test is "did the SHA touch SOMETHING in that subtree",
+# not "did it touch the exact line range".
 declare -A LOCATION_DIRS=(
     [REL]="crates/ audit/ docs/ tests/ scripts/"
     [SEC]="crates/ audit/ tests/ docs/"
@@ -173,55 +128,41 @@ aoa_fail=0
 aoa_fail_lines=()
 aoa_seen_claims=0
 
-# Iterate every review file.
 review_files=$(find audit -type f -name 'round-*-review.md' -not -path '*/round-7/*' -not -path '*/round-8/*' 2>/dev/null | sort)
-# Also accept round-2-findings (legacy security file).
+# round-*-findings.md is the legacy security-file spelling.
 sec_findings=$(find audit -type f -name 'round-*-findings.md' 2>/dev/null | sort)
 review_files=$(printf '%s\n%s\n' "$review_files" "$sec_findings" | awk 'NF' | sort -u)
 
 for rf in $review_files; do
     [ -f "$rf" ] || continue
-    # Parse the file in a single awk pass:
-    #   - track the current finding ID (`### ID — title`).
-    #   - track the current finding's Location/Recommendation text.
-    #   - emit triplets (line_no, ID, statusline, location, recommendation)
+    # One awk pass emits FINDING<TAB>id<TAB>status<TAB>location<TAB>recommendation.
     while IFS=$'\t' read -r tag id status_line loc rec; do
         [ "$tag" = "FINDING" ] || continue
-        # We only validate Verified-Fixed (not -Partial — partials are
-        # disclosed; the disclosure note in the HTML comment is the
-        # acceptance criterion and a future round must re-walk it).
-        # We DO validate Verified-Fixed even when followed by " — " or
-        # " (verifier=...)" prefix; the SHA extractor handles both.
+        # -Partial is exempt on purpose: a partial is already disclosed, and its
+        # disclosure note is the acceptance criterion for a future round to re-walk.
         case "$status_line" in
             *Verified-Fixed-Partial*) continue ;;
             *Verified-Fixed*) ;;
             *) continue ;;
         esac
         aoa_seen_claims=$((aoa_seen_claims + 1))
-        # Extract the SHA list from the first `Verified-Fixed(...)` clause.
-        # Supports `Verified-Fixed(<sha>)`, `Verified-Fixed(<sha>, <sha>)`,
-        # and `Verified-Fixed(verifier=NAME, author-sha=<sha>+<sha>)`.
+        # Handles `Verified-Fixed(<sha>)`, `(<sha>, <sha>)`, and
+        # `(verifier=NAME, author-sha=<sha>+<sha>)`.
         sha_block=$(printf '%s' "$status_line" | sed -nE 's/.*Verified-Fixed\(([^)]+)\).*/\1/p')
         if [ -z "$sha_block" ]; then
             aoa_fail_lines+=("$rf:$id  [audit-of-audit: cannot parse SHA from status line: $status_line]")
             aoa_fail=1
             continue
         fi
-        # Strip optional `verifier=...` / `author-sha=` prefixes.
         sha_block=$(printf '%s' "$sha_block" | sed -E 's/^[^=]*=//; s/, *author-sha=/+/g')
-        # Tokens are 7+ hex chars; split on , + ; and whitespace.
         shas=$(printf '%s' "$sha_block" | tr ',+; ' '\n' | grep -E '^[0-9a-f]{6,}$' || true)
         if [ -z "$shas" ]; then
-            # No SHA-shaped token (might be e.g. "task-38") — record warn but
-            # do not fail. Future rounds should use real SHAs.
+            # No SHA-shaped token (e.g. "task-38"): skip rather than fail.
             continue
         fi
-        # Determine the area prefix for the LOCATION_DIRS lookup.
         prefix=$(printf '%s' "$id" | sed -E 's/^([A-Z]+).*/\1/')
         accepted_dirs="${LOCATION_DIRS[$prefix]:-crates/ tests/ docs/ audit/ scripts/ packaging/}"
 
-        # Pre-pull per-SHA diff stats + per-SHA tree listings; cache
-        # across recommendation matches.
         combined_stat=""
         combined_tree=""
         first_sha=""
@@ -243,51 +184,36 @@ $(git ls-tree -r --name-only "$sha" 2>/dev/null || true)"
             continue
         fi
 
-        # Test 1: Location-touch (advisory). `Location:` is where the
-        # *bug* lives, not necessarily where the fix lands — for
-        # example, a runtime-config validator may land in a sibling
-        # crate from the call-site that misuses the bad default. We
-        # emit a warning, not a failure, when the closure SHA(s) miss
-        # the Location path. Hard-failures live in Test 2 below.
+        # Test 1 is ADVISORY: `Location:` is where the bug lives, not necessarily
+        # where the fix lands (a validator may land in a sibling crate from the
+        # call-site that misused it). Hard failures are Test 2 only.
         loc_path=$(printf '%s' "$loc" | grep -oE '(crates|audit|scripts|packaging|tests|docs)/[A-Za-z0-9._/-]+' | head -1 || true)
         if [ -n "$loc_path" ]; then
             loc_path_clean=$(printf '%s' "$loc_path" | sed -E 's/:[0-9].*$//')
             if ! printf '%s' "$combined_stat" | grep -qF -- "$loc_path_clean"; then
                 loc_parent=$(dirname "$loc_path_clean")
                 if ! printf '%s' "$combined_stat" | grep -qF -- "$loc_parent"; then
-                    # Advisory only.
-                    : # echo "  [advisory] $rf:$id Location $loc_path_clean not in SHA(s) diffstat" >&2
+                    : # advisory only — deliberately no failure here
                 fi
             fi
         fi
 
-        # Test 2: Recommendation-cited paths must EXIST in the tree
-        # at the closure SHA. This is the EBPF-2-07 trap.
-        #
-        # Extract glob-shaped tokens like
-        # `audit/ebpf/verifier-logs/<kver>.log` (the angle-bracket
-        # placeholder is stripped — we then search for any matching
-        # file with the suffix `.log` under the directory).
+        # Test 2 (the EBPF-2-07 trap): Recommendation-cited paths must EXIST in the
+        # closure SHA's tree. `<kver>`-style placeholders are globbed to "any file
+        # under that dir with the trailing suffix".
         rec_paths=$(printf '%s' "$rec" | grep -oE '(audit|crates|scripts|packaging)/[A-Za-z0-9._<>/-]+' | sort -u || true)
         for p in $rec_paths; do
-            # Drop trailing punctuation.
             p_clean=$(printf '%s' "$p" | sed -E 's/[).,;:]+$//')
-            # If the path contains a placeholder like <kver>, glob it.
             if printf '%s' "$p_clean" | grep -q '<'; then
-                # Construct a directory + suffix.
                 dir=$(dirname "$p_clean")
-                # Use the suffix after the last placeholder closure.
                 suffix=$(printf '%s' "$p_clean" | sed -E 's/.*>//; s/.*<.*$//')
-                # If suffix is empty, accept any file in dir.
                 if [ -z "$suffix" ]; then
                     suffix=""
                 fi
-                # Test: does any file under $dir matching $suffix exist
-                # in the union of trees? README.md does not count.
+                # Empty suffix accepts any file under $dir. README.md never counts.
                 hits=$(printf '%s' "$combined_tree" | awk -v d="$dir/" -v s="$suffix" '
                     index($0, d) == 1 {
-                        # Strip README.md — that is the no-op-disguise
-                        # the EBPF-2-07 case shipped.
+                        # README.md is the no-op disguise EBPF-2-07 shipped.
                         base = $0;
                         sub(/.*\//, "", base);
                         if (base == "README.md") next;
@@ -298,12 +224,10 @@ $(git ls-tree -r --name-only "$sha" 2>/dev/null || true)"
                     aoa_fail=1
                 fi
             else
-                # Concrete path. Must appear in the tree.
                 if ! printf '%s' "$combined_tree" | grep -qFx -- "$p_clean"; then
-                    # Try as a directory prefix.
                     if ! printf '%s' "$combined_tree" | grep -qE "^${p_clean//./\\.}/"; then
-                        # Allow if the path appears at HEAD (operator may have moved it
-                        # forward in a later commit — the closure was still real).
+                        # HEAD fallback: a later commit may have moved the path forward,
+                        # and the closure was still real.
                         if ! [ -e "$p_clean" ]; then
                             aoa_fail_lines+=("$rf:$id  [audit-of-audit: recommendation cites '$p_clean' but it is not present at the closure SHA(s) tree nor at HEAD]")
                             aoa_fail=1
@@ -356,7 +280,6 @@ $(git ls-tree -r --name-only "$sha" 2>/dev/null || true)"
     ' "$rf")
 done
 
-# Final summary.
 if [ "$aoa_fail" -ne 0 ]; then
     echo "doc-lint tier-2 (audit-of-audit): FAIL" >&2
     echo "" >&2

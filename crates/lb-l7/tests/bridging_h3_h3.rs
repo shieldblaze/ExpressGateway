@@ -18,7 +18,6 @@ fn test_bridge_h3_to_h3() {
         trailers: Vec::new(),
     };
     let bridged = bridge.bridge_request(&req).unwrap();
-    // Pseudo-headers preserved
     assert!(
         bridged
             .headers
@@ -43,6 +42,5 @@ fn test_bridge_h3_to_h3() {
             .iter()
             .any(|(k, v)| k == ":authority" && v == "health.example.com")
     );
-    // Body preserved (empty)
     assert!(bridged.body.is_empty());
 }

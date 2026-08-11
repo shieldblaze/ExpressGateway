@@ -1,38 +1,23 @@
-//! Maglev consistent hashing load balancer.
-//!
-//! Implements the Maglev lookup table algorithm from Google's 2016 paper
-//! "Maglev: A Fast and Reliable Software Network Load Balancer."
-//!
-//! Table size is the prime 65537 which provides good distribution and
-//! minimal disruption when backends change.
+//! Maglev consistent hashing (Google, 2016).
 
 use crate::{Backend, BalancerError, KeyedLoadBalancer, backend_identity_hash};
 
-/// Maglev table size. Must be prime and larger than the expected number of
-/// backends. 65537 is a common choice (2^16 + 1, a Fermat prime).
+/// Table size. MUST stay prime — the skip-coprimality argument below depends on it.
 const TABLE_SIZE: usize = 65537;
 
-/// Maglev consistent hashing balancer.
-///
-/// The lookup table is pre-computed from the backend set. On pick, the key
-/// is mapped to a table slot in O(1).
+/// Maglev balancer; the table is precomputed so a pick is O(1).
 #[derive(Debug)]
 pub struct Maglev {
     /// Lookup table: each entry is a backend index.
     table: Vec<usize>,
     /// Number of backends the table was built for.
     num_backends: usize,
-    /// Identity hash of the backend set used to build the table. Detects swaps
-    /// where the count stays the same but the backends themselves differ.
+    /// Identity hash of the backend set — catches a same-count swap a length check would miss.
     identity_hash: u64,
 }
 
 impl Maglev {
-    /// Build a new Maglev lookup table for the given backends.
-    ///
-    /// # Errors
-    ///
-    /// Returns `BalancerError::NoBackends` if the backend slice is empty.
+    /// Build the lookup table.
     pub fn new(backends: &[Backend]) -> Result<Self, BalancerError> {
         if backends.is_empty() {
             return Err(BalancerError::NoBackends);
@@ -46,21 +31,17 @@ impl Maglev {
         })
     }
 
-    /// Compute offset and skip for a backend based on its id hash.
     #[allow(clippy::cast_possible_truncation)]
     fn permutation(id: &str) -> (usize, usize) {
         let h1 = Self::hash_str(id, 0);
         let h2 = Self::hash_str(id, 0x9e37_79b9_7f4a_7c15);
 
-        // Truncation is intentional: we reduce modulo TABLE_SIZE which fits in usize.
         let offset = (h1 as usize) % TABLE_SIZE;
-        // skip must be in [1, TABLE_SIZE), coprime with TABLE_SIZE.
-        // Since TABLE_SIZE is prime, any value in [1, TABLE_SIZE) works.
+        // `skip` must be coprime with TABLE_SIZE; primality makes every value in range valid.
         let skip = ((h2 as usize) % (TABLE_SIZE - 1)) + 1;
         (offset, skip)
     }
 
-    /// Simple multiply-shift string hash.
     fn hash_str(s: &str, seed: u64) -> u64 {
         let mut h = seed;
         for byte in s.bytes() {
@@ -68,7 +49,6 @@ impl Maglev {
                 .wrapping_mul(0x517c_c1b7_2722_0a95)
                 .wrapping_add(u64::from(byte));
         }
-        // Finalizer mix
         h ^= h >> 33;
         h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
         h ^= h >> 33;
@@ -77,15 +57,12 @@ impl Maglev {
         h
     }
 
-    /// Populate the Maglev lookup table using the permutation algorithm.
     fn populate(backends: &[Backend]) -> Vec<usize> {
         let n = backends.len();
 
-        // Compute permutations (offset, skip) for each backend.
         let perms: Vec<(usize, usize)> =
             backends.iter().map(|b| Self::permutation(&b.id)).collect();
 
-        // next[i] tracks how far backend i has advanced in its permutation.
         let mut next = vec![0usize; n];
         let mut table = vec![usize::MAX; TABLE_SIZE];
         let mut filled = 0usize;
@@ -97,7 +74,6 @@ impl Maglev {
                     None => continue,
                 };
 
-                // Find the next empty slot for backend i.
                 let mut c = match next.get(i) {
                     Some(v) => *v,
                     None => continue,
@@ -108,7 +84,6 @@ impl Maglev {
                     slot = (offset + c * skip) % TABLE_SIZE;
                 }
 
-                // Place backend i in this slot.
                 if let Some(entry) = table.get_mut(slot) {
                     *entry = i;
                 }
@@ -136,7 +111,6 @@ impl KeyedLoadBalancer for Maglev {
         if backends.len() != self.num_backends
             || backend_identity_hash(backends) != self.identity_hash
         {
-            // Table was built for a different backend set. Caller should rebuild.
             return Err(BalancerError::TableStale);
         }
 
@@ -188,7 +162,7 @@ mod tests {
         ];
         let maglev = Maglev::new(&backends_orig).unwrap();
 
-        // Replace backend-1 with backend-X at the same index. Same count, different identity.
+        // Same count, different identity — the case a length check misses.
         let backends_swapped = vec![
             Backend::new("backend-0", 1),
             Backend::new("backend-X", 1),

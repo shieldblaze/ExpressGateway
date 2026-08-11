@@ -1,23 +1,7 @@
-//! S1-A (task B.1) — crate-local QUIC listener lifecycle coverage.
-//!
-//! Closes the `audit/h3-program/s1-inventory.md` finding that
-//! `crates/lb-quic/src/listener.rs` had **0% coverage from the crate's
-//! own test suite** (it was exercised only by repo-root `tests/*.rs`
-//! integration binaries that do NOT gate `cargo test -p lb-quic`).
-//!
-//! Every test here spawns the REAL [`lb_quic::QuicListener`] (real UDP
-//! bind, real `load_or_generate_retry_secret`, real `build_server_config`
-//! cert/ALPN/flow-control, real `router::spawn`) and drives a REAL
-//! `quiche` client over loopback UDP. The helper shapes (rcgen
-//! self-signed cert with SAN `expressgateway.test` + serverAuth EKU,
-//! CA-trusting client config with `verify_peer(true)`, the
-//! handshake-pump driver) mirror the proven repo-root
-//! `tests/quic_listener_e2e.rs` so this is the same wire path, just
-//! gated inside the crate.
-//!
-//! Assertions are real: a single-actor / mis-bind / wrong-ALPN /
-//! retry-secret-permission / shutdown-hang regression in
-//! `listener.rs` fails at least one test here.
+//! Crate-local QUIC listener lifecycle coverage, closing the finding that `listener.rs` had 0%
+//! coverage from the crate's own suite (it was exercised only by repo-root integration binaries
+//! that do NOT gate `cargo test -p lb-quic`). Every test spawns the REAL
+//! [`lb_quic::QuicListener`] and drives a REAL `quiche` client over loopback.
 
 use std::fs;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -40,9 +24,8 @@ const UNKNOWN_ALPN: &[u8] = b"hq-interop";
 
 static DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// rcgen-generated loopback cert/key + a (non-existent) retry-secret
-/// path so the listener exercises the *generate* branch of
-/// `load_or_generate_retry_secret`. Dropping removes the temp dir.
+/// rcgen loopback cert/key plus a NON-EXISTENT retry-secret path, so the listener exercises the
+/// *generate* branch of `load_or_generate_retry_secret`.
 struct TestCerts {
     dir: PathBuf,
     cert: PathBuf,
@@ -82,8 +65,7 @@ fn generate_loopback_certs() -> TestCerts {
     let cert_path = dir.join("cert.pem");
     let key_path = dir.join("key.pem");
     let ca_path = dir.join("ca.pem");
-    // Deliberately does NOT exist: forces the listener's retry-secret
-    // *generate* branch (mode 0600 write) on first spawn.
+    // Deliberately does NOT exist: forces the retry-secret *generate* branch (0600 write).
     let retry_path = dir.join("retry.key");
     fs::write(&cert_path, cert_pem.as_bytes()).unwrap();
     fs::write(&key_path, key_pem.as_bytes()).unwrap();
@@ -97,7 +79,6 @@ fn generate_loopback_certs() -> TestCerts {
     }
 }
 
-/// Build a client config trusting the rcgen CA, offering `alpn`.
 fn build_client_config(ca_path: &std::path::Path, alpn: &[u8]) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
     cfg.set_application_protos(&[alpn]).unwrap();
@@ -124,7 +105,6 @@ fn random_scid_bytes() -> [u8; quiche::MAX_CONN_ID_LEN] {
     scid
 }
 
-/// Outcome of driving a client handshake to a terminal state.
 #[derive(Debug, PartialEq, Eq)]
 enum HandshakeOutcome {
     Established,
@@ -132,10 +112,8 @@ enum HandshakeOutcome {
     DeadlineNotEstablished,
 }
 
-/// Drive a client `quiche::Connection` until it is established, it
-/// closes, or the deadline elapses. Returns which terminal state was
-/// reached so callers can assert BOTH positive (h3/h3-29) and negative
-/// (unknown ALPN must NOT establish) outcomes.
+/// Drive a client until established, closed, or the deadline elapses, so callers can assert both
+/// the positive and the negative (unknown ALPN must NOT establish) cases.
 async fn drive_client(
     mut conn: quiche::Connection,
     socket: &UdpSocket,
@@ -203,9 +181,6 @@ fn spawn_listener_params(certs: &TestCerts) -> QuicListenerParams {
     )
 }
 
-// ---------------------------------------------------------------------
-// 1. UDP bind + observable local_addr
-// ---------------------------------------------------------------------
 #[tokio::test]
 async fn udp_bind_and_local_addr_observable() {
     let certs = generate_loopback_certs();
@@ -218,9 +193,8 @@ async fn udp_bind_and_local_addr_observable() {
     assert!(addr.ip().is_loopback(), "bound addr must be loopback");
     assert_ne!(addr.port(), 0, "OS must assign a concrete port");
 
-    // A second UDP bind to the SAME concrete port must fail — proves
-    // the listener actually holds the socket (regression: a no-op
-    // spawn that never binds would let this succeed).
+    // A second UDP bind to the SAME concrete port must fail — proves the listener actually holds
+    // the socket (a no-op spawn that never binds would let this succeed).
     let rebind = UdpSocket::bind(addr).await;
     assert!(
         rebind.is_err(),
@@ -231,9 +205,6 @@ async fn udp_bind_and_local_addr_observable() {
     let _ = tokio::time::timeout(Duration::from_secs(2), handle).await;
 }
 
-// ---------------------------------------------------------------------
-// 2. Retry secret: auto-generate at 0600, then reload identical secret
-// ---------------------------------------------------------------------
 #[tokio::test]
 async fn retry_secret_autogenerated_0600_then_reloaded() {
     let certs = generate_loopback_certs();
@@ -242,7 +213,6 @@ async fn retry_secret_autogenerated_0600_then_reloaded() {
         "fixture: retry path must not pre-exist so the generate branch runs"
     );
 
-    // --- first spawn: generate branch ---
     let shutdown1 = CancellationToken::new();
     let l1 = QuicListener::spawn(spawn_listener_params(&certs), shutdown1.clone())
         .await
@@ -261,7 +231,6 @@ async fn retry_secret_autogenerated_0600_then_reloaded() {
         assert_eq!(mode, 0o600, "retry secret file mode must be 0600");
     }
 
-    // A token minted by listener #1's signer, bound to a fixed peer.
     let signer1 = l1.retry_signer();
     let peer: SocketAddr = "127.0.0.1:40000".parse().unwrap();
     let odcid = b"original-dcid-16";
@@ -270,7 +239,6 @@ async fn retry_secret_autogenerated_0600_then_reloaded() {
     let h1 = l1.shutdown();
     let _ = tokio::time::timeout(Duration::from_secs(2), h1).await;
 
-    // --- second spawn on the SAME retry path: reload branch ---
     let shutdown2 = CancellationToken::new();
     let l2 = QuicListener::spawn(spawn_listener_params(&certs), shutdown2.clone())
         .await
@@ -282,10 +250,8 @@ async fn retry_secret_autogenerated_0600_then_reloaded() {
         "reload must NOT rewrite/rotate the persisted secret"
     );
 
-    // Decisive reload assertion: the reloaded signer must verify a
-    // token minted by the FIRST listener's signer. This only holds if
-    // the 32-byte secret was loaded back identically — a regression
-    // that regenerates instead of reloading fails here.
+    // Decisive reload assertion: the reloaded signer must verify a token minted by the FIRST
+    // listener's signer, which only holds if the 32-byte secret was loaded back identically.
     let signer2 = l2.retry_signer();
     let verified = signer2.verify(&token, peer, std::time::Instant::now());
     assert!(
@@ -303,9 +269,6 @@ async fn retry_secret_autogenerated_0600_then_reloaded() {
     let _ = tokio::time::timeout(Duration::from_secs(2), h2).await;
 }
 
-// ---------------------------------------------------------------------
-// 3a. ALPN `h3` is accepted -> handshake reaches is_established()
-// ---------------------------------------------------------------------
 #[tokio::test]
 async fn alpn_h3_accepted_handshake_established() {
     let certs = generate_loopback_certs();
@@ -329,9 +292,6 @@ async fn alpn_h3_accepted_handshake_established() {
     );
 }
 
-// ---------------------------------------------------------------------
-// 3b. ALPN `h3-29` (legacy) is accepted -> is_established()
-// ---------------------------------------------------------------------
 #[tokio::test]
 async fn alpn_h3_29_legacy_accepted_handshake_established() {
     let certs = generate_loopback_certs();
@@ -355,9 +315,6 @@ async fn alpn_h3_29_legacy_accepted_handshake_established() {
     );
 }
 
-// ---------------------------------------------------------------------
-// 3c. Unknown ALPN is rejected -> handshake must NOT establish
-// ---------------------------------------------------------------------
 #[tokio::test]
 async fn alpn_unknown_rejected_handshake_fails() {
     let certs = generate_loopback_certs();
@@ -368,9 +325,8 @@ async fn alpn_unknown_rejected_handshake_fails() {
     let server_addr = listener.local_addr();
 
     let (conn, sock) = connect_client(server_addr, &certs.ca, UNKNOWN_ALPN).await;
-    // Shorter deadline: a correct server tears the TLS handshake down
-    // on no-ALPN-overlap (no_application_protocol); we must observe a
-    // NON-established terminal state.
+    // Shorter deadline: a correct server tears the handshake down on no-ALPN-overlap, so we must
+    // observe a NON-established terminal state.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     let outcome = drive_client(conn, &sock, deadline).await;
 
@@ -386,9 +342,6 @@ async fn alpn_unknown_rejected_handshake_fails() {
     );
 }
 
-// ---------------------------------------------------------------------
-// 4. shutdown() cancels the router and the join completes cleanly
-// ---------------------------------------------------------------------
 #[tokio::test]
 async fn shutdown_cancels_join_cleanly() {
     let certs = generate_loopback_certs();
@@ -398,10 +351,8 @@ async fn shutdown_cancels_join_cleanly() {
         .unwrap();
     let addr = listener.local_addr();
 
-    // shutdown() cancels the token and returns the listener task join
-    // handle. It MUST resolve well within the budget — a regression
-    // where the router select! does not honour `cancel.cancelled()`
-    // would hang here and the timeout would fire.
+    // `shutdown()` cancels the token and returns the join handle; a router select! that does not
+    // honour `cancel.cancelled()` would hang here.
     let handle = listener.shutdown();
     let joined = tokio::time::timeout(Duration::from_secs(3), handle).await;
     assert!(
@@ -413,8 +364,7 @@ async fn shutdown_cancels_join_cleanly() {
         .unwrap()
         .expect("listener task panicked instead of clean exit");
 
-    // After a clean drain the port is released — rebinding now
-    // succeeds (proves the socket was actually dropped, not leaked).
+    // After a clean drain the port is released — rebinding proves the socket was dropped.
     let rebound = UdpSocket::bind(addr).await;
     assert!(
         rebound.is_ok(),

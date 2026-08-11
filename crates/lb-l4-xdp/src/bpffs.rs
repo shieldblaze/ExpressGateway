@@ -1,18 +1,8 @@
-//! ROUND8-L4-11: bpffs runtime check.
+//! ROUND8-L4-11: bpffs runtime check (Linux-only).
 //!
-//! Reference: xdp-tutorial lessons 6 + 7 — `mount -t bpf bpf
-//! /sys/fs/bpf/` is a prerequisite for pinning. Without it, aya
-//! `EbpfLoader::map_pin_path` ends up pinning into a regular tmpfs
-//! and the kernel rejects it deep in `bpf(BPF_OBJ_GET)` with an
-//! opaque EINVAL. Running an explicit `statfs(2)` on the pin
-//! directory before handing it to aya gives the operator an
-//! actionable error ("pin path is not bpffs; run `mount -t bpf …`")
-//! instead of a kernel errno trail.
-//!
-//! Plan owns the bpffs runtime check; OPS-07 owns the systemd unit
-//! that establishes the mount/perm contract this module verifies.
-//!
-//! Linux-only: the entire bpffs concept is a Linux kernel facility.
+//! `mount -t bpf bpf /sys/fs/bpf/` is a prerequisite for pinning; without it aya pins into a
+//! regular tmpfs and the kernel rejects it deep in `bpf(BPF_OBJ_GET)` with an opaque EINVAL. An
+//! explicit `statfs(2)` before handing the path to aya turns that into an actionable error.
 
 #![cfg(target_os = "linux")]
 
@@ -22,30 +12,14 @@ use std::path::{Path, PathBuf};
 
 use crate::loader::XdpLoaderError;
 
-/// Kernel magic for `BPF_FS_MAGIC` — `include/uapi/linux/magic.h`.
-/// Stable kernel-side ABI; not exported by libc as a constant
-/// (libc only ships POSIX statfs() symbols), so we redeclare the
-/// constant here next to the use site.
+/// Kernel `BPF_FS_MAGIC` (`include/uapi/linux/magic.h`). Stable kernel ABI that libc does not
+/// export, so it is redeclared next to its use site.
 pub const BPF_FS_MAGIC: i64 = 0xCAFE_4A11;
 
-/// Verify that `path` resolves to a directory backed by bpffs.
-///
-/// On success returns `Ok(())`. On failure returns a typed
-/// `XdpLoaderError` carrying enough context for the operator to
-/// fix the deployment (which path, what magic the kernel reported,
-/// suggested remediation).
-///
-/// # Errors
-///
-/// - [`XdpLoaderError::PinPathStatFailed`] when the `statfs(2)`
-///   syscall itself fails (path missing, EACCES, ...).
-/// - [`XdpLoaderError::PinPathNotBpffs`] when `statfs` succeeds but
-///   the filesystem magic is not `BPF_FS_MAGIC` (e.g. someone tried
-///   to pin into a plain tmpfs).
+/// Verify that `path` resolves to a directory backed by bpffs, returning a typed error that carries
+/// the path, the magic the kernel reported, and the remediation command.
 pub fn assert_bpffs(path: &Path) -> Result<(), XdpLoaderError> {
-    // libc::statfs takes a NUL-terminated C string. Convert from
-    // OsStr -> CString without unwrap; an interior NUL is itself
-    // a hard error from the caller.
+    // libc::statfs needs a NUL-terminated C string; an interior NUL is a hard caller error.
     let c_path = CString::new(path.as_os_str().as_bytes()).map_err(|e| {
         XdpLoaderError::PinPathStatFailed {
             path: path.to_path_buf(),
@@ -65,10 +39,8 @@ pub fn assert_bpffs(path: &Path) -> Result<(), XdpLoaderError> {
         });
     }
 
-    // `f_type` is `c_long` on 64-bit Linux glibc (i.e. i64). Cast
-    // through the native width so the comparison against
-    // `BPF_FS_MAGIC` works regardless of how libc exposes the field
-    // on the target architecture.
+    // `f_type` is `c_long` on 64-bit glibc — cast through the native width so the comparison holds
+    // regardless of how libc exposes the field per architecture.
     #[allow(
         clippy::unnecessary_cast,
         clippy::cast_lossless,
@@ -107,15 +79,11 @@ pub fn default_pin_dir() -> PathBuf {
 mod tests {
     use super::*;
 
-    /// `assert_bpffs` on a regular tempdir (tmpfs or ext4) must
-    /// return `PinPathNotBpffs`, not `Ok`. The CI runner's tempdir
-    /// is by definition not bpffs.
     #[test]
     fn rejects_non_bpffs_tempdir() {
         let tmp = std::env::temp_dir();
-        // Some CI sandboxes lock the temp dir to a non-statfs-able
-        // path; skip the assertion in that case (the test is only
-        // load-bearing when statfs succeeds).
+        // Some CI sandboxes block statfs; the contract under test is only no-false-positive-Ok, so
+        // skip when statfs itself fails.
         let result = assert_bpffs(&tmp);
         match result {
             Err(XdpLoaderError::PinPathNotBpffs {
@@ -128,17 +96,14 @@ mod tests {
                 );
             }
             Err(XdpLoaderError::PinPathStatFailed { .. }) => {
-                // Acceptable if the sandbox blocks statfs; the
-                // contract is "no false-positive Ok on non-bpffs".
+                // Acceptable if the sandbox blocks statfs; the contract under test is "no
+                // false-positive Ok on non-bpffs".
             }
             Ok(()) => panic!("tempdir cannot be bpffs but assert_bpffs returned Ok"),
             other => panic!("unexpected: {other:?}"),
         }
     }
 
-    /// Missing path returns `PinPathStatFailed` whose source kind
-    /// is `NotFound` — the operator-visible message points at the
-    /// missing directory.
     #[test]
     fn rejects_missing_path() {
         let path = Path::new("/nonexistent/bpf/expressgateway-test");
@@ -151,8 +116,6 @@ mod tests {
         }
     }
 
-    /// Interior-NUL in the path is also a fail-fast, not a silent
-    /// truncation — defensive against accidental injection.
     #[test]
     fn rejects_interior_nul_path() {
         use std::ffi::OsString;
@@ -165,8 +128,6 @@ mod tests {
         ));
     }
 
-    /// `BPF_FS_MAGIC` matches the kernel constant byte-for-byte.
-    /// Sanity that no rebase / refactor changed the constant.
     #[test]
     fn bpf_fs_magic_constant_is_kernel_value() {
         assert_eq!(BPF_FS_MAGIC, 0xCAFE_4A11);

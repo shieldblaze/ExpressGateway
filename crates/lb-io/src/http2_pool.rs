@@ -1,43 +1,6 @@
-//! HTTP/2 upstream connection pool for backend `protocol = "h2"`.
-//!
-//! Mirrors the shape of [`crate::pool::TcpPool`] and
-//! [`crate::quic_pool::QuicUpstreamPool`]: a per-peer cache keyed by
-//! `SocketAddr`, but the cached entity is a hyper 1.x H2
-//! [`hyper::client::conn::http2::SendRequest`] handle rather than a raw
-//! socket. H2 multiplexes streams over a single TCP connection, so the
-//! pool's job is to amortise the TCP+H2 handshake across many requests
-//! and to redial transparently when the underlying connection dies.
-//!
-//! ## Lifecycle
-//!
-//! [`Http2Pool::send_request`] looks up the cached `SendRequest` for
-//! `addr`. If present and `is_ready()`, the request is forwarded as a
-//! new H2 stream. If absent or closed, the pool dials a fresh TCP
-//! connection (via the supplied [`crate::pool::TcpPool`]) and runs
-//! [`hyper::client::conn::http2::handshake`].
-//!
-//! No second-attempt retry is performed: if `send_request` returns an
-//! error the caller surfaces a 502. This keeps the request-body
-//! lifecycle simple — the pool never has to clone or replay a body it
-//! does not own.
-//!
-//! ## Bounds & defaults
-//!
-//! Per-listener caps (PROTO-001):
-//! * `max_concurrent_streams = 256`.
-//! * `initial_stream_window = 65_535` — RFC 7540 default.
-//! * `keep_alive_interval = 30 s` — H2 PING liveness probe cadence.
-//! * `keep_alive_timeout = 10 s` — H2 PING-ACK deadline.
-//!
-//! These are exposed on [`Http2PoolConfig`]; defaults match Pingora.
-//!
-//! ## What this module does NOT do
-//!
-//! * TLS termination on the upstream side. PROTO-001's e2e tests run
-//!   plaintext H2 backends; production H2 backends behind TLS will need
-//!   ALPN-aware dial machinery, which is OUT-OF-SCOPE for v1.
-//! * Connection-eviction on age — we trust hyper's keep-alive PING to
-//!   detect dead peers.
+//! HTTP/2 upstream connection pool for backend `protocol = "h2"`: caches a hyper `SendRequest` per
+//! peer, not a socket. NO retry on send failure (the caller 502s), so the pool never replays a body
+//! it does not own; there is no age-based eviction, dead-peer detection is hyper's keep-alive PING.
 
 use std::collections::HashMap;
 use std::io;
@@ -59,22 +22,9 @@ use tokio::time::Instant;
 use crate::idle_send::{IdleSendError, idle_bounded_send};
 use crate::pool::TcpPool;
 
-/// S6 / H3→H2 R8 (I0.5, lead-approved Option A): the request-body type
-/// the H2 upstream pool accepts.
-///
-/// Widened from `BoxBody<Bytes, hyper::Error>` to a boxed
-/// `std::error::Error` so a *streaming, bounded-incremental* request
-/// body can signal a mid-body abort (H3 client RESET / premature
-/// channel close) with a CONSTRUCTIBLE error — `hyper::Error` has no
-/// public constructor, so an erroring streaming request body could not
-/// be expressed against the old alias (request-smuggling parity: a
-/// truncated request must RST_STREAM the upstream, never be presented
-/// as complete). This is a **type-only widening with NO behavioural
-/// change**: hyper's `SendRequest` already accepts any body whose
-/// `Error: Into<Box<dyn Error + Send + Sync>>`, and `hyper::Error`
-/// itself satisfies that bound, so every pre-existing caller adapts
-/// with a single `.map_err(Into::into)` (or unchanged when its body is
-/// `Infallible`/already-boxed).
+/// Request-body type for the H2 upstream pool. The error is a BOXED `std::error::Error` because
+/// `hyper::Error` has no public constructor, so a streaming body could not express a mid-body abort
+/// and a truncated request would reach the backend as COMPLETE.
 pub type H2ReqBody = BoxBody<Bytes, Box<dyn std::error::Error + Send + Sync>>;
 
 /// Default H2 max concurrent streams per upstream connection.
@@ -88,19 +38,14 @@ pub const DEFAULT_H2_KEEP_ALIVE_TIMEOUT: Duration = Duration::from_secs(10);
 /// Default upstream H2 send timeout.
 pub const DEFAULT_H2_SEND_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// F-RES-2 (S38): max HPACK header-list size accepted from a backend on
-/// the upstream H2 leg. Matches the client-facing server policy
-/// (`lb_l7::h2_security` default, 64 KiB) so a malicious backend cannot
-/// push a larger decoded header list at us than a malicious client could.
+/// Max HPACK header-list size accepted FROM a backend (F-RES-2): a malicious backend gets no more
+/// decode budget than a malicious client.
 pub const MAX_HEADER_LIST_SIZE: u32 = 64 * 1024;
 
-/// Configuration for an [`Http2Pool`]. Defaults match the values
-/// documented on the module — Pingora-aligned.
+/// Configuration for an [`Http2Pool`]; Pingora-aligned defaults.
 #[derive(Debug, Clone, Copy)]
 pub struct Http2PoolConfig {
-    /// Maximum concurrent streams the pool will open on a single H2
-    /// connection. Surfaced as the hyper builder's
-    /// `max_concurrent_reset_streams` (the closest knob hyper exposes).
+    /// Concurrent streams per H2 connection, via hyper's `max_concurrent_reset_streams`.
     pub max_concurrent_streams: u32,
     /// Initial stream window in bytes.
     pub initial_stream_window: u32,
@@ -124,7 +69,6 @@ impl Default for Http2PoolConfig {
     }
 }
 
-/// Per-peer cached entry: a `SendRequest` handle plus the driver task.
 struct PeerEntry {
     sender: SendRequest<H2ReqBody>,
     driver: JoinHandle<()>,
@@ -159,10 +103,7 @@ pub enum Http2PoolError {
     Timeout,
 }
 
-/// HTTP/2 upstream connection pool.
-///
-/// Cheap to clone via [`Arc`]; every clone shares the same per-peer
-/// cache.
+/// HTTP/2 upstream connection pool; cheap to clone, all clones share one per-peer cache.
 #[derive(Clone)]
 pub struct Http2Pool {
     inner: Arc<Http2PoolInner>,
@@ -185,8 +126,7 @@ impl std::fmt::Debug for Http2Pool {
 }
 
 impl Http2Pool {
-    /// Build a new pool that dials backends through the supplied
-    /// [`TcpPool`].
+    /// New pool dialing backends through `tcp_pool`.
     #[must_use]
     pub fn new(config: Http2PoolConfig, tcp_pool: TcpPool) -> Self {
         Self {
@@ -204,33 +144,11 @@ impl Http2Pool {
         self.inner.peers.lock().len()
     }
 
-    /// Forward `request` to `addr` over a multiplexed H2 connection.
-    ///
-    /// On a missing or dead cached connection the pool dials fresh and
-    /// stores the new sender for subsequent calls.
-    ///
-    /// **ROUND8-L7-10 — H2 cousin of the H1 take-and-discard pattern.**
-    /// This method evicts the cached `PeerEntry` for `addr` on every
-    /// `Send`-class hyper error (`Ok(Err(e))` branch below) and on
-    /// every header-roundtrip timeout (`Err(_)` branch). That covers
-    /// the full set of H2 stream framing errors a misbehaving upstream
-    /// can emit — `PROTOCOL_ERROR`, `FRAME_SIZE_ERROR`, mid-body
-    /// `STREAM_CLOSED`, body-length over-read / under-read — because
-    /// hyper surfaces all of them as `SendRequest` errors. Eviction
-    /// here is **deliberately broad**: the H2 reuse path multiplexes
-    /// many streams on one connection, so a single corrupted stream
-    /// could otherwise corrupt every concurrent stream on the same
-    /// peer. See Pingora 0.6.0 / 0.8.0 CHANGELOG for the upstream-
-    /// smuggling bug class this guards against.
-    ///
-    /// # Errors
-    ///
-    /// * [`Http2PoolError::Dial`] — TCP dial failed.
-    /// * [`Http2PoolError::Handshake`] — hyper H2 handshake failed.
-    /// * [`Http2PoolError::Send`] — `send_request` failed; cached
-    ///   entry for this address is evicted before returning.
-    /// * [`Http2PoolError::Timeout`] — header roundtrip exceeded
-    ///   [`Http2PoolConfig::send_timeout`]; cached entry is evicted.
+    /// Forward `request` to `addr`, dialing fresh when the cached connection is missing or dead.
+    /// **ROUND8-L7-10 — H2 cousin of the H1 take-and-discard pattern.** Every `Send`-class error and
+    /// every timeout evicts the whole cached `PeerEntry`: hyper surfaces all H2 framing faults as
+    /// `SendRequest` errors, and one corrupted stream can corrupt every other stream on that peer
+    /// (Pingora shipped this upstream-smuggling class in 0.6.0 and again in 0.8.0).
     pub async fn send_request(
         &self,
         addr: SocketAddr,
@@ -241,11 +159,6 @@ impl Http2Pool {
         match tokio::time::timeout(self.inner.config.send_timeout, send_fut).await {
             Ok(Ok(resp)) => Ok(resp),
             Ok(Err(e)) => {
-                // ROUND8-L7-10: evict on every Send-class error so a
-                // single stream-framing fault (PROTOCOL_ERROR, FRAME_
-                // SIZE_ERROR, mid-body STREAM_CLOSED, body-length
-                // mismatch) cannot corrupt subsequent multiplexed
-                // streams on the same upstream peer.
                 self.evict(addr);
                 Err(Http2PoolError::Send(e.to_string()))
             }
@@ -256,48 +169,11 @@ impl Http2Pool {
         }
     }
 
-    /// **S14 / CF-BODY-WALLCLOCK Phase 1** — idle-aware H2 send.
-    ///
-    /// Functionally equivalent to [`Self::send_request`] EXCEPT the
-    /// fixed [`Http2PoolConfig::send_timeout`] wall-clock is replaced
-    /// by [`crate::idle_send::idle_bounded_send`]'s two-phase
-    /// idle/head deadline:
-    /// * Phase A — `idle` no-forward-progress watchdog, reset by the
-    ///   caller's request-egress pump on every successful chunk
-    ///   hand-off into the H2 body channel.
-    /// * Phase B — once the pump sets `upload_complete = true`, a
-    ///   fixed `head_timeout` cap on the remaining HEAD wait.
-    ///
-    /// `last_progress` / `upload_complete` are OWNED and DRIVEN by the
-    /// caller (the lb-l7 request-egress pump); the pool only consumes
-    /// them. `epoch` is the [`tokio::time::Instant`] the caller
-    /// captured at request start (the same epoch `last_progress` ms
-    /// counts from).
-    ///
-    /// The same ROUND8-L7-10 eviction policy as [`Self::send_request`]
-    /// applies on BOTH error arms (Send-class error AND timeout) to
-    /// preserve the H2-multiplex corruption guard. Phase 1 collapses
-    /// both [`IdleSendError`] variants onto [`Http2PoolError::Timeout`]
-    /// (logged at warn-level for triage) so the enum surface stays
-    /// stable for existing callers ([`h3_bridge`-style callers and
-    /// existing pool tests). Phase 2/3 may split the variant if
-    /// cell-level phase-attribution is wanted on the wire.
-    ///
-    /// # Errors
-    ///
-    /// * [`Http2PoolError::Dial`] — TCP dial failed.
-    /// * [`Http2PoolError::Handshake`] — hyper H2 handshake failed.
-    /// * [`Http2PoolError::Send`] — hyper Send-class error; cached
-    ///   entry evicted.
-    /// * [`Http2PoolError::Timeout`] — either Phase A idle OR Phase B
-    ///   head deadline fired; cached entry evicted.
-    //
-    // Eight parameters is one over clippy's default seven-arg lint, but
-    // every one is load-bearing for the two-phase deadline contract and
-    // none has a sensible per-pool default (the cells own `idle` /
-    // `head_timeout` via HttpTimeouts in Phase 2). Bundling them into a
-    // helper struct would obscure the call site without removing any
-    // argument.
+    /// [`Self::send_request`] under [`crate::idle_send::idle_bounded_send`]'s two-phase deadline, so
+    /// a slow-but-progressing upload is not 504-truncated. The caller OWNS and drives
+    /// `last_progress` and `upload_complete`. Both [`IdleSendError`] variants collapse onto
+    /// [`Http2PoolError::Timeout`] — the firing phase survives only in the warn log.
+    // Over clippy's seven-arg limit, but every argument is load-bearing for the deadline contract.
     #[allow(clippy::too_many_arguments)]
     pub async fn send_request_idle(
         &self,
@@ -323,14 +199,11 @@ impl Http2Pool {
         {
             Ok(Ok(resp)) => Ok(resp),
             Ok(Err(e)) => {
-                // ROUND8-L7-10 eviction parity with `send_request`.
                 self.evict(addr);
                 Err(Http2PoolError::Send(e.to_string()))
             }
             Err(idle_err) => {
-                // Phase 1 collapses IdleTimeout / HeadTimeout onto the
-                // existing Timeout variant; discriminant kept in the
-                // log line for triage.
+                // The phase survives only here — the returned variant is the same either way.
                 let phase = match idle_err {
                     IdleSendError::IdleTimeout(_) => "idle",
                     IdleSendError::HeadTimeout(_) => "head",
@@ -345,8 +218,6 @@ impl Http2Pool {
         }
     }
 
-    /// Get a sender for `addr`, dialing fresh when the cached entry is
-    /// missing or dead.
     async fn acquire_sender(
         &self,
         addr: SocketAddr,
@@ -385,34 +256,12 @@ impl Http2Pool {
         peers.remove(&addr);
     }
 
-    /// F-MD-4 (S10 H2→H2 request-smuggling fix) — forcibly tear down the
-    /// cached H2 connection to `addr`, RESETTING every stream currently
-    /// multiplexed on it.
-    ///
-    /// This is the H2 analog of the H1 path's `conn_handle.abort()`
-    /// backstop. When an L7 streaming-request pump determines that the
-    /// inbound request was truncated mid-body (client RST_STREAM without
-    /// END_STREAM, over-cap, or a forbidden trailer), it MUST guarantee
-    /// the upstream stream is reset so the backend never observes the
-    /// truncated request as COMPLETE. Injecting a body error into hyper's
-    /// `SendStream` is racy on a multiplexed connection: hyper may
-    /// gracefully finalize (END_STREAM) the upstream stream — emitting the
-    /// truncated body as complete — before it polls the injected error,
-    /// especially when the downstream cancellation drops the request body
-    /// at a frame boundary. Dropping the cached `PeerEntry` aborts its
-    /// driver task ([`PeerEntry::drop`] → `driver.abort()`), which closes
-    /// the underlying connection and DETERMINISTICALLY resets the
-    /// in-flight upstream stream(s).
-    ///
-    /// Like [`Self::send_request`]'s ROUND8-L7-10 eviction this is
-    /// deliberately connection-scoped: an L7 abort is a rare,
-    /// security-relevant event, and resetting the peer connection (the
-    /// same broad teardown the error-eviction path already performs) is
-    /// the safe choice over risking a smuggled-complete request.
+    /// Tear down the cached connection to `addr`, resetting every stream on it (F-MD-4) — call this
+    /// when an inbound request was truncated mid-body. Injecting a body error into hyper's
+    /// `SendStream` does NOT work: hyper may END_STREAM the upstream, presenting the truncated body
+    /// as COMPLETE, before it polls the injected error. Connection-scoped teardown is the deliberate
+    /// trade: an L7 abort is rare, a smuggled-complete request is not recoverable.
     pub fn reset_peer(&self, addr: SocketAddr) {
-        // Dropping the removed `PeerEntry` runs its `Drop` impl which
-        // `driver.abort()`s the connection task → connection close → all
-        // streams on it reset.
         let _evicted = self.inner.peers.lock().remove(&addr);
     }
 
@@ -420,9 +269,6 @@ impl Http2Pool {
         &self,
         addr: SocketAddr,
     ) -> Result<(SendRequest<H2ReqBody>, JoinHandle<()>), Http2PoolError> {
-        // CODE-2-09 follow-on: async dial via `TcpPool::acquire_async`,
-        // eliminating the previous `spawn_blocking(pool.acquire)` site
-        // that shared the global blocking pool with `dns::resolve`.
         let pooled = self.inner.tcp_pool.acquire_async(addr).await?;
         let stream = pooled
             .take_stream()
@@ -432,11 +278,7 @@ impl Http2Pool {
         builder
             .initial_stream_window_size(self.inner.config.initial_stream_window)
             .max_concurrent_reset_streams(self.inner.config.max_concurrent_streams as usize)
-            // F-RES-2 (S38): cap the HPACK header-list size a malicious
-            // BACKEND can make us decode, for parity with the client-facing
-            // H2 server policy (64 KiB; see lb_l7::h2_security). Without this
-            // the upstream leg relies on the h2 crate's implicit 16 KiB
-            // default — strictly safe but undocumented; set it explicitly.
+            // Explicit, not left to the h2 crate's undocumented implicit default (F-RES-2).
             .max_header_list_size(MAX_HEADER_LIST_SIZE)
             .timer(TokioTimer::new());
         if !self.inner.config.keep_alive_interval.is_zero() {
@@ -457,14 +299,7 @@ impl Http2Pool {
     }
 }
 
-/// Convenience helper: collect the body of a [`Response<Incoming>`] into
-/// a single [`Bytes`]. Bound by `max_body` to defend against unbounded
-/// upstream responses.
-///
-/// # Errors
-///
-/// Returns an [`io::Error`] of kind `InvalidData` if the body exceeds
-/// `max_body` bytes, or wraps any underlying hyper body error.
+/// Collect a response body into one [`Bytes`]; errors with `InvalidData` past `max_body`.
 pub async fn collect_body_bounded(body: Incoming, max_body: usize) -> io::Result<Bytes> {
     let collected = body
         .collect()
@@ -513,13 +348,7 @@ mod tests {
         assert_eq!(pool.peer_count(), 0);
     }
 
-    /// S14 / arm (viii) — pool dial-fail smoke for `send_request_idle`.
-    ///
-    /// Behavior coverage of the helper itself is in `idle_send::tests`;
-    /// this arm only proves the new pool method preserves the
-    /// dial-failure path exactly the way `send_request` does. A "real"
-    /// pool+backend behavior test belongs in Phase 3 alongside the cell
-    /// wiring.
+    /// Only checks `send_request_idle` keeps the dial-failure path; deadlines live in `idle_send`.
     #[tokio::test]
     async fn send_request_idle_dial_fail_smoke() {
         use http_body_util::Empty;
@@ -537,7 +366,7 @@ mod tests {
         );
         let pool = Http2Pool::new(Http2PoolConfig::default(), tcp_pool);
 
-        // 127.0.0.1:1 — virtually always refused on Linux dev hosts.
+        // Virtually always refused on Linux dev hosts.
         let addr: SocketAddr = "127.0.0.1:1".parse().unwrap();
         let req: Request<H2ReqBody> = Request::builder()
             .uri("/")
@@ -569,14 +398,7 @@ mod tests {
         );
     }
 
-    /// In-process H2 backend used by the `send_request_idle` coverage
-    /// arms below. Spawns a single connection acceptor and serves
-    /// `handler` for each incoming request; returns the bound address.
-    ///
-    /// The acceptor runs until the test drops the listener (we leak it
-    /// via `Box::leak` so the test doesn't have to thread a shutdown
-    /// channel — tests are short-lived and the runtime tears down at
-    /// the end of the `#[tokio::test]` fn).
+    /// In-process H2 backend; the `#[tokio::test]` runtime teardown is the only stop signal.
     async fn spawn_h2_backend<F, R>(handler: F) -> SocketAddr
     where
         F: Fn(Request<Incoming>) -> R + Send + Sync + 'static,
@@ -643,9 +465,6 @@ mod tests {
             .unwrap()
     }
 
-    /// S14 / cov — `send_request_idle` SUCCESS arm (the `Ok(Ok(resp))`
-    /// match). Drives the full path: acquire_sender → handshake →
-    /// `idle_bounded_send` → backend 200 OK → return Ok(Response).
     #[tokio::test]
     async fn send_request_idle_success_arm() {
         use http_body_util::Full;
@@ -676,16 +495,10 @@ mod tests {
         assert!(pool.peer_count() >= 1, "pool should cache the peer");
     }
 
-    /// S14 / cov — `send_request_idle` TIMEOUT arm (the `Err(idle_err)`
-    /// match). Backend handler NEVER returns → `idle_bounded_send`
-    /// fires Phase B `HeadTimeout` (upload_complete = true,
-    /// head_timeout is short). Asserts the pool evicts on timeout
-    /// (parity with `send_request`'s ROUND8-L7-10 policy).
+    /// Phase B head timeout must fire AND evict, for ROUND8-L7-10 parity with `send_request`.
     #[tokio::test]
     async fn send_request_idle_head_timeout_arm() {
         let addr = spawn_h2_backend(|_req| async move {
-            // Never respond — the H2 stream stays open until the
-            // pool's deadline fires and the connection is dropped.
             std::future::pending::<Result<Response<http_body_util::Full<Bytes>>, std::io::Error>>()
                 .await
         })
@@ -714,11 +527,7 @@ mod tests {
         );
     }
 
-    /// S14 / cov — `send_request_idle` IDLE timeout arm (Phase A
-    /// firing). upload_complete stays false; `last_progress` never
-    /// bumps; backend never responds → `idle_bounded_send` fires
-    /// `IdleTimeout`. Asserts the pool path collapses Idle → Timeout
-    /// (Phase 1 stable-enum semantics) and evicts.
+    /// Phase A idle timeout must collapse onto `Timeout` and evict.
     #[tokio::test]
     async fn send_request_idle_idle_timeout_arm() {
         let addr = spawn_h2_backend(|_req| async move {

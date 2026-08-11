@@ -1,8 +1,5 @@
-//! The observability loop: every `interval`, sample the gateway child's
-//! `/proc` footprint (RSS/fd/threads) and scrape its `/metrics` for the
-//! scenario's state-table gauges, append a row to a [`TimeSeries`], and print a
-//! one-line heartbeat snapshot (the soak's liveness signal — R9: a quiet soak
-//! is expected; the SNAPSHOT stream, not the agent, is the heartbeat).
+//! The observability loop: sample `/proc` + scrape `/metrics` every `interval` into a
+//! [`TimeSeries`], printing a one-line SNAPSHOT heartbeat (R9: a quiet soak is expected).
 
 use std::net::SocketAddr;
 use std::time::Duration;
@@ -15,13 +12,8 @@ use crate::metrics::{self, MetricSet};
 use crate::procstat;
 use crate::timeseries::TimeSeries;
 
-/// The fixed leading columns (OS footprint), before the per-scenario gauges.
 pub const BASE_COLUMNS: [&str; 4] = ["rss_kb", "vmhwm_kb", "fds", "threads"];
 
-/// Minimal HTTP GET over a fresh TCP connection (HTTP/1.1 + `Connection:
-/// close`, read to EOF). Returns `(status, body)`. Used for the gateway
-/// readiness gate and the `/metrics` scrape — no hyper client churn in the hot
-/// sampling loop.
 pub async fn http_get(addr: SocketAddr, path: &str) -> anyhow::Result<(u16, String)> {
     let mut stream =
         tokio::time::timeout(Duration::from_secs(3), TcpStream::connect(addr)).await??;
@@ -40,8 +32,6 @@ pub async fn http_get(addr: SocketAddr, path: &str) -> anyhow::Result<(u16, Stri
     Ok((status, body.to_string()))
 }
 
-/// Scrape `/metrics` and parse it. Returns an empty set on any failure (a
-/// transient scrape miss must not kill the sampler — the row records NaN).
 pub async fn scrape(metrics_addr: SocketAddr) -> MetricSet {
     match http_get(metrics_addr, "/metrics").await {
         Ok((200..=299, body)) => metrics::parse(&body),
@@ -49,12 +39,8 @@ pub async fn scrape(metrics_addr: SocketAddr) -> MetricSet {
     }
 }
 
-/// Run the sampling loop until `cancel` fires (plus one final post-cancel
-/// sample so the drained-down state is recorded). Returns the full series.
-///
-/// `gauges` is the ordered list of `/metrics` family names to track (each
-/// summed across label sets). The series columns are [`BASE_COLUMNS`] followed
-/// by `gauges`.
+/// Run the sampling loop until `cancel` fires, plus one final post-cancel sample so the
+/// drained-down state is recorded. Columns are [`BASE_COLUMNS`] then `gauges` (each summed).
 pub async fn run_sampler(
     pid: u32,
     metrics_addr: SocketAddr,
@@ -74,13 +60,11 @@ pub async fn run_sampler(
         print_heartbeat(label, t, &gauges, &row);
         ts.push(t, row);
 
-        // Stop after recording one sample post-cancel.
         if cancel.is_cancelled() {
             break;
         }
         tokio::select! {
             () = cancel.cancelled() => {
-                // Take one more (final) sample on the next loop iteration.
             }
             () = tokio::time::sleep(interval) => {}
         }
@@ -88,7 +72,6 @@ pub async fn run_sampler(
     ts
 }
 
-/// Build a single sample row: [rss, vmhwm, fds, threads, gauge values…].
 async fn build_row(pid: u32, metrics_addr: SocketAddr, gauges: &[String]) -> Vec<f64> {
     let fp = procstat::sample_pid(pid);
     let metricset = scrape(metrics_addr).await;
@@ -147,7 +130,6 @@ mod tests {
 
     #[tokio::test]
     async fn http_get_parses_status_and_body() {
-        // Stand up a one-shot TCP server returning a tiny HTTP/1.1 response.
         let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
             .await
             .unwrap();

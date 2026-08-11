@@ -18,6 +18,5 @@ fn test_bridge_h1_to_h1() {
     let bridged = bridge.bridge_request(&req).unwrap();
     assert_eq!(bridged.method, "GET");
     assert_eq!(bridged.uri, "/path");
-    // Host header preserved
     assert!(bridged.headers.iter().any(|(k, _)| k == "host"));
 }

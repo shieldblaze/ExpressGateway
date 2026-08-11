@@ -1,13 +1,8 @@
-//! Pillar 4b-2 userspace simulation of the BPF data-plane extensions:
-//! 802.1Q VLAN stripping, IPv6 conntrack, LPM-trie ACL, and RFC 1624
-//! incremental checksum updates.
+//! Pillar 4b-2 userspace simulation of the BPF data-plane extensions (802.1Q stripping, IPv6
+//! conntrack, LPM-trie ACL, RFC 1624 checksums).
 //!
-//! The simulation does not replace the in-kernel program — it's a
-//! CI-safe functional spec. The BPF source is authoritative; these
-//! routines are what we can exercise without `CAP_BPF`.
-//!
-//! All helpers are byte-order-agnostic in their test contracts; the
-//! production BPF code operates on network-byte-order packet data.
+//! This does not replace the in-kernel program — the BPF source is authoritative and these are the
+//! routines we can exercise without `CAP_BPF`.
 
 #![allow(
     clippy::module_name_repetitions,
@@ -18,13 +13,8 @@
 use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, Ipv6Addr};
 
-// ---------------------------------------------------------------------------
-// VLAN stripping.
-// ---------------------------------------------------------------------------
-
-/// Ethernet + optional VLAN header shape the simulation understands.
-/// Raw wire bytes of a frame prefix (14 or 18 bytes) — exactly what the
-/// BPF program sees at `ctx.data()`.
+/// Ethernet + optional VLAN header shape — the raw wire prefix (14 or 18 bytes) the BPF program
+/// sees at `ctx.data()`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StrippedFrame {
     /// Destination MAC.
@@ -35,13 +25,12 @@ pub struct StrippedFrame {
     pub ether_type: u16,
     /// VLAN ID if one was present, else `None`.
     pub vlan_id: Option<u16>,
-    /// Offset (in bytes) where the L3 header begins. 14 for untagged,
-    /// 18 for single-tag.
+    /// Offset (in bytes) where the L3 header begins.
     pub l3_offset: usize,
 }
 
-/// Parse Ethernet + optional single 802.1Q VLAN tag, returning the
-/// stripped frame prefix or `None` on bounds failure.
+/// Parse Ethernet + optional single 802.1Q VLAN tag, returning the stripped frame prefix or `None`
+/// on bounds failure.
 #[must_use]
 pub fn strip_vlan(frame: &[u8]) -> Option<StrippedFrame> {
     if frame.len() < 14 {
@@ -75,10 +64,6 @@ pub fn strip_vlan(frame: &[u8]) -> Option<StrippedFrame> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// IPv6 conntrack simulation.
-// ---------------------------------------------------------------------------
-
 /// IPv6 5-tuple flow key — userspace model of `FlowKeyV6`.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct FlowKeyV6 {
@@ -86,8 +71,8 @@ pub struct FlowKeyV6 {
     pub src: Ipv6Addr,
     /// Destination IPv6 address.
     pub dst: Ipv6Addr,
-    /// Source port (network byte order is the BPF convention; tests
-    /// may use either as long as both sides agree).
+    /// Source port (network byte order is the BPF convention; tests may use either as long as both
+    /// sides agree).
     pub src_port: u16,
     /// Destination port.
     pub dst_port: u16,
@@ -102,16 +87,16 @@ pub enum SimAction {
     Pass,
     /// `XDP_DROP` — ACL denied.
     Drop,
-    /// `XDP_TX` — rewrite-and-transmit. The opaque backend index is
-    /// attached so assertions can verify correct steering.
+    /// `XDP_TX` — rewrite-and-transmit; the backend index is attached so assertions can verify
+    /// steering.
     Tx {
         /// Backend table index selected by the conntrack lookup.
         backend_idx: u32,
     },
 }
 
-/// IPv6 conntrack table mirror. `BTreeMap` for deterministic iteration;
-/// semantics (insert / lookup / `backend_idx`) match the BPF map.
+/// IPv6 conntrack table mirror. `BTreeMap` for deterministic iteration; insert/lookup semantics
+/// match the BPF map.
 #[derive(Debug, Default)]
 pub struct ConntrackV6 {
     entries: BTreeMap<(Ipv6Addr, Ipv6Addr, u16, u16, u8), u32>,
@@ -134,8 +119,7 @@ impl ConntrackV6 {
         );
     }
 
-    /// Simulate the BPF decision: on a hit, return `Tx` with the pinned
-    /// backend; otherwise `Pass`.
+    /// Simulate the BPF decision: on a hit, return `Tx` with the pinned backend; otherwise `Pass`.
     #[must_use]
     pub fn decide(&self, key: &FlowKeyV6) -> SimAction {
         self.entries
@@ -144,12 +128,7 @@ impl ConntrackV6 {
     }
 }
 
-// ---------------------------------------------------------------------------
-// LPM trie ACL simulation.
-// ---------------------------------------------------------------------------
-
-/// Simple userspace LPM trie over IPv4 /CIDR entries. Not performance-
-/// critical (tests only); the real in-kernel structure is
+/// Userspace LPM trie over IPv4 CIDR entries. Tests only — the real in-kernel structure is
 /// `BPF_MAP_TYPE_LPM_TRIE`.
 #[derive(Debug, Default)]
 pub struct AclTrie {
@@ -165,8 +144,7 @@ impl AclTrie {
         }
     }
 
-    /// Add a deny rule. `addr` is the network address; `prefix_len` is
-    /// the CIDR prefix length in bits (0..=32).
+    /// Add a deny rule.
     pub fn deny(&mut self, addr: Ipv4Addr, prefix_len: u8) {
         let mask = if prefix_len == 0 {
             0
@@ -177,8 +155,8 @@ impl AclTrie {
         self.entries.push((net, prefix_len.min(32)));
     }
 
-    /// Look up the longest prefix matching `addr`; return the prefix
-    /// length on match, `None` otherwise.
+    /// Look up the longest prefix matching `addr`; return the prefix length on match, `None`
+    /// otherwise.
     #[must_use]
     pub fn longest_match(&self, addr: Ipv4Addr) -> Option<u8> {
         let a = u32::from(addr);
@@ -202,10 +180,7 @@ impl AclTrie {
     }
 }
 
-// ---------------------------------------------------------------------------
-// RFC 1624 incremental checksum helpers (userspace mirrors of the
-// BPF code in `ebpf/src/main.rs`).
-// ---------------------------------------------------------------------------
+// RFC 1624 incremental checksum helpers — userspace mirrors of `ebpf/src/main.rs`.
 
 /// Fold a 32-bit one's-complement sum to 16 bits.
 #[must_use]
@@ -228,9 +203,8 @@ pub fn csum16_update(old_csum: u16, old_field: u16, new_field: u16) -> u16 {
     !fold32(sum)
 }
 
-/// Compute a full one's-complement checksum over `bytes`. Used by the
-/// RFC 1624 property test to sanity-check that the incremental update
-/// agrees with a fresh sum.
+/// Full one's-complement checksum over `bytes`. Used by the RFC 1624 property test to check the
+/// incremental update agrees with a fresh sum.
 #[must_use]
 pub fn full_checksum(bytes: &[u8]) -> u16 {
     let mut sum: u32 = 0;
@@ -247,20 +221,12 @@ pub fn full_checksum(bytes: &[u8]) -> u16 {
     !fold32(sum)
 }
 
-// ---------------------------------------------------------------------------
-// Tests.
-// ---------------------------------------------------------------------------
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// 802.1Q single-tag frame is stripped and the inner `ether_type` is
-    /// what the IPv4/IPv6 branch sees.
     #[test]
     fn vlan_tag_stripped_before_ipv4_parse() {
-        // Frame: dst mac (6), src mac (6), 0x8100 (2), TCI=0x0064 (VID 100) (2),
-        // inner ether_type=0x0800 (2).
         let frame: [u8; 18] = [
             0x02, 0x00, 0x00, 0x00, 0x00, 0x01, // dst
             0x02, 0x00, 0x00, 0x00, 0x00, 0x02, // src
@@ -274,7 +240,6 @@ mod tests {
         assert_eq!(stripped.l3_offset, 18);
     }
 
-    /// Untagged frame is passed through with `l3_offset == 14`.
     #[test]
     fn untagged_frame_has_14_byte_l3_offset() {
         let frame: [u8; 14] = [
@@ -286,8 +251,6 @@ mod tests {
         assert_eq!(stripped.l3_offset, 14);
     }
 
-    /// Truncated 802.1Q frame (missing inner type) returns None rather
-    /// than panicking.
     #[test]
     fn truncated_vlan_frame_returns_none() {
         let frame: [u8; 15] = [
@@ -297,8 +260,6 @@ mod tests {
         assert!(strip_vlan(&frame).is_none());
     }
 
-    /// IPv6 conntrack hit maps to an `XDP_TX` action with the stored
-    /// backend index; misses pass through.
     #[test]
     fn ipv6_conntrack_hit_triggers_xdp_tx_sim() {
         let mut ct = ConntrackV6::new();
@@ -319,7 +280,6 @@ mod tests {
         assert_eq!(ct.decide(&other), SimAction::Pass);
     }
 
-    /// LPM trie picks the most-specific matching prefix.
     #[test]
     fn lpm_trie_acl_matches_prefix() {
         let mut acl = AclTrie::new();
@@ -330,13 +290,11 @@ mod tests {
         assert_eq!(acl.longest_match(Ipv4Addr::new(10, 9, 9, 9)), Some(8));
         assert!(!acl.denies(Ipv4Addr::new(192, 168, 0, 1)));
 
-        // /32 deny only matches exact addr.
         acl.deny(Ipv4Addr::new(203, 0, 113, 7), 32);
         assert_eq!(acl.longest_match(Ipv4Addr::new(203, 0, 113, 7)), Some(32));
         assert!(!acl.denies(Ipv4Addr::new(203, 0, 113, 8)));
     }
 
-    /// /0 rule matches every address.
     #[test]
     fn lpm_trie_zero_prefix_matches_everything() {
         let mut acl = AclTrie::new();
@@ -345,16 +303,14 @@ mod tests {
         assert!(acl.denies(Ipv4Addr::new(255, 255, 255, 255)));
     }
 
-    /// Property test: for a few thousand random 16-bit field mutations,
-    /// RFC 1624 incremental checksum update always agrees with the
-    /// full-recompute path.
+    /// Property test: over a few thousand random 16-bit field mutations, the RFC 1624 incremental
+    /// update must always agree with a full recompute.
     #[test]
     #[allow(
         clippy::cast_possible_truncation,
         reason = "low-byte / low-word of an xorshift state is exactly the random value we want"
     )]
     fn rfc_1624_incremental_checksum_matches_recompute() {
-        // xorshift64* — deterministic, reproducible, no rand dep.
         fn xorshift(state: &mut u64) -> u64 {
             *state ^= *state << 13;
             *state ^= *state >> 7;
@@ -378,18 +334,15 @@ mod tests {
                 }
                 let initial_csum = full_checksum(&buf);
 
-                // 19 aligned 16-bit lanes at offsets 0..38.
                 let lane = (xorshift(&mut state) as usize) % 19;
                 let offset = lane * 2;
                 let old_word = u16::from_be_bytes([buf[offset], buf[offset + 1]]);
                 let new_word = xorshift(&mut state) as u16;
 
-                // Full recompute path.
                 buf[offset] = (new_word >> 8) as u8;
                 buf[offset + 1] = new_word as u8;
                 let recomputed = full_checksum(&buf);
 
-                // Incremental path.
                 let incremental = csum16_update(initial_csum, old_word, new_word);
 
                 assert_eq!(
@@ -403,8 +356,7 @@ mod tests {
         }
     }
 
-    /// Incremental update is reversible: applying old→new then new→old
-    /// returns the original checksum.
+    /// Incremental update is reversible: old→new then new→old returns the original checksum.
     #[test]
     fn rfc_1624_incremental_reversible() {
         let csum: u16 = 0x1234;

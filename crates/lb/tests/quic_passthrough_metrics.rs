@@ -1,23 +1,4 @@
 //! S15 A3 verify gate 3 — `quic_passthrough_*` metrics.
-//!
-//! Independent verification (author≠verifier): builder-1 added the
-//! `lb-observability::PassthroughMetrics` family + the bump sites in
-//! `lb-quic::passthrough`, and a UNIT suite inside `passthrough.rs`
-//! driving the router ctx directly. This file is the verifier's
-//! INDEPENDENT integration-level check: it drives the REAL
-//! `PassthroughListener` over the loopback UDP datapath and asserts the
-//! metric handles, read back from the shared `MetricsRegistry`,
-//! increment correctly.
-//!
-//! Design §A3 verify gate: "Metrics assertions — assert they increment
-//! correctly (flows, flows_evicted_total, retry_minted_total,
-//! retry_rejected_total, header_parse_errors_total,
-//! backend_socket_errors_total) via the metrics registry."
-//!
-//! Gauge semantics (lead Q2 ruling): `quic_passthrough_flows` is
-//! `.set(table.len())` — it tracks DISPATCH-TABLE size, so a migrated
-//! flow that holds two CID keys reads 2. We assert it tracks
-//! `flows_len()` (the same dispatch-table count), NOT `== 1`.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -72,9 +53,7 @@ fn build_initial(dcid: &[u8], scid: &[u8], token: &[u8]) -> Vec<u8> {
     pkt
 }
 
-/// A truncated long header — DCID length byte claims 20 bytes but the
-/// datagram ends early. The public-header parser must reject it,
-/// bumping `header_parse_errors_total`.
+/// A truncated long header — DCID length byte claims 20 bytes but the datagram ends early.
 fn build_truncated_long() -> Vec<u8> {
     vec![
         0b1100_0000, // long header, fixed bit, Initial
@@ -106,9 +85,7 @@ async fn spawn_void_backend() -> SocketAddr {
     addr
 }
 
-/// Spawn a listener with a fresh metrics registry wired in. Returns the
-/// listener, its addr, the metrics handles (read-back surface), and the
-/// cancel token.
+/// Spawn a listener with a fresh metrics registry wired in.
 async fn spawn_with_metrics(
     cap: usize,
     mint_retry: bool,
@@ -146,15 +123,8 @@ async fn spawn_with_metrics(
     (listener, addr, metrics, cancel)
 }
 
-// ============================================================
-// flows gauge + retry_minted + retry_rejected.
-// ============================================================
-
 #[tokio::test(flavor = "current_thread")]
 async fn flows_gauge_and_retry_counters() {
-    // mint_retry=true: a no-token Initial mints a Retry (no flow yet).
-    // A Retry-validated Initial installs a flow. A bad-token Initial is
-    // rejected.
     const CAP: usize = 256;
     let signer = RetryTokenSigner::new_with_secret(RETRY_SECRET);
     let (listener, lb_addr, m, cancel) = spawn_with_metrics(CAP, true).await;
@@ -165,7 +135,6 @@ async fn flows_gauge_and_retry_counters() {
     let client_addr = client.local_addr().expect("local_addr");
     let scid = [0x11u8; 8];
 
-    // (1) No-token Initial → Retry minted, no flow installed.
     let dcid0 = dcid_for(1);
     let no_token = build_initial(&dcid0, &scid, &[]);
     let _ = client.send_to(&no_token, lb_addr).await;
@@ -182,8 +151,6 @@ async fn flows_gauge_and_retry_counters() {
         m.flows.get()
     );
 
-    // (2) Retry-validated Initial → one flow installed; gauge tracks the
-    // dispatch-table size (== flows_len), per the Q2 gauge ruling.
     let dcid1 = dcid_for(2);
     let token = signer.mint(client_addr, &dcid1);
     let good = build_initial(&dcid1, &scid, &token);
@@ -198,8 +165,6 @@ async fn flows_gauge_and_retry_counters() {
          flows_len() ({table}) — Q2 .set(table.len()) semantics"
     );
 
-    // (3) Bad-token Initial (token minted for a DIFFERENT peer) →
-    // rejected, retry_rejected_total bumps, no new flow.
     let dcid2 = dcid_for(3);
     let wrong_peer = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 9, 8, 7)), 4321);
     let bad_token = signer.mint(wrong_peer, &dcid2);
@@ -223,10 +188,6 @@ async fn flows_gauge_and_retry_counters() {
     let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
 }
 
-// ============================================================
-// header_parse_errors_total.
-// ============================================================
-
 #[tokio::test(flavor = "current_thread")]
 async fn header_parse_errors_counter() {
     let (listener, lb_addr, m, cancel) = spawn_with_metrics(256, true).await;
@@ -236,7 +197,6 @@ async fn header_parse_errors_counter() {
 
     assert_eq!(m.header_parse_errors_total.get(), 0, "starts at zero");
 
-    // Send three malformed datagrams (truncated long headers).
     for _ in 0..3 {
         let _ = client.send_to(&build_truncated_long(), lb_addr).await;
     }
@@ -249,21 +209,14 @@ async fn header_parse_errors_counter() {
          to exactly 3 (observed {})",
         m.header_parse_errors_total.get()
     );
-    // No flow installed; no Retry minted on a parse error.
     assert_eq!(m.flows.get(), 0, "parse error must not install a flow");
 
     cancel.cancel();
     let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
 }
 
-// ============================================================
-// flows_evicted_total + gauge tracks eviction.
-// ============================================================
-
 #[tokio::test(flavor = "current_thread")]
 async fn flows_evicted_counter_and_gauge_bounded() {
-    // Drive cap+overflow distinct flows; evictions must be counted and
-    // the gauge must stay bounded at the dispatch-table size.
     const CAP: usize = 32;
     const SENDS: u32 = 200;
     let signer = RetryTokenSigner::new_with_secret(RETRY_SECRET);
@@ -286,13 +239,11 @@ async fn flows_evicted_counter_and_gauge_bounded() {
     }
     tokio::time::sleep(Duration::from_millis(200)).await;
 
-    // SENDS (200) >> CAP (32) so eviction MUST have fired.
     assert!(
         m.flows_evicted_total.get() >= 1,
         "cap+overflow drove no evictions (flows_evicted_total={})",
         m.flows_evicted_total.get()
     );
-    // Gauge tracks the bounded dispatch-table size == flows_len().
     let gauge = m.flows.get();
     let table = i64::try_from(listener.flows_len()).unwrap();
     assert_eq!(

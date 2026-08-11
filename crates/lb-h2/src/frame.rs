@@ -4,7 +4,6 @@ use bytes::{BufMut, Bytes, BytesMut};
 
 use crate::H2Error;
 
-// Frame type constants (RFC 9113 §4).
 const FRAME_DATA: u8 = 0x0;
 const FRAME_HEADERS: u8 = 0x1;
 const FRAME_PRIORITY: u8 = 0x2;
@@ -16,7 +15,6 @@ const FRAME_GOAWAY: u8 = 0x7;
 const FRAME_WINDOW_UPDATE: u8 = 0x8;
 const FRAME_CONTINUATION: u8 = 0x9;
 
-// Flag constants.
 const FLAG_END_STREAM: u8 = 0x1;
 const FLAG_ACK: u8 = 0x1;
 const FLAG_END_HEADERS: u8 = 0x4;
@@ -126,34 +124,29 @@ pub enum H2Frame {
     },
 }
 
-/// Strip the PADDED-frame envelope: first byte is `Pad Length`, the
-/// trailing `Pad Length` bytes are padding. Returns the inner slice.
+/// Strip the PADDED envelope (leading `Pad Length` byte, trailing padding).
 ///
-/// References ROUND8-L7-11 / HAProxy `BUG/MEDIUM: mux-h2: Properly
-/// consume padding for DATA frames`. Per RFC 9113 §6.1:
-/// - PADDED flag with zero-byte payload is malformed.
-/// - `Pad Length + 1 > payload.len()` is malformed.
+/// ROUND8-L7-11 / HAProxy `BUG/MEDIUM: mux-h2: Properly consume padding for
+/// DATA frames`. Per RFC 9113 §6.1, PADDED with a zero-byte payload or
+/// `Pad Length + 1 > payload.len()` is malformed.
 fn strip_padding(payload: &[u8]) -> Result<&[u8], H2Error> {
     let pad_len = usize::from(
         *payload
             .first()
             .ok_or_else(|| H2Error::InvalidFrame("PADDED frame with empty payload".to_string()))?,
     );
-    // Total layout: 1 (pad-length byte) + inner + pad_len.
     if pad_len + 1 > payload.len() {
         return Err(H2Error::InvalidFrame(format!(
             "PADDED pad_length {pad_len} exceeds payload size {} ",
             payload.len()
         )));
     }
-    // Inner slice = [1, payload.len() - pad_len)
     let inner_end = payload.len() - pad_len;
     payload
         .get(1..inner_end)
         .ok_or_else(|| H2Error::InvalidFrame("PADDED inner slice out of range".to_string()))
 }
 
-/// Read a `u32` from a 4-byte big-endian slice.
 fn read_u32_be(buf: &[u8]) -> Result<u32, H2Error> {
     let b0 = u32::from(*buf.first().ok_or(H2Error::Incomplete)?);
     let b1 = u32::from(*buf.get(1).ok_or(H2Error::Incomplete)?);
@@ -162,7 +155,6 @@ fn read_u32_be(buf: &[u8]) -> Result<u32, H2Error> {
     Ok((b0 << 24) | (b1 << 16) | (b2 << 8) | b3)
 }
 
-/// Read a `u16` from a 2-byte big-endian slice.
 fn read_u16_be(buf: &[u8]) -> Result<u16, H2Error> {
     let b0 = u16::from(*buf.first().ok_or(H2Error::Incomplete)?);
     let b1 = u16::from(*buf.get(1).ok_or(H2Error::Incomplete)?);
@@ -212,11 +204,8 @@ fn decode_frame_low(
 ) -> Result<H2Frame, H2Error> {
     match frame_type {
         FRAME_DATA => {
-            // ROUND8-L7-11: RFC 9113 §6.1 — when PADDED is set the
-            // payload is `Pad Length (1) | Data | Padding (PadLength)`.
-            // The decoder MUST strip both ends; failing to do so is
-            // the HAProxy `BUG/MEDIUM: mux-h2: Properly consume
-            // padding for DATA frames` smuggling primitive.
+            // ROUND8-L7-11: failing to strip BOTH ends is the HAProxy
+            // `Properly consume padding` smuggling primitive.
             let data_slice = if flags & FLAG_PADDED != 0 {
                 strip_padding(payload)?
             } else {
@@ -229,14 +218,9 @@ fn decode_frame_low(
             })
         }
         FRAME_HEADERS => {
-            // ROUND8-L7-11: layered stripping when PADDED + PRIORITY
-            // both set. RFC 9113 §6.2 wire layout:
-            //   PADDED only:  `Pad Length (1) | Block | Padding`
-            //   PRIORITY only:`E+Dep+Weight (5) | Block`
-            //   Both:         `Pad Length (1) | E+Dep+Weight (5) |
-            //                  Block | Padding (PadLength)`
-            // Strip padding from the outside first, then peel the
-            // priority block from the inside.
+            // ROUND8-L7-11: with PADDED + PRIORITY both set the layout is
+            // `Pad Length (1) | E+Dep+Weight (5) | Block | Padding`, so strip
+            // padding from the OUTSIDE first, then peel priority from inside.
             let unpadded = if flags & FLAG_PADDED != 0 {
                 strip_padding(payload)?
             } else {
@@ -296,8 +280,7 @@ fn decode_frame_low(
     }
 }
 
-/// Decode `SETTINGS`, `PUSH_PROMISE`, `PING`, `GOAWAY`, `WINDOW_UPDATE`,
-/// or `CONTINUATION` frames.
+/// Decode `SETTINGS`/`PUSH_PROMISE`/`PING`/`GOAWAY`/`WINDOW_UPDATE`/`CONTINUATION`.
 fn decode_frame_high(
     frame_type: u8,
     flags: u8,
@@ -390,7 +373,7 @@ fn decode_frame_high(
             header_block: Bytes::copy_from_slice(payload),
             end_headers: flags & FLAG_END_HEADERS != 0,
         }),
-        // RFC 9113 §4.1: Implementations MUST ignore unknown frame types.
+        // RFC 9113 §4.1: unknown frame types MUST be ignored, not rejected.
         other => Ok(H2Frame::Unknown {
             frame_type: other,
             stream_id,
@@ -403,19 +386,12 @@ fn decode_frame_high(
 /// Default maximum frame size per RFC 9113 Section 4.2.
 pub const DEFAULT_MAX_FRAME_SIZE: usize = 16_384;
 
-/// Decode a single HTTP/2 frame from the front of `buf`.
-///
-/// `max_frame_size` is the `SETTINGS_MAX_FRAME_SIZE` value (default 16,384).
-/// Frames with a payload length exceeding this limit produce
-/// `H2Error::FrameTooLarge`.
-///
-/// Returns `(frame, bytes_consumed)` on success.
+/// Decode one HTTP/2 frame from the front of `buf`, returning
+/// `(frame, bytes_consumed)`.
 ///
 /// # Errors
-///
-/// Returns `H2Error::Incomplete` if `buf` does not contain a complete frame.
-/// Returns `H2Error::FrameTooLarge` if the payload exceeds `max_frame_size`.
-/// Returns `H2Error::InvalidFrame` on malformed input.
+/// `Incomplete` on a partial frame, `FrameTooLarge` past `max_frame_size`
+/// (`SETTINGS_MAX_FRAME_SIZE`), `InvalidFrame` on malformed input.
 pub fn decode_frame(buf: &[u8], max_frame_size: usize) -> Result<(H2Frame, usize), H2Error> {
     let hdr = parse_frame_header(buf)?;
 
@@ -447,8 +423,7 @@ pub fn decode_frame(buf: &[u8], max_frame_size: usize) -> Result<(H2Frame, usize
 /// Encode an HTTP/2 frame into bytes.
 ///
 /// # Errors
-///
-/// Returns `H2Error::InvalidFrame` if the frame cannot be encoded (e.g. payload too large).
+/// `H2Error::InvalidFrame` if the frame cannot be encoded.
 pub fn encode_frame(frame: &H2Frame) -> Result<Bytes, H2Error> {
     let mut buf = BytesMut::new();
 
@@ -527,7 +502,7 @@ fn encode_frame_lower(buf: &mut BytesMut, frame: &H2Frame) -> Result<(), H2Error
     Ok(())
 }
 
-/// Encode `PUSH_PROMISE`, `PING`, `GOAWAY`, `WINDOW_UPDATE`, and `CONTINUATION`.
+/// Encode `PUSH_PROMISE`/`PING`/`GOAWAY`/`WINDOW_UPDATE`/`CONTINUATION`.
 fn encode_frame_upper(buf: &mut BytesMut, frame: &H2Frame) -> Result<(), H2Error> {
     match frame {
         H2Frame::PushPromise {
@@ -682,7 +657,6 @@ mod tests {
 
     #[test]
     fn frame_too_large_rejected() {
-        // Encode a DATA frame with 20000-byte payload (> 16384 default).
         let payload = vec![0u8; 20_000];
         let frame = H2Frame::Data {
             stream_id: 1,
@@ -700,30 +674,24 @@ mod tests {
             })
         ));
 
-        // Same frame succeeds with a larger limit.
+        // Negative control: the same frame succeeds with a larger limit.
         let result = decode_frame(&encoded, 32_768);
         assert!(result.is_ok());
     }
 
     #[test]
     fn unknown_frame_type_ignored() {
-        // RFC 9113 §4.1: implementations MUST ignore unknown frame types.
-        // Build a raw frame with type 0xFF, stream_id=7, flags=0x42, payload "xyz".
+        // Raw frame: type 0xFF, stream_id 7, flags 0x42, payload "xyz".
         let payload = b"xyz";
         let mut buf = BytesMut::new();
-        // 3-byte length
         #[allow(clippy::cast_possible_truncation)]
         let len = payload.len() as u32;
         buf.put_u8(((len >> 16) & 0xFF) as u8);
         buf.put_u8(((len >> 8) & 0xFF) as u8);
         buf.put_u8((len & 0xFF) as u8);
-        // type
         buf.put_u8(0xFF);
-        // flags
         buf.put_u8(0x42);
-        // stream id
         buf.put_u32(7);
-        // payload
         buf.put_slice(payload);
 
         let (frame, consumed) = decode_frame(&buf, DEFAULT_MAX_FRAME_SIZE).unwrap();

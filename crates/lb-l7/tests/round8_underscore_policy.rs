@@ -1,38 +1,13 @@
-//! ROUND8-L7-05 — `headers_with_underscores` policy contract tests.
-//!
-//! Envoy edge best-practice mandates `headers_with_underscores_action
-//! = REJECT_REQUEST`; nginx defaults to silent drop
-//! (`underscores_in_headers off`). Both converge: the underscore is
-//! an auth-bypass primitive against backends that normalise `_` <->
-//! `-` (Java middleware, some Python frameworks, SAP gateways).
-//!
-//! Full request-flow tests require a hyper server + an upstream
-//! backend; the policy enforcement itself is a simple per-header
-//! byte scan. These tests pin the contract at three levels:
-//!
-//! 1. `HeaderUnderscorePolicy::default()` returns `Reject` — the
-//!    Envoy-equivalent edge default. Any future drift fails CI.
-//! 2. The H1Proxy builder method accepts each variant and the field
-//!    is stored verbatim (verified indirectly via the
-//!    enum-default-pinning test plus a builder-call smoke).
-//! 3. The byte-scan predicate used by the hot path
-//!    (`name.as_bytes().contains(&b'_')`) returns the expected
-//!    answer on the corpus of header names mentioned in the L7-05
-//!    finding's reference attack table.
-//!
-//! Reference attack corpus: the names below are drawn from the
-//! Envoy + nginx + Pingora documentation examples plus the
-//! L7-05 finding's reproduction notes (Java middleware, Python
-//! WSGI), and from RFC 9110 §5.1 tchar set negative tests.
+//! ROUND8-L7-05 — the underscore is an auth-bypass primitive against backends
+//! that normalise `_` <-> `-`. These pin the enum default, the builder surface,
+//! and the byte-scan predicate over the L7-05 attack corpus.
 
 use lb_l7::h1_proxy::HeaderUnderscorePolicy;
 
 #[test]
 fn default_policy_is_reject() {
-    // L7-05 contract: ExpressGateway adopts the Envoy edge stance,
-    // not Envoy library default (ALLOW). Any future PR that changes
-    // this to `Drop` or `Allow` must update `docs/edge-defaults.md`
-    // and `audit/round-8/findings/ROUND8-L7-05.md` in lockstep.
+    // The Envoy EDGE stance, not the Envoy library default (ALLOW). Changing
+    // it must update `docs/edge-defaults.md` in lockstep.
     assert_eq!(
         HeaderUnderscorePolicy::default(),
         HeaderUnderscorePolicy::Reject,
@@ -43,9 +18,6 @@ fn default_policy_is_reject() {
 
 #[test]
 fn policy_variants_are_distinct() {
-    // Sanity: the three variants must be distinct PartialEq values
-    // so the runtime `match` in H1Proxy::handle / H2Proxy::handle
-    // can dispatch correctly.
     let r = HeaderUnderscorePolicy::Reject;
     let d = HeaderUnderscorePolicy::Drop;
     let a = HeaderUnderscorePolicy::Allow;
@@ -56,12 +28,7 @@ fn policy_variants_are_distinct() {
 
 #[test]
 fn underscore_byte_scan_predicate_reference_corpus() {
-    // Mirrors the predicate used in `H1Proxy::handle` / `H2Proxy::handle`:
-    // `name.as_bytes().contains(&b'_')`. The corpus below is the
-    // L7-05 attack reference set — names a backend that normalises
-    // `_` <-> `-` would silently coerce to a privileged header.
-    //
-    // Positive (must be matched as containing `_`):
+    // MIRROR of the hot-path predicate `name.as_bytes().contains(&b'_')`.
     let attacks: &[&str] = &[
         "x_forwarded_for",
         "x_auth_token",
@@ -78,8 +45,7 @@ fn underscore_byte_scan_predicate_reference_corpus() {
              the underscore scan (the proxy's Reject mode hinges on it)"
         );
     }
-    // Negative (must NOT be matched — these are legitimate dash-named
-    // tokens that the proxy must continue to forward):
+    // Negative control: dash-named tokens must keep forwarding.
     let legitimate: &[&str] = &[
         "x-forwarded-for",
         "x-auth-token",
@@ -101,14 +67,7 @@ fn underscore_byte_scan_predicate_reference_corpus() {
 
 #[test]
 fn lb_config_enum_default_matches_lb_l7_enum_default() {
-    // The two enums (`lb_config::HeaderUnderscorePolicy` and
-    // `lb_l7::h1_proxy::HeaderUnderscorePolicy`) intentionally
-    // share a default. The wiring crate maps one to the other; this
-    // test pins the default-side of the contract on the lb-l7 side.
-    //
-    // We do NOT import lb-config here (no dep edge); the contract
-    // is asserted on the runtime side only. The lb-config side has
-    // its own `Default` derive that locks the same variant.
+    // No lb-config dep edge here; this pins the lb-l7 side only.
     assert!(matches!(
         HeaderUnderscorePolicy::default(),
         HeaderUnderscorePolicy::Reject
@@ -117,9 +76,7 @@ fn lb_config_enum_default_matches_lb_l7_enum_default() {
 
 #[test]
 fn h1_proxy_source_carries_l7_05_marker() {
-    // Drift detection: the H1Proxy::handle method must reference
-    // ROUND8-L7-05 in a comment or error message so a future
-    // refactor cannot silently delete the policy enforcement.
+    // Drift detection: a refactor must not silently delete the policy check.
     let src =
         std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/h1_proxy.rs")).unwrap();
     assert!(

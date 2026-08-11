@@ -1,26 +1,16 @@
 #!/usr/bin/env bash
-# release-soak.sh — the RELEASE soak gate CONTROLLER (on-demand EC2).
+# The RELEASE soak gate CONTROLLER (on-demand EC2). Gates RELEASE, not every PR —
+# hosted CI cannot soak (DEV-SETUP.md).
 #
-# Provisions a dedicated soak EC2, runs the full 12-scenario lb-soak on it for a
-# release-grade duration, fetches the PASS/FAIL verdict, and ALWAYS tears the
-# instance down (a trap, even on failure/timeout/interrupt). Exits non-zero iff
-# any scenario was not BOUNDED (or panicked) — gating the RELEASE.
+# Provisions a soak EC2, runs the full 12-scenario soak, fetches the verdict, and
+# ALWAYS tears the instance down via a trap (failure, timeout or interrupt alike).
+# The box ALSO self-terminates, belt-and-suspenders. Exits non-zero iff a scenario
+# was not BOUNDED or panicked.
 #
-# This gates RELEASE, not every PR (hosted CI cannot soak — see DEV-SETUP.md).
-# It is invoked manually / by the release workflow (release.yml, workflow_dispatch).
-#
-# MODEL (owner-confirmed S40): on-demand provision -> run -> report -> TEARDOWN.
-# Auth: in CI, GitHub OIDC assumes a scoped IAM role (no long-lived keys) before
-# this runs; locally, configure AWS creds in the environment first.
-#
-#   controller (here): run-instances (user-data bootstraps the box) -> poll S3
-#                      for the DONE sentinel -> download summary -> terminate.
-#   on the box (user-data -> scripts/soak/release-soak-onbox.sh): clone@REF ->
-#                      build -> 12-scenario soak -> verdict -> upload to S3 ->
-#                      self-terminate (belt-and-suspenders with the trap).
+# Auth: in CI, GitHub OIDC assumes a scoped IAM role before this runs (no long-lived
+# keys); locally, configure AWS creds in the environment first.
 #
 # Validate without spending money:  ./scripts/release-soak.sh --dry-run
-#   prints every AWS command (stubbed) and the rendered user-data, runs nothing.
 #
 # ---- required configuration (env) ----------------------------------------
 #   SOAK_REGION                AWS region                (default: $AWS_REGION)
@@ -54,13 +44,13 @@ SOAK_SAMPLE_SECS="${SOAK_SAMPLE_SECS:-30}"
 SOAK_MAX_WAIT_SECS="${SOAK_MAX_WAIT_SECS:-$((SOAK_DURATION_SECS + 3600))}"
 SOAK_GIT_REPO="${SOAK_GIT_REPO:-$(git -C "$REPO_ROOT" remote get-url origin 2>/dev/null || echo UNKNOWN)}"
 SOAK_GIT_REF="${SOAK_GIT_REF:-$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo HEAD)}"
-# A filesystem/S3-safe stamp without Date.now()-style fragility: derive from the ref.
+# Filesystem/S3-safe stamp derived from the ref.
 SOAK_S3_PREFIX="${SOAK_S3_PREFIX:-release-soak/${SOAK_GIT_REF}}"
 
 die()  { echo "::error::$*" >&2; exit 2; }
 log()  { echo "[release-soak $(date -u +%H:%M:%S)] $*"; }
 
-# aws wrapper: in --dry-run, print and skip; else execute.
+# In --dry-run, print the command and skip it.
 aws_do() {
   if [ "$DRY_RUN" -eq 1 ]; then echo "    DRY-RUN aws $*"; return 0; fi
   aws "$@"
@@ -88,7 +78,7 @@ echo "[bootstrap \$(date -u)] release soak box up"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get install -y git curl build-essential cmake clang libclang-dev llvm pkg-config awscli
-# Rust at the pinned MSRV (rust-toolchain.toml is honored by rustup on build).
+# rustup honors rust-toolchain.toml at build time, pinning the MSRV.
 curl -fsSL https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.88
 export PATH="\$HOME/.cargo/bin:/root/.cargo/bin:\$PATH"
 cd /opt
@@ -110,7 +100,7 @@ fi
 # ---- provision ------------------------------------------------------------
 INSTANCE_ID=""
 teardown() {
-  # The trap: ALWAYS terminate (idempotent with the box's self-terminate).
+  # ALWAYS terminate; idempotent with the box's own self-terminate.
   if [ -n "$INSTANCE_ID" ]; then
     log "teardown: terminating $INSTANCE_ID"
     aws_do ec2 terminate-instances --region "$SOAK_REGION" --instance-ids "$INSTANCE_ID" >/dev/null 2>&1 || true
@@ -166,7 +156,7 @@ else
   log "no summary retrieved (timeout after ${waited}s?)"; VERDICT_RC=1
 fi
 
-# teardown runs via the trap on exit.
+# Teardown runs via the EXIT trap.
 if [ "${VERDICT_RC:-1}" -eq 0 ]; then
   log "RELEASE SOAK GATE: PASS"; exit 0
 fi

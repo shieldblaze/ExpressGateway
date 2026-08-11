@@ -1,19 +1,5 @@
-//! ROUND8-L7-06 proof — per-keep-alive-connection request cap (H1).
-//!
-//! Reference: nginx `keepalive_requests 100` default + Pingora 0.8.0
-//! `keepalive_requests` cap (Cloudflare added it after hitting
-//! per-connection accounting growth / TLS-session-age / FD-pinning
-//! pain at the edge). `ref-l7` handoff Top-10 #1.
-//!
-//! Invariants:
-//!   * `h1_nth_response_carries_connection_close` — with cap = N, the
-//!     Nth response on one keep-alive connection carries
-//!     `Connection: close` and the server closes the socket after it.
-//!   * `h1_cap_zero_disables` — with cap = 0, many sequential requests
-//!     on one connection all succeed and the cap never injects
-//!     `Connection: close`.
-//!   * `counter_increments_on_cap_close` — the cap-termination atomic
-//!     advances exactly once per cap-triggered close.
+//! ROUND8-L7-06 — per-keep-alive-connection request cap (H1): the Nth response
+//! carries `Connection: close` and the socket then closes; cap = 0 never fires.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -28,9 +14,7 @@ use lb_l7::h1_proxy::{H1Proxy, HttpTimeouts, RoundRobinAddrs};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-/// Trivial HTTP/1.1 backend that answers every request with a fixed
-/// 200 and stays keep-alive (so the *gateway* is the one that decides
-/// to close, per the cap).
+/// Stays keep-alive, so the GATEWAY is the side that decides to close.
 async fn spawn_echo_backend() -> SocketAddr {
     let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = l.local_addr().unwrap();
@@ -42,8 +26,6 @@ async fn spawn_echo_backend() -> SocketAddr {
             tokio::spawn(async move {
                 let mut buf = [0u8; 4096];
                 loop {
-                    // Read one request (tests send small, unpipelined
-                    // requests so a single read covers the head).
                     match s.read(&mut buf).await {
                         Ok(0) | Err(_) => return,
                         Ok(_) => {}
@@ -94,13 +76,11 @@ async fn spawn_proxy(backend: SocketAddr, cap: u32) -> (SocketAddr, Arc<H1Proxy>
     (addr, proxy)
 }
 
-/// Send one request on `client` and return the full response head.
 async fn one_request(client: &mut TcpStream, path: &str) -> String {
     let req = format!("GET {path} HTTP/1.1\r\nHost: x\r\n\r\n");
     client.write_all(req.as_bytes()).await.unwrap();
     let mut resp = Vec::new();
     let mut tmp = [0u8; 1024];
-    // Read until we have headers + the 2-byte body.
     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
     loop {
         if tokio::time::Instant::now() >= deadline {
@@ -126,7 +106,6 @@ async fn h1_nth_response_carries_connection_close() {
     let (proxy_addr, _proxy) = spawn_proxy(backend, CAP).await;
     let mut client = TcpStream::connect(proxy_addr).await.unwrap();
 
-    // Requests 1..CAP-1: served, no cap-driven close.
     for i in 1..CAP {
         let head = one_request(&mut client, &format!("/r{i}")).await;
         assert!(
@@ -138,8 +117,6 @@ async fn h1_nth_response_carries_connection_close() {
             "request {i} (< cap) must NOT carry Connection: close: {head:?}"
         );
     }
-    // The CAP-th request: 200 + Connection: close, then the server
-    // closes the socket.
     let head = one_request(&mut client, "/rcap").await;
     assert!(
         head.starts_with("HTTP/1.1 200"),
@@ -149,8 +126,6 @@ async fn h1_nth_response_carries_connection_close() {
         head.to_ascii_lowercase().contains("connection: close"),
         "the cap-th (#{CAP}) response MUST carry Connection: close (nginx keepalive_requests parity): {head:?}"
     );
-    // Server closes after the cap-th response: a follow-up read
-    // returns 0 (EOF) within the budget.
     let mut tmp = [0u8; 64];
     let eof = tokio::time::timeout(Duration::from_secs(3), client.read(&mut tmp)).await;
     assert!(
@@ -189,7 +164,6 @@ async fn counter_increments_on_cap_close() {
     let mut client = TcpStream::connect(proxy_addr).await.unwrap();
     let _ = one_request(&mut client, "/a").await;
     let _ = one_request(&mut client, "/b").await; // cap-th
-    // Give the service future a beat to bump the counter.
     tokio::time::sleep(Duration::from_millis(200)).await;
     assert_eq!(
         counter.load(Ordering::Relaxed),

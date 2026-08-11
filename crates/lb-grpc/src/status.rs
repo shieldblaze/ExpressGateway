@@ -1,8 +1,5 @@
-//! gRPC status codes and HTTP status translation.
-//!
-//! Maps between gRPC status codes (0..=16) and HTTP status codes per the
-//! gRPC specification:
-//! <https://github.com/grpc/grpc/blob/master/doc/statuscodes.md>
+//! gRPC status codes (0..=16) ↔ HTTP status translation, per
+//! <https://github.com/grpc/grpc/blob/master/doc/statuscodes.md>.
 
 use crate::GrpcError;
 
@@ -46,11 +43,10 @@ pub enum GrpcStatus {
 }
 
 impl GrpcStatus {
-    /// Parse a gRPC status code from its numeric representation.
+    /// Parse a gRPC status code.
     ///
     /// # Errors
-    ///
-    /// Returns [`GrpcError::InvalidStatus`] if the code is outside 0..=16.
+    /// [`GrpcError::InvalidStatus`] outside 0..=16.
     pub const fn from_code(code: u32) -> Result<Self, GrpcError> {
         match code {
             0 => Ok(Self::Ok),
@@ -74,9 +70,7 @@ impl GrpcStatus {
         }
     }
 
-    /// Map this gRPC status to the closest HTTP status code.
-    ///
-    /// Per the gRPC spec's mapping table for gRPC-to-HTTP translation.
+    /// Map to the closest HTTP status, per the gRPC spec's table.
     #[must_use]
     pub const fn to_http_status(self) -> u16 {
         match self {
@@ -95,9 +89,7 @@ impl GrpcStatus {
         }
     }
 
-    /// Map an HTTP status code to the closest gRPC status code.
-    ///
-    /// Per the gRPC spec's mapping table for HTTP-to-gRPC translation.
+    /// Map an HTTP status to the closest gRPC status, per the gRPC spec.
     #[must_use]
     pub const fn from_http_status(status: u16) -> Self {
         match status {

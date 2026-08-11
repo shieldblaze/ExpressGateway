@@ -1,7 +1,4 @@
 //! Proof for the TLS-handshake timeout helper (SEC-2-10).
-//!
-//! Wave-2c wires the call site in `crates/lb/src/main.rs`; this
-//! test exercises the helper directly through the public API.
 
 use std::io;
 use std::pin::Pin;
@@ -13,8 +10,7 @@ use lb_security::{DEFAULT_HANDSHAKE_TIMEOUT_MS, HandshakeError, timeout_accept};
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio_rustls::TlsAcceptor;
 
-/// `AsyncRead` that always returns `Pending`. Drives the rustls
-/// state machine into a permanent park.
+/// Always `Pending`, so rustls parks forever.
 #[derive(Debug)]
 struct SilentStream;
 
@@ -63,9 +59,6 @@ fn test_acceptor() -> TlsAcceptor {
 
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn test_slow_handshake_times_out() {
-    // Plan-named headline test. A silent (no-byte) stream drives the
-    // rustls state machine into a permanent park; the helper's
-    // timeout must surface as HandshakeError::Timeout.
     let acceptor = test_acceptor();
     let err = timeout_accept(&acceptor, SilentStream, Duration::from_millis(500))
         .await
@@ -78,8 +71,7 @@ async fn test_slow_handshake_times_out() {
 
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn timeout_uses_default_budget_constant() {
-    // The default 5 s budget is exposed via the public constant so
-    // the Wave-2c call site can name it instead of hardcoding 5000.
+    // The constant exists so call sites name it instead of hardcoding 5000.
     assert_eq!(DEFAULT_HANDSHAKE_TIMEOUT_MS, 5_000);
     let acceptor = test_acceptor();
     let err = timeout_accept(

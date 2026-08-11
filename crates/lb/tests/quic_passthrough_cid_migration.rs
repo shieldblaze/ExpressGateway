@@ -1,17 +1,4 @@
 //! S15 A2 verify gate (iii) — CID-migration / NAT-rebind proof.
-//!
-//! Establish ONE passthrough flow (Initial with valid Retry token),
-//! then have the client's UDP socket rebind to a NEW ephemeral source
-//! port and continue sending short-header datagrams carrying the SAME
-//! DCID. The LB MUST route those to the same backend (the flow stays
-//! alive end-to-end), and `flows_len()` MUST stay bounded at the
-//! single-flow level (`≤ 2` dispatch entries: client-DCID + backend-
-//! SCID).
-//!
-//! This is the design §3.5 "Path migration (NAT rebind)" guarantee:
-//! Table[dcid] still hits → packet routes to the same backend;
-//! `FlowEntry.peer` updates on every recv → reverse-direction writes
-//! follow the new peer.
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -77,11 +64,7 @@ fn build_short(dcid: &[u8], n: u8) -> Vec<u8> {
     pkt
 }
 
-/// Backend that records distinct source-peer 4-tuples it ever
-/// received from. After the LB-side per-flow socket connects, the LB
-/// rebinds to ONE backend socket per flow — so the backend sees
-/// exactly ONE source 4-tuple per flow, irrespective of how many
-/// client-side ports the original sender used.
+/// Backend that records distinct source-peer 4-tuples it ever received from.
 async fn spawn_unique_peer_backend() -> (SocketAddr, Arc<Mutex<HashSet<SocketAddr>>>, Arc<AtomicU64>)
 {
     let sock = UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
@@ -144,7 +127,6 @@ async fn nat_rebind_preserves_single_flow() {
     let (listener, lb_addr, _backend, backend_peers, backend_count, cancel) =
         spawn_listener(DCID_LEN).await;
 
-    // ── Phase 1: install one flow via Initial from peer A. ──────
     let client_a = UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
         .await
         .expect("client A bind");
@@ -154,7 +136,6 @@ async fn nat_rebind_preserves_single_flow() {
     let pkt = build_initial(&dcid, &scid, &token);
     let _ = client_a.send_to(&pkt, lb_addr).await;
 
-    // Some short-header packets through peer A (pre-migration).
     for n in 0..4u8 {
         let _ = client_a.send_to(&build_short(&dcid, n), lb_addr).await;
     }
@@ -171,8 +152,6 @@ async fn nat_rebind_preserves_single_flow() {
         "backend got count={count_after_a}, expected ≥5 (1 initial + 4 short)"
     );
 
-    // ── Phase 2: NAT rebind — close client A, open client B
-    // (different ephemeral port), continue sending SAME DCID. ───
     drop(client_a);
     let client_b = UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
         .await
@@ -201,11 +180,6 @@ async fn nat_rebind_preserves_single_flow() {
          rebind packets dropped"
     );
 
-    // Backend sees exactly ONE peer 4-tuple — the LB's per-flow
-    // backend socket — irrespective of how many client-side ports
-    // the original sender used. This is by design §3.4 (the per-flow
-    // backend socket isolates the backend from client-side NAT
-    // shenanigans).
     let peers_snapshot: Vec<SocketAddr> = backend_peers.lock().unwrap().iter().copied().collect();
     assert_eq!(
         peers_snapshot.len(),

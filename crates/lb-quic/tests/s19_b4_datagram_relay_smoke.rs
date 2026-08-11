@@ -1,29 +1,7 @@
-//! SESSION 19 / Mode B — B4 MINIMAL datagram-relay smoke test
-//! (builder-1's self-check).
-//!
-//! Scope is deliberately narrow (author ≠ verifier): this proves that
-//! the B4 bidirectional raw-DATAGRAM (RFC 9221) relay carries a handful
-//! of binary datagram payloads byte-identically through the full wire
-//! path, BOTH directions —
-//!
-//!   real quiche CLIENT  ⇄  Mode B actor (`run_raw_proxy_actor_for_test`)
-//!                          ⇄  real quiche DATAGRAM-ECHO backend
-//!
-//! — i.e. client→LB→backend→LB→client. It does NOT author the
-//! flood / drop-newest / bounded-queue / R13 proofs — those are the
-//! VERIFIER's (plan §"Verification"). It mirrors the S16-B2 stream-relay
-//! rig (`s16_b2_stream_relay_smoke.rs`) but exercises datagrams instead
-//! of streams.
-//!
-//! The mechanism under test: the client sends several datagrams of
-//! varied shapes (zero-length, all-zero bytes, non-UTF8 high-bit bytes,
-//! a near-UDP-payload-max one). The actor's `relay_datagrams` forwards
-//! each verbatim client→upstream. The backend echoes every received
-//! datagram straight back. The actor relays them upstream→client. The
-//! client MUST receive a byte-identical multiset of what it sent.
-//!
-//! Driven with `--features test-gauges` so the `run_raw_proxy_actor_for_test`
-//! hook (gated `#[cfg(any(test, feature = "test-gauges"))]`) is reachable.
+//! Mode B — B4 minimal datagram-relay smoke: the bidirectional raw-DATAGRAM (RFC 9221) relay
+//! carries varied binary payloads (zero-length, all-zero, non-UTF8 high-bit, near-UDP-max)
+//! byte-identically BOTH directions. Narrow by design — the flood / drop-newest / bounded-queue
+//! proofs are the verifier's.
 
 #![cfg(feature = "test-gauges")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -51,10 +29,6 @@ const H3_ALPN: &[u8] = b"h3";
 const MAX_UDP: usize = 65_535;
 const HANDSHAKE_BUDGET: Duration = Duration::from_secs(5);
 const RELAY_BUDGET: Duration = Duration::from_secs(10);
-
-// ─────────────────────────────────────────────────────────────────────
-// Cert plumbing (mirrors s16_b2_stream_relay_smoke.rs).
-// ─────────────────────────────────────────────────────────────────────
 
 static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -111,8 +85,7 @@ fn random_scid() -> [u8; quiche::MAX_CONN_ID_LEN] {
     scid
 }
 
-/// CLIENT-facing SERVER config (the LB-as-server leg). Serves the
-/// loopback cert; advertises `h3`; negotiates DATAGRAM (RFC 9221).
+/// CLIENT-facing SERVER config: serves the loopback cert, advertises `h3`, negotiates DATAGRAM.
 fn lb_server_config(certs: &TestCerts) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
     cfg.set_application_protos(&[H3_ALPN]).unwrap();
@@ -134,7 +107,6 @@ fn lb_server_config(certs: &TestCerts) -> quiche::Config {
     cfg
 }
 
-/// The real downstream CLIENT config — verifies the LB's cert.
 fn client_config(certs: &TestCerts) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).unwrap();
     cfg.set_application_protos(&[H3_ALPN]).unwrap();
@@ -155,7 +127,6 @@ fn client_config(certs: &TestCerts) -> quiche::Config {
     cfg
 }
 
-/// The pool's per-dial CLIENT config factory (LB → backend leg).
 fn upstream_config_factory(
     ca: PathBuf,
 ) -> Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> {
@@ -180,10 +151,7 @@ fn upstream_config_factory(
     })
 }
 
-/// A throwaway BACKEND quiche server that accepts ONE connection and
-/// ECHOes any received DATAGRAM straight back (recv dgram → send the
-/// same bytes back as a datagram). This is the far end of the relay:
-/// client→LB→**backend (dgram-echo)**→LB→client.
+/// Accepts ONE connection and ECHOes any received DATAGRAM straight back.
 fn spawn_dgram_echo_backend(certs: &TestCerts) -> SocketAddr {
     let std_sock = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     std_sock.set_nonblocking(true).unwrap();
@@ -195,8 +163,8 @@ fn spawn_dgram_echo_backend(certs: &TestCerts) -> SocketAddr {
         let mut in_buf = vec![0u8; MAX_UDP];
         let mut out_buf = vec![0u8; MAX_UDP];
         let mut rd = vec![0u8; MAX_UDP];
-        // Datagrams the backend received and still owes back to the peer
-        // (echoed FIFO; a full send queue retries next turn).
+        // Datagrams received and still owed back (echoed FIFO; a full send queue retries next
+        // turn).
         let mut echo_q: std::collections::VecDeque<Vec<u8>> = std::collections::VecDeque::new();
         let mut conn: Option<quiche::Connection> = None;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
@@ -206,7 +174,6 @@ fn spawn_dgram_echo_backend(certs: &TestCerts) -> SocketAddr {
                 return;
             }
             if let Some(c) = conn.as_mut() {
-                // 1) Drain received datagrams into the echo queue.
                 loop {
                     match c.dgram_recv(&mut rd) {
                         Ok(n) => echo_q.push_back(rd.get(..n).unwrap_or(&[]).to_vec()),
@@ -214,8 +181,7 @@ fn spawn_dgram_echo_backend(certs: &TestCerts) -> SocketAddr {
                         Err(_) => break,
                     }
                 }
-                // 2) Echo them back, front-first; a full send queue (Done)
-                //    stops this turn and retries next.
+                // 2) Echo back front-first; a full send queue (Done) stops this turn and retries.
                 while let Some(front) = echo_q.front() {
                     match c.dgram_send(front) {
                         Ok(()) => {
@@ -223,13 +189,11 @@ fn spawn_dgram_echo_backend(certs: &TestCerts) -> SocketAddr {
                         }
                         Err(quiche::Error::Done) => break,
                         Err(_) => {
-                            // Drop an un-forwardable datagram (e.g. too
-                            // large for the peer) and keep going.
+                            // Drop an un-forwardable datagram (e.g. too large for the peer).
                             let _ = echo_q.pop_front();
                         }
                     }
                 }
-                // 3) Flush outbound.
                 loop {
                     match c.send(&mut out_buf) {
                         Ok((n, info)) => {
@@ -300,11 +264,8 @@ async fn try_recv_one(
     }
 }
 
-/// The datagrams the client sends. Varied shapes to prove verbatim,
-/// binary-safe, zero-length-preserving relay. Each is sized to fit the
-/// negotiated datagram-frame writable len (the 1350 UDP-payload configs
-/// give ~1300 writable bytes), so the "large" one is ~1200 bytes — large
-/// but never refused with BufferTooShort.
+/// Varied shapes proving verbatim, binary-safe, zero-length-preserving relay. Each is sized to
+/// fit the negotiated writable length, so even the large one is never refused `BufferTooShort`.
 fn datagram_set() -> Vec<Vec<u8>> {
     vec![
         Vec::new(),                                           // zero-length
@@ -318,17 +279,14 @@ fn datagram_set() -> Vec<Vec<u8>> {
     ]
 }
 
-/// THE B4 self-check: a varied set of binary datagrams survives
-/// client→LB→backend(dgram-echo)→LB→client byte-identically (as a
-/// multiset — datagrams are unordered).
+/// THE B4 self-check: a varied set of binary datagrams survives the full path byte-identically
+/// as a MULTISET — datagrams are unordered.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn s19_b4_datagrams_round_trip_byte_identical() {
     let certs = generate_loopback_certs();
 
-    // 1) Real datagram-echo backend.
     let backend_addr = spawn_dgram_echo_backend(&certs);
 
-    // 2) Shared LB listener socket (the "server" leg).
     let lb_socket = Arc::new(
         UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
             .await
@@ -336,7 +294,6 @@ async fn s19_b4_datagrams_round_trip_byte_identical() {
     );
     let lb_local = lb_socket.local_addr().unwrap();
 
-    // 3) Real downstream CLIENT.
     let client_socket = Arc::new(
         UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
             .await
@@ -363,7 +320,6 @@ async fn s19_b4_datagrams_round_trip_byte_identical() {
     )
     .unwrap();
 
-    // 4) Inline-drive the client⇄LB legs to established.
     let mut out = vec![0u8; MAX_UDP];
     let mut in_buf = vec![0u8; MAX_UDP];
     let deadline = tokio::time::Instant::now() + HANDSHAKE_BUDGET;
@@ -392,8 +348,6 @@ async fn s19_b4_datagrams_round_trip_byte_identical() {
     }
     assert_eq!(client_conn.application_proto(), H3_ALPN);
 
-    // 5) Queue the datagrams on the client BEFORE handing off, so they are
-    //    buffered in quiche; the client driver below keeps flushing.
     let sent = datagram_set();
     for d in &sent {
         client_conn
@@ -402,7 +356,6 @@ async fn s19_b4_datagrams_round_trip_byte_identical() {
     }
     flush(&mut client_conn, &client_socket, &mut out).await;
 
-    // 6) Forwarder: drain the shared LB socket into the actor's inbound.
     let (tx, rx) = mpsc::channel::<InboundPacket>(64);
     let cancel = CancellationToken::new();
     let fwd_socket = Arc::clone(&lb_socket);
@@ -428,8 +381,6 @@ async fn s19_b4_datagrams_round_trip_byte_identical() {
         }
     });
 
-    // 7) Client driver: keep the client live (flush + recv) and collect
-    //    echoed datagrams until it has received `expected_count` of them.
     let expected_count = sent.len();
     let (done_tx, done_rx) = tokio::sync::oneshot::channel::<Vec<Vec<u8>>>();
     let client_cancel = cancel.clone();
@@ -452,7 +403,6 @@ async fn s19_b4_datagrams_round_trip_byte_identical() {
                 Duration::from_millis(10),
             )
             .await;
-            // Pull echoed datagrams.
             loop {
                 match client_conn.dgram_recv(&mut recv_buf) {
                     Ok(n) => received.push(recv_buf.get(..n).unwrap_or(&[]).to_vec()),
@@ -469,7 +419,6 @@ async fn s19_b4_datagrams_round_trip_byte_identical() {
         }
     });
 
-    // 8) The Mode B backend.
     let pool = QuicUpstreamPool::new(
         QuicPoolConfig::default(),
         upstream_config_factory(certs.ca.clone()),
@@ -478,8 +427,6 @@ async fn s19_b4_datagrams_round_trip_byte_identical() {
         pool,
         addr: backend_addr,
         sni: TEST_SNI.to_string(),
-        // B6 (R14/R12): caps now carried on RawBackend; the const
-        // defaults keep these tests byte-identical in behaviour.
         dgram_queue_cap: lb_quic::DGRAM_QUEUE_CAP,
         max_relay_streams: lb_quic::MAX_RELAY_STREAMS,
     };
@@ -496,14 +443,12 @@ async fn s19_b4_datagrams_round_trip_byte_identical() {
         h2_backend: None,
         raw_quic_backend: Some(raw_backend),
         quic_modeb_metrics: None,
-        // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
         ws_enabled: false,
         ws_relay_launcher: None,
         max_requests_per_h3_connection: 0,
         h3_recycle_metrics: None,
     };
 
-    // 9) Run the actor; wait for the echoed datagrams, then cancel.
     let actor = tokio::spawn(run_raw_proxy_actor_for_test(params));
 
     let received = tokio::time::timeout(RELAY_BUDGET, done_rx)
@@ -511,8 +456,7 @@ async fn s19_b4_datagrams_round_trip_byte_identical() {
         .expect("client must receive the echoed datagrams before the budget")
         .expect("client driver must deliver the received datagrams");
 
-    // ── THE ASSERTION: every sent datagram came back byte-identical.
-    // Datagrams are unordered, so compare as a multiset.
+    // Every sent datagram came back byte-identical; datagrams are unordered, so compare multisets.
     assert_eq!(
         received.len(),
         sent.len(),
@@ -535,15 +479,13 @@ async fn s19_b4_datagrams_round_trip_byte_identical() {
         "no unexpected/extra datagrams should remain"
     );
 
-    // Sanity: the zero-length datagram in particular round-tripped (it is
-    // the one most likely to be silently dropped by a naive relay).
+    // Sanity: the zero-length datagram round-tripped — the one a naive relay silently drops.
     let lens: HashSet<usize> = sent.iter().map(Vec::len).collect();
     assert!(
         lens.contains(&0),
         "fixture must include a zero-length datagram"
     );
 
-    // Tidy up.
     cancel.cancel();
     forwarder.abort();
     let _ = client_driver.await;

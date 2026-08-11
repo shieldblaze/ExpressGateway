@@ -1,14 +1,9 @@
-//! Ring-based consistent hashing with virtual nodes.
-//!
-//! Each backend is placed at multiple positions (virtual nodes) on a hash ring.
-//! Keys are mapped to the ring and routed to the nearest backend clockwise.
+//! Ring-based consistent hashing; keys route clockwise to the nearest virtual node.
 
 use crate::{Backend, BalancerError, KeyedLoadBalancer, backend_identity_hash};
 
-/// Number of virtual nodes per backend on the ring.
 const VNODES_PER_BACKEND: u32 = 150;
 
-/// A point on the hash ring: (hash value, backend index).
 #[derive(Debug, Clone)]
 struct RingPoint {
     hash: u64,
@@ -25,11 +20,7 @@ pub struct RingHash {
 }
 
 impl RingHash {
-    /// Build a new hash ring for the given backends.
-    ///
-    /// # Errors
-    ///
-    /// Returns `BalancerError::NoBackends` if the backend slice is empty.
+    /// Build the ring.
     pub fn new(backends: &[Backend]) -> Result<Self, BalancerError> {
         if backends.is_empty() {
             return Err(BalancerError::NoBackends);
@@ -56,17 +47,14 @@ impl RingHash {
         })
     }
 
-    /// Hash a backend id with a virtual node index using multiply-shift.
     fn hash_vnode(id: &str, vnode: u32) -> u64 {
         let mut h: u64 = 0xcbf2_9ce4_8422_2325; // FNV offset basis
         for byte in id.bytes() {
             h ^= u64::from(byte);
             h = h.wrapping_mul(0x0100_0000_01b3); // FNV prime
         }
-        // Mix in the vnode number.
         h ^= u64::from(vnode);
         h = h.wrapping_mul(0x517c_c1b7_2722_0a95);
-        // Finalizer
         h ^= h >> 33;
         h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
         h ^= h >> 33;
@@ -75,7 +63,6 @@ impl RingHash {
         h
     }
 
-    /// Hash a key value.
     const fn hash_key(key: u64) -> u64 {
         let mut h = key;
         h ^= h >> 33;
@@ -103,7 +90,6 @@ impl KeyedLoadBalancer for RingHash {
 
         let h = Self::hash_key(key);
 
-        // Binary search for the first ring point >= h.
         let pos = match self.ring.binary_search_by_key(&h, |p| p.hash) {
             Ok(i) => i,
             Err(i) => {
@@ -161,7 +147,7 @@ mod tests {
         ];
         let ring = RingHash::new(&backends_orig).unwrap();
 
-        // Replace ring-backend-1 with ring-backend-X at the same index.
+        // Same count, different identity.
         let backends_swapped = vec![
             Backend::new("ring-backend-0", 1),
             Backend::new("ring-backend-X", 1),

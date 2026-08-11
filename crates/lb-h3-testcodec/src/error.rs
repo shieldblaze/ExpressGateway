@@ -1,7 +1,6 @@
 //! Error types for the HTTP/3 codec.
 
-/// Errors that can occur during HTTP/3 frame parsing, QPACK processing,
-/// or security mitigation checks.
+/// Frame-parsing, QPACK, and security-detector errors.
 #[derive(Debug, thiserror::Error)]
 pub enum H3Error {
     /// The input buffer does not contain a complete frame or element.

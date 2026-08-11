@@ -4,8 +4,7 @@ use rand::{Rng, RngExt};
 
 use crate::{Backend, BalancerError, LoadBalancer};
 
-/// Weighted random balancer: picks a backend with probability proportional
-/// to its weight.
+/// Picks with probability proportional to weight.
 #[derive(Debug)]
 pub struct WeightedRandom<R: Rng> {
     rng: R,
@@ -38,8 +37,7 @@ impl<R: Rng + Send + Sync> LoadBalancer for WeightedRandom<R> {
             dart -= w;
         }
 
-        // Fallback: should not be reached if weights are correct, but we never
-        // panic in non-test code. Return last backend.
+        // Unreachable with correct weights; the crate denies panics.
         Ok(backends.len().saturating_sub(1))
     }
 }
@@ -72,7 +70,6 @@ mod tests {
                 *c += 1;
             }
         }
-        // Expected: ~7000, ~2000, ~1000
         assert!(counts.first().copied().unwrap_or(0) > 6000);
         assert!(counts.get(1).copied().unwrap_or(0) > 1200);
         assert!(counts.get(2).copied().unwrap_or(0) > 400);

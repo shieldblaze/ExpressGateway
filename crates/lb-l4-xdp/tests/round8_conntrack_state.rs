@@ -1,20 +1,10 @@
 //! ROUND8-L4-02 proof: TCP-state-aware conntrack pruning.
 //!
-//! Reference: Cilium `bpf/lib/conntrack.h` lesson — pure LRU is
-//! vulnerable to a sliding-RST replay (an adversary spraying RST/FIN
-//! packets across already-evicted flows fills the LRU's young end and
-//! pushes live flows toward eviction). Pruning on RST and on the
-//! FIN-ACK terminating sequence keeps the table aligned to actual
-//! TCP-FSM reality.
-//!
-//! The eBPF code path is unreachable in CI; this file models the BPF
-//! state-machine over the userspace [`ConntrackTable`] and the
-//! [`stats_export::StatSlot`] vocabulary the BPF program uses, so any
-//! drift between the userspace contract and the BPF source surfaces
-//! as a test failure.
-//!
-//! NUM_SLOTS bumps with this commit from 13 to 15 to make room for
-//! `StatSlot::CtRstPrune` (13) and `StatSlot::CtFinPrune` (14).
+//! Cilium `bpf/lib/conntrack.h` lesson: pure LRU is vulnerable to a sliding-RST replay (an
+//! adversary spraying RST/FIN across already-evicted flows fills the LRU's young end and pushes
+//! live flows toward eviction). The eBPF path is unreachable in CI, so this models the BPF state
+//! machine over the userspace table + the `StatSlot` vocabulary, turning any drift between the two
+//! into a test failure.
 
 #![cfg(target_os = "linux")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
@@ -22,24 +12,19 @@
 use lb_l4_xdp::stats_export::{NUM_SLOTS, StatSlot};
 use lb_l4_xdp::{ConntrackTable, FlowKey};
 
-// TCP flag bits as they appear on the wire — same constants the BPF
-// program uses (see `crates/lb-l4-xdp/ebpf/src/main.rs` TCP_FLAG_*).
+// TCP flag bits as they appear on the wire — the same constants the BPF program uses
+// (`ebpf/src/main.rs` TCP_FLAG_*).
 const FIN: u8 = 0x01;
 const RST: u8 = 0x04;
 const ACK: u8 = 0x10;
 const SYN: u8 = 0x02;
 
-/// Tiny stand-in for the BPF action enum. The BPF program returns one
-/// of `XDP_PASS` / `XDP_TX` / `XDP_DROP`; we only care about the
-/// distinguishability of PASS vs TX in this test.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Action {
     Pass,
     Tx,
 }
 
-/// Per-slot counter set the eBPF program updates. We model only the
-/// slots this fix touches.
 #[derive(Debug, Default)]
 struct Stats {
     rst_prune: u64,
@@ -47,41 +32,35 @@ struct Stats {
     ct_hit: u64,
 }
 
-/// Simulator of the eBPF program's TCP path: lookup + state-aware
-/// prune (matches the inline code in `handle_ipv4`). Returns the
-/// XDP action the BPF program would have returned.
+/// Simulator of the eBPF program's TCP path: lookup + state-aware prune (matches the inline code in
+/// `handle_ipv4`).
 fn sim_tcp_path(
     table: &mut ConntrackTable,
     stats: &mut Stats,
     flow: &FlowKey,
     flags: u8,
 ) -> Action {
-    // 1. RST short-circuit: prune and PASS the original packet so the
-    //    network stack sees the RST end-to-end.
+    // 1. RST short-circuit: prune and PASS so the stack sees the RST end-to-end.
     if (flags & RST) != 0 {
         table.remove(flow);
         stats.rst_prune += 1;
         return Action::Pass;
     }
 
-    // 2. Lookup. Miss -> PASS so userspace populates the entry.
     let backend = match table.lookup(flow) {
         Some(b) => b,
         None => return Action::Pass,
     };
     stats.ct_hit += 1;
 
-    // 3. Sentinel guard (ROUND8-L4-01); modelled as "any backend index
-    //    is valid" in this test — the L4-01 test covers the sentinel
-    //    case separately.
+    // 3. Sentinel guard (ROUND8-L4-01) is covered by the L4-01 test; modelled here as "any backend
+    //    index is valid".
     let _ = backend;
 
-    // 4. Rewrite -> TX.
     let action = Action::Tx;
 
-    // 5. FIN-ACK prune AFTER the rewrite. The last FIN-ACK is
-    //    forwarded normally; the slot is freed so a replay can't
-    //    keep an already-closed flow alive.
+    // 5. FIN-ACK prune AFTER the rewrite: the last FIN-ACK is forwarded, but the slot is freed so a
+    //    replay cannot keep a closed flow alive.
     if (flags & FIN) != 0 && (flags & ACK) != 0 {
         table.remove(flow);
         stats.fin_prune += 1;
@@ -144,9 +123,7 @@ fn fin_ack_prunes_after_tx() {
 
 #[test]
 fn fin_without_ack_does_not_prune() {
-    // Cilium's lesson is FIN-ACK specifically — a plain FIN (without
-    // ACK) is unusual and we don't prune on it; the FSM-aware version
-    // is Pillar 4b-3.
+    // Cilium's lesson is FIN-ACK specifically — a plain FIN is not pruned on.
     let mut table = ConntrackTable::new();
     let mut stats = Stats::default();
     let f = flow(40002);
@@ -174,9 +151,8 @@ fn syn_ack_does_not_prune() {
 
 #[test]
 fn rst_replay_only_evicts_matching_flow() {
-    // The defensive property: an RST for flow A must not affect
-    // flow B's conntrack entry. This is what guards live flows
-    // against a sliding-RST replay attack.
+    // An RST for flow A must not affect flow B — this is what guards live flows against the
+    // sliding-RST replay.
     let mut table = ConntrackTable::new();
     let mut stats = Stats::default();
     let a = flow(50000);
@@ -196,8 +172,7 @@ fn rst_replay_only_evicts_matching_flow() {
 
 #[test]
 fn rst_for_untracked_flow_is_no_op_on_table() {
-    // BPF's CONNTRACK.remove returns Err for a missing key; the prune
-    // path swallows the result so the table is unaffected.
+    // CONNTRACK.remove returns Err for a missing key; the prune path swallows it.
     let mut table = ConntrackTable::new();
     let mut stats = Stats::default();
     let f = flow(50002);
@@ -210,23 +185,14 @@ fn rst_for_untracked_flow_is_no_op_on_table() {
 
 #[test]
 fn stat_slot_indices_for_prune_slots_are_stable() {
-    // Wire-stability: operators key Prom recording rules off the slot
-    // index. The L4-02 commit is the source of truth for slot 13/14.
+    // Wire-stability: operators key Prom recording rules off the slot index; the L4-02 commit is
+    // the source of truth for slot 13/14.
     assert_eq!(StatSlot::CtRstPrune as usize, 13);
     assert_eq!(StatSlot::CtFinPrune as usize, 14);
-    // Sanity that the NUM_SLOTS read-loop ceiling covers the prune slots.
-    // Compile-time `const _: () = assert!(NUM_SLOTS >= 15)` would also
-    // work but the const path masks an upgrade footgun (a hand-edited
-    // NUM_SLOTS without a matching enum addition).
-    //
-    // ROUND8-L4-02/08: L4-03 appended `StatSlot::NewFlowRateCap` (15) so
-    // `CtFinPrune` (14) is no longer the LAST kernel slot — the previous
-    // `CtFinPrune + 1 == NUM_SLOTS` literal regressed. The load-bearing
-    // invariant is unchanged: every prune slot must fall inside the
-    // `read_stats()` `0..NUM_SLOTS` loop, and the last kernel slot must
-    // be the last STAT_*-backed enum variant (`NewFlowRateCap`). Both
-    // are expressed relative to the enum so the next slot add cannot
-    // silently break the read loop without tripping this test.
+    // Every prune slot must fall inside the `read_stats()` `0..NUM_SLOTS` loop, and the last kernel
+    // slot must be the last STAT_*-backed variant. Both are expressed RELATIVE to the enum (not a
+    // literal) so the next slot addition cannot silently break the read loop — an earlier
+    // `CtFinPrune + 1 == NUM_SLOTS` literal regressed exactly that way.
     assert!(
         (StatSlot::CtRstPrune as usize) < NUM_SLOTS,
         "CtRstPrune slot must be inside the read_stats loop"

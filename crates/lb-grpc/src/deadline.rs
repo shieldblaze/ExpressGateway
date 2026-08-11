@@ -1,9 +1,5 @@
-//! gRPC deadline (timeout) propagation.
-//!
-//! Parses and formats the `grpc-timeout` header value per the gRPC
-//! specification: `Timeout = 1*DIGIT TimeUnit` where `TimeUnit` is one of
-//! `H` (hours), `M` (minutes), `S` (seconds), `m` (milliseconds),
-//! `u` (microseconds), `n` (nanoseconds).
+//! gRPC deadline propagation: `Timeout = 1*DIGIT TimeUnit`, where `TimeUnit`
+//! is `H`/`M`/`S`/`m`/`u`/`n`.
 
 use crate::GrpcError;
 
@@ -11,27 +7,15 @@ use crate::GrpcError;
 pub struct GrpcDeadline;
 
 impl GrpcDeadline {
-    /// Parse a `grpc-timeout` header value into milliseconds.
-    ///
-    /// # Examples
-    ///
-    /// - `"5S"` -> 5000 ms
-    /// - `"100m"` -> 100 ms
-    /// - `"1H"` -> 3,600,000 ms
-    /// - `"2M"` -> 120,000 ms
-    /// - `"1000000u"` -> 1000 ms
-    /// - `"1000000000n"` -> 1000 ms
+    /// Parse a `grpc-timeout` value into milliseconds.
     ///
     /// # Errors
-    ///
-    /// Returns [`GrpcError::InvalidTimeout`] if the value does not match the
-    /// expected format.
+    /// [`GrpcError::InvalidTimeout`] if it does not match the grammar.
     pub fn parse_timeout(value: &str) -> Result<u64, GrpcError> {
         if value.is_empty() {
             return Err(GrpcError::InvalidTimeout(value.to_owned()));
         }
 
-        // The last character is the unit; everything before it is the digit string.
         let (digits_str, unit_char) = value.split_at(value.len() - 1);
 
         if digits_str.is_empty() {
@@ -42,9 +26,7 @@ impl GrpcDeadline {
             .parse()
             .map_err(|_| GrpcError::InvalidTimeout(value.to_owned()))?;
 
-        // Convert to milliseconds based on unit.
-        // For sub-millisecond units (microseconds, nanoseconds), use ceiling
-        // division so that a non-zero value never truncates to 0ms.
+        // CEILING division: a non-zero sub-ms value must never become 0 ms.
         let ms = match unit_char {
             "H" => digits.saturating_mul(3_600_000),
             "M" => digits.saturating_mul(60_000),
@@ -58,10 +40,8 @@ impl GrpcDeadline {
         Ok(ms)
     }
 
-    /// Format a millisecond timeout into a `grpc-timeout` header value.
-    ///
-    /// Uses the most human-readable unit that represents the value exactly when
-    /// possible. Falls back to milliseconds.
+    /// Format milliseconds as a `grpc-timeout` value, preferring the coarsest
+    /// unit that divides evenly.
     #[must_use]
     pub fn format_timeout(timeout_ms: u64) -> String {
         if timeout_ms == 0 {
@@ -81,9 +61,7 @@ impl GrpcDeadline {
         format!("{timeout_ms}m")
     }
 
-    /// Calculate remaining timeout given the original timeout and elapsed time.
-    ///
-    /// Returns `None` if the deadline has already passed (elapsed >= original).
+    /// Remaining timeout, or `None` once the deadline has passed.
     #[must_use]
     pub const fn remaining(original_ms: u64, elapsed_ms: u64) -> Option<u64> {
         if elapsed_ms >= original_ms {

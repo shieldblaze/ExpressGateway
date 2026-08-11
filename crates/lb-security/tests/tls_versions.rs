@@ -1,19 +1,7 @@
-//! PROTO-2-14 — `tls13_only` policy knob proof tests.
-//!
-//! `build_server_config_with_policy(_, tls13_only = true)` must
-//! produce a rustls `ServerConfig` that refuses TLS 1.2 ClientHellos.
-//! We can't easily fake a TLS 1.2 ClientHello bit-pattern in a unit
-//! test without dragging a TLS 1.2 client implementation in, so the
-//! proof shape is: invoke `build_server_config_with_policy` with
-//! `tls13_only = true` and run a live TLS 1.2-only client against a
-//! listener built from it — the connection must fail with a
-//! protocol-version alert. Conversely, `tls13_only = false` must
-//! accept the default rustls 1.2/1.3 set.
-//!
-//! Sec was OK with the single-line touch in `ticket.rs`; the new
-//! `build_server_config_with_policy` shadows the unchanged
-//! `build_server_config` shim so the rest of the codebase doesn't
-//! see a rename.
+//! PROTO-2-14 — `tls13_only` proof tests. The shape is a live TLS 1.2-only client against a
+//! `tls13_only = true` listener, because a faked ClientHello would need a whole TLS 1.2 client.
+//! `build_server_config_with_policy` shadows the unchanged `build_server_config` shim so the rest
+//! of the codebase does not see a rename.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -42,11 +30,8 @@ fn default_config_lists_tls12_and_tls13() {
     let (chain, key) = self_signed();
     let cfg = build_server_config_with_policy(fresh_rotator(), chain, key, &[], false)
         .expect("default config builds");
-    // rustls 0.23 exposes `versions` on the `ServerConfig` via the
-    // builder lifecycle. After construction, the negotiated set is
-    // not directly readable on the final `ServerConfig`, but
-    // construction with `with_safe_default_protocol_versions`
-    // succeeds (asserted above) implies both 1.2 and 1.3 are wired.
+    // The negotiated version set is not readable off a built `ServerConfig`, so a successful
+    // `with_safe_default_protocol_versions` is the only available proxy for "1.2 and 1.3 wired".
     let _ = cfg;
 }
 
@@ -55,16 +40,11 @@ fn tls13_only_config_builds_without_tls12() {
     let (chain, key) = self_signed();
     let cfg = build_server_config_with_policy(fresh_rotator(), chain, key, &[], true)
         .expect("tls13_only config builds");
-    // Construction with `with_protocol_versions(&[&TLS13])` succeeds
-    // and produces a usable config; the 1.2 rejection happens at
-    // handshake time. The `test_tls13_only_rejects_tls12` test below
-    // exercises the wire-level rejection.
+    // Construction cannot show the rejection — that happens at handshake time, which
+    // `test_tls13_only_rejects_tls12` covers.
     let _ = cfg;
 }
 
-/// Drive an in-memory TLS 1.2-only client against a server built with
-/// `tls13_only = true` and assert the handshake fails with a
-/// protocol-version alert.
 #[tokio::test]
 async fn test_tls13_only_rejects_tls12() {
     use tokio::io::AsyncWriteExt;
@@ -84,12 +64,10 @@ async fn test_tls13_only_rejects_tls12() {
     let acceptor = TlsAcceptor::from(server_cfg);
     let server_task = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
-        // The accept must fail — the TLS 1.2 client cannot proceed.
         let result = acceptor.accept(stream).await;
         result.err().is_some()
     });
 
-    // Build a TLS 1.2-only client config.
     let mut root = rustls::RootCertStore::empty();
     for c in &chain {
         root.add(c.clone()).unwrap();

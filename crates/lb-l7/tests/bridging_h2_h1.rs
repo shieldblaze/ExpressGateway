@@ -19,22 +19,17 @@ fn test_bridge_h2_to_h1() {
         trailers: Vec::new(),
     };
     let bridged = bridge.bridge_request(&req).unwrap();
-    // :method extracted into method field
     assert_eq!(bridged.method, "GET");
-    // :path extracted into uri field
     assert_eq!(bridged.uri, "/resource");
-    // :authority becomes Host header
     assert!(
         bridged
             .headers
             .iter()
             .any(|(k, v)| k == "host" && v == "example.com")
     );
-    // Pseudo-headers removed from headers list
     assert!(!bridged.headers.iter().any(|(k, _)| k == ":method"));
     assert!(!bridged.headers.iter().any(|(k, _)| k == ":path"));
     assert!(!bridged.headers.iter().any(|(k, _)| k == ":scheme"));
     assert!(!bridged.headers.iter().any(|(k, _)| k == ":authority"));
-    // Regular headers preserved
     assert!(bridged.headers.iter().any(|(k, _)| k == "accept"));
 }

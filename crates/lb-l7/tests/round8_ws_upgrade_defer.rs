@@ -1,24 +1,7 @@
-//! ROUND8-L7-01 + ROUND8-OPS-06 proof.
-//!
-//! Reference: Pingora GHSA-xq2h-p299-vjwv / Envoy GHSA-rj35-4m94-77jh
-//! (both CVSS 9.3) — a proxy MUST NOT emit `101 Switching Protocols`
-//! to the client until the *upstream* WebSocket handshake has
-//! completed. The pre-fix `handle_ws_upgrade` returned `101`
-//! synchronously and dialed the upstream in a detached task.
-//!
-//! Invariants asserted:
-//!   * `client_sees_502_when_backend_rejects_ws` — backend answers the
-//!     WS handshake with `200 OK` (non-101); the client receives
-//!     `502`, the wire NEVER carries `101`.
-//!   * `client_sees_504_on_dial_timeout` — backend never answers;
-//!     client sees `504`, no `101`.
-//!   * `no_smuggled_request_forwarded_on_failure` — bytes pipelined
-//!     after the upgrade request must not reach the backend when the
-//!     upstream handshake is refused (the Pingora reproducer shape).
-//!   * `upstream_receives_child_traceparent` — the inner request to
-//!     the backend carries a `traceparent` whose trace-id == the
-//!     client's and whose parent-id != the client's verbatim
-//!     (ROUND8-OPS-06: the LB span is the new parent).
+//! ROUND8-L7-01 (Pingora GHSA-xq2h-p299-vjwv / Envoy GHSA-rj35-4m94-77jh, CVSS
+//! 9.3) — no `101` until the UPSTREAM handshake completes. Also asserts bytes
+//! pipelined after a refused upgrade never reach the backend (the Pingora
+//! reproducer shape) and the ROUND8-OPS-06 `traceparent` re-parenting.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -35,8 +18,6 @@ use tokio::net::{TcpListener, TcpStream};
 
 const CLIENT_TRACEPARENT: &str = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
 
-/// Spawn the H1+WS proxy on an ephemeral loopback port pointed at
-/// `backend_addr`. Returns the proxy's listen address.
 async fn spawn_proxy(backend_addr: SocketAddr, header_timeout: Duration) -> SocketAddr {
     let pool = TcpPool::new(
         PoolConfig::default(),
@@ -70,7 +51,6 @@ async fn spawn_proxy(backend_addr: SocketAddr, header_timeout: Duration) -> Sock
     addr
 }
 
-/// A WS handshake request the upgrade detector accepts.
 fn ws_request_bytes(host: &str, extra_headers: &str) -> Vec<u8> {
     format!(
         "GET /chat HTTP/1.1\r\n\
@@ -106,8 +86,7 @@ async fn read_response_head(client: &mut TcpStream) -> String {
 
 #[tokio::test]
 async fn client_sees_502_when_backend_rejects_ws() {
-    // Faux backend: consume the inbound handshake bytes, answer 200
-    // (a deliberate non-101) and close.
+    // Answers a deliberate 200 (non-101).
     let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let backend_addr = backend.local_addr().unwrap();
     tokio::spawn(async move {
@@ -139,8 +118,7 @@ async fn client_sees_502_when_backend_rejects_ws() {
 
 #[tokio::test]
 async fn client_sees_504_on_dial_timeout() {
-    // Backend accepts the TCP connection but never answers the WS
-    // handshake — the bounded header timeout must elapse → 504.
+    // Accepts TCP but never answers: the header timeout must elapse → 504.
     let stuck_backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let backend_addr = stuck_backend.local_addr().unwrap();
     tokio::spawn(async move {
@@ -165,10 +143,8 @@ async fn client_sees_504_on_dial_timeout() {
 
 #[tokio::test]
 async fn no_smuggled_request_forwarded_on_failure() {
-    // The backend records every byte it ever receives. The client
-    // pipelines a smuggled request after the upgrade headers. With the
-    // upstream handshake refused, the smuggled `/smuggled` line must
-    // never appear in what the backend read.
+    // With the handshake refused, the pipelined `/smuggled` line must never
+    // appear in what the backend received.
     let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let backend_addr = backend.local_addr().unwrap();
     let seen: Arc<tokio::sync::Mutex<Vec<u8>>> = Arc::new(tokio::sync::Mutex::new(Vec::new()));
@@ -205,10 +181,8 @@ async fn no_smuggled_request_forwarded_on_failure() {
 
 #[tokio::test]
 async fn upstream_receives_child_traceparent() {
-    // The backend records its inbound handshake request so we can
-    // assert the propagated `traceparent`. We answer 200 (non-101) so
-    // the proxy still drives the full upstream handshake (where the
-    // header is injected) before returning 502 to the client.
+    // 200 (non-101) so the proxy still drives the full upstream handshake,
+    // which is where the header is injected.
     let backend = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let backend_addr = backend.local_addr().unwrap();
     let seen: Arc<tokio::sync::Mutex<Vec<u8>>> = Arc::new(tokio::sync::Mutex::new(Vec::new()));

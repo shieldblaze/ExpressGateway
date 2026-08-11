@@ -1,22 +1,12 @@
-//! ROUND8-L4-12: real RTM_GETLINK XDP prog-id query.
+//! ROUND8-L4-12: real RTM_GETLINK XDP prog-id query (Linux-only).
 //!
-//! Closes the EBUSY-on-redeploy hazard (finding ROUND8-L4-12, primary
-//! production failure mode A): on a redeploy onto an interface that
-//! still has our previous XDP program attached, a plain attach fails
-//! `EBUSY`. To replace atomically (or to *verify* a detach actually
-//! removed the program) the loader must know the kernel-visible
-//! `prog_id` currently bound to the interface's `IFLA_XDP` attribute.
+//! Closes the EBUSY-on-redeploy hazard: a plain attach onto an interface still holding our previous
+//! program fails `EBUSY`, so replacing it — or VERIFYING a detach really removed it —
+//! requires the kernel-visible `prog_id` bound to `IFLA_XDP`. aya 0.13.1 exposes no public
+//! `bpf_xdp_query`, so the query goes over a raw `AF_NETLINK`/`NETLINK_ROUTE` socket, the same
+//! thing `ip link show` does.
 //!
-//! aya 0.13.1 exposes no public `bpf_xdp_query` wrapper (same API
-//! blocker family as ROUND8-L4-05). Rather than ship a `prog_id: None`
-//! stub, we issue the query ourselves over a raw `AF_NETLINK` /
-//! `NETLINK_ROUTE` socket — exactly what `ip link show` /
-//! `bpftool net` do under the hood. The only dependency is `libc`,
-//! which is already a workspace dependency (no new dep).
-//!
-//! Wire format (kernel UAPI, stable since Linux 4.13 when `IFLA_XDP`
-//! landed):
-//!
+//! Wire format (kernel UAPI, stable since Linux 4.13):
 //! ```text
 //! RTM_GETLINK request:
 //!   nlmsghdr { len, type=RTM_GETLINK, flags=REQUEST, seq, pid=0 }
@@ -27,25 +17,19 @@
 //!   ifinfomsg { ifi_index, ... }
 //!   rtattr*  ...
 //!     rtattr IFLA_XDP (43) — NESTED container
-//!       rtattr IFLA_XDP_PROG_ID (4) -> u32   (only present when a
-//!                                             prog is attached)
+//!       rtattr IFLA_XDP_PROG_ID (4) -> u32   (only when attached)
 //!       rtattr IFLA_XDP_ATTACHED (2) -> u8   (XDP mode)
 //! ```
 //!
-//! [`parse_getlink_response`] / [`parse_ifinfo_payload`] are pure,
-//! allocation-free, panic-free (no slice indexing — every read goes
-//! through `.get()`), so the byte-parse proof in
-//! `tests/round8_netlink_xdp_query.rs` exercises them against a
-//! real-shaped blob with no `CAP_NET_ADMIN`. [`query_xdp_prog_id`] is
-//! the live production caller.
+//! [`parse_getlink_response`] / [`parse_ifinfo_payload`] are pure, allocation-free and panic-free
+//! (no slice indexing — every read goes through `.get()`), so the byte-parse proof in
+//! `tests/round8_netlink_xdp_query.rs` runs against a real-shaped blob without `CAP_NET_ADMIN`.
 
 #![cfg(target_os = "linux")]
 #![allow(unsafe_code)]
 
 use std::io;
 use std::mem::size_of;
-
-// ---- kernel UAPI constants (stable; libc only exposes a subset) ----
 
 /// `IFLA_XDP` outer attribute type (kernel `if_link.h`).
 const IFLA_XDP: u16 = 43;
@@ -60,8 +44,7 @@ const NLMSGHDR_LEN: usize = 16;
 const IFINFOMSG_LEN: usize = 16;
 const RTATTR_HDR_LEN: usize = 4;
 
-/// `XDP_ATTACHED_NONE` (kernel `if_link.h`): `IFLA_XDP_ATTACHED == 0`
-/// means no program attached.
+/// `XDP_ATTACHED_NONE` (kernel `if_link.h`): `IFLA_XDP_ATTACHED == 0` means no program attached.
 pub const XDP_ATTACHED_NONE: u8 = 0;
 
 #[inline]
@@ -69,9 +52,8 @@ const fn align(len: usize, to: usize) -> usize {
     (len + to - 1) & !(to - 1)
 }
 
-/// Slice-safe little helpers — every multibyte read goes through
-/// `.get()` so a hostile / truncated kernel buffer can never panic
-/// (crate denies `clippy::indexing_slicing`).
+/// Slice-safe helpers — every multibyte read goes through `.get()` so a hostile or truncated kernel
+/// buffer can never panic (the crate denies `clippy::indexing_slicing`).
 #[inline]
 fn read_u16(buf: &[u8], at: usize) -> Option<u16> {
     let end = at.checked_add(2)?;
@@ -99,27 +81,19 @@ fn read_i32(buf: &[u8], at: usize) -> Option<i32> {
 /// One decoded XDP attachment fact for an interface.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct XdpLinkInfo {
-    /// Kernel `bpf_prog_info.id` of the attached program, if any.
-    /// `None` means the `IFLA_XDP` nested block had no
-    /// `IFLA_XDP_PROG_ID` (i.e. nothing attached).
+    /// Kernel `bpf_prog_info.id` of the attached program. `None` means the `IFLA_XDP` nested block
+    /// carried no `IFLA_XDP_PROG_ID`, i.e. nothing is attached.
     pub prog_id: Option<u32>,
-    /// Raw `IFLA_XDP_ATTACHED` mode byte (`XDP_ATTACHED_*`), if the
-    /// kernel reported it.
+    /// Raw `IFLA_XDP_ATTACHED` mode byte (`XDP_ATTACHED_*`), if the kernel reported it.
     pub attached_mode: Option<u8>,
 }
 
-/// Parse a `RTM_NEWLINK` reply body (everything after — and excluding
-/// — the leading 16-byte `nlmsghdr`) and pull out the `IFLA_XDP`
-/// nested block.
-///
-/// `payload` starts at the `ifinfomsg`. Returns
-/// `XdpLinkInfo::default()` (prog_id `None`) when no XDP program is
-/// attached — the success signal `detach_verifying` needs. Pure,
-/// allocation-free, panic-free.
+/// Parse a `RTM_NEWLINK` reply body (everything after the leading 16-byte `nlmsghdr`, starting at
+/// the `ifinfomsg`) and pull out the `IFLA_XDP` nested block. Returns a default (prog_id `None`)
+/// when nothing is attached — the success signal `detach_verifying` needs.
 #[must_use]
 pub fn parse_ifinfo_payload(payload: &[u8]) -> XdpLinkInfo {
     let mut out = XdpLinkInfo::default();
-    // ifinfomsg is 16 bytes; attributes follow, NLMSG-aligned.
     let attr_start = align(IFINFOMSG_LEN, NLMSG_ALIGNTO);
     let Some(attrs) = payload.get(attr_start..) else {
         return out;
@@ -128,7 +102,6 @@ pub fn parse_ifinfo_payload(payload: &[u8]) -> XdpLinkInfo {
         if atype != IFLA_XDP {
             continue;
         }
-        // Nested container: walk its inner rtattrs.
         for (inner_type, inner_data) in RtattrIter::new(adata) {
             match inner_type {
                 IFLA_XDP_PROG_ID => {
@@ -145,24 +118,16 @@ pub fn parse_ifinfo_payload(payload: &[u8]) -> XdpLinkInfo {
             }
         }
     }
-    // The kernel never hands out prog_id 0; treat 0 as "none" so
-    // attach_replacing does not think a foreign prog 0 owns the iface.
+    // The kernel never hands out prog_id 0; treat 0 as "none" so attach_replacing does not think a
+    // foreign prog 0 owns the iface.
     if out.prog_id == Some(0) {
         out.prog_id = None;
     }
     out
 }
 
-/// Parse a full netlink datagram (one or more `nlmsghdr`-prefixed
-/// messages — e.g. the raw `recv()` buffer) and return the XDP link
-/// info from the first `RTM_NEWLINK`. `NLMSG_ERROR` with a non-zero
-/// errno becomes `Err`; `NLMSG_DONE` / unrelated types are skipped.
-///
-/// # Errors
-///
-/// - [`io::ErrorKind::InvalidData`] if a message is truncated /
-///   internally inconsistent.
-/// - An OS error if the kernel returned `NLMSG_ERROR` with errno.
+/// Parse a full netlink datagram and return the XDP link info from the first `RTM_NEWLINK`.
+/// `NLMSG_ERROR` with a non-zero errno becomes `Err`; `NLMSG_DONE` and unrelated types are skipped.
 pub fn parse_getlink_response(buf: &[u8]) -> io::Result<XdpLinkInfo> {
     const NLMSG_ERROR: u16 = 0x2;
     const NLMSG_DONE: u16 = 0x3;
@@ -195,7 +160,6 @@ pub fn parse_getlink_response(buf: &[u8]) -> io::Result<XdpLinkInfo> {
         let body_start = off
             .checked_add(NLMSGHDR_LEN)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "body offset overflow"))?;
-        // msg_end is Some here (checked above).
         let body_end = match msg_end {
             Some(e) => e,
             None => {
@@ -235,10 +199,8 @@ pub fn parse_getlink_response(buf: &[u8]) -> io::Result<XdpLinkInfo> {
     Ok(XdpLinkInfo::default())
 }
 
-/// Minimal `rtattr` TLV iterator. Each attribute is
-/// `rta_len: u16, rta_type: u16` then `rta_len - 4` payload bytes,
-/// padded up to `RTA_ALIGNTO`. Malformed entries terminate iteration
-/// (never panic, never infinite-loop).
+/// Minimal `rtattr` TLV iterator (`rta_len: u16, rta_type: u16`, payload, padded to `RTA_ALIGNTO`).
+/// A malformed entry terminates iteration — never panics, never loops forever.
 struct RtattrIter<'a> {
     buf: &'a [u8],
     pos: usize,
@@ -257,8 +219,7 @@ impl<'a> Iterator for RtattrIter<'a> {
         let rta_len = read_u16(self.buf, self.pos)? as usize;
         let type_at = self.pos.checked_add(2)?;
         let rta_type = read_u16(self.buf, type_at)?;
-        // rta_len includes the 4-byte header; < 4 or running past the
-        // buffer is malformed -> stop.
+        // rta_len includes the 4-byte header; < 4 or running past the buffer is malformed -> stop.
         if rta_len < RTATTR_HDR_LEN {
             return None;
         }
@@ -276,14 +237,8 @@ impl<'a> Iterator for RtattrIter<'a> {
     }
 }
 
-/// Live query: open an `AF_NETLINK`/`NETLINK_ROUTE` socket, send an
-/// `RTM_GETLINK` for `iface`, and return the attached XDP `prog_id`
-/// (or `None`). A *read* needs no `CAP_NET_ADMIN`.
-///
-/// # Errors
-///
-/// - [`io::Error`] for any socket / send / recv failure or if the
-///   interface name does not resolve to an ifindex.
+/// Live query: open an `AF_NETLINK`/`NETLINK_ROUTE` socket, send an `RTM_GETLINK` for `iface`, and
+/// return the attached XDP `prog_id` (or `None`). A read needs no `CAP_NET_ADMIN`.
 pub fn query_xdp_prog_id(iface: &str) -> io::Result<Option<u32>> {
     let ifindex = if_nametoindex(iface)?;
     let buf = rtm_getlink_roundtrip(ifindex)?;
@@ -333,8 +288,8 @@ fn rtm_getlink_roundtrip(ifindex: u32) -> io::Result<Vec<u8>> {
     }
     let _guard = OwnedFd(fd);
 
-    // Request: nlmsghdr(16) + ifinfomsg(16). Built field-by-field
-    // into a fixed buffer via slice-safe writes.
+    // Request: nlmsghdr(16) + ifinfomsg(16), built field-by-field into a fixed buffer via
+    // slice-safe writes.
     let total = NLMSGHDR_LEN + IFINFOMSG_LEN;
     let mut req = vec![0u8; total];
     write_at(&mut req, 0, &(total as u32).to_ne_bytes())?;
@@ -365,8 +320,7 @@ fn rtm_getlink_roundtrip(ifindex: u32) -> io::Result<Vec<u8>> {
         return Err(io::Error::last_os_error());
     }
 
-    // 32 KiB is the conventional netlink buffer and more than enough
-    // for one link's attributes.
+    // 32 KiB is the conventional netlink buffer and more than enough for one link's attributes.
     let mut reply = vec![0u8; 32 * 1024];
     // SAFETY: reply is a valid writable buffer of reply.len() bytes.
     let n = unsafe { libc::recv(fd, reply.as_mut_ptr().cast(), reply.len(), 0) };

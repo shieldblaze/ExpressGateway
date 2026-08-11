@@ -1,7 +1,6 @@
 //! Error types for the HTTP/2 codec.
 
-/// Errors that can occur during HTTP/2 frame parsing, HPACK processing, or
-/// security mitigation checks.
+/// Frame-parsing, HPACK, and security-detector errors.
 #[derive(Debug, thiserror::Error)]
 pub enum H2Error {
     /// The input buffer does not contain a complete frame.
@@ -34,7 +33,7 @@ pub enum H2Error {
         count: u64,
     },
 
-    /// An HPACK bomb was detected (decoded size vastly exceeds encoded size).
+    /// An HPACK bomb: decoded size vastly exceeds encoded size.
     #[error("HPACK bomb: decoded {decoded} bytes from {encoded} encoded (ratio {ratio})")]
     HpackBomb {
         /// Total decoded header size in bytes.
@@ -68,8 +67,7 @@ pub enum H2Error {
         count: u32,
     },
 
-    /// A stream failed to advance under a zero receive-window for longer
-    /// than the configured stall timeout.
+    /// A stream stalled under a zero receive-window past the stall timeout.
     #[error("zero-window stall on stream {stream_id}")]
     ZeroWindowStall {
         /// Identifier of the stalled stream.

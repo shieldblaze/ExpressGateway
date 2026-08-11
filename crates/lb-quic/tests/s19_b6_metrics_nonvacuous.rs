@@ -1,29 +1,9 @@
-//! SESSION 19 / Mode B — B6 METRICS NON-VACUITY proof (the stub trap)
-//! (author ≠ verifier; this is the verifier's independent metrics proof).
-//!
-//! A metric that NEVER moves is a stub — registered for show, never wired
-//! through the datapath (the historical `trusted_cidrs` trap). This file
-//! drives a REAL Mode-B relay with a REAL [`QuicModeBMetrics`] registered
-//! off a fresh [`MetricsRegistry`], passed as
-//! `ActorParams.quic_modeb_metrics = Some(metrics)`, and asserts each
-//! `quic_modeb_*` handle actually MOVES under the conditions it claims to
-//! track:
-//!
-//! 1. `quic_modeb_connections_total` increments to ≥ 1 once the two-conn
-//!    relay establishes, AND the `quic_modeb_connections` gauge is back to 0
-//!    after the actor returns — proving the `ActiveConnGuard` RAII
-//!    dec-on-drop is live (`raw_proxy.rs:352-372`).
-//! 2. `quic_modeb_datagrams_dropped_total` increments > 0 under a datagram
-//!    flood at a STALLED backend (the B4 bounded drop-newest queue overflows
-//!    and the per-pass delta is surfaced — `raw_proxy.rs:597-608`).
-//! 3. `quic_modeb_streams_active` is observed NON-ZERO during a multi-stream
-//!    transfer (the gauge is set to the B5 relay-table size each pass).
-//!    Because the gauge is set per-pass and returns to 0 at teardown, the
-//!    test SAMPLES it live via a clone of the handle while the transfer is in
-//!    flight, then confirms it returns to 0.
-//!
-//! Topology (real wire): client ⇄ Mode B actor (`run_raw_proxy_actor_for_test`)
-//! ⇄ real quiche backend. Driven with `--features test-gauges`.
+//! Mode B — the METRICS NON-VACUITY proof (the stub trap): a metric that NEVER moves is
+//! registered for show and not wired through the datapath. Drives a REAL Mode-B relay with a REAL
+//! [`QuicModeBMetrics`] and asserts each `quic_modeb_*` handle MOVES: `connections_total`
+//! increments and the `connections` gauge returns to 0 (proving the `ActiveConnGuard` RAII
+//! dec-on-drop is live); `datagrams_dropped_total` increments under flood at a stalled backend;
+//! `streams_active` is SAMPLED live mid-transfer, since it is set per-pass and returns to 0.
 
 #![cfg(feature = "test-gauges")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -51,10 +31,6 @@ const H3_ALPN: &[u8] = b"h3";
 const MAX_UDP: usize = 65_535;
 const HANDSHAKE_BUDGET: Duration = Duration::from_secs(5);
 const RELAY_BUDGET: Duration = Duration::from_secs(12);
-
-// ─────────────────────────────────────────────────────────────────────
-// Cert plumbing.
-// ─────────────────────────────────────────────────────────────────────
 
 static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -176,8 +152,7 @@ fn upstream_config_factory(
     })
 }
 
-/// Backend that ECHOes STREAM bytes back on the same stream id (FINing once
-/// drained). Used by the connections-total + streams-active tests.
+/// ECHOes STREAM bytes back on the same stream id, FINing once drained.
 fn spawn_echo_backend(certs: &TestCerts) -> SocketAddr {
     let std_sock = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     std_sock.set_nonblocking(true).unwrap();
@@ -291,10 +266,8 @@ fn spawn_echo_backend(certs: &TestCerts) -> SocketAddr {
     addr
 }
 
-/// Datagram backend that STALLS (never reads its datagrams) so the LB→backend
-/// `dgram_send` back-pressures and the relay's bounded c2u queue drops-newest.
-/// Keeps the connection alive (handshake + timeouts). Used by the
-/// datagrams-dropped test.
+/// STALLS (never reads its datagrams) so the LB→backend `dgram_send` back-pressures and the
+/// relay's bounded queue drops-newest, while keeping the connection alive.
 fn spawn_stalled_dgram_backend(certs: &TestCerts) -> SocketAddr {
     let std_sock = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     std_sock.set_nonblocking(true).unwrap();
@@ -313,9 +286,8 @@ fn spawn_stalled_dgram_backend(certs: &TestCerts) -> SocketAddr {
                 return;
             }
             if let Some(c) = conn.as_mut() {
-                // Deliberately NEVER drain dgram_recv: the recv queue fills,
-                // back-pressuring the LB→backend leg so the relay's c2u queue
-                // saturates and drops-newest.
+                // Deliberately NEVER drain dgram_recv: the recv queue fills, back-pressuring
+                // the LB→backend leg so the relay's c2u queue saturates and drops-newest.
                 loop {
                     match c.send(&mut out_buf) {
                         Ok((n, info)) => {
@@ -387,7 +359,6 @@ async fn try_recv_one(
     }
 }
 
-/// Everything the test needs after the client⇄LB handshake + actor spawn.
 struct Rig {
     client_conn: quiche::Connection,
     client_socket: Arc<UdpSocket>,
@@ -398,7 +369,6 @@ struct Rig {
     _certs: TestCerts,
 }
 
-/// Build the rig wiring the actor with `Some(metrics)`.
 async fn build_rig(certs: TestCerts, backend_addr: SocketAddr, metrics: QuicModeBMetrics) -> Rig {
     let lb_socket = Arc::new(
         UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 0)))
@@ -509,9 +479,7 @@ async fn build_rig(certs: TestCerts, backend_addr: SocketAddr, metrics: QuicMode
         h3_backend: None,
         h2_backend: None,
         raw_quic_backend: Some(raw_backend),
-        // ── THE WIRING UNDER TEST: a REAL metrics handle. ──
         quic_modeb_metrics: Some(metrics),
-        // SESSION 27 WS-over-H3 Stage A: Mode-B test never H3-terminates.
         ws_enabled: false,
         ws_relay_launcher: None,
         max_requests_per_h3_connection: 0,
@@ -536,16 +504,8 @@ async fn teardown(rig: Rig) {
     let _ = tokio::time::timeout(Duration::from_secs(6), rig.actor).await;
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// CHECK 3a — connections_total increments; connections gauge → 0 on exit.
-// ─────────────────────────────────────────────────────────────────────
-
-/// Establish a Mode-B relay with a live metrics handle, do a small stream
-/// round-trip so we know both legs are up, then assert:
-/// * `connections_total` >= 1 (incremented once the upstream established);
-/// * the `connections` gauge was raised to 1 WHILE the relay was live
-///   (sampled via a handle clone), and is back to 0 AFTER the actor returns
-///   (the `ActiveConnGuard` Drop ran).
+/// CHECK 3a — `connections_total >= 1`, the `connections` gauge reads 1 WHILE the relay is live
+/// (sampled via a clone), and it is back to 0 AFTER the actor returns (`ActiveConnGuard` Drop ran).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn connections_total_increments_and_gauge_returns_to_zero() {
     let certs = generate_loopback_certs();
@@ -553,19 +513,17 @@ async fn connections_total_increments_and_gauge_returns_to_zero() {
 
     let reg = MetricsRegistry::new();
     let metrics = QuicModeBMetrics::register(&reg).expect("register");
-    // Independent clones the test reads (the Arc-backed prometheus handles
-    // observe the same underlying value the actor bumps).
+    // Arc-backed prometheus handles: these clones observe the same value the actor bumps.
     let connections = metrics.connections.clone();
     let connections_total = metrics.connections_total.clone();
 
-    // Pre-condition: everything starts at 0 (no churn from registration).
     assert_eq!(connections.get(), 0, "gauge starts 0");
     assert_eq!(connections_total.get(), 0, "counter starts 0");
 
     let mut rig = build_rig(certs, backend_addr, metrics).await;
 
-    // Drive a small stream round-trip so we KNOW both legs established (the
-    // actor only bumps connections_total AFTER the upstream dial succeeds).
+    // A small round-trip first, so both legs are known up — the actor bumps `connections_total`
+    // only AFTER the upstream dial succeeds.
     let payload = b"mode-b-metrics-probe".to_vec();
     rig.client_conn
         .stream_send(0, &payload, true)
@@ -586,7 +544,6 @@ async fn connections_total_increments_and_gauge_returns_to_zero() {
             Duration::from_millis(10),
         )
         .await;
-        // Sample the live gauge: once the relay is established it is 1.
         if connections.get() >= 1 {
             gauge_seen_one = true;
         }
@@ -603,22 +560,18 @@ async fn connections_total_increments_and_gauge_returns_to_zero() {
         echoed, payload,
         "stream round-trip must complete (both legs established)"
     );
-    // `connections_total` MOVED: at least one established two-conn relay.
     assert!(
         connections_total.get() >= 1,
         "quic_modeb_connections_total must increment to >= 1 once the relay \
          established (observed {})",
         connections_total.get()
     );
-    // The live gauge was raised to 1 while the relay ran (RAII inc).
     assert!(
         gauge_seen_one,
         "quic_modeb_connections gauge must read >= 1 WHILE the relay is live"
     );
 
-    // Tear down and confirm the gauge returns to 0 (ActiveConnGuard::drop).
     teardown(rig).await;
-    // The actor has returned; give the Drop a beat to be observed.
     let drop_deadline = tokio::time::Instant::now() + Duration::from_secs(3);
     while connections.get() != 0 && tokio::time::Instant::now() < drop_deadline {
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -629,20 +582,15 @@ async fn connections_total_increments_and_gauge_returns_to_zero() {
         "quic_modeb_connections gauge MUST return to 0 after the actor exits \
          (the ActiveConnGuard RAII dec-on-drop is live, not a leak)"
     );
-    // The cumulative counter does NOT decrement (it is cumulative).
+    // The cumulative counter does NOT decrement.
     assert!(
         connections_total.get() >= 1,
         "connections_total is cumulative — stays >= 1 after the relay ends"
     );
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// CHECK 3b — datagrams_dropped_total increments > 0 under a flood.
-// ─────────────────────────────────────────────────────────────────────
-
-/// Flood client→upstream datagrams at a STALLED backend so the relay's
-/// bounded drop-newest queue overflows. Assert `datagrams_dropped_total`
-/// increments strictly > 0 — the per-pass drop delta is genuinely surfaced.
+/// CHECK 3b — flood client→upstream datagrams at a STALLED backend so the bounded drop-newest
+/// queue overflows: `datagrams_dropped_total` must increment strictly > 0.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn datagrams_dropped_total_increments_under_flood() {
     let certs = generate_loopback_certs();
@@ -691,15 +639,12 @@ async fn datagrams_dropped_total_increments_under_flood() {
                 Duration::from_millis(1),
             )
             .await;
-            // Once we've observed drops we have what we need; stop early to
-            // keep the test snappy.
             if dropped.get() > 0 {
                 break;
             }
         }
     }
 
-    // Give the relay a few more turns to surface the drop delta.
     let drop_deadline = tokio::time::Instant::now() + Duration::from_secs(4);
     while dropped.get() == 0 && tokio::time::Instant::now() < drop_deadline {
         flush(&mut rig.client_conn, &rig.client_socket, &mut out).await;
@@ -729,14 +674,8 @@ async fn datagrams_dropped_total_increments_under_flood() {
     eprintln!("datagrams_dropped_total observed = {observed} (sent_ok={sent_ok})");
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// CHECK 3c — streams_active is set non-zero during a multi-stream transfer.
-// ─────────────────────────────────────────────────────────────────────
-
-/// Open several concurrent bidi streams and keep them mid-flight long enough
-/// to sample the `streams_active` gauge non-zero. The relay sets the gauge to
-/// the B5 relay-table size each pass; we sample a handle clone in a tight
-/// loop while the transfer runs, then confirm it returns to 0 at teardown.
+/// CHECK 3c — several concurrent bidi streams held mid-flight long enough to sample
+/// `streams_active` non-zero.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn streams_active_set_nonzero_during_multistream_transfer() {
     let certs = generate_loopback_certs();
@@ -749,9 +688,8 @@ async fn streams_active_set_nonzero_during_multistream_transfer() {
 
     let mut rig = build_rig(certs, backend_addr, metrics).await;
 
-    // Open several bidi streams (ids 0,4,8,...) each with a payload large
-    // enough that it does not all clear in a single pass — so the relay table
-    // holds multiple entries concurrently and the gauge reads > 0.
+    // Payloads large enough not to clear in a single pass, so the relay table holds multiple
+    // entries concurrently and the gauge reads > 0.
     const N: u64 = 8;
     let payload: Vec<u8> = (0..32 * 1024usize)
         .map(|i| ((i * 31 + 7) % 256) as u8)
@@ -762,12 +700,10 @@ async fn streams_active_set_nonzero_during_multistream_transfer() {
 
     for k in 0..N {
         let sid = k * 4; // client-initiated bidi stream ids
-        // Short write is fine; the driver below keeps flushing.
         let _ = rig.client_conn.stream_send(sid, &payload, true);
     }
     flush(&mut rig.client_conn, &rig.client_socket, &mut out).await;
 
-    // Drive + sample the gauge while the multi-stream transfer is in flight.
     let mut max_seen: i64 = 0;
     let mut got: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
     let deadline = tokio::time::Instant::now() + RELAY_BUDGET;
@@ -805,16 +741,13 @@ async fn streams_active_set_nonzero_during_multistream_transfer() {
         }
     }
 
-    // Sample once more BEFORE teardown so the live max reflects the in-flight
-    // table even if the last drive turn drained it.
+    // Sample once more BEFORE teardown, in case the last drive turn drained the table.
     let pre_teardown = streams_active.get();
     teardown(rig).await;
 
-    // The gauge MOVED to a non-zero relay-table size while streams were live.
-    // (Unlike `connections`, `streams_active` has NO RAII reset on exit — it
-    // is a per-pass `set()` to the live B5 table size — so the post-teardown
-    // value is simply whatever the final pass wrote and is not asserted here;
-    // the load-bearing claim is that it READ non-zero while streams ran.)
+    // The load-bearing claim is that the gauge READ non-zero while streams were live. Unlike
+    // `connections`, `streams_active` has NO RAII reset — it is a per-pass `set()` — so the
+    // post-teardown value is whatever the final pass wrote and is not asserted.
     assert!(
         max_seen >= 1,
         "quic_modeb_streams_active MUST read >= 1 during a multi-stream \

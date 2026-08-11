@@ -1,6 +1,6 @@
 //! gRPC error types.
 
-/// Errors raised during gRPC frame processing.
+/// gRPC frame-processing errors.
 #[derive(Debug, thiserror::Error)]
 pub enum GrpcError {
     /// Not enough data to decode a complete frame.

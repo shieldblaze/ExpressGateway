@@ -2,8 +2,7 @@
 
 use crate::{Bridge, BridgeRequest, BridgeResponse, L7Error, Protocol, check_header_count};
 
-/// HTTP/1.1 hop-by-hop headers that MUST NOT be forwarded by a proxy
-/// (RFC 7230 section 6.1).
+/// Hop-by-hop headers a proxy MUST NOT forward (RFC 7230 §6.1).
 const HOP_BY_HOP_HEADERS: &[&str] = &[
     "connection",
     "keep-alive",
@@ -15,9 +14,7 @@ const HOP_BY_HOP_HEADERS: &[&str] = &[
     "te",
 ];
 
-/// Collect the header names listed in the `Connection` header value.
-///
-/// `Connection: keep-alive, x-custom` -> `["keep-alive", "x-custom"]`.
+/// Collect the header names listed inside the `Connection` value.
 fn connection_named_headers(headers: &[(String, String)]) -> Vec<String> {
     headers
         .iter()
@@ -49,7 +46,6 @@ impl Bridge for H1ToH1Bridge {
             .iter()
             .filter_map(|(k, v)| {
                 let lower = k.to_lowercase();
-                // Allow TE only if the value is "trailers".
                 if lower == "te" {
                     return if is_te_trailers(v) {
                         Some((lower, "trailers".to_owned()))
@@ -75,9 +71,7 @@ impl Bridge for H1ToH1Bridge {
             headers,
             body: req.body.clone(),
             scheme: req.scheme.clone(),
-            // PROTO-2-12: trailers are end-to-end (RFC 9110 §6.6.2);
-            // forward without filtering. The Trailer-list field in the
-            // headers (already preserved above) declares what is sent.
+            // PROTO-2-12: trailers are end-to-end (RFC 9110 §6.6.2).
             trailers: req.trailers.clone(),
         })
     }
@@ -87,9 +81,8 @@ impl Bridge for H1ToH1Bridge {
 
         let conn_named = connection_named_headers(&resp.headers);
 
-        // TE is a request-only header (RFC 7230 section 4.3) so unlike the
-        // request path we do NOT preserve "te: trailers" in responses — it is
-        // unconditionally stripped via the hop-by-hop list.
+        // TE is request-only (RFC 7230 §4.3), so unlike the request path
+        // `te: trailers` is NOT preserved on responses.
         let headers: Vec<(String, String)> = resp
             .headers
             .iter()
@@ -111,7 +104,6 @@ impl Bridge for H1ToH1Bridge {
             status: resp.status,
             headers,
             body: resp.body.clone(),
-            // PROTO-2-12: trailers pass through unchanged.
             trailers: resp.trailers.clone(),
         })
     }

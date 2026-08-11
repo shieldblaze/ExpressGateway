@@ -1,37 +1,12 @@
-//! SESSION 16 / Mode B — B3 INDEPENDENT VERIFIER: the F-MD-4 bar for raw
-//! cancellation propagation (plan §2.3, R13 a+b+c).
+//! Mode B — the F-MD-4 bar for raw cancellation propagation (R13 a+b+c): real quiche client ⇄
+//! Mode B actor ⇄ real quiche backend. Covers a forward reset with a DISTINCT code plus a
+//! sibling-stream proof that the cancellation is STREAM-level and not a connection teardown, a
+//! reverse (backend) reset, a client STOP_SENDING, and a `#[should_panic]` control proving the
+//! no-clean-FIN discriminator actually fires.
 //!
-//! Author ≠ verifier. The builder's `s16_b3_reset_propagation_smoke.rs`
-//! proves the *positive* forward leg (client RESET → backend sees
-//! `StreamReset(0xBEEF)`). THIS file is the load-bearing negative-control
-//! suite the bar demands:
-//!
-//!   real quiche CLIENT  ⇄  Mode B actor (`run_raw_proxy_actor_for_test`)
-//!                          ⇄  real quiche BACKEND
-//!
-//! It adds, beyond the smoke test:
-//!   1. **Forward reset** with a DISTINCT code (`0xCAFE`) AND a connection-
-//!      stays-up proof: after the reset, a SECOND client stream relays
-//!      end-to-end byte-identical, proving the cancellation is STREAM-level
-//!      RESET_STREAM, NOT the whole connection being torn down (the
-//!      reset-vs-connection-teardown masking hazard from memory
-//!      [[h1h3-fmd4-teardown-not-reset]] / [[h3h3-fmd4-no-r13-bc]]).
-//!   2. **Reverse reset**: the BACKEND resets a backend-initiated stream
-//!      mid-response → the CLIENT observes `StreamReset(code)` with the exact
-//!      code, never a clean FIN.
-//!   3. **Client STOP_SENDING** → the backend's `stream_send` surfaces the
-//!      propagated `StreamStopped(code)`.
-//!   4. A `#[should_panic]` control proving the no-clean-FIN discriminator
-//!      actually FIRES on a genuine FIN (so assertion (1)/(2) are not
-//!      vacuously true).
-//!
-//! quiche-0.28 gotcha (already bit B2): `stream_finished()` returns `true`
-//! for an UNKNOWN/collected stream — a correctly-reset stream is collected,
-//! so `stream_finished` would FALSE-positive a clean end. The ONLY clean-FIN
+//! quiche gotcha: `stream_finished()` returns `true` for an UNKNOWN/collected stream, and a
+//! correctly-reset stream IS collected — so it FALSE-POSITIVES a clean end. The ONLY clean-FIN
 //! witness used here is `stream_recv` returning `fin == true`.
-//!
-//! Driven with `--features test-gauges` so `run_raw_proxy_actor_for_test`
-//! (gated `#[cfg(any(test, feature = "test-gauges"))]`) is reachable.
 
 #![cfg(feature = "test-gauges")]
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
@@ -60,13 +35,10 @@ const HANDSHAKE_BUDGET: Duration = Duration::from_secs(5);
 
 /// Client-initiated bidi stream that is reset mid-upload (forward test).
 const FWD_STREAM: u64 = 0;
-/// A SECOND client-initiated bidi stream opened AFTER the forward reset to
-/// prove the connection/relay is still alive (per-stream reset, not conn
-/// teardown). Client-initiated bidi ⇒ id 4.
+/// A SECOND client bidi stream opened AFTER the forward reset, to prove the relay is alive.
 const SIBLING_STREAM: u64 = 4;
-/// Application error code the client puts on its forward RESET_STREAM. A
-/// DISTINCT, non-trivial value (different from the smoke test's 0xBEEF) so a
-/// stray default-0 reset or a copy of the smoke fixture cannot pass.
+/// A DISTINCT, non-trivial value, so a stray default-0 reset or a copy of the smoke fixture
+/// cannot pass.
 const FWD_RESET_CODE: u64 = 0xCAFE;
 /// Reverse direction: code the BACKEND puts on its RESET_STREAM.
 const REV_RESET_CODE: u64 = 0xD00D;
@@ -76,12 +48,7 @@ const STOP_CODE: u64 = 0x5701;
 const NO_RESET: u64 = u64::MAX;
 /// Partial body sent BEFORE a reset (multi-packet, no FIN).
 const PARTIAL_LEN: usize = 24 * 1024;
-/// Sibling-stream payload (small, single-shot, FIN).
 const SIBLING_PAYLOAD: &[u8] = b"sibling-stream-survives-the-reset-0123456789";
-
-// ─────────────────────────────────────────────────────────────────────
-// Cert plumbing (mirrors s16_b3_reset_propagation_smoke.rs).
-// ─────────────────────────────────────────────────────────────────────
 
 static DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -183,8 +150,8 @@ fn client_config(certs: &TestCerts) -> quiche::Config {
     cfg
 }
 
-/// Pool dial config factory (LB → backend). Wrong ALPN on purpose so the
-/// actor must MIRROR the client's `h3`.
+/// Pool dial config factory (LB → backend). Wrong ALPN on purpose so the actor must MIRROR
+/// the client's `h3`.
 fn upstream_config_factory(
     ca: PathBuf,
 ) -> Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync> {
@@ -235,17 +202,14 @@ async fn try_recv_one(
     }
 }
 
-/// Shared per-stream observations recorded by the backend.
 #[derive(Clone)]
 struct BackendObs {
-    /// Bytes received on FWD_STREAM.
     fwd_bytes: Arc<AtomicUsize>,
     /// `StreamReset` code seen on FWD_STREAM (first wins; NO_RESET = none).
     fwd_reset_code: Arc<AtomicU64>,
     /// Whether a CLEAN FIN was ever observed on FWD_STREAM (must stay false).
     fwd_saw_fin: Arc<AtomicBool>,
-    /// Bytes received on SIBLING_STREAM (the backend echoes them back; the
-    /// client side does the byte-identity check, so we only count here).
+    /// Bytes received on SIBLING_STREAM; the client side does the byte-identity check.
     sibling_bytes: Arc<AtomicUsize>,
 }
 
@@ -260,14 +224,8 @@ impl BackendObs {
     }
 }
 
-/// Spawn the standard control backend used by the FORWARD reset test. It:
-///  * records bytes / clean-FIN / reset-code on `FWD_STREAM`;
-///  * for `SIBLING_STREAM`, accumulates received bytes and ECHOes them back
-///    (so the client can prove a post-reset stream round-trips cleanly).
-///
-/// No `stream_finished()` witness — see the file header re: the quiche-0.28
-/// collected-stream gotcha. The only clean-FIN witness is `fin == true` from
-/// `stream_recv`.
+/// The FORWARD-reset control backend: records bytes / clean-FIN / reset-code on `FWD_STREAM`
+/// and echoes `SIBLING_STREAM`. No `stream_finished()` witness — see the collected-stream gotcha.
 fn spawn_forward_backend(certs: &TestCerts, obs: BackendObs) -> SocketAddr {
     let std_sock = std::net::UdpSocket::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     std_sock.set_nonblocking(true).unwrap();
@@ -280,7 +238,6 @@ fn spawn_forward_backend(certs: &TestCerts, obs: BackendObs) -> SocketAddr {
         let mut out_buf = vec![0u8; MAX_UDP];
         let mut rd = vec![0u8; MAX_UDP];
         let mut conn: Option<quiche::Connection> = None;
-        // sibling echo queue: bytes pending + peer-FIN-seen + our-FIN-sent.
         let mut sib_pending: Vec<u8> = Vec::new();
         let mut sib_peer_fin = false;
         let mut sib_fin_sent = false;
@@ -329,7 +286,6 @@ fn spawn_forward_backend(certs: &TestCerts, obs: BackendObs) -> SocketAddr {
                         }
                     }
                 }
-                // Echo the sibling stream back so the client sees it complete.
                 if !sib_pending.is_empty() {
                     let mut acc = 0usize;
                     while acc < sib_pending.len() {
@@ -356,7 +312,6 @@ fn spawn_forward_backend(certs: &TestCerts, obs: BackendObs) -> SocketAddr {
                 {
                     sib_fin_sent = true;
                 }
-                // Flush outbound.
                 loop {
                     match c.send(&mut out_buf) {
                         Ok((n, info)) => {
@@ -402,17 +357,13 @@ fn spawn_forward_backend(certs: &TestCerts, obs: BackendObs) -> SocketAddr {
     addr
 }
 
-/// Build + drive a client⇄LB⇄backend Mode B world to the point where both the
-/// client⇄LB legs are established and the actor is running. Returns the live
-/// handles the test bodies drive. Kept as one helper because all three tests
-/// share the identical bring-up.
+/// Bring a client⇄LB⇄backend Mode B world up to both legs established; all three tests share it.
 struct World {
     cancel: CancellationToken,
     actor: tokio::task::JoinHandle<std::io::Result<lb_quic::RawProxyOutcome>>,
     forwarder: tokio::task::JoinHandle<()>,
     client_socket: Arc<UdpSocket>,
     client_local: SocketAddr,
-    // The client connection is owned by the test body (driven inline).
     client_conn: quiche::Connection,
 }
 
@@ -478,7 +429,6 @@ async fn bring_up(certs: &TestCerts, backend_addr: SocketAddr) -> World {
     }
     assert_eq!(client_conn.application_proto(), H3_ALPN);
 
-    // Forwarder: shared LB socket → actor inbound mpsc (the router's job).
     let (tx, rx) = mpsc::channel::<InboundPacket>(256);
     let cancel = CancellationToken::new();
     let fwd_socket = Arc::clone(&lb_socket);
@@ -512,8 +462,6 @@ async fn bring_up(certs: &TestCerts, backend_addr: SocketAddr) -> World {
         pool,
         addr: backend_addr,
         sni: TEST_SNI.to_string(),
-        // B6 (R14/R12): caps now carried on RawBackend; the const
-        // defaults keep these tests byte-identical in behaviour.
         dgram_queue_cap: lb_quic::DGRAM_QUEUE_CAP,
         max_relay_streams: lb_quic::MAX_RELAY_STREAMS,
     };
@@ -530,7 +478,6 @@ async fn bring_up(certs: &TestCerts, backend_addr: SocketAddr) -> World {
         h2_backend: None,
         raw_quic_backend: Some(raw_backend),
         quic_modeb_metrics: None,
-        // SESSION 27 WS-over-H3 Stage A: Mode-B tests never H3-terminate.
         ws_enabled: false,
         ws_relay_launcher: None,
         max_requests_per_h3_connection: 0,
@@ -554,26 +501,10 @@ async fn teardown(w: World) {
     let _ = tokio::time::timeout(Duration::from_secs(5), w.actor).await;
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// R13(c) — FORWARD: client RESET → backend StreamReset(code), no clean FIN,
-// connection stays up (sibling stream survives).
-// ─────────────────────────────────────────────────────────────────────
-
-/// **THE HEADLINE.** A client RESET_STREAM mid-upload is propagated to the
-/// backend as a STREAM-level RESET_STREAM carrying the EXACT code; the backend
-/// never sees a clean FIN on that stream; AND the connection stays fully alive
-/// — a SECOND client stream opened after the reset round-trips byte-identical.
-///
-/// This is load-bearing in three independent ways:
-///  * **reset-with-code**: asserts `fwd_reset_code == FWD_RESET_CODE` — fails
-///    if the relay dropped the half (B2: backend would keep getting `Done`,
-///    code stays `NO_RESET`) OR forwarded the wrong code.
-///  * **no-clean-FIN**: asserts `!fwd_saw_fin` — fails if the relay ever
-///    synthesised `stream_send(.., fin=true)` (the F-MD-4 smuggling bug).
-///  * **per-stream, not conn-teardown**: asserts the sibling stream completed
-///    byte-identical — fails if the cancellation tore the whole connection
-///    down (which would also kill the sibling), proving the reset is scoped to
-///    the one stream.
+/// **THE HEADLINE**, load-bearing three independent ways: **reset-with-code** fails if the relay
+/// dropped the half (the backend would keep getting `Done`) or forwarded the wrong code;
+/// **no-clean-FIN** fails if the relay ever synthesised `fin = true` (the F-MD-4 smuggling bug);
+/// **per-stream, not conn-teardown** fails if the cancellation tore the connection down.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn forward_client_reset_propagates_with_code_conn_stays_up() {
     let certs = generate_loopback_certs();
@@ -581,7 +512,6 @@ async fn forward_client_reset_propagates_with_code_conn_stays_up() {
     let backend_addr = spawn_forward_backend(&certs, obs.clone());
     let mut w = bring_up(&certs, backend_addr).await;
 
-    // Move the client conn out so we can drive it inline here.
     let mut client = std::mem::replace(
         &mut w.client_conn,
         quiche::accept(
@@ -598,13 +528,12 @@ async fn forward_client_reset_propagates_with_code_conn_stays_up() {
     let mut out = vec![0u8; MAX_UDP];
     let mut in_buf = vec![0u8; MAX_UDP];
 
-    // 1) Partial upload on FWD_STREAM, NO fin.
     let payload = make_payload(PARTIAL_LEN);
     client.stream_send(FWD_STREAM, &payload, false).unwrap();
     flush(&mut client, &client_socket, &mut out).await;
 
-    // 2) Wait until the backend has received SOME of those bytes (the reset
-    //    must land MID-transfer, after the mirror stream exists).
+    // 2) Wait until the backend has received SOME bytes — the reset must land MID-transfer,
+    //    after the mirror stream exists.
     let wait_recv = tokio::time::Instant::now() + Duration::from_secs(10);
     while obs.fwd_bytes.load(Ordering::Relaxed) == 0 {
         if tokio::time::Instant::now() >= wait_recv {
@@ -623,21 +552,15 @@ async fn forward_client_reset_propagates_with_code_conn_stays_up() {
     let before = obs.fwd_bytes.load(Ordering::Relaxed);
     eprintln!("forward: backend received {before} bytes before the reset");
 
-    // 3) RESET_STREAM the forward stream with the distinct code, and keep
-    //    pumping so the RESET frame actually leaves quiche.
+    // 3) RESET_STREAM with the distinct code, and keep pumping so the RESET frame actually
+    //    leaves quiche.
     client
         .stream_shutdown(FWD_STREAM, quiche::Shutdown::Write, FWD_RESET_CODE)
         .unwrap();
 
-    // 4) Simultaneously OPEN the sibling stream (after the reset) and drive
-    //    both: wait for (a) backend observes the reset code, AND (b) the
-    //    sibling round-trips back to the client with a clean FIN.
-    //
-    //    Right after the FWD_STREAM RESET_STREAM, quiche can transiently return
-    //    `Err(Done)` here (stream-grant / connection-flow-control not yet
-    //    available) and can also SHORT-WRITE (`Ok(n)` with `n < len`). Pump the
-    //    connection and retry until the whole sibling payload (with FIN riding
-    //    the final chunk) is queued, bounded by a deadline.
+    // Right after the RESET_STREAM quiche can transiently return `Done` here (stream grant /
+    // connection flow control not yet available) and can also SHORT-WRITE, so pump and retry
+    // until the whole sibling payload is queued.
     let mut sibling_sent = 0usize;
     let queue_by = tokio::time::Instant::now() + Duration::from_secs(10);
     while sibling_sent < SIBLING_PAYLOAD.len() {
@@ -679,7 +602,6 @@ async fn forward_client_reset_propagates_with_code_conn_stays_up() {
         )
         .await;
 
-        // Pull sibling echo bytes.
         if !sibling_done {
             let readable: Vec<u64> = client.readable().collect();
             for sid in readable {
@@ -714,7 +636,6 @@ async fn forward_client_reset_propagates_with_code_conn_stays_up() {
         }
     }
 
-    // ── ASSERTIONS ──
     let code = obs.fwd_reset_code.load(Ordering::Relaxed);
     assert_ne!(
         code, NO_RESET,
@@ -732,8 +653,7 @@ async fn forward_client_reset_propagates_with_code_conn_stays_up() {
         "F-MD-4 SMUGGLING: backend saw a CLEAN FIN on the forward stream after \
          a mid-transfer reset — truncated transfer presented as complete."
     );
-    // Connection-stays-up / per-stream proof: the sibling stream relayed
-    // end-to-end byte-identical AFTER the reset.
+    // Connection-stays-up / per-stream proof: the sibling relayed byte-identical AFTER the reset.
     assert!(
         sibling_done,
         "the sibling stream never completed — the reset appears to have torn \
@@ -751,30 +671,18 @@ async fn forward_client_reset_propagates_with_code_conn_stays_up() {
         sibling_recv.len()
     );
 
-    // Put the client back so teardown owns a real conn (cosmetic).
     w.client_conn = client;
     teardown(w).await;
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// R13(c) — REVERSE: backend RESET → client StreamReset(code), no clean FIN.
-// ─────────────────────────────────────────────────────────────────────
-
-/// The BACKEND resets a backend-initiated bidi stream mid-response; the CLIENT
-/// must observe `StreamReset(REV_RESET_CODE)` (propagated by the relay's u2c
-/// direction) and never a clean FIN.
-///
-/// Stream choice: a *backend-initiated* bidi stream is server-initiated id 1
-/// on the backend's connection. Under the identity map it surfaces to the
-/// client as the same id 1 (the LB is server to the client, so a peer-of-LB
-/// server stream id stays consistent). We let the backend open it, push a
-/// partial response, then RESET it.
+/// The BACKEND resets a backend-initiated bidi stream mid-response; the CLIENT must observe
+/// `StreamReset(REV_RESET_CODE)` and never a clean FIN. A server-initiated bidi stream is id 1 on
+/// the backend's connection and surfaces to the client as the same id, the LB being its server.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn reverse_backend_reset_propagates_with_code_to_client() {
     let certs = generate_loopback_certs();
 
-    // A backend that opens stream 1 (server-initiated bidi), pushes a partial
-    // response without FIN, then RESET_STREAMs it with REV_RESET_CODE once the
+    // Opens stream 1, pushes a partial response without FIN, then RESET_STREAMs it once the
     // relay has carried some bytes.
     let backend_sent = Arc::new(AtomicUsize::new(0));
     let client_recv_seen = Arc::new(AtomicUsize::new(0)); // set by test via shared? no — client side
@@ -810,9 +718,6 @@ async fn reverse_backend_reset_propagates_with_code_to_client() {
             }
             if let Some(c) = conn.as_mut() {
                 if c.is_established() {
-                    // Drain anything the client/relay sends (e.g. the request
-                    // that triggers the actor to start relaying), so the conn
-                    // progresses; we don't care about its content.
                     let readable: Vec<u64> = c.readable().collect();
                     for sid in readable {
                         while let Ok((_, fin)) = c.stream_recv(sid, &mut rd) {
@@ -821,7 +726,6 @@ async fn reverse_backend_reset_propagates_with_code_to_client() {
                             }
                         }
                     }
-                    // Open the server-initiated stream + push partial response.
                     if !opened {
                         match c.stream_send(REV_STREAM, &payload, false) {
                             Ok(n) => {
@@ -839,7 +743,6 @@ async fn reverse_backend_reset_propagates_with_code_to_client() {
                             backend_sent_b.store(sent, Ordering::Relaxed);
                         }
                     }
-                    // When told, RESET the response stream with the code.
                     if do_reset_b.load(Ordering::Relaxed) && !did_reset_b.load(Ordering::Relaxed) {
                         let _ =
                             c.stream_shutdown(REV_STREAM, quiche::Shutdown::Write, REV_RESET_CODE);
@@ -910,14 +813,13 @@ async fn reverse_backend_reset_propagates_with_code_to_client() {
     let mut in_buf = vec![0u8; MAX_UDP];
     let mut recv_buf = vec![0u8; MAX_UDP];
 
-    // The client opens stream 0 with a FIN'd request so the actor begins
-    // relaying and the backend's connection is driven (the backend opens its
-    // response stream only after established + it sees client traffic).
+    // A FIN'd request on stream 0 starts the actor relaying — the backend opens its response
+    // stream only after it sees client traffic.
     client.stream_send(0, b"GET /", true).unwrap();
     flush(&mut client, &client_socket, &mut out).await;
 
-    // Wait until the client has received SOME bytes of the backend's response
-    // on REV_STREAM (mirror exists, mid-response), then fire the reset.
+    // Fire the reset only once the client has received SOME response bytes on REV_STREAM,
+    // so the mirror exists and it lands mid-response.
     let mut client_rev_bytes = 0usize;
     let mut client_saw_fin = false;
     let mut client_reset_code: u64 = NO_RESET;
@@ -960,7 +862,6 @@ async fn reverse_backend_reset_propagates_with_code_to_client() {
 
     do_reset.store(true, Ordering::Relaxed);
 
-    // Drive until the client observes the propagated StreamReset code.
     let observe = tokio::time::Instant::now() + Duration::from_secs(8);
     while client_reset_code == NO_RESET {
         if tokio::time::Instant::now() >= observe {
@@ -1025,21 +926,13 @@ async fn reverse_backend_reset_propagates_with_code_to_client() {
     teardown(w).await;
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// R13(c) — STOP_SENDING: client STOP_SENDING → backend stream_send stops.
-// ─────────────────────────────────────────────────────────────────────
-
-/// The client STOP_SENDINGs the response (read) side of a stream. The relay
-/// must propagate a STOP_SENDING toward the backend so the backend's
-/// `stream_send` on that stream eventually returns `Err(StreamStopped(code))`,
-/// and must never let the client observe a clean FIN. We assert the backend
-/// surfaces the propagated code AND no clean FIN reaches the client.
+/// A client STOP_SENDING must propagate toward the backend, so the backend's `stream_send`
+/// returns `Err(StreamStopped(code))` with that code and the client never observes a clean FIN.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn client_stop_sending_propagates_to_backend() {
     let certs = generate_loopback_certs();
 
-    // Backend opens stream 1, streams a response continuously, and records the
-    // FIRST StreamStopped code it gets on stream 1 from its own `stream_send`.
+    // Records the FIRST StreamStopped code its own `stream_send` gets on stream 1.
     let stop_code_seen = Arc::new(AtomicU64::new(NO_RESET));
     let backend_started = Arc::new(AtomicBool::new(false));
     let stop_code_b = Arc::clone(&stop_code_seen);
@@ -1075,9 +968,8 @@ async fn client_stop_sending_propagates_to_backend() {
                             }
                         }
                     }
-                    // Continuously try to push response bytes on REV_STREAM.
-                    // Once the client's STOP_SENDING is propagated, this turns
-                    // into StreamStopped(code).
+                    // Keep pushing; once the STOP_SENDING is propagated this becomes
+                    // StreamStopped(code).
                     match c.stream_send(REV_STREAM, &chunk, false) {
                         Ok(n) => {
                             if n > 0 {
@@ -1163,8 +1055,7 @@ async fn client_stop_sending_propagates_to_backend() {
     client.stream_send(0, b"GET /", true).unwrap();
     flush(&mut client, &client_socket, &mut out).await;
 
-    // Wait until the client has received SOME response bytes on REV_STREAM,
-    // then STOP_SENDING that read side.
+    // STOP_SENDING only after some response bytes arrived, so the read side exists.
     let mut got_some = false;
     let mut client_saw_fin = false;
     let wait_recv = tokio::time::Instant::now() + Duration::from_secs(12);
@@ -1201,12 +1092,10 @@ async fn client_stop_sending_propagates_to_backend() {
         }
     }
 
-    // STOP_SENDING the read side of REV_STREAM (Shutdown::Read ⇒ STOP_SENDING).
     client
         .stream_shutdown(REV_STREAM, quiche::Shutdown::Read, STOP_CODE)
         .unwrap();
 
-    // Drive until the backend's stream_send surfaces the propagated stop code.
     let observe = tokio::time::Instant::now() + Duration::from_secs(10);
     while stop_code_seen.load(Ordering::Relaxed) == NO_RESET {
         if tokio::time::Instant::now() >= observe {
@@ -1221,7 +1110,6 @@ async fn client_stop_sending_propagates_to_backend() {
             Duration::from_millis(10),
         )
         .await;
-        // Keep reading so we'd catch any (forbidden) clean FIN.
         let readable: Vec<u64> = client.readable().collect();
         for sid in readable {
             if sid != REV_STREAM {
@@ -1262,15 +1150,9 @@ async fn client_stop_sending_propagates_to_backend() {
     teardown(w).await;
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// Discriminator self-test: prove the no-clean-FIN witness actually fires.
-// ─────────────────────────────────────────────────────────────────────
-
-/// LOAD-BEARING META-TEST. If a genuine clean FIN is delivered, the same
-/// `stream_recv` fin-scan the forward/reverse tests rely on MUST trip. This
-/// guards against the witness being vacuously satisfiable (e.g. if a future
-/// refactor made `stream_recv` never surface fin). A real client→backend FIN
-/// is relayed by Mode B on the happy path; we assert the scan observes it.
+/// LOAD-BEARING META-TEST: on a genuine clean FIN the same `stream_recv` fin-scan the
+/// forward/reverse tests rely on MUST trip — otherwise the witness is vacuously satisfiable
+/// (e.g. if a refactor made `stream_recv` never surface fin).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn discriminator_clean_fin_is_observable_on_happy_path() {
     let certs = generate_loopback_certs();
@@ -1293,8 +1175,7 @@ async fn discriminator_clean_fin_is_observable_on_happy_path() {
     let mut out = vec![0u8; MAX_UDP];
     let mut in_buf = vec![0u8; MAX_UDP];
 
-    // A COMPLETE upload WITH fin on the forward stream — the relay delivers a
-    // legitimate clean FIN to the backend.
+    // A COMPLETE upload WITH fin — the relay delivers a legitimate clean FIN to the backend.
     client
         .stream_send(FWD_STREAM, b"complete-with-fin", true)
         .unwrap();

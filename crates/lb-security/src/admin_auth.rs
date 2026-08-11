@@ -1,44 +1,16 @@
-//! Admin HTTP authentication + bind-loopback enforcement (SEC-2-06).
-//!
-//! Wave-2a delivers the **API**. The wiring into
-//! `lb-observability::admin_http` is a follow-up owned by rel
-//! (REL-2-04, Wave-2b/c) — flagged in the commit body. The Wave-2c
-//! call site reads:
-//!
-//! ```ignore
-//! AdminAuthGate::validate_bind(cfg.bind, cfg.allow_non_loopback)?;
-//! let gate = AdminAuthGate::new(cfg.api_token_hash);
-//! // ... in each request handler:
-//! gate.authorize(request_headers)?;
-//! ```
-//!
-//! The gate stores a **SHA-256 of the bearer token**, never the
-//! plaintext. Operators put the digest in TOML as
-//! `[admin].api_token_hash = "deadbeef..."` (64 hex chars). The
-//! hex-encoded form lives at rest; the plaintext token only ever
-//! crosses the wire on a request and is hashed before comparison.
-//! Comparison uses `subtle::ConstantTimeEq` so a wrong-prefix token
-//! cannot be inferred from response timing.
-//!
-//! ## SHA-256 dep
-//!
-//! `ring` is already a workspace dep (`crates/lb-security/Cargo.toml`)
-//! and offers `ring::digest::SHA256`, so this module avoids pulling
-//! a new transitive.
+//! Admin HTTP authentication + bind-loopback enforcement (SEC-2-06). The gate holds only a SHA-256
+//! of the bearer token — the plaintext never enters the struct — and compares with
+//! `subtle::ConstantTimeEq` so a wrong-prefix token cannot be recovered from response timing.
 
 use std::net::SocketAddr;
 
 use ring::digest;
 use subtle::ConstantTimeEq;
 
-/// Errors the [`AdminAuthGate::validate_bind`] start-up check can
-/// surface.
+/// Errors from the [`AdminAuthGate::validate_bind`] start-up check.
 #[derive(Debug, thiserror::Error)]
 pub enum AdminBindError {
-    /// Configured bind address is non-loopback and
-    /// `allow_non_loopback` was not set. Refuse to start — Wave-2c's
-    /// `crates/lb/src/main.rs` propagates this as a hard exit so the
-    /// operator cannot silently expose the admin surface.
+    /// Non-loopback bind without `allow_non_loopback`; a hard startup exit, never a silent expose.
     #[error(
         "refusing to bind admin HTTP listener to non-loopback address {addr}: set \
          [admin].allow_non_loopback = true to override"
@@ -48,9 +20,7 @@ pub enum AdminBindError {
         addr: SocketAddr,
     },
 
-    /// `allow_non_loopback = true` was set but no `api_token_hash`
-    /// was configured — a foot-gun guard. Public bind + no auth =
-    /// open admin surface.
+    /// `allow_non_loopback` without a token hash — public bind plus no auth is an open admin surface.
     #[error(
         "refusing to bind admin HTTP listener to non-loopback address {addr} without \
          [admin].api_token_hash set"
@@ -61,37 +31,28 @@ pub enum AdminBindError {
     },
 }
 
-/// Errors the per-request [`AdminAuthGate::authorize`] check can
-/// surface.
+/// Errors from the per-request [`AdminAuthGate::authorize`] check.
 #[derive(Debug, thiserror::Error)]
 pub enum AdminAuthError {
     /// Request is missing the `Authorization` header.
     #[error("missing Authorization header")]
     MissingHeader,
 
-    /// `Authorization` header is present but does not start with the
-    /// `Bearer ` prefix.
+    /// Present but not a `Bearer ` credential.
     #[error("Authorization header is not a Bearer token")]
     NotBearer,
 
-    /// Bearer token did not hash to the configured
-    /// `[admin].api_token_hash`. Comparison is constant-time so a
-    /// wrong-prefix token leaks no timing.
+    /// Token did not hash to `[admin].api_token_hash`.
     #[error("invalid bearer token")]
     InvalidToken,
 }
 
-/// Decoded SHA-256 of the bearer token configured via
-/// `[admin].api_token_hash`. 32 bytes.
+/// Decoded 32-byte SHA-256 of the configured bearer token.
 #[derive(Clone)]
 pub struct AdminTokenHash([u8; 32]);
 
 impl AdminTokenHash {
-    /// Hash a plaintext bearer token with SHA-256. Convenience
-    /// constructor for tests and for operators who prefer to commit a
-    /// raw token to a secret store and let the gateway hash it on
-    /// startup; production TOML uses
-    /// [`AdminTokenHash::from_hex`] instead.
+    /// SHA-256 a plaintext token; production TOML uses [`Self::from_hex`] instead.
     #[must_use]
     pub fn from_plaintext(token: &str) -> Self {
         let d = digest::digest(&digest::SHA256, token.as_bytes());
@@ -102,14 +63,7 @@ impl AdminTokenHash {
         Self(out)
     }
 
-    /// Decode a 64-character lowercase or uppercase hex string into
-    /// the 32-byte SHA-256 digest.
-    ///
-    /// # Errors
-    ///
-    /// Returns `Err(())` if the input is not exactly 64 hex chars.
-    /// The caller (Wave-2c `lb-config` glue) translates the error
-    /// into a config validation message.
+    /// Decode a 64-char hex digest; `Err(())` unless the input is exactly 64 hex chars.
     #[allow(clippy::result_unit_err)]
     pub fn from_hex(hex: &str) -> Result<Self, ()> {
         if hex.len() != 64 {
@@ -134,9 +88,7 @@ impl AdminTokenHash {
 
 impl std::fmt::Debug for AdminTokenHash {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Never render the digest, even though it is not the secret
-        // — it is still a verification credential and printing it
-        // routinely to logs invites grep-then-reuse mistakes.
+        // Never render the digest — it is a verification credential and logging invites grep-then-reuse.
         f.debug_struct("AdminTokenHash").finish_non_exhaustive()
     }
 }
@@ -150,21 +102,13 @@ fn decode_nibble(b: u8) -> Result<u8, ()> {
     }
 }
 
-/// Authentication gate for the admin HTTP listener.
-///
-/// Wave-2a deliverable; Wave-2b/c wires it into
-/// `lb-observability::admin_http` (REL-2-04 follow-up). The gate
-/// stores only the digest of the bearer token; the plaintext token
-/// never enters this struct.
+/// Authentication gate for the admin HTTP listener; holds the digest only.
 pub struct AdminAuthGate {
     expected: Option<AdminTokenHash>,
 }
 
 impl AdminAuthGate {
-    /// Build a gate. `None` disables bearer-token enforcement (the
-    /// loopback-only bind guard is the sole defense in that case;
-    /// [`validate_bind`](Self::validate_bind) refuses non-loopback
-    /// without a token).
+    /// Build a gate; `None` disables token enforcement, leaving only the loopback bind guard.
     #[must_use]
     pub const fn new(expected: Option<AdminTokenHash>) -> Self {
         Self { expected }
@@ -176,19 +120,8 @@ impl AdminAuthGate {
         self.expected.is_some()
     }
 
-    /// Authorize a request based on its `Authorization` header value
-    /// (if any).
-    ///
-    /// Pass `None` if the header is absent; pass `Some(header_value)`
-    /// otherwise. The header value is expected verbatim — the
-    /// `Bearer ` prefix check happens inside this function.
-    ///
-    /// # Errors
-    ///
-    /// Returns the matching [`AdminAuthError`] for the failure class.
-    /// When no token is configured (`new(None)`) **all requests are
-    /// allowed** — the listener bind must therefore be loopback-only
-    /// (enforced by [`Self::validate_bind`]).
+    /// Authorize on the verbatim `Authorization` header value, or `None` when absent. With no token
+    /// configured EVERY request is allowed, so the bind must be loopback-only.
     pub fn authorize(&self, header: Option<&str>) -> Result<(), AdminAuthError> {
         let Some(expected) = self.expected.as_ref() else {
             return Ok(());
@@ -211,21 +144,7 @@ impl AdminAuthGate {
         }
     }
 
-    /// Refuse to start when the admin listener would be exposed
-    /// without authentication. Call once at startup before binding.
-    ///
-    /// Wave-2c reads `[admin].bind`, `[admin].allow_non_loopback` and
-    /// `[admin].api_token_hash` from `lb-config` and passes the
-    /// result here. The function takes the inputs flat to keep this
-    /// module independent of lb-config (this crate is reused in
-    /// other contexts).
-    ///
-    /// # Errors
-    ///
-    /// * [`AdminBindError::NonLoopbackWithoutOverride`] — non-loopback
-    ///   bind and `allow_non_loopback = false`.
-    /// * [`AdminBindError::PublicBindWithoutToken`] —
-    ///   `allow_non_loopback = true` but no token hash configured.
+    /// Refuse to start an admin listener exposed without authentication; call once before binding.
     pub fn validate_bind(
         bind: SocketAddr,
         allow_non_loopback: bool,
@@ -261,13 +180,10 @@ mod tests {
         use std::fmt::Write;
         let mut s = String::with_capacity(64);
         for b in bytes {
-            // unwrap_used is allowed under #[cfg(test)] in this crate.
             write!(&mut s, "{b:02x}").unwrap();
         }
         s
     }
-
-    // ---- validate_bind ----
 
     #[test]
     fn loopback_v4_always_ok() {
@@ -300,8 +216,6 @@ mod tests {
     fn public_bind_override_with_token_ok() {
         AdminAuthGate::validate_bind(sa_v4([0, 0, 0, 0], 9090), true, true).unwrap();
     }
-
-    // ---- authorize ----
 
     #[test]
     fn no_token_configured_allows_all() {
@@ -350,13 +264,8 @@ mod tests {
         gate.authorize(Some("bearer s3kret")).unwrap();
     }
 
-    // ---- AdminTokenHash::from_hex ----
-
     #[test]
     fn from_hex_round_trips_with_plaintext_hash() {
-        // sha256("s3kret") (verified independently): use the
-        // plaintext hasher to derive the expected hex form and then
-        // round-trip.
         let h1 = AdminTokenHash::from_plaintext("s3kret");
         let hex: String = to_hex(&h1.0);
         let h2 = AdminTokenHash::from_hex(&hex).unwrap();
@@ -378,7 +287,6 @@ mod tests {
     fn debug_does_not_print_digest_bytes() {
         let h = AdminTokenHash::from_plaintext("s3kret");
         let s = format!("{h:?}");
-        // Should NOT contain any hex byte sequence from the digest.
         let hex: String = to_hex(&h.0);
         assert!(!s.contains(&hex));
     }

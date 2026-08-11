@@ -1,7 +1,5 @@
-//! ROUND8-L7-14 — named H2 CVE-class regression corpus.
-//!
-//! Each test cites the CVE / GHSA / bug-class it pins. Failure of
-//! any of them is a regression of a fix we already paid for.
+//! ROUND8-L7-14 — named H2 CVE-class regression corpus; a failure here is a
+//! regression of a fix already paid for.
 
 use lb_h2::{DEFAULT_MAX_FRAME_SIZE, H2Frame, decode_frame};
 
@@ -24,8 +22,7 @@ fn make_frame(frame_type: u8, flags: u8, stream_id: u32, payload: &[u8]) -> Vec<
 const FRAME_DATA: u8 = 0x0;
 const FLAG_PADDED: u8 = 0x8;
 
-/// ROUND8-L7-11 / HAProxy `Properly consume padding` — DATA with
-/// PADDED must strip both pad-length byte and trailing pad bytes.
+/// ROUND8-L7-11 / HAProxy `Properly consume padding`: BOTH ends must strip.
 #[test]
 fn data_padded_strips_padding() {
     let payload = [3u8, b'a', b'b', b'c', 0, 0, 0];
@@ -37,7 +34,7 @@ fn data_padded_strips_padding() {
     }
 }
 
-/// ROUND8-L7-11 — pad_len > payload.len() - 1 must error.
+/// ROUND8-L7-11 — `pad_len > payload.len() - 1` must error.
 #[test]
 fn data_padded_pad_length_exceeds_payload_errors() {
     let payload = [200u8, b'a', b'b'];

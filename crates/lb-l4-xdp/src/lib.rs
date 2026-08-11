@@ -1,8 +1,8 @@
 //! L4 XDP/eBPF data plane for TCP and UDP load balancing.
 //!
-//! Provides userspace simulation of the L4 XDP data plane. Real eBPF programs
-//! cannot be tested in CI, so we simulate the conntrack table, Maglev consistent
-//! hashing, and hot-swap behavior.
+//! Ships the real aya-based loader plus the bpffs / netlink / NIC-compat helpers and the telemetry
+//! surface, alongside a CI-safe userspace simulation ([`sim`]) of the in-kernel routines that
+//! cannot be exercised without a privileged host.
 #![deny(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -21,58 +21,35 @@
 
 use std::collections::{HashMap, VecDeque};
 
-// Pillar 4a: real aya-based userspace loader, Linux-only. The standalone
-// BPF program it loads lives in crates/lb-l4-xdp/ebpf/ and is compiled
+// The standalone BPF program this loads lives in crates/lb-l4-xdp/ebpf/ and is compiled
 // out-of-workspace via scripts/build-xdp.sh.
 #[cfg(target_os = "linux")]
 pub mod loader;
 
-/// ROUND8-L4-11: bpffs (`/sys/fs/bpf/...`) mount-type runtime check.
-/// Verifies the pin directory the loader is about to use is actually
-/// backed by `BPF_FS_MAGIC` so the operator sees an actionable error
-/// at startup instead of a deep-aya EINVAL. The module's own
-/// `#![cfg(target_os = "linux")]` inner attribute gates the body, so
-/// no outer cfg is needed here.
+/// ROUND8-L4-11: bpffs mount-type runtime check, so a non-bpffs pin directory is an actionable
+/// startup error instead of a deep-aya EINVAL.
 pub mod bpffs;
 
-/// ROUND8-L4-05: known-bad NIC + firmware blocklist for native
-/// (`Drv`) XDP and the post-attach silent-drop probe scaffold (aya
-/// #1193 / Cilium lesson 8). The module's own
-/// `#![cfg(target_os = "linux")]` inner attribute gates the body.
+/// ROUND8-L4-05: known-bad NIC + firmware blocklist for native (`Drv`) XDP and the post-attach
+/// silent-drop probe scaffold (aya #1193 / Cilium lesson 8).
 pub mod nic_compat;
 
-/// ROUND8-L4-12: real RTM_GETLINK XDP prog-id query over a raw
-/// `AF_NETLINK` socket (closes the EBUSY-on-redeploy hazard). The
-/// module's own `#![cfg(target_os = "linux")]` inner attribute gates
-/// the body (same pattern as `bpffs`), so no outer cfg here; the
-/// byte-parser is `pub` for the CI proof test.
+/// ROUND8-L4-12: real RTM_GETLINK XDP prog-id query over a raw `AF_NETLINK` socket (closes the
+/// EBUSY-on-redeploy hazard). Its byte-parser is `pub` for the CI proof test.
 pub mod netlink_xdp;
 
-/// EBPF-2-04 / EBPF-2-05 / EBPF-2-08: lock-step telemetry surface
-/// between the eBPF data plane and userspace observability (rel's
-/// `lb-observability` consumes via the `pub fn` accessors).
+/// EBPF-2-04 / EBPF-2-05 / EBPF-2-08: lock-step telemetry surface between the eBPF data plane and
+/// userspace observability.
 pub mod stats_export;
 
-/// Pillar 4b-2 userspace simulation of the BPF extensions.
-///
-/// Covers 802.1Q VLAN stripping, IPv6 conntrack lookups, LPM-trie ACL
-/// matching, and RFC 1624 incremental checksum updates. The real in-kernel
-/// code lives under `crates/lb-l4-xdp/ebpf/src/main.rs`; this module is the
-/// CI-safe functional spec those routines must satisfy.
+/// Pillar 4b-2 userspace simulation of the BPF extensions (VLAN stripping, IPv6 conntrack, LPM-trie
+/// ACL, RFC 1624 checksums). The real in-kernel code is `ebpf/src/main.rs`; this is the CI-safe
+/// functional spec those routines must satisfy.
 pub mod sim;
 
-/// The compiled BPF ELF produced by `scripts/build-xdp.sh`.
-///
-/// `build.rs` emits `cfg(lb_xdp_elf)` when `src/lb_xdp.bin` is present, so
-/// this constant exists only when a real ELF has been built and committed.
-///
-/// Pillar 4b-1 produces this artifact (~3 KiB) and tracks it as a binary
-/// blob alongside the source. `XdpLoader::load_from_bytes(LB_XDP_ELF)` is
-/// the supported entry point.
-///
-/// The bytes are emitted with 8-byte alignment so downstream `object`-crate
-/// parsers that cast ELF headers through `from_bytes` (alignment-checked)
-/// do not reject them.
+/// The compiled BPF ELF produced by `scripts/build-xdp.sh`; exists only when `build.rs` sees
+/// `src/lb_xdp.bin` and emits `cfg(lb_xdp_elf)`. Emitted with 8-byte alignment so `object`-crate
+/// parsers that cast ELF headers through alignment-checked `from_bytes` do not reject them.
 #[cfg(lb_xdp_elf)]
 pub const LB_XDP_ELF: &[u8] = {
     #[repr(C, align(8))]
@@ -120,10 +97,8 @@ pub struct FlowKey {
     pub protocol: u8,
 }
 
-/// Simulated conntrack table -- maps flow 5-tuples to backend indices.
-///
-/// Supports a maximum capacity with FIFO eviction: when the table is full,
-/// the oldest entry is evicted to make room for new insertions.
+/// Simulated conntrack table mapping flow 5-tuples to backend indices, with FIFO eviction of the
+/// oldest entry once `max_capacity` is reached.
 #[derive(Debug)]
 pub struct ConntrackTable {
     entries: HashMap<FlowKey, usize>,
@@ -158,18 +133,14 @@ impl ConntrackTable {
         self.entries.get(flow).copied()
     }
 
-    /// Insert or update a flow-to-backend mapping.
-    ///
-    /// If the table is at capacity, the oldest entry is evicted first.
+    /// Insert or update a flow-to-backend mapping, evicting the oldest entry if at capacity.
     pub fn insert(&mut self, flow: FlowKey, backend_idx: usize) {
-        // If the flow already exists, update in-place without touching capacity.
         if let std::collections::hash_map::Entry::Occupied(mut e) = self.entries.entry(flow.clone())
         {
             e.insert(backend_idx);
             return;
         }
 
-        // Evict the oldest entry if at capacity.
         while self.entries.len() >= self.max_entries {
             if let Some(oldest) = self.insert_order.pop_front() {
                 self.entries.remove(&oldest);
@@ -232,9 +203,6 @@ const fn is_prime(n: usize) -> bool {
 }
 
 /// Maglev consistent hash table for L4 load balancing.
-///
-/// This is a standalone BPF-map-style table, independent of the `lb-balancer`
-/// crate, suitable for simulating XDP data-plane lookups.
 #[derive(Debug)]
 pub struct MaglevTable {
     table: Vec<usize>,
@@ -243,11 +211,6 @@ pub struct MaglevTable {
 
 impl MaglevTable {
     /// Build a new Maglev lookup table for the given backend names.
-    ///
-    /// # Errors
-    ///
-    /// Returns `XdpError::NoBackends` if `backends` is empty, or
-    /// `XdpError::InvalidTableSize` if `table_size` is zero or not prime.
     pub fn new(backends: &[String], table_size: usize) -> Result<Self, XdpError> {
         if backends.is_empty() {
             return Err(XdpError::NoBackends);
@@ -264,10 +227,6 @@ impl MaglevTable {
     }
 
     /// Look up the backend index for a given hash key.
-    ///
-    /// # Errors
-    ///
-    /// Returns `XdpError::EmptyTable` if the table is empty.
     #[allow(clippy::cast_possible_truncation)]
     pub fn lookup(&self, key: u64) -> Result<usize, XdpError> {
         if self.table.is_empty() {
@@ -342,7 +301,6 @@ impl MaglevTable {
                 };
                 let mut slot = (offset + c * skip) % table_size;
 
-                // Advance until we find an empty slot.
                 while table.get(slot).copied() != Some(usize::MAX) {
                     c += 1;
                     slot = (offset + c * skip) % table_size;
@@ -366,11 +324,9 @@ impl MaglevTable {
     }
 }
 
-/// Atomic backend table swap manager.
-///
-/// Old flows keep their pinned backend via conntrack; new flows use the new
-/// Maglev table. After a swap, stale conntrack entries pointing to out-of-range
-/// backend indices are detected and evicted on the next lookup.
+/// Atomic backend table swap manager. Old flows keep their pinned backend via conntrack; new flows
+/// use the new Maglev table, and conntrack entries pointing out of range after a shrink are evicted
+/// on the next lookup.
 #[derive(Debug)]
 pub struct HotSwapManager {
     conntrack: ConntrackTable,
@@ -379,10 +335,6 @@ pub struct HotSwapManager {
 
 impl HotSwapManager {
     /// Create a new hot-swap manager with the given initial backend set.
-    ///
-    /// # Errors
-    ///
-    /// Returns `XdpError` if the Maglev table cannot be built.
     pub fn new(backends: &[String], table_size: usize) -> Result<Self, XdpError> {
         let table = MaglevTable::new(backends, table_size)?;
         Ok(Self {
@@ -391,12 +343,8 @@ impl HotSwapManager {
         })
     }
 
-    /// Swap to a new backend set. Existing conntrack entries are preserved,
-    /// so in-flight flows continue to reach their original backend.
-    ///
-    /// # Errors
-    ///
-    /// Returns `XdpError` if the new Maglev table cannot be built.
+    /// Swap to a new backend set. Existing conntrack entries are preserved, so in-flight flows keep
+    /// reaching their original backend.
     pub fn swap_backends(
         &mut self,
         new_backends: &[String],
@@ -407,24 +355,14 @@ impl HotSwapManager {
         Ok(())
     }
 
-    /// Route a flow: check conntrack first, then fall back to the Maglev table.
-    ///
-    /// If the conntrack entry points to a backend index that is out of range
-    /// for the current table (e.g. after a swap to fewer backends), the stale
-    /// entry is removed and the flow is re-routed via Maglev.
-    ///
-    /// If the flow is new, the Maglev lookup result is inserted into the
-    /// conntrack table for future lookups.
-    ///
-    /// # Errors
-    ///
-    /// Returns `XdpError` if the Maglev lookup fails.
+    /// Route a flow: conntrack first, else Maglev (whose result is memoised into conntrack). A
+    /// conntrack entry pointing to a backend index out of range for the current table (e.g. after a
+    /// swap to fewer backends) is removed and the flow re-routed.
     pub fn route_flow(&mut self, flow: FlowKey, hash_key: u64) -> Result<usize, XdpError> {
         if let Some(idx) = self.conntrack.lookup(&flow) {
             if idx < self.current_table.backend_count() {
                 return Ok(idx);
             }
-            // Stale entry -- remove and re-route via Maglev.
             self.conntrack.remove(&flow);
         }
 
@@ -484,7 +422,6 @@ mod tests {
         ct.insert(make_flow(3), 2);
         assert_eq!(ct.len(), 3);
 
-        // Inserting a 4th entry should evict the oldest (src_port=1).
         ct.insert(make_flow(4), 3);
         assert_eq!(ct.len(), 3);
         assert_eq!(
@@ -520,7 +457,6 @@ mod tests {
         ct.insert(flow_b.clone(), 1);
         assert_eq!(ct.len(), 2);
 
-        // Update flow_a -- should NOT evict anything.
         ct.insert(flow_a.clone(), 99);
         assert_eq!(ct.len(), 2);
         assert_eq!(ct.lookup(&flow_a), Some(99));
@@ -617,7 +553,6 @@ mod tests {
 
     #[test]
     fn hotswap_evicts_stale_conntrack_after_shrink() {
-        // Start with 5 backends so conntrack entries can point to indices 0..4.
         let backends: Vec<String> = (0..5).map(|i| format!("backend-{i}")).collect();
         let mut mgr = HotSwapManager::new(&backends, 65537).unwrap();
 
@@ -631,25 +566,19 @@ mod tests {
 
         let original_idx = mgr.route_flow(flow.clone(), 42).unwrap();
 
-        // Swap to only 2 backends. Any conntrack entry with idx >= 2 is stale.
         let fewer_backends: Vec<String> = vec!["new-a".into(), "new-b".into()];
         mgr.swap_backends(&fewer_backends, 65537).unwrap();
 
         let rerouted_idx = mgr.route_flow(flow, 42).unwrap();
 
-        // The rerouted index must be valid for the new (smaller) backend set.
         assert!(
             rerouted_idx < 2,
             "rerouted index must be < new backend count"
         );
 
-        // If the original was already in-range, it should be unchanged; if it
-        // was out-of-range, it must have been re-routed via Maglev.
         if original_idx >= 2 {
-            // Was stale, must have been re-routed.
             assert!(rerouted_idx < 2);
         } else {
-            // Was still valid, conntrack should have returned it as-is.
             assert_eq!(rerouted_idx, original_idx);
         }
     }

@@ -11,7 +11,7 @@
 # Stability soak (NOT throughput): co-located load+gateway is acceptable (owner
 # ruling). Read the verdict ONLY from the COMPLETED run (R15).
 #
-# Usage: scripts/soak/s20-run.sh <duration_secs> <out_dir> [sample_secs]
+# Usage: scripts/archive/s20-run.sh <duration_secs> <out_dir> [sample_secs]
 set -uo pipefail
 
 DUR="${1:?usage: s20-run.sh <duration_secs> <out_dir> [sample_secs]}"

@@ -1,41 +1,20 @@
-//! Minimal Prometheus text-exposition (0.0.4) parser, scoped to what the soak
-//! sampler needs: pull named gauge/counter values out of the gateway's
-//! `/metrics` body so the soak can watch state-table sizes over time.
-//!
-//! Verdict-critical: the state-table gauges (`quic_modeb_streams_active`,
-//! `quic_passthrough_flows`, `accept_inflight{listener=…}`, …) are the
-//! product's own bounded-state signal. A wrong parse = a wrong bound verdict,
-//! so the parser is unit-tested on a captured exposition body that includes
-//! HELP/TYPE comments, labelled series, floats, and counters.
-//!
-//! This is intentionally NOT a full Prometheus parser — it handles the subset
-//! the product actually emits (no exemplars, no histogram-bucket reassembly
-//! beyond treating each line as an independent series).
+//! Minimal Prometheus text-exposition parser, scoped to the gauge/counter subset the product emits.
+//! A wrong parse is a wrong bound verdict, so it is unit-tested.
 
-/// One exposition line: a metric family name, its label set, and its value.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Sample {
-    /// Metric family name (e.g. `quic_modeb_streams_active`).
     pub name: String,
-    /// Label key/value pairs, in source order. Empty for unlabelled series.
     pub labels: Vec<(String, String)>,
-    /// Parsed value. `NaN`/`+Inf`/`-Inf` are preserved.
     pub value: f64,
 }
 
-/// A parsed `/metrics` body.
 #[derive(Debug, Clone, Default)]
 pub struct MetricSet {
-    /// Every value-bearing line, in source order.
     pub samples: Vec<Sample>,
 }
 
 impl MetricSet {
-    /// Sum the values of every series whose family name is `name`. Returns
-    /// `None` if the name is absent (distinct from `Some(0.0)`, which means
-    /// present-and-zero). Summing makes a labelled gauge like
-    /// `accept_inflight{listener=…}` collapse to a single total — the bound
-    /// signal the soak wants.
+    /// Sum every series with family name `name`; `None` (absent) is distinct from `Some(0.0)`.
     #[must_use]
     pub fn sum(&self, name: &str) -> Option<f64> {
         let mut found = false;
@@ -49,8 +28,6 @@ impl MetricSet {
         found.then_some(total)
     }
 
-    /// The maximum value across series with family name `name` (e.g. the
-    /// largest per-listener `accept_inflight`). `None` if absent.
     #[must_use]
     pub fn max(&self, name: &str) -> Option<f64> {
         self.samples
@@ -61,13 +38,7 @@ impl MetricSet {
     }
 }
 
-/// Parse a Prometheus text-exposition body into a [`MetricSet`].
-///
-/// Skips blank lines and `#`-prefixed HELP/TYPE comments. For each value line
-/// it splits the metric (with optional `{labels}`) from the value, parses the
-/// value as `f64` (the optional trailing timestamp token is ignored), and
-/// records a [`Sample`]. Unparseable lines are skipped rather than fatal — a
-/// soak must not die because one exposition line was odd.
+/// Parse a Prometheus text-exposition body. Unparseable lines are skipped, not fatal.
 #[must_use]
 pub fn parse(body: &str) -> MetricSet {
     let mut samples = Vec::new();
@@ -76,9 +47,7 @@ pub fn parse(body: &str) -> MetricSet {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        // Split `metric[{labels}] value [timestamp]`. The metric+labels token
-        // ends at the first whitespace that is OUTSIDE a `{...}` label block
-        // (label values may contain spaces).
+        // The metric+labels token ends at the first whitespace OUTSIDE `{...}`.
         let (metric, rest) = match split_metric_value(line) {
             Some(pair) => pair,
             None => continue,
@@ -107,8 +76,6 @@ pub fn parse(body: &str) -> MetricSet {
     MetricSet { samples }
 }
 
-/// Split a line into the `metric[{labels}]` token and the trailing
-/// `value [timestamp]` remainder, honoring spaces inside a `{...}` block.
 fn split_metric_value(line: &str) -> Option<(&str, &str)> {
     let mut depth = 0usize;
     for (i, c) in line.char_indices() {
@@ -129,8 +96,6 @@ fn split_metric_value(line: &str) -> Option<(&str, &str)> {
     None
 }
 
-/// Parse `k1="v1",k2="v2"` (the inside of a `{...}` block) into pairs. Tolerant
-/// of missing quotes and trailing commas.
 fn parse_labels(blob: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for pair in blob.split(',') {
@@ -181,7 +146,6 @@ http_request_seconds_sum 1.5
     #[test]
     fn sums_labelled_series() {
         let m = parse(SAMPLE);
-        // accept_inflight has two listener series — sum is the total bound.
         assert_eq!(m.sum("accept_inflight"), Some(12.0));
         assert_eq!(m.max("accept_inflight"), Some(7.0));
     }
@@ -207,7 +171,6 @@ http_request_seconds_sum 1.5
     fn absent_name_is_none_not_zero() {
         let m = parse(SAMPLE);
         assert_eq!(m.sum("quic_passthrough_flows"), None);
-        // Present-and-zero is distinguishable from absent.
         assert_eq!(m.sum("panic_total"), Some(0.0));
     }
 
@@ -219,7 +182,6 @@ http_request_seconds_sum 1.5
 
     #[test]
     fn value_with_trailing_timestamp() {
-        // Prometheus allows `metric value timestamp`; we take the value.
         let m = parse("foo_total 99 1700000000000\n");
         assert_eq!(m.sum("foo_total"), Some(99.0));
     }

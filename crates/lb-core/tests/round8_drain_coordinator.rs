@@ -1,11 +1,5 @@
-//! OPS-04+L4-12 Round-8 — drain coordinator unit-level proofs.
-//!
-//! This file owns the *coordinator-level* contract tests. The
-//! 15-case binary-integration tests live in
-//! `tests/round8_drain_15case.rs` (workspace root) and drive the
-//! real `expressgateway` binary; this file exercises the
-//! `Shutdown::run_drain` state machine directly so a regression at
-//! the lb-core level surfaces immediately without a binary build.
+//! Coordinator-level drain proofs, driving `Shutdown::run_drain` directly. The binary-level
+//! 15-case matrix lives in the workspace-root `round8_drain_15case.rs`.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -28,9 +22,6 @@ impl DrainObserver for CountingObserver {
     }
 }
 
-/// Reference: OPS-04+L4-12 plan §B.1 — every phase must observe
-/// once in declared order. A regression that re-ordered phases would
-/// break this assertion.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn run_drain_phases_in_order() {
     let shutdown = Shutdown::new();
@@ -72,8 +63,6 @@ async fn run_drain_phases_in_order() {
     );
 }
 
-/// Reference: OPS-04+L4-12 plan §B.2 case C-10 — two SIGTERMs in
-/// quick succession must call drain exactly once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn run_drain_idempotent_c10() {
     let shutdown = Shutdown::new();
@@ -94,8 +83,7 @@ async fn run_drain_idempotent_c10() {
     };
     let report1 = shutdown.run_drain(spec1).await;
 
-    // Second call: a different closure that would bump a different
-    // counter if it ran. The idempotency latch must prevent it.
+    // A distinct closure, so a broken latch shows up as a bumped counter.
     let mark_called_3 = Arc::clone(&mark_called);
     let spec2 = DrainSpec {
         readiness_settle: Duration::from_millis(10),
@@ -122,13 +110,9 @@ async fn run_drain_idempotent_c10() {
     );
 }
 
-/// Reference: OPS-04+L4-12 plan §B.2 case C-7 — drain with an
-/// uncooperative task records `TimedOut` outcome and surfaces the
-/// remaining-task count.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn run_drain_inflight_timeout_c7() {
     let shutdown = Shutdown::new();
-    // Spawn a task that ignores cancel.
     shutdown.tracker().spawn(async {
         tokio::time::sleep(Duration::from_secs(30)).await;
     });
@@ -163,8 +147,6 @@ async fn run_drain_inflight_timeout_c7() {
     );
 }
 
-/// Reference: OPS-04+L4-12 plan §B.2 case C-8 — XDP detach itself
-/// times out; coordinator records `TimedOut` and proceeds to exit.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn run_drain_xdp_detach_timeout_c8() {
     let shutdown = Shutdown::new();
@@ -176,7 +158,6 @@ async fn run_drain_xdp_detach_timeout_c8() {
         jitter_max: Duration::ZERO,
         mark_draining: None,
         xdp_detach: Some(Box::pin(async {
-            // Simulate a stuck kernel call.
             tokio::time::sleep(Duration::from_secs(60)).await;
             XdpDetachOutcome::Clean
         })),
@@ -190,8 +171,6 @@ async fn run_drain_xdp_detach_timeout_c8() {
     );
 }
 
-/// Reference: OPS-04+L4-12 plan §B.2 case C-13 — admin /drain mode
-/// passes `xdp_detach_deadline = None`; coordinator skips phase 6.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn run_drain_admin_skips_xdp_c13() {
     let shutdown = Shutdown::new();
@@ -220,10 +199,7 @@ async fn run_drain_admin_skips_xdp_c13() {
     );
 }
 
-/// Reference: OPS-04+L4-12 plan §F.1 — child token cancellation
-/// semantics. Cancelling the parent `token` must also cancel the
-/// `listener_token` (child); cancelling the listener_token must NOT
-/// cancel the parent.
+/// Cancellation is ONE-WAY: parent cancels the listener token, never the reverse.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn listener_token_is_child_of_root_token() {
     let s1 = Shutdown::new();

@@ -1,8 +1,5 @@
-//! Mirror of `crates/lb-l4-xdp/build.rs`: emit `cfg(lb_xdp_elf)` when the
-//! compiled BPF ELF is present, so `#[cfg(lb_xdp_elf)]` gates inside
-//! `crates/lb/src/xdp.rs` work the same way they do in the lb-l4-xdp
-//! crate. Cargo cfg values do not propagate across crates, so each
-//! consumer that wants to fence on ELF availability re-runs the check.
+//! Emit `cfg(lb_xdp_elf)` when the compiled BPF ELF is present. Cargo cfg values do NOT
+//! propagate across crates, so this check is duplicated per consumer (see lb-l4-xdp/build.rs).
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(lb_xdp_elf)");
     let elf_path = format!(

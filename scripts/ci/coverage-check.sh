@@ -1,57 +1,34 @@
 #!/usr/bin/env bash
 #
-# D-6 coverage gate — PER-MODULE hot-path threshold (S34).
+# D-6 coverage gate — per-module hot-path line coverage >= 80% (S34).
 #
-# The coverage charter (audit/coverage-scope.md) defines the gate as
-# "Per-module line coverage >= 80%" on the named hot-path modules — NOT a
-# whole-workspace (or whole-package) AGGREGATE. The previous CI job applied
-# `--fail-under-lines 80` to a 7-package aggregate, which (a) never matched the
-# charter metric and (b) is an average that hides an under-covered hot module
-# (the full-workspace aggregate is only ~76.6%, yet every hot-path module is
-# >= 80% — except the carve-out below). This script enforces the charter's real
-# metric: it reads per-file line coverage from an LCOV report and requires EACH
-# hot-path file to be >= 80%.
+# The charter metric (audit/coverage-scope.md) is PER-MODULE, not an aggregate: the
+# workspace average (~76.6%) hides an under-covered hot module. No averaging — any
+# hot-path module below threshold turns this RED.
 #
-# HONESTY CONTRACT (mirrors the h3spec named-waiver gate):
-#   * A hot-path module that drops below 80% turns this RED. No averaging.
-#   * Exactly ONE carve-out, named + justified: lb-l4-xdp/src/loader.rs. It
-#     performs the privileged XDP load / map-population syscalls that a unit
-#     harness cannot exercise without root, so its load-path lines are
-#     structurally unreachable here. The charter itself defers these to CI
-#     integration (audit/coverage-scope.md, audit/round-7/deferred-to-ci.md);
-#     the load path is instead smoke-validated by D2-xdp-verifier-smoke, which
-#     loads the real object into the runner-kernel verifier. NAMED, not blanket.
-#   * If EVERY required pattern matches zero files the gate fails closed (the
-#     LCOV paths are wrong); a single non-matching pattern is loud-warned so a
-#     legitimate rename surfaces without wedging the gate.
+# ONE carve-out, named and justified: lb-l4-xdp/src/loader.rs performs the privileged
+# XDP load / map-population syscalls, structurally unreachable without root. The
+# charter defers these to CI integration (audit/round-7/deferred-to-ci.md); the load
+# path is smoke-validated by D2-xdp-verifier-smoke, which loads the real object into
+# the runner-kernel verifier. NAMED, not blanket.
 #
-# METRIC CORRECTION (S44) — score merged DA: records, not the LF:/LH: summary.
-#   `lb-l7` (and 25 other modules) are compiled twice; llvm-cov merges both
-#   instantiations into ONE `SF:` record whose LF:/LH: summary counts shared
-#   source lines TWICE, while the per-line DA: records do not. For h2_proxy.rs
-#   the record declared LF:1887 while emitting only 1780 distinct DA: lines —
-#   107 phantom lines, and 596 FN: entries split across two crate
-#   disambiguators (CsdExPruU9iqX_5lb_l7 / CsbnMibX7jh97_5lb_l7). The second
-#   instantiation is the lib-unit-test build, which CANNOT reach the request
-#   hot path at all (`hyper::body::Incoming` has no public constructor), so its
-#   unhit lines were being scored as genuine misses. That put the gate on a
-#   coin flip: 3 RED / 3 green on byte-identical production source.
+# Fails closed if EVERY required pattern matches zero files (LCOV paths are wrong); a
+# single unmatched pattern only warns, so a rename surfaces without wedging the gate.
 #
-#   So: a source line is counted ONCE, and is "hit" if ANY instantiation
-#   executed it. This is the charter's stated metric ("per-module line
-#   coverage") measured correctly.
+# METRIC (S44 correction) — score merged DA: records, NEVER the LF:/LH: summary. 26
+# modules incl. lb-l7 are compiled twice; llvm-cov merges both instantiations into one
+# SF: record whose LF: counts shared source lines twice while the DA: records do not
+# (h2_proxy.rs declared LF:1887 vs 1780 distinct DA:). The second instantiation is the
+# lib-unit-test build, which CANNOT reach the request hot path at all
+# (`hyper::body::Incoming` has no public constructor), so its unhit lines scored as
+# genuine misses — the gate was a coin flip, 3 RED / 3 green on byte-identical source.
+# A line is now counted ONCE, hit if ANY instantiation executed it.
 #
-#   This is a CORRECTION, NOT a relaxation, and the evidence is that it moves
-#   numbers in BOTH directions — random.rs 86.21 -> 85.71, conn_gate.rs
-#   91.14 -> 90.91, conn_actor.rs 85.01 -> 84.79 all get STRICTER, because
-#   double-counted *hit* lines are removed from the numerator too. A loosening
-#   would only ever move numbers up. The 80% threshold is unchanged, no module
-#   is exempted, and no module falls below 80% under the corrected metric.
-#   Full 31-module before/after table: audit/ci/s44-coverage-metric-rebaseline.md
-#
-#   Records whose declared LF: exceeds their distinct DA: line count are
-#   reported as "dual-instantiated" so the artifact stays VISIBLE rather than
-#   silently drifting back.
+# This is a CORRECTION, not a relaxation: it moves numbers in BOTH directions
+# (random.rs 86.21 -> 85.71, conn_gate.rs 91.14 -> 90.91) because double-counted *hit*
+# lines leave the numerator too; a loosening could only move them up. Threshold
+# unchanged, nothing exempted, nothing falls below 80%.
+# 31-module before/after: audit/ci/s44-coverage-metric-rebaseline.md
 #
 # Usage: coverage-check.sh <coverage.lcov>
 
@@ -65,9 +42,7 @@ import re, sys, collections
 
 lcov_path, threshold = sys.argv[1], float(sys.argv[2])
 
-# Parse LCOV per-LINE (DA:<line>,<count>), merging every record and every
-# instantiation of a file. A source line is counted ONCE; it is "hit" if ANY
-# instantiation executed it. See the METRIC CORRECTION note in the header.
+# Merge every record and instantiation of a file; see the METRIC note in the header.
 # `declared_lf` is retained ONLY to surface dual-instantiation, never to score.
 lines_by_file = collections.defaultdict(dict)   # file -> {line_no: max_count}
 declared_lf = collections.Counter()             # file -> sum of LF: across records
@@ -85,10 +60,9 @@ for line in open(lcov_path):
             ln, cnt = int(parts[0]), int(parts[1])
         except (ValueError, IndexError):
             continue
-        # ALWAYS assign: a line whose every instantiation reports 0 must still
-        # land in the dict, or it silently leaves the DENOMINATOR and every
-        # file scores 100%. (`if cnt > d.get(ln, 0)` is the trap — 0 > 0 is
-        # False, so never-executed lines would never be inserted at all.)
+        # ALWAYS assign: `if cnt > d.get(ln, 0)` is the trap — 0 > 0 is False, so a
+        # line whose every instantiation reports 0 never enters the dict, silently
+        # leaving the DENOMINATOR and scoring every file 100%.
         d = lines_by_file[cur]
         d[ln] = max(d.get(ln, 0), cnt)
     elif line == "end_of_record":
@@ -103,12 +77,10 @@ for f, lns in lines_by_file.items():
     if declared_lf[f] > len(lns):
         dual.append((f, declared_lf[f], len(lns)))
 
-# Charter hot-path modules mapped to the CURRENT file layout. "bridges::*" =
-# the cross-protocol h*_to_h*.rs files; lb-balancer "* (all)" = every
-# lb-balancer/src/*.rs. CHARTER DRIFT (documented in audit/ci/s34-report.md):
-# the charter's `lb-config::validate` and `lb-observability::metrics` no longer
-# exist as standalone files, so they are not asserted; the request/packet hot
-# path below is what the gate guards.
+# Charter hot-path modules mapped to the CURRENT file layout. CHARTER DRIFT
+# (audit/ci/s34-report.md): the charter's `lb-config::validate` and
+# `lb-observability::metrics` no longer exist as standalone files, so they are not
+# asserted; the request/packet hot path below is what the gate guards.
 REQUIRED = [
     r"lb-l7/src/h1_proxy\.rs$",
     r"lb-l7/src/h2_proxy\.rs$",
@@ -139,8 +111,8 @@ print("  metric: merged DA: per-line (each source line counted once, hit if ANY 
 print(f"  {len(checked)} hot-path modules passed, {len(below)} below, "
       f"{len(empty_pats)} pattern(s) unmatched")
 
-# Visibility, not a gate: report files llvm-cov emitted with more declared LF:
-# than distinct source lines. Scoring off LF:/LH: here would double-count them.
+# Visibility, not a gate: surface dual-instantiated files so the artifact cannot
+# silently drift back. Scoring off their LF:/LH: would double-count them.
 dual_hot = sorted((f, lf, n) for f, lf, n in dual
                   if any(hit(p, f) for p in REQUIRED) or hit(EXEMPT, f))
 if dual_hot:

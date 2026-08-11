@@ -1,37 +1,8 @@
-//! DNS re-resolver with positive + negative caching.
-//!
-//! The resolver queries the platform's system resolver via
-//! [`std::net::ToSocketAddrs`], which is blocking; each uncached lookup
-//! runs on [`tokio::task::spawn_blocking`]. Answers are cached in a
-//! sharded [`dashmap::DashMap`] keyed on `(hostname, port)`.
-//!
-//! ## TTL approximation — known limitation
-//!
-//! `std::net::ToSocketAddrs` does not expose DNS TTL values. We cap the
-//! positive cache lifetime at [`ResolverConfig::positive_ttl_cap`]
-//! (default 300 s) which acts as a hard upper bound; a real
-//! TTL-honouring resolver belongs behind the same API later (e.g.
-//! `hickory-resolver`). Negative answers (NXDOMAIN / connection errors
-//! from the stub resolver) are cached for
-//! [`ResolverConfig::negative_ttl`] (default 5 s) to soak up
-//! flood-resolve loops without papering over transient outages.
-//!
-//! ## Concurrent-share
-//!
-//! When N tokio tasks call [`DnsResolver::resolve`] for the same key at
-//! once, exactly one system-resolver call fires. All waiters block on a
-//! shared [`tokio::sync::OnceCell`]; the first waiter populates it, the
-//! rest read the same `Arc`-wrapped result. This matches Pingora's
-//! singleflight behaviour and keeps the hot path non-blocking once the
-//! cache is warm.
-//!
-//! ## Refresh
-//!
-//! [`DnsResolver::spawn_background_refresh`] starts a tokio task that
-//! wakes every `every` duration and re-queries every non-expired entry.
-//! The refresh is best-effort: if a refresh fails it leaves the existing
-//! cached value in place until its natural expiry so a flaky resolver
-//! can not flip a healthy pool into a negative-cache storm.
+//! DNS re-resolver with positive + negative caching and Pingora-style singleflight.
+//! KNOWN LIMITATION: `ToSocketAddrs` exposes no TTLs, so the positive cache is bounded by a flat
+//! `positive_ttl_cap`; honouring real TTLs means swapping the backend behind this same API.
+//! A FAILED background refresh leaves the existing value until natural expiry — otherwise a flaky
+//! resolver flips a healthy pool into a negative-cache storm.
 
 use std::hash::{Hash, Hasher};
 use std::io;
@@ -75,15 +46,13 @@ impl Default for ResolverConfig {
 /// Errors from DNS resolution.
 #[derive(Debug, thiserror::Error, Clone)]
 pub enum DnsError {
-    /// The system resolver returned no answers for the name (NXDOMAIN or
-    /// an empty `getaddrinfo` result).
+    /// No answers — NXDOMAIN or an empty `getaddrinfo` result.
     #[error("NXDOMAIN: {hostname}")]
     NxDomain {
         /// Hostname that failed to resolve.
         hostname: String,
     },
-    /// The system resolver returned an I/O error. The `message` field is
-    /// a stringified copy because [`io::Error`] is not [`Clone`].
+    /// Resolver I/O error, stringified because [`io::Error`] is not [`Clone`].
     #[error("resolver i/o error for {hostname}: {message}")]
     Io {
         /// Hostname that failed to resolve.
@@ -93,15 +62,13 @@ pub enum DnsError {
     },
 }
 
-/// What kind of value a cache entry holds.
 #[derive(Debug, Clone)]
 enum ResolveResult {
     Positive(Arc<Vec<SocketAddr>>),
     Negative(DnsError),
 }
 
-/// A shared cache entry. `value` is filled exactly once by whichever
-/// task wins the singleflight race; all other waiters await it.
+/// Cache entry; `value` is filled once by the singleflight winner and awaited by the rest.
 struct CacheEntry {
     value: OnceCell<ResolveResult>,
     expires_at: parking_lot::Mutex<Instant>,
@@ -124,8 +91,7 @@ impl CacheEntry {
     }
 }
 
-/// Composite key used for caching. `hostname` is stored owned to avoid
-/// allocating on every lookup past the first.
+/// Cache key; `hostname` is owned so lookups past the first do not allocate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CacheKey {
     hostname: String,
@@ -148,9 +114,6 @@ impl CacheKey {
     }
 }
 
-/// Pluggable system-resolve backend. The default implementation delegates
-/// to [`ToSocketAddrs`]; unit tests swap in a counting / deterministic
-/// stub via [`DnsResolver::with_resolver`].
 type ResolveFn =
     Arc<dyn Fn(&str, u16) -> Result<Vec<SocketAddr>, io::Error> + Send + Sync + 'static>;
 
@@ -220,18 +183,7 @@ impl DnsResolver {
         self.inner.cache.len()
     }
 
-    /// Resolve `hostname:port` via the cache.
-    ///
-    /// On a cache hit the current value is returned immediately. On a
-    /// miss or expired entry, a single blocking resolve is dispatched to
-    /// [`tokio::task::spawn_blocking`]; other tasks that race the same
-    /// key wait on the shared cell.
-    ///
-    /// # Errors
-    /// Returns [`DnsError::NxDomain`] if the resolver yields no
-    /// addresses, and [`DnsError::Io`] for any other resolver error
-    /// (including tokio `JoinError`, which is surfaced as
-    /// [`io::ErrorKind::Other`]).
+    /// Resolve `hostname:port` through the cache; racing callers share one system-resolver call.
     pub async fn resolve(&self, hostname: &str, port: u16) -> Result<Vec<SocketAddr>, DnsError> {
         let key = CacheKey::from_ref(hostname, port);
         let entry = self
@@ -246,17 +198,9 @@ impl DnsResolver {
             return Self::materialize(entry.value.get());
         }
 
-        // Expired or empty: try to fill. Two cases:
-        //  1. The OnceCell is still empty — our closure runs at most
-        //     once and is the value every concurrent caller will see.
-        //  2. The OnceCell is already initialized but expired — replace
-        //     the entry with a fresh OnceCell and re-drive.
+        // An already-initialized-but-expired cell cannot be refilled, so it must be REPLACED.
         if entry.value.initialized() && entry.is_expired(now) {
-            // Replace the entry atomically so concurrent callers pick
-            // up the fresh cell. A small window exists where two
-            // concurrent tasks both see a stale entry and both refresh,
-            // but both writes are idempotent and both return the same
-            // system-resolver answer.
+            // Two tasks may both refresh; the writes are idempotent, so a duplicate lookup is the cost.
             let fresh = Arc::new(CacheEntry::new());
             self.inner.cache.insert(key.clone(), fresh.clone());
             return self.fill_and_return(&fresh, hostname, port).await;
@@ -319,11 +263,7 @@ impl DnsResolver {
         }
     }
 
-    /// Spawn a background task that re-resolves every cache entry at the
-    /// given cadence. Returns the tokio handle; callers should store it
-    /// and abort on shutdown. Only one refresher runs at a time per
-    /// resolver (subsequent calls return a sentinel that exits
-    /// immediately).
+    /// Spawn the periodic re-resolve task; a second call returns a handle that exits immediately.
     #[must_use]
     pub fn spawn_background_refresh(&self, every: Duration) -> JoinHandle<()> {
         let started = self.inner.refresh_running.compare_exchange(
@@ -333,14 +273,12 @@ impl DnsResolver {
             Ordering::Acquire,
         );
         if started.is_err() {
-            // Already running — return a no-op handle.
             return tokio::spawn(async {});
         }
         let resolver = self.clone();
         tokio::spawn(async move {
             let mut ticker = tokio::time::interval(every);
-            // Skip the immediate first tick so the first refresh fires
-            // one `every` after spawn, not at t=0.
+            // Skip the immediate tick so the first refresh is one `every` after spawn.
             ticker.tick().await;
             loop {
                 ticker.tick().await;
@@ -349,12 +287,9 @@ impl DnsResolver {
         })
     }
 
-    /// One-shot refresh of every cached entry. Exposed for testing and
-    /// for callers that want explicit control over the refresh cadence.
+    /// One-shot refresh of every cached entry.
     pub async fn refresh_all(&self) {
-        // Snapshot the keys so we can drop the dashmap iterator before
-        // issuing spawn_blocking calls (avoids holding shard locks over
-        // `.await` points).
+        // Snapshot the keys first — holding a shard lock across an `.await` would deadlock.
         let snapshot: Vec<CacheKey> = self.inner.cache.iter().map(|kv| kv.key().clone()).collect();
         for key in snapshot {
             let fresh = Arc::new(CacheEntry::new());
@@ -365,9 +300,7 @@ impl DnsResolver {
 }
 
 fn io_err_to_dns(hostname: &str, err: &io::Error) -> DnsError {
-    // `getaddrinfo` failures commonly surface as ErrorKind::Other with
-    // "failed to lookup address information". Treat a clearly-not-found
-    // result as NxDomain; everything else is Io.
+    // `getaddrinfo` reports NXDOMAIN as ErrorKind::Other, so the message text is the only discriminator.
     let msg = err.to_string();
     let looks_like_nxdomain = msg.contains("failed to lookup address information")
         || msg.contains("Name or service not known")
@@ -444,7 +377,6 @@ mod tests {
     #[tokio::test]
     async fn negative_entry_caches_nxdomain() {
         let counter = Arc::new(AtomicUsize::new(0));
-        // NX via empty answer list.
         let fn_: ResolveFn = {
             let c = counter.clone();
             Arc::new(move |_h: &str, _p: u16| {
@@ -481,8 +413,7 @@ mod tests {
     #[tokio::test]
     async fn concurrent_resolvers_share_cache() {
         let counter = Arc::new(AtomicUsize::new(0));
-        // Introduce a tiny sleep in the "resolve" so concurrent callers
-        // actually queue on the OnceCell.
+        // The sleep is what makes concurrent callers actually queue on the cell.
         let fn_: ResolveFn = {
             let c = counter.clone();
             Arc::new(move |_h: &str, _p: u16| {

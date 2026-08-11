@@ -10,7 +10,7 @@
 # scenarios — each gets a sustained, co-located, NON-saturated run. Verdict from the
 # COMPLETED run only (R15).
 #
-# Usage: scripts/soak/s21-run.sh <per_batch_secs> <out_dir> [sample_secs]
+# Usage: scripts/archive/s21-run.sh <per_batch_secs> <out_dir> [sample_secs]
 set -uo pipefail
 
 DUR="${1:?usage: s21-run.sh <per_batch_secs> <out_dir> [sample_secs]}"

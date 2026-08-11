@@ -1,19 +1,6 @@
-//! `io_uring` operations used by the lb-io runtime.
-//!
-//! This module exposes a small, single-shot API around the raw
-//! [`io_uring`] opcodes we care about: [`nop_roundtrip`] (used by
-//! [`super::detect_backend`] to probe the kernel), [`accept_one`],
-//! [`recv`], [`send`], and [`splice`]. Each helper constructs a fresh
-//! ring, pushes one SQE, submits, waits for the corresponding CQE,
-//! inspects the result, and tears the ring down.
-//!
-//! These primitives are **deliberately synchronous**. Wiring them into
-//! tokio's reactor (so they can drive `AsyncRead`/`AsyncWrite` without
-//! blocking the executor) is a much larger undertaking tracked as a
-//! future optimisation pass. Likewise, fixed file descriptors
-//! (`IORING_REGISTER_FILES`) and registered buffer pools
-//! (`IORING_REGISTER_BUFFERS`) are scoped for a later pass — this module
-//! only does unregistered, one-op-per-ring work.
+//! `io_uring` operations used by the lb-io runtime. Every helper builds a fresh ring for ONE op and
+//! tears it down. That synchronicity is what makes the `unsafe` pushes below sound: the caller's
+//! stack storage outlives `submit_and_wait`. Do NOT make these async without rewriting ownership.
 
 use std::io;
 use std::mem::MaybeUninit;
@@ -22,8 +9,7 @@ use std::os::fd::RawFd;
 
 use io_uring::{IoUring, cqueue, opcode, squeue, types};
 
-/// Sentinel value stamped into the NOP submission queue entry so the probe
-/// can confirm the CQE it receives is the one it submitted.
+/// Sentinel tag proving the reaped CQE is the one we submitted.
 const NOP_USER_DATA: u64 = 0xDEAD_BEEF_u64;
 
 /// Result of a successful [`nop_roundtrip`].
@@ -33,20 +19,13 @@ pub struct UringNopResult {
     pub user_data: u64,
 }
 
-/// Submit a single `NOP` operation and reap the completion.
-///
-/// # Errors
-/// Any failure during ring construction, SQE submission, or CQE reaping is
-/// converted into an [`io::Error`]. Failure is expected on kernels older
-/// than 5.1, on systems with `kernel.io_uring_disabled=1`, or under a
-/// seccomp filter that rejects `io_uring_setup(2)`.
+/// Submit a single `NOP` and reap the completion. Failure is EXPECTED pre-5.1, under
+/// `kernel.io_uring_disabled=1`, or behind a seccomp filter — callers treat it as "use epoll".
 pub fn nop_roundtrip() -> io::Result<UringNopResult> {
     let mut ring = IoUring::new(8)?;
     let nop = opcode::Nop::new().build().user_data(NOP_USER_DATA);
 
-    // SAFETY: a NOP opcode references no caller-owned memory, so there is
-    // nothing for the kernel to outlive. The ring was just constructed
-    // with 8 entries so a single push cannot overflow.
+    // SAFETY: a NOP references no caller-owned memory, and the fresh 8-entry ring cannot overflow.
     unsafe { push_sqe(&mut ring, &nop)? };
 
     ring.submit_and_wait(1)?;
@@ -58,23 +37,11 @@ pub fn nop_roundtrip() -> io::Result<UringNopResult> {
     })
 }
 
-/// Accept exactly one inbound connection on `listener_fd` via
-/// `IORING_OP_ACCEPT` and return the accepted fd along with the remote
-/// socket address.
-///
-/// This is a single-shot accept: multishot accept
-/// (`IORING_FEAT_ACCEPT_MULTI`) and `file_index` fixed-slot installation
-/// are explicitly out of scope for this pass.
-///
-/// # Errors
-/// Returns any `io::Error` the kernel reports via `CQE.result()`, plus
-/// any ring-construction failure. Callers should treat `EOPNOTSUPP` or
-/// `EPERM` here as "fall back to epoll / `accept(2)`".
+/// Single-shot `IORING_OP_ACCEPT` — not multishot, no fixed-slot installation.
 pub fn accept_one(listener_fd: RawFd) -> io::Result<(RawFd, SocketAddr)> {
     let mut ring = IoUring::new(8)?;
 
-    // The kernel fills these two out; start with a generous buffer that
-    // holds either an `sockaddr_in` or `sockaddr_in6`.
+    // Sized for the larger of `sockaddr_in` / `sockaddr_in6`; the kernel fills both out.
     let mut addr_storage = MaybeUninit::<libc::sockaddr_storage>::zeroed();
     let mut addr_len: libc::socklen_t =
         core::mem::size_of::<libc::sockaddr_storage>()
@@ -89,31 +56,22 @@ pub fn accept_one(listener_fd: RawFd) -> io::Result<(RawFd, SocketAddr)> {
     .build()
     .user_data(0xACCE_7700_u64);
 
-    // SAFETY: `addr_storage` and `addr_len` outlive `submit_and_wait`
-    // below (both are stack locals of this function). The pointers are
-    // writable, correctly typed for the accept opcode, and do not alias.
+    // SAFETY: `addr_storage` and `addr_len` are stack locals that outlive `submit_and_wait`; both
+    // pointers are writable, correctly typed for the accept opcode, and do not alias.
     unsafe { push_sqe(&mut ring, &entry)? };
 
     ring.submit_and_wait(1)?;
     let cqe = reap_cqe(&mut ring)?;
     let fd = check_cqe(&cqe)?;
 
-    // SAFETY: on a successful accept the kernel has written a
-    // `sockaddr_in` / `sockaddr_in6` into `addr_storage` and set
-    // `addr_len` to the number of valid bytes. We only read via the
-    // typed sockaddr_in / sockaddr_in6 views below after checking the
-    // family tag.
+    // SAFETY: a successful accept means the kernel wrote a `sockaddr_in`/`sockaddr_in6` into
+    // `addr_storage` and set `addr_len`; the typed views below are read only after the family check.
     let addr = unsafe { sockaddr_storage_to_socketaddr(&addr_storage, addr_len)? };
 
     Ok((fd, addr))
 }
 
 /// Receive from `fd` into `buf` via `IORING_OP_RECV`.
-///
-/// # Errors
-/// Ring-construction errors and any negative result from the kernel are
-/// surfaced as `io::Error`. A zero-length return (orderly close) is
-/// returned as `Ok(0)`.
 pub fn recv(fd: RawFd, buf: &mut [u8]) -> io::Result<usize> {
     let len_u32 = u32::try_from(buf.len()).unwrap_or(u32::MAX);
     let mut ring = IoUring::new(8)?;
@@ -122,10 +80,8 @@ pub fn recv(fd: RawFd, buf: &mut [u8]) -> io::Result<usize> {
         .build()
         .user_data(0x2ECC_0000_u64);
 
-    // SAFETY: `buf` is a caller-supplied slice that outlives this call
-    // because this function is synchronous — the kernel finishes writing
-    // before `submit_and_wait` returns. `len_u32` is bounded by the slice
-    // length, so the kernel cannot write past the slice end.
+    // SAFETY: this call is synchronous, so `buf` outlives the kernel write, and `len_u32` is
+    // bounded by the slice length so the kernel cannot write past its end.
     unsafe { push_sqe(&mut ring, &entry)? };
 
     ring.submit_and_wait(1)?;
@@ -135,10 +91,6 @@ pub fn recv(fd: RawFd, buf: &mut [u8]) -> io::Result<usize> {
 }
 
 /// Send from `buf` on `fd` via `IORING_OP_SEND`.
-///
-/// # Errors
-/// Ring-construction errors and any negative result from the kernel are
-/// surfaced as `io::Error`.
 pub fn send(fd: RawFd, buf: &[u8]) -> io::Result<usize> {
     let len_u32 = u32::try_from(buf.len()).unwrap_or(u32::MAX);
     let mut ring = IoUring::new(8)?;
@@ -147,9 +99,7 @@ pub fn send(fd: RawFd, buf: &[u8]) -> io::Result<usize> {
         .build()
         .user_data(0x5EDD_0000_u64);
 
-    // SAFETY: `buf` outlives the synchronous `submit_and_wait` below.
-    // `len_u32` is bounded by the slice length so the kernel cannot read
-    // past the slice end.
+    // SAFETY: `buf` outlives the synchronous `submit_and_wait`, and `len_u32` is bounded by its length.
     unsafe { push_sqe(&mut ring, &entry)? };
 
     ring.submit_and_wait(1)?;
@@ -158,13 +108,7 @@ pub fn send(fd: RawFd, buf: &[u8]) -> io::Result<usize> {
     Ok(usize_from_nonneg_i32(n))
 }
 
-/// Splice up to `len` bytes from `from` to `to` with `IORING_OP_SPLICE`.
-/// Both descriptors must satisfy `splice(2)`'s pipe constraint — typically
-/// one side must be a pipe.
-///
-/// # Errors
-/// Ring-construction errors and any negative result from the kernel are
-/// surfaced as `io::Error`.
+/// `IORING_OP_SPLICE` up to `len` bytes. One side MUST be a pipe, per `splice(2)`.
 pub fn splice(from: RawFd, to: RawFd, len: u32) -> io::Result<u32> {
     let mut ring = IoUring::new(8)?;
 
@@ -172,9 +116,7 @@ pub fn splice(from: RawFd, to: RawFd, len: u32) -> io::Result<u32> {
         .build()
         .user_data(0x5917_CE00_u64);
 
-    // SAFETY: Splice carries no caller-owned memory — the fds are the
-    // only inputs and they remain owned by the caller for the duration
-    // of this synchronous call.
+    // SAFETY: splice carries no caller-owned memory; the fds stay owned by the caller throughout.
     unsafe { push_sqe(&mut ring, &entry)? };
 
     ring.submit_and_wait(1)?;
@@ -183,16 +125,11 @@ pub fn splice(from: RawFd, to: RawFd, len: u32) -> io::Result<u32> {
     Ok(u32_from_nonneg_i32(n))
 }
 
-// ── helpers ─────────────────────────────────────────────────────────────
-
 /// Push a single SQE.
 ///
 /// # Safety
-/// The caller must ensure that any memory referenced by `entry` lives at
-/// least until `submit_and_wait` returns. For the helpers in this module
-/// that invariant is upheld because every one of them is synchronous —
-/// the buffer / addr storage is on the caller's stack and the call does
-/// not return until the kernel is done.
+/// Memory referenced by `entry` must live until `submit_and_wait` returns. Every helper here is
+/// synchronous, so its caller's stack storage does.
 unsafe fn push_sqe(ring: &mut IoUring, entry: &squeue::Entry) -> io::Result<()> {
     let mut sq = ring.submission();
     // SAFETY: forwarded from the caller of this function.
@@ -209,8 +146,6 @@ fn reap_cqe(ring: &mut IoUring) -> io::Result<cqueue::Entry> {
         .ok_or_else(|| io::Error::other("io_uring completion queue empty after submit_and_wait"))
 }
 
-/// Decode the CQE result: negative values are errno, non-negative values
-/// are the op's success return.
 fn check_cqe(cqe: &cqueue::Entry) -> io::Result<i32> {
     let code = cqe.result();
     if code < 0 {
@@ -220,16 +155,12 @@ fn check_cqe(cqe: &cqueue::Entry) -> io::Result<i32> {
     }
 }
 
-/// Widen a non-negative `i32` (validated upstream by [`check_cqe`]) to
-/// `usize` without a lossy cast.
 #[inline]
 fn usize_from_nonneg_i32(n: i32) -> usize {
     // `n >= 0` is an invariant of our callers; fall back to 0 otherwise.
     usize::try_from(n).unwrap_or(0)
 }
 
-/// Widen a non-negative `i32` (validated upstream by [`check_cqe`]) to
-/// `u32` without a lossy cast.
 #[inline]
 fn u32_from_nonneg_i32(n: i32) -> u32 {
     u32::try_from(n).unwrap_or(0)
@@ -238,9 +169,8 @@ fn u32_from_nonneg_i32(n: i32) -> u32 {
 /// Interpret the `sockaddr_storage` the kernel wrote during ACCEPT.
 ///
 /// # Safety
-/// `storage` must hold at least `addr_len` initialised bytes matching
-/// one of the supported address families (`AF_INET`, `AF_INET6`). This
-/// is guaranteed by a successful `IORING_OP_ACCEPT` completion.
+/// `storage` must hold `addr_len` initialised bytes of `AF_INET`/`AF_INET6`, as guaranteed by a
+/// successful `IORING_OP_ACCEPT` completion.
 unsafe fn sockaddr_storage_to_socketaddr(
     storage: &MaybeUninit<libc::sockaddr_storage>,
     addr_len: libc::socklen_t,
@@ -257,8 +187,7 @@ unsafe fn sockaddr_storage_to_socketaddr(
                     "AF_INET sockaddr truncated",
                 ));
             }
-            // SAFETY: family tag is AF_INET and addr_len covers at least
-            // sizeof(sockaddr_in); the storage is `repr(C)`-compatible.
+            // SAFETY: family is AF_INET, addr_len covers sizeof(sockaddr_in), storage is repr(C).
             let sin = unsafe { &*core::ptr::from_ref(storage_ref).cast::<libc::sockaddr_in>() };
             let ip = std::net::Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr));
             let port = u16::from_be(sin.sin_port);
@@ -273,8 +202,7 @@ unsafe fn sockaddr_storage_to_socketaddr(
                     "AF_INET6 sockaddr truncated",
                 ));
             }
-            // SAFETY: family tag is AF_INET6 and addr_len covers at
-            // least sizeof(sockaddr_in6).
+            // SAFETY: family is AF_INET6 and addr_len covers sizeof(sockaddr_in6).
             let sin6 = unsafe { &*core::ptr::from_ref(storage_ref).cast::<libc::sockaddr_in6>() };
             let ip = std::net::Ipv6Addr::from(sin6.sin6_addr.s6_addr);
             let port = u16::from_be(sin6.sin6_port);
@@ -354,7 +282,6 @@ mod tests {
         let (server, _) = listener.accept().unwrap();
         let fd = server.as_raw_fd();
 
-        // Receive "PING".
         let mut buf = [0u8; 4];
         match recv(fd, &mut buf) {
             Ok(n) => {
@@ -369,7 +296,6 @@ mod tests {
             }
         }
 
-        // Echo back "PONG".
         match send(fd, b"PONG") {
             Ok(n) => assert_eq!(n, 4),
             Err(e) => eprintln!("skipping send path: {e}"),
@@ -380,9 +306,7 @@ mod tests {
 
     #[test]
     fn splice_rejects_non_pipe_or_succeeds() {
-        // splice(2) requires one side to be a pipe; splicing between two
-        // TCP sockets should either succeed (kernel synthesises it) or
-        // return EINVAL. Either way, no panic.
+        // splice(2) needs one side to be a pipe; socket-to-socket either works or EINVALs, never panics.
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         let _client_thread = std::thread::spawn(move || {

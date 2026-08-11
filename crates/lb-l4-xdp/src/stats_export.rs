@@ -1,21 +1,10 @@
-//! Lock-step API boundary between the eBPF data plane and userspace
-//! observability (rel's `lb-observability` crate consumes this in
-//! Wave-2 per REL-2-13).
-//!
-//! Created by EBPF-2-04 (XDP attach mode reporting) and extended by
-//! EBPF-2-05 (pinned-map reuse reporting) and EBPF-2-08 (per-CPU
-//! STATS array export). Everything in this file is **safe**, **lock-
-//! free**, and **panic-free** at steady state — telemetry must never
-//! be the reason production aborts.
-//!
-//! File ownership: `ebpf` owns this file. `rel` reads from it via the
-//! `pub fn` accessors below; rel MUST NOT edit this file.
-
+//! Lock-step API boundary between the eBPF data plane and userspace observability. Everything here
+//! is safe, lock-free and panic-free at steady state — telemetry must never be the reason
+//! production aborts.
 use std::sync::atomic::{AtomicU8, Ordering};
 
-// EBPF-2-08: the per-CPU STATS surface is Linux-only because aya
-// is. Non-Linux callers still see the AttachModeLabel /
-// pin-reused / slot-enum APIs (they're pure-Rust).
+// EBPF-2-08: the per-CPU STATS surface is Linux-only because aya is. The label / pin-reused /
+// slot-enum APIs are pure Rust and stay available everywhere.
 #[cfg(target_os = "linux")]
 use std::sync::OnceLock;
 
@@ -24,26 +13,19 @@ use aya::maps::{Map as AyaMap, MapData, MapError, PerCpuArray};
 #[cfg(target_os = "linux")]
 use parking_lot::Mutex;
 
-// ---------------------------------------------------------------------------
-// EBPF-2-04: XDP attach mode reporting.
-// ---------------------------------------------------------------------------
-
-/// Coarse-grained mode label for the Prometheus `xdp_attach_mode`
-/// gauge. Matches the kernel's `XDP_FLAGS_*` mode bits one-for-one.
+/// Coarse-grained mode label for the Prometheus `xdp_attach_mode` gauge.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AttachModeLabel {
-    /// Native driver mode (`XDP_FLAGS_DRV_MODE`). 40-80 Mpps single-core.
+    /// Native driver mode (`XDP_FLAGS_DRV_MODE`).
     Drv,
-    /// Generic SKB mode (`XDP_FLAGS_SKB_MODE`). 1-3 Mpps single-core; CI
-    /// / dev path.
+    /// Generic SKB mode (`XDP_FLAGS_SKB_MODE`).
     Skb,
-    /// Hardware offload (`XDP_FLAGS_HW_MODE`). mlx5 / nfp only.
+    /// Hardware offload (`XDP_FLAGS_HW_MODE`).
     Hw,
 }
 
 impl AttachModeLabel {
-    /// Stable byte encoding for atomic storage. Sentinel `0xFF` =
-    /// "not set" (i.e. XDP not attached in this process yet).
+    /// Stable byte encoding for atomic storage. Sentinel `0xFF` = not set.
     const fn as_byte(self) -> u8 {
         match self {
             Self::Drv => 1,
@@ -61,8 +43,8 @@ impl AttachModeLabel {
         }
     }
 
-    /// Prometheus label value (lower-case, matches the kernel API
-    /// vocabulary so an operator can compare to `bpftool net show`).
+    /// Prometheus label value, matching the kernel API vocabulary so an operator can compare it
+    /// against `bpftool net show`.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -73,75 +55,49 @@ impl AttachModeLabel {
     }
 }
 
-/// Sentinel for "no attach mode recorded yet". Distinct from any
-/// valid `AttachModeLabel::as_byte()` value.
+/// Sentinel for "no attach mode recorded yet".
 const ATTACH_MODE_UNSET: u8 = 0xFF;
 
-/// Process-global atomic store of the current XDP attach mode.
-/// Single producer (the `xdp.rs::try_attach_xdp` startup path);
-/// many consumers (the Prom scraper, status endpoints, tests).
-/// Atomic byte is sufficient — there is at most one XDP attach per
-/// process for the foreseeable future.
+/// Process-global atomic store of the current XDP attach mode. Single producer (the startup attach
+/// path), many consumers; at most one XDP attach per process.
 static ATTACH_MODE: AtomicU8 = AtomicU8::new(ATTACH_MODE_UNSET);
 
-/// Record which mode the XDP loader successfully attached in.
-/// Called from `crates/lb/src/xdp.rs` after `attach_with_fallback`
-/// returns Ok. Safe to call repeatedly; latest call wins.
+/// Record which mode the XDP loader successfully attached in. Latest call wins.
 pub fn record_attach_mode(mode: AttachModeLabel) {
     ATTACH_MODE.store(mode.as_byte(), Ordering::Relaxed);
 }
 
-/// Read back the current attach mode for telemetry exposition.
-/// Returns `None` when XDP has not been attached yet (so rel's gauge
-/// reports `0` for every mode rather than fabricating a value).
+/// Read back the current attach mode. `None` when XDP has not been attached, so the gauge reports 0
+/// for every mode rather than fabricating a value.
 #[must_use]
 pub fn current_attach_mode() -> Option<AttachModeLabel> {
     AttachModeLabel::from_byte(ATTACH_MODE.load(Ordering::Relaxed))
 }
 
-// ---------------------------------------------------------------------------
-// ROUND8-L4-05: xdp_attach_probe_failed_total.
-// ---------------------------------------------------------------------------
-
-/// Process-global count of `Drv` attaches the static NIC blocklist
-/// refused OR the post-attach silent-drop probe found dead (aya
-/// #1193 / Cilium lesson 8), forcing a demotion to `Skb`. Userspace-
-/// only — there is no kernel `STATS` slot because the BPF program
-/// never runs when an attach silently drops. rel's Prom layer
-/// projects this to `xdp_attach_probe_failed_total{iface,mode}`.
+/// Process-global count of `Drv` attaches the blocklist refused or the probe found dead, forcing a
+/// demotion to `Skb`. Userspace-only — the BPF program never runs when an attach silently drops, so
+/// there is no kernel `STATS` slot.
 static ATTACH_PROBE_FAILED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// Increment the attach-probe-failed counter. Called by
-/// `XdpLoader::attach_with_fallback` when the NIC blocklist refuses
-/// `Drv` (and the loader falls through to `Skb`) or when the runtime
-/// probe finds a silent drop.
+/// Increment the attach-probe-failed counter.
 pub fn record_attach_probe_failed() {
     ATTACH_PROBE_FAILED.fetch_add(1, Ordering::Relaxed);
 }
 
-/// Read back the cumulative attach-probe-failed count for Prom
-/// exposition (`xdp_attach_probe_failed_total`).
+/// Read back the cumulative attach-probe-failed count for Prom exposition
+/// (`xdp_attach_probe_failed_total`).
 #[must_use]
 pub fn attach_probe_failed_count() -> u64 {
     ATTACH_PROBE_FAILED.load(Ordering::Relaxed)
 }
 
-// ---------------------------------------------------------------------------
-// EBPF-2-05: pinned-map reuse reporting.
-// ---------------------------------------------------------------------------
-
-/// Snapshot of which pinned maps were reused vs. freshly-created on
-/// process startup. Read by rel's Prom layer; written once at startup
-/// from `crates/lb-l4-xdp/src/loader.rs::load_from_bytes_pinned`.
-///
-/// Bit layout in the underlying atomic: bit `i` is `1` if the
-/// `i`-th pin in [`pin_names()`] was reused from a prior process.
-/// The packing is intentional: rel's Prom scrape pulls a single
-/// atomic load and projects to per-name gauges, no Mutex required.
+/// Snapshot of which pinned maps were reused vs. freshly created at startup. Bit `i` is `1` if the
+/// `i`-th pin in [`pin_names()`] was reused; the packing keeps the Prom scrape a single atomic load
+/// projected to per-name gauges, no Mutex.
 static PIN_REUSED_BITMAP: AtomicU8 = AtomicU8::new(0);
 
-/// Canonical pin-name ordering for the bitmap. Add new entries to
-/// the END only — bit positions are wire-stable.
+/// Canonical pin-name ordering for the bitmap. Append to the END only — bit positions are
+/// wire-stable.
 #[must_use]
 pub fn pin_names() -> &'static [&'static str] {
     &[
@@ -153,9 +109,8 @@ pub fn pin_names() -> &'static [&'static str] {
     ]
 }
 
-/// Record whether the named pin was reused.
-/// Unknown names are silently dropped (forward compatibility with
-/// future pin additions).
+/// Record whether the named pin was reused. Unknown names are silently dropped (forward
+/// compatibility with future pin additions).
 pub fn record_pin_reused(name: &str, reused: bool) {
     if let Some(idx) = pin_names().iter().position(|n| *n == name) {
         let mask = 1u8 << idx;
@@ -178,14 +133,8 @@ pub fn pin_reused_snapshot() -> Vec<(&'static str, bool)> {
         .collect()
 }
 
-// ---------------------------------------------------------------------------
-// EBPF-2-08: STATS per-CPU array export.
-// ---------------------------------------------------------------------------
-
-/// Slot indices into the eBPF program's `STATS: PerCpuArray<u64>`.
-/// **MUST** stay in lock-step with `crates/lb-l4-xdp/ebpf/src/main.rs`
-/// (search for `STAT_*` constants). Order is wire-stable — append
-/// new slots to the end ONLY, never reorder.
+/// Slot indices into the eBPF program's `STATS: PerCpuArray<u64>`. MUST stay in lock-step with the
+/// `STAT_*` constants in `ebpf/src/main.rs`; order is wire-stable, so append only.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 #[repr(usize)]
 pub enum StatSlot {
@@ -209,80 +158,42 @@ pub enum StatSlot {
     VlanStripped = 8,
     /// `STAT_V6_EXT_UNSUPPORTED`: too many IPv6 extension headers.
     V6ExtUnsupported = 9,
-    /// `STAT_BACKEND_UNPOPULATED` (ROUND8-L4-01): a conntrack hit
-    /// whose `backend_ip == 0` or `backend_port == 0` — controller
-    /// wrote an unpopulated entry. The XDP path returns XDP_PASS
-    /// so the kernel stack handles the packet; this counter is the
-    /// operator signal to chase the misconfiguration.
+    /// `STAT_BACKEND_UNPOPULATED` (ROUND8-L4-01): a conntrack hit whose `backend_ip == 0` or
+    /// `backend_port == 0` — controller wrote an unpopulated entry.
     BackendUnpopulated = 10,
-    /// `STAT_V4_FRAGMENT` (ROUND8-L4-08): IPv4 packet with MF set
-    /// or fragment offset > 0. XDP_PASS so the kernel reassembles.
+    /// `STAT_V4_FRAGMENT` (ROUND8-L4-08): IPv4 packet with MF set or fragment offset > 0.
     V4Fragment = 11,
-    /// `STAT_V6_FRAGMENT` (ROUND8-L4-08): IPv6 packet carrying a
-    /// Fragment Extension Header (IPPROTO_FRAGMENT = 44).
+    /// `STAT_V6_FRAGMENT` (ROUND8-L4-08): IPv6 packet carrying a Fragment Extension Header
+    /// (IPPROTO_FRAGMENT = 44).
     V6Fragment = 12,
-    /// `STAT_CT_RST_PRUNE` (ROUND8-L4-02): a TCP RST packet evicted
-    /// its conntrack entry (Cilium `bpf/lib/conntrack.h` RST-prune
-    /// lesson). The RST itself is passed to the kernel so the peer
-    /// still observes connection teardown end-to-end; only flow
-    /// *tracking* stops. Counter is the operator signal for sliding-
-    /// RST replay attacks.
+    /// `STAT_CT_RST_PRUNE` (ROUND8-L4-02): a TCP RST packet evicted its conntrack entry (Cilium
+    /// `bpf/lib/conntrack.h` RST-prune lesson).
     CtRstPrune = 13,
-    /// `STAT_CT_FIN_PRUNE` (ROUND8-L4-02): a TCP FIN-ACK packet
-    /// evicted its conntrack entry. Packet itself is still forwarded
-    /// (XDP_TX) so the FIN-ACK reaches the backend; the slot is freed
-    /// to keep the LRU aligned with real TCP-FSM reality without
-    /// paying the verifier cost of a full FSM (deferred to Pillar
-    /// 4b-3).
+    /// `STAT_CT_FIN_PRUNE` (ROUND8-L4-02): a TCP FIN-ACK packet evicted its conntrack entry.
     CtFinPrune = 14,
-    /// `STAT_NEW_FLOW_RATE_CAP` (ROUND8-L4-03): a *new* flow
-    /// (conntrack miss) was rate-capped under a SYN flood. Katran
-    /// `is_under_flood()` lesson 4: above the per-CPU new-flow cap
-    /// (`xdp_new_flow_cap_per_sec_per_cpu`, default 125_000), the
-    /// CT-miss path is short-circuited to XDP_PASS WITHOUT the
-    /// STAT_PASS "please populate conntrack" signal — established
-    /// (CT-hit) flows are untouched so the LRU stays stable for
-    /// legitimate traffic instead of being thrashed by the
-    /// attacker's unique 5-tuples. This counter is the operator's
-    /// SYN-flood alarm AND the back-pressure signal the userspace
-    /// control loop polls. The userspace `CtInsertGate` increments
-    /// the same slot when it denies a control-plane CT insert.
+    /// `STAT_NEW_FLOW_RATE_CAP` (ROUND8-L4-03): a new flow was rate-capped under a SYN flood
+    /// (Katran `is_under_flood()`). The userspace `CtInsertGate` increments the SAME slot when it
+    /// denies a control-plane CT insert.
     NewFlowRateCap = 15,
-    /// `xdp_attach_probe_failed_total` (ROUND8-L4-05): the post-attach
-    /// silent-drop probe (or the static NIC blocklist) found the
-    /// requested `Drv` attach dead/unsafe and the loader demoted to
-    /// `Skb` (aya #1193 / Cilium lesson 8). This is NOT an eBPF
-    /// per-CPU `STATS` slot — the BPF program never runs if the
-    /// attach silently drops — so it has no `STAT_*` constant in the
-    /// ebpf crate. It lives in the enum's wire-stable ordering so
-    /// rel's exposition keeps one slot vocabulary; the counter is
-    /// surfaced via [`record_attach_probe_failed`] /
-    /// [`attach_probe_failed_count`] (a process-global atomic), not
-    /// via `read_stats()`.
+    /// `xdp_attach_probe_failed_total` (ROUND8-L4-05): the blocklist or probe found the requested
+    /// `Drv` attach dead and the loader demoted to `Skb`. NOT a kernel per-CPU slot — no `STAT_*`
+    /// constant, surfaced via [`attach_probe_failed_count`], never `read_stats()`, but it holds a
+    /// wire-stable position so the slot vocabulary stays single-sourced.
     AttachProbeFailed = 16,
 }
 
-/// Number of **kernel-side** per-CPU `STATS` slots — the length of
-/// the `read_stats()` `bpf_map_lookup_elem` loop. Slots `0..=15`
-/// (`Pass`..=`NewFlowRateCap`) each have a matching `STAT_*` constant
-/// in the eBPF crate. Bumps MUST come WITH a new `STAT_*` constant in
-/// the eBPF crate AND a new [`StatSlot`] variant.
+/// Number of KERNEL-side per-CPU `STATS` slots — the length of the `read_stats()` lookup loop. A
+/// bump MUST come with a new `STAT_*` constant in the eBPF crate AND a new [`StatSlot`].
 ///
-/// ROUND8-L4-05 note: `StatSlot::AttachProbeFailed` (16) is
-/// deliberately NOT counted here — it is a userspace-only counter
-/// (the BPF program never runs when an attach silently drops, so
-/// there is no kernel slot to read). It is surfaced via the
-/// process-global [`attach_probe_failed_count`] atomic, NOT
-/// `read_stats()`. Keeping `NUM_SLOTS == 16` is what keeps the
-/// kernel read loop bounded to real kernel slots.
+/// ROUND8-L4-05: `StatSlot::AttachProbeFailed` (16) is deliberately NOT counted — it is
+/// userspace-only, and keeping `NUM_SLOTS == 16` is what bounds the kernel read loop to real kernel
+/// slots.
 pub const NUM_SLOTS: usize = 16;
 
 /// Errors from the STATS read path.
 #[derive(Debug, thiserror::Error)]
 pub enum StatsExportError {
-    /// The per-CPU array handle was never installed by
-    /// `XdpLoader::load_from_bytes_pinned`. Either the loader was
-    /// never called or the ELF didn't declare a `stats` map.
+    /// The per-CPU array handle was never installed by `XdpLoader::load_from_bytes_pinned`.
     #[error("STATS handle not installed; load_from_bytes_pinned must be called first")]
     HandleMissing,
     /// `aya::maps::MapError` from the underlying read.
@@ -290,33 +201,22 @@ pub enum StatsExportError {
     Map(String),
 }
 
-/// Owned snapshot of the STATS map at a single moment in time.
-/// `summed[i]` is the cross-CPU sum of slot `i`; the Prom scraper
-/// only ever publishes `summed`. `per_cpu[i]` is the un-summed
-/// slice for the debug HTTP endpoint.
+/// Owned snapshot of the STATS map at one moment. `summed[i]` is the cross-CPU sum (all the Prom
+/// scraper publishes); `per_cpu[i]` is the un-summed slice for the debug endpoint.
 #[derive(Debug, Clone)]
 pub struct StatsSnapshot {
-    /// Cross-CPU sum per slot. Length = [`NUM_SLOTS`].
+    /// Cross-CPU sum per slot.
     pub summed: Vec<u64>,
-    /// Per-CPU breakdown. Outer len = [`NUM_SLOTS`], inner = nr_cpus.
+    /// Per-CPU breakdown.
     pub per_cpu: Vec<Vec<u64>>,
 }
 
 #[cfg(target_os = "linux")]
 static STATS_HANDLE: OnceLock<Mutex<PerCpuArray<MapData, u64>>> = OnceLock::new();
 
-/// Install the STATS map handle. Called by
-/// `XdpLoader::load_from_bytes_pinned` exactly once per process.
-///
-/// EBPF-2-08 invariant: aya `PerCpuArray::get(&i, 0)` performs the
-/// `bpf_map_lookup_elem` syscall on each call; we cache the typed
-/// wrapper but **never cache the values** — the scraper always sees
-/// fresh kernel state.
-///
-/// # Errors
-///
-/// - [`StatsExportError::Map`] if the supplied `Map` is not a
-///   `PerCpuArray<u64>` (e.g. someone wired the wrong slot in).
+/// Install the STATS map handle, once per process. EBPF-2-08 invariant: the typed wrapper is cached
+/// but the VALUES never are — each `PerCpuArray::get` is a fresh `bpf_map_lookup_elem`, so the
+/// scraper always sees live state.
 #[cfg(target_os = "linux")]
 pub fn install_stats_handle(map: AyaMap) -> Result<(), StatsExportError> {
     let pca: PerCpuArray<MapData, u64> =
@@ -327,19 +227,9 @@ pub fn install_stats_handle(map: AyaMap) -> Result<(), StatsExportError> {
     Ok(())
 }
 
-/// Read a fresh STATS snapshot. The public Prom-side entry point.
-///
-/// Cost: one `bpf_map_lookup_elem` syscall per slot per scrape, so
-/// `NUM_SLOTS × scrape_period`-grained. On 256-CPU hosts each
-/// syscall returns a 256 × 8 = 2 KiB buffer; total per-scrape work
-/// is ~20 KiB of kernel copy.
-///
-/// # Errors
-///
-/// - [`StatsExportError::HandleMissing`]: loader has not installed
-///   the handle (e.g. running without XDP).
-/// - [`StatsExportError::Map`]: aya rejected the read (kernel-side
-///   syscall failure).
+/// Read a fresh STATS snapshot — the public Prom-side entry point. Cost: one `bpf_map_lookup_elem`
+/// per slot per scrape; on a 256-CPU host each syscall returns 2 KiB, so a scrape copies ~20 KiB of
+/// kernel memory.
 #[cfg(target_os = "linux")]
 pub fn read_stats() -> Result<StatsSnapshot, StatsExportError> {
     let handle = STATS_HANDLE.get().ok_or(StatsExportError::HandleMissing)?;
@@ -350,7 +240,6 @@ pub fn read_stats() -> Result<StatsSnapshot, StatsExportError> {
         let values = guard
             .get(&i, 0)
             .map_err(|e: MapError| StatsExportError::Map(format!("{e}")))?;
-        // `PerCpuValues` derefs to `&[V]`.
         let slice: &[u64] = &values;
         let sum: u64 = slice.iter().copied().fold(0u64, u64::wrapping_add);
         per_cpu.push(slice.to_vec());
@@ -359,9 +248,8 @@ pub fn read_stats() -> Result<StatsSnapshot, StatsExportError> {
     Ok(StatsSnapshot { summed, per_cpu })
 }
 
-/// Non-Linux stub. Returns a snapshot of zeros sized to
-/// [`NUM_SLOTS`] so cross-platform consumers (tests, dev mode) can
-/// still call without `cfg` gates.
+/// Non-Linux stub returning zeros sized to [`NUM_SLOTS`], so cross-platform consumers need no `cfg`
+/// gates.
 #[cfg(not(target_os = "linux"))]
 #[must_use]
 pub fn read_stats() -> Result<StatsSnapshot, StatsExportError> {
@@ -377,7 +265,6 @@ mod tests {
 
     #[test]
     fn unset_returns_none() {
-        // Independent of other tests' record-calls: read after reset.
         ATTACH_MODE.store(ATTACH_MODE_UNSET, Ordering::Relaxed);
         assert_eq!(current_attach_mode(), None);
     }
@@ -403,7 +290,6 @@ mod tests {
 
     #[test]
     fn pin_reuse_records_round_trip() {
-        // Reset bitmap so prior tests don't contaminate.
         PIN_REUSED_BITMAP.store(0, Ordering::Relaxed);
         record_pin_reused("conntrack", true);
         record_pin_reused("stats", true);
@@ -418,17 +304,15 @@ mod tests {
 
     #[test]
     fn pin_reuse_unknown_name_is_silent() {
-        // Forward-compat: a future pin name added in the eBPF crate
-        // but not yet in `pin_names()` must not panic.
+        // Forward-compat: a pin name added in the eBPF crate but not yet in `pin_names()` must not
+        // panic.
         record_pin_reused("future_map", true);
-        // No observable effect — just check the call doesn't blow up.
     }
 
     #[test]
     fn stat_slot_indices_are_wire_stable() {
-        // Wire-stability invariant: the numeric value of each slot
-        // is published to operators via `xdp_packets_total{result}`
-        // labels; reordering breaks Prom recording rules.
+        // Wire-stability invariant: each slot's numeric value is published to operators via
+        // `xdp_packets_total{result}` labels; reordering breaks Prom recording rules.
         assert_eq!(StatSlot::Pass as usize, 0);
         assert_eq!(StatSlot::Drop as usize, 1);
         assert_eq!(StatSlot::CtHitV4 as usize, 2);
@@ -445,9 +329,8 @@ mod tests {
         assert_eq!(StatSlot::CtRstPrune as usize, 13);
         assert_eq!(StatSlot::CtFinPrune as usize, 14);
         assert_eq!(StatSlot::NewFlowRateCap as usize, 15);
-        // ROUND8-L4-05: userspace-only slot (NOT counted in
-        // NUM_SLOTS — see the const doc). Wire position is still
-        // stable so rel's exposition vocabulary is single-sourced.
+        // ROUND8-L4-05: userspace-only slot (NOT counted in NUM_SLOTS — see the const doc). Wire
+        // position is still stable so the exposition vocabulary is single-sourced.
         assert_eq!(StatSlot::AttachProbeFailed as usize, 16);
     }
 
@@ -461,9 +344,8 @@ mod tests {
 
     #[test]
     fn num_slots_matches_enum() {
-        // If a new variant is added to StatSlot without bumping
-        // NUM_SLOTS the read loop in `read_stats` would silently
-        // skip it — this assertion guards that invariant.
+        // A new StatSlot variant without a NUM_SLOTS bump would be silently skipped by the
+        // `read_stats` read loop — this assertion guards that.
         assert_eq!(NUM_SLOTS, 16);
     }
 

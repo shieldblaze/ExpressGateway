@@ -1,53 +1,20 @@
-//! PROTO-2-15 — SNI ↔ `:authority` / `Host` agreement validator.
+//! SNI ↔ `:authority` / `Host` agreement validator (RFC 6066 §3 vs RFC 9113
+//! §8.3.1). TLS to `attacker.example` then `Host: victim.example` is a
+//! host-confusion primitive one layer below PROTO-2-01: the termination point
+//! picked cert and policy from the SNI while routing would follow the
+//! application-layer authority. Refusal is **421** (RFC 9110 §15.5.20).
 //!
-//! RFC 6066 §3 defines Server Name Indication: the TLS client signals
-//! the intended server hostname during the ClientHello. RFC 9113
-//! §8.3.1 (HTTP/2) and RFC 9110 §7.2 (Host header) require the
-//! application-layer authority to identify the same origin. If a
-//! client opens a TLS session to `attacker.example` (SNI) and then
-//! issues `Host: victim.example`, the gateway should refuse the
-//! request: the TLS termination point made an authorisation decision
-//! (which certificate to present, which set of policies to apply)
-//! based on the SNI, but the routing decision would otherwise be
-//! made on the application-layer authority. Forwarding such a
-//! request is a host-confusion smuggling primitive — comparable to
-//! the `:authority` ≠ `Host` pattern in PROTO-2-01, but one layer
-//! lower.
-//!
-//! The canonical response is **421 Misdirected Request** (RFC 9110
-//! §15.5.20), which signals to the client that the connection is
-//! authoritative for a different origin and the client should re-
-//! resolve / re-connect.
-//!
-//! ## Wiring status
-//!
-//! The validator lives here, fully unit-tested. Wiring it on the hot
-//! path requires capturing the SNI value from the rustls handshake
-//! result and threading it from `crates/lb/src/main.rs` (via the
-//! TLS-accept future) down into `H1Proxy::serve_connection` /
-//! `H2Proxy::serve_connection`. That main.rs handler change is
-//! **DEFERRED to Wave-2c** per the Wave-2b-2 scope (PROTO-2-15
-//! plan). When Wave-2c lands the SNI propagation, it should call
-//! [`check_sni_authority`] inside the proxy `handle` method
-//! immediately after [`crate::h2_proxy::check_authority_host_agreement`]
-//! and return [`misdirected_response`] on `Err(_)`.
+//! The validator IS wired on the hot path (`h1_proxy`, `h2_proxy`, and the
+//! binary's TLS-accept site).
 
 use http::StatusCode;
 
-/// Result of [`check_sni_authority`].
-///
-/// `Ok(())` means: no SNI was captured (the connection was plain
-/// TCP or the SNI extension was absent), or the SNI is consistent
-/// with the application-layer authority.
-///
-/// `Err(SniMismatch { … })` carries enough context for a structured
-/// log line; the proxy renders this as 421 Misdirected Request.
+/// Mismatch context from [`check_sni_authority`], rendered as a 421.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SniMismatch {
     /// The SNI value captured from the TLS handshake.
     pub sni: String,
-    /// The application-layer authority host (from `:authority` or
-    /// `Host`; whichever was present and agreed per PROTO-2-01).
+    /// The application-layer authority host (`:authority` or `Host`).
     pub authority: String,
 }
 
@@ -63,35 +30,12 @@ impl std::fmt::Display for SniMismatch {
 
 impl std::error::Error for SniMismatch {}
 
-/// Verify that the TLS SNI value agrees with the HTTP authority.
-///
-/// `sni` is the value captured from the rustls handshake (None when
-/// the connection is plain TCP or the client omitted the SNI
-/// extension — the latter is rare but valid per RFC 6066 §3).
-///
-/// `authority` is the host component of `:authority` (HTTP/2/3) or
-/// `Host` (HTTP/1.1). The caller is responsible for resolving the
-/// authority/Host agreement upstream (PROTO-2-01); this validator
-/// only compares against the SNI.
-///
-/// Rules:
-///   * No SNI → `Ok(())`. There is nothing to compare against.
-///   * Empty `authority` → `Ok(())`. The PROTO-2-01 check upstream
-///     already rejects a missing/empty Host on the H1 path; for H2
-///     `:authority` is required-and-non-empty by §8.3. Either way,
-///     this validator is a co-defence, not the primary gate.
-///   * Case-insensitive comparison on the host name (RFC 3986
-///     §3.2.2).
-///   * Ports are ignored. SNI never carries a port (it's a
-///     hostname); the authority may carry one. Comparing on host
-///     alone matches `Browser` behaviour and the §8.3.1 carve-out.
-///   * Trailing dot is normalised (FQDN form vs. relative form).
+/// Verify that the TLS SNI agrees with the HTTP authority. A `None` SNI or an
+/// empty `authority` is `Ok(())` — PROTO-2-01 is the primary gate, this is a
+/// co-defence. Case-insensitive, port-ignoring, trailing-dot normalised.
 ///
 /// # Errors
-///
-/// Returns [`SniMismatch`] when the SNI host and the authority host
-/// disagree case-insensitively. Callers should render this as a
-/// 421 Misdirected Request response.
+/// [`SniMismatch`] when the two hosts disagree.
 pub fn check_sni_authority(sni: Option<&str>, authority: &str) -> Result<(), SniMismatch> {
     let Some(sni) = sni else {
         return Ok(());
@@ -112,13 +56,8 @@ pub fn check_sni_authority(sni: Option<&str>, authority: &str) -> Result<(), Sni
     }
 }
 
-/// Build the canonical 421 Misdirected Request response body.
-///
-/// The body is the static string `"Misdirected Request: SNI does
-/// not match request authority (RFC 9110 §15.5.20)"`. Returning a
-/// `(StatusCode, &'static str)` pair keeps this module free of any
-/// hyper / http-body dependency; the proxy site builds the actual
-/// `Response<BoxBody<…>>` from the pair.
+/// The canonical 421 status + body as a pair, so this module needs no hyper /
+/// http-body dependency.
 #[must_use]
 pub const fn misdirected_response() -> (StatusCode, &'static str) {
     (
@@ -132,9 +71,8 @@ fn normalise_host(s: &str) -> String {
     s.trim_end_matches('.').to_ascii_lowercase()
 }
 
-/// Split `host[:port]`, IPv6-bracket aware. Mirror of the helpers in
-/// `h2_proxy.rs` / `h2_to_h1.rs`; duplicated to keep this module
-/// dependency-free.
+/// Split `host[:port]`, IPv6-bracket aware. Duplicated from `h2_proxy.rs` to
+/// keep this module dep-free.
 fn split_host_port(s: &str) -> (&str, Option<&str>) {
     if let Some(stripped) = s.strip_prefix('[') {
         if let Some(end) = stripped.find(']') {
@@ -162,8 +100,6 @@ mod tests {
 
     #[test]
     fn empty_authority_passes() {
-        // PROTO-2-01 covers the empty-authority case upstream; this
-        // validator is a co-defence, not the primary gate.
         assert!(check_sni_authority(Some("example.test"), "").is_ok());
     }
 
@@ -188,8 +124,6 @@ mod tests {
 
     #[test]
     fn authority_with_port_compared_on_host_only() {
-        // SNI never carries a port; an authority may. Compare on
-        // host only.
         assert!(check_sni_authority(Some("example.test"), "example.test:8443").is_ok());
     }
 
@@ -202,7 +136,6 @@ mod tests {
     #[test]
     fn ipv6_authority() {
         assert!(check_sni_authority(Some("[::1]"), "[::1]:443").is_ok());
-        // Different host literal must reject.
         assert!(check_sni_authority(Some("[::1]"), "[::2]:443").is_err());
     }
 

@@ -1,66 +1,9 @@
 //! Slowloris / slow-POST connection watchdog (SEC-2-03).
-//!
-//! Provides a stable accept-time API that the Wave-2b call sites in
-//! `crates/lb-l7/src/h{1,2}_proxy.rs` (and Wave-2c's
-//! `crates/lb/src/main.rs` accept loop) drive without depending on
-//! the existing per-connection [`SlowlorisDetector`] /
-//! [`SlowPostDetector`] state-machine internals.
-//!
-//! Shape
-//! -----
-//!
-//! ```ignore
-//! let wd = Watchdog::new(WatchdogConfig::default());
-//! let conn_id = ConnId::new(socket.peer_addr()?, fd);
-//! wd.register(conn_id, Instant::now() + Duration::from_secs(5));
-//! // ... checkpoint (today: once, at the header phase). To make the
-//! // SlowRate body check live, a caller would invoke this on every
-//! // parsed body frame — the production callers do NOT (see SCOPE below).
-//! wd.progress(conn_id, bytes_read_cumulative)?;
-//! // ... when the request is done:
-//! wd.deregister(conn_id);
-//! ```
-//!
-//! `progress` returns `Err(WatchdogError::Deadline)` when the
-//! connection has exceeded its deadline (slow handshake / slowloris
-//! header phase) **or** `Err(WatchdogError::SlowRate)` when its
-//! observed rate has dropped below the configured minimum (slow-POST
-//! body phase).
-//!
-//! ## SCOPE: this is a DETECTION / OBSERVABILITY layer, not the enforcer
-//! (F-RES-5, S38)
-//!
-//! The Watchdog's job is to **detect and surface** stalled connections
-//! (warn logs + the `evicted` count for alerting), NOT to be the primary
-//! mechanism that closes them. The current wiring reflects this:
-//! * `progress` is called **once** per request (the H1/H2 header-phase
-//!   checkpoint, e.g. `h1_proxy.rs`), not on every body frame, so the
-//!   `SlowRate` slow-POST rate check is effectively dormant.
-//! * the production sweeper (`lb/src/main.rs`) calls
-//!   [`Watchdog::sweep_expired`] on a tick and **logs** the swept count;
-//!   it does NOT close the offending socket (there is no mpsc
-//!   eviction→close path wired today — closing a parked socket from the
-//!   sweeper would race the graceful-drain coordinator).
-//!
-//! ENFORCEMENT — the bounds that actually close a stalled connection —
-//! lives in the timeout stack, not here:
-//! * **slowloris header phase:** hyper's `header_read_timeout`
-//!   (`HttpTimeouts::header`, wired with a `Timer` in the H1/H2 builders;
-//!   F-RES-1, S38);
-//! * **slow-POST / no-forward-progress body phase:** the
-//!   `idle_bounded_send` Phase-A idle deadline + `HttpTimeouts::total`;
-//! * **H2 zero-window stall:** the keepalive PING / settings caps;
-//! * **QUIC idle:** `set_max_idle_timeout`.
-//!
-//! So a deployment can rely on the timeout stack for bounding and treat
-//! the Watchdog's metrics/logs as the alerting/visibility signal. If a
-//! future revision wants the Watchdog itself to enforce, wire an mpsc
-//! eviction channel from the sweeper to a per-connection cancel token and
-//! call `progress` from the body pump — both are deliberately absent today.
-//!
-//! Sweeper lifecycle is owned by Wave-2c's `lb_core::Shutdown`
-//! token; this crate exposes the entry points and a stable
-//! `Watchdog::shutdown()` for the call site to invoke.
+//! SCOPE (F-RES-5, S38): this DETECTS, it does not ENFORCE. `progress` is called once per request,
+//! never per body frame, so `SlowRate` is dormant by design, and the sweeper logs rather than
+//! closing (closing would race the drain coordinator). The bounds that actually close a stalled
+//! connection live in the timeout stack: hyper `header_read_timeout` (F-RES-1), `idle_bounded_send`
+//! Phase-A + `HttpTimeouts::total`, the H2 keepalive PING, and QUIC `set_max_idle_timeout`.
 
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -68,19 +11,12 @@ use std::time::{Duration, Instant};
 
 use dashmap::DashMap;
 
-/// Identifier for a watched connection.
-///
-/// The watchdog itself is opaque about how the caller assigns IDs —
-/// the common pattern is `(peer_ip, accept_seqno)` so two
-/// simultaneous connections from the same NAT egress IP are
-/// distinguishable.
+/// Watched-connection id; `(peer_ip, accept_seqno)` keeps two conns behind one NAT IP distinct.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ConnId {
-    /// Peer IP. Stored for eviction logging only — not used for
-    /// hashing equality is composed of `(ip, seq)`.
+    /// Peer IP, for eviction logging.
     pub peer: IpAddr,
-    /// Caller-assigned sequence number. Unique within the listener
-    /// across the lifetime of the watchdog.
+    /// Caller-assigned sequence number, unique within the listener.
     pub seq: u64,
 }
 
@@ -92,16 +28,14 @@ impl ConnId {
     }
 }
 
-/// Outcome the [`Watchdog::progress`] call returns to the hot path.
+/// Outcome the [`Watchdog::progress`] call returns to the hot path; map either eviction to 408 / RST.
 #[derive(Debug, thiserror::Error)]
 pub enum WatchdogError {
-    /// Connection passed its registered deadline without the caller
-    /// invoking [`Watchdog::deregister`]. Map to 408 / RST.
+    /// Registered deadline elapsed without a [`Watchdog::deregister`].
     #[error("watchdog evicted conn {0:?}: deadline exceeded")]
     Deadline(ConnId),
 
-    /// Observed byte-rate over the most recent window dropped below
-    /// `min_rate_bps`. Map to 408 / RST.
+    /// Byte-rate over the most recent window dropped below `min_rate_bps`.
     #[error("watchdog evicted conn {conn:?}: rate {observed_bps} B/s below floor {floor_bps} B/s")]
     SlowRate {
         /// The evicted connection.
@@ -112,9 +46,7 @@ pub enum WatchdogError {
         floor_bps: u64,
     },
 
-    /// `progress` called for a connection that was never
-    /// [`register`](Watchdog::register)ed. Surface to the caller as a
-    /// programming error — the hot path should never silence this.
+    /// `progress` on an unregistered id — a caller bug; never silence it on the hot path.
     #[error("watchdog: unknown connection {0:?}")]
     Unknown(ConnId),
 }
@@ -122,25 +54,17 @@ pub enum WatchdogError {
 /// Static configuration for a watchdog instance.
 #[derive(Debug, Clone, Copy)]
 pub struct WatchdogConfig {
-    /// Minimum bytes-per-second over the most-recent window. `0`
-    /// disables the rate check (deadline-only mode).
+    /// Minimum bytes-per-second over the most-recent window; `0` disables the rate check.
     pub min_rate_bps: u64,
-    /// Window length over which the rate is computed. Must be
-    /// non-zero.
+    /// Window over which the rate is computed. Must be non-zero.
     pub rate_window: Duration,
-    /// Maximum number of concurrent registered connections. The
-    /// watchdog's per-entry overhead is a `DashMap` slot
-    /// (~64 bytes); a 100 000-conn ceiling is ~6 MB.
+    /// Concurrent-registration ceiling (~64 B per `DashMap` slot, so 100 000 conns ≈ 6 MB).
     pub max_registered: usize,
 }
 
 impl Default for WatchdogConfig {
     fn default() -> Self {
-        // Defaults align with SEC-2-03 plan §Approach:
-        //   header phase: 5 s total cap, 64 B/s min
-        //   slow POST   : 10 s window, 256 B/s min
-        // Pick the lower (header) bound here; the caller picks the
-        // deadline per `register` call.
+        // SEC-2-03 header-phase bound; the caller sets the per-`register` deadline.
         Self {
             min_rate_bps: 64,
             rate_window: Duration::from_secs(1),
@@ -157,11 +81,7 @@ struct Entry {
     last_seen: Instant,
 }
 
-/// Per-connection slowloris / slow-POST watchdog.
-///
-/// Cheap to clone (`Arc` newtype). The Wave-2b call sites are
-/// expected to hold a single watchdog per listener and clone it into
-/// the per-task state.
+/// Per-connection slowloris / slow-POST watchdog; cheap to clone (`Arc` newtype), one per listener.
 #[derive(Clone)]
 pub struct Watchdog {
     inner: Arc<WatchdogInner>,
@@ -202,12 +122,7 @@ impl Watchdog {
         self.inner.table.is_empty()
     }
 
-    /// Register a new connection.
-    ///
-    /// Returns `false` if the table is already at
-    /// `max_registered` capacity; the caller should reject the
-    /// connection in that case (it is structurally equivalent to a
-    /// listener-cap exhaustion).
+    /// Register a connection; `false` means the table is at `max_registered` and the caller must reject.
     pub fn register(&self, id: ConnId, deadline: Instant) -> bool {
         if self.inner.table.len() >= self.inner.config.max_registered {
             return false;
@@ -224,30 +139,19 @@ impl Watchdog {
         true
     }
 
-    /// Record progress (cumulative bytes read) for a connection and
-    /// evaluate eviction rules.
-    ///
-    /// # Errors
-    ///
-    /// * [`WatchdogError::Deadline`] — registered deadline elapsed.
-    /// * [`WatchdogError::SlowRate`] — rate over the most-recent
-    ///   window is below the configured floor.
-    /// * [`WatchdogError::Unknown`] — caller passed an unregistered id.
+    /// Record cumulative bytes read and evaluate the eviction rules.
     pub fn progress(&self, id: ConnId, bytes_read: u64) -> Result<(), WatchdogError> {
         let now = Instant::now();
-        // Snapshot the eviction decision under the bucket lock, then
-        // release the lock before mutating the table.
+        // Decide under the bucket lock, mutate the table only after releasing it.
         let mut evict_reason: Option<WatchdogError> = None;
         {
             let mut entry = match self.inner.table.get_mut(&id) {
                 Some(e) => e,
                 None => return Err(WatchdogError::Unknown(id)),
             };
-            // Deadline check.
             if now > entry.deadline {
                 evict_reason = Some(WatchdogError::Deadline(id));
             }
-            // Rate check (only if no deadline trip and rate enabled).
             if evict_reason.is_none() && self.inner.config.min_rate_bps > 0 {
                 let window_elapsed = now.saturating_duration_since(entry.window_started_at);
                 if window_elapsed >= self.inner.config.rate_window {
@@ -265,42 +169,27 @@ impl Watchdog {
                             });
                         }
                     }
-                    // Roll the window forward regardless of outcome.
                     entry.bytes_at_window_start = bytes_read;
                     entry.window_started_at = now;
                 }
             }
-            // Update the checkpoint.
             entry.last_bytes = bytes_read;
             entry.last_seen = now;
         }
 
         if let Some(reason) = evict_reason {
-            // Evict from the table — the caller is closing the
-            // socket on this error.
             self.inner.table.remove(&id);
             return Err(reason);
         }
         Ok(())
     }
 
-    /// Remove a connection from the watchdog (clean shutdown path).
-    ///
-    /// Returns `true` if the entry existed.
+    /// Remove a connection (clean shutdown path); `true` if the entry existed.
     pub fn deregister(&self, id: ConnId) -> bool {
         self.inner.table.remove(&id).is_some()
     }
 
-    /// Sweep all entries and remove any whose deadline has elapsed.
-    ///
-    /// Returns the set of evicted connection ids. Intended for a
-    /// periodic sweeper task driven by `tokio::time::interval`;
-    /// inline `progress` calls already cover the common path where
-    /// the connection is making any progress at all. The sweeper
-    /// closes the gap for connections that are completely stalled
-    /// (no bytes received → no `progress` calls → deadline trip is
-    /// only observed when the next byte arrives or when this sweeper
-    /// runs).
+    /// Drop and return every entry past its deadline — a fully stalled conn never calls `progress`.
     pub fn sweep_expired(&self) -> Vec<ConnId> {
         let now = Instant::now();
         let mut evicted = Vec::new();
@@ -354,7 +243,6 @@ mod tests {
         sleep(Duration::from_millis(20));
         let err = wd.progress(id, 1).unwrap_err();
         assert!(matches!(err, WatchdogError::Deadline(_)));
-        // Evicted from table.
         assert!(matches!(
             wd.progress(id, 2).unwrap_err(),
             WatchdogError::Unknown(_)

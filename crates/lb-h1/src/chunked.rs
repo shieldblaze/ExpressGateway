@@ -20,9 +20,6 @@ enum DecoderState {
 }
 
 /// Incremental decoder for HTTP/1.1 chunked transfer encoding.
-///
-/// Feed bytes via [`feed`](Self::feed) and collect decoded body chunks
-/// and optional trailers.
 #[derive(Debug)]
 pub struct ChunkedDecoder {
     state: DecoderState,
@@ -45,32 +42,28 @@ impl ChunkedDecoder {
         }
     }
 
-    /// Feed more data into the decoder. Call repeatedly as data arrives.
-    ///
-    /// Returns `Ok(true)` when the entire chunked body has been decoded,
-    /// `Ok(false)` when more data is needed.
+    /// Feed more data; `Ok(true)` once the whole body has been decoded.
     ///
     /// # Errors
-    ///
-    /// Returns `H1Error::InvalidChunkEncoding` on malformed input.
+    /// `H1Error::InvalidChunkEncoding` on malformed input.
     pub fn feed(&mut self, data: &[u8]) -> Result<bool, H1Error> {
         self.buf.extend_from_slice(data);
         self.process()
     }
 
-    /// Return all decoded body chunks accumulated so far.
+    /// Decoded body chunks accumulated so far.
     #[must_use]
     pub fn take_body(&mut self) -> Vec<Bytes> {
         core::mem::take(&mut self.body_chunks)
     }
 
-    /// Return the trailers (available only after decoding completes).
+    /// Trailers; only populated once decoding completes.
     #[must_use]
     pub fn trailers(&self) -> &[(String, String)] {
         &self.trailers
     }
 
-    /// Whether the decoder has reached the terminal state.
+    /// Has the decoder reached its terminal state?
     #[must_use]
     pub fn is_done(&self) -> bool {
         self.state == DecoderState::Done
@@ -121,16 +114,12 @@ impl ChunkedDecoder {
         }
     }
 
-    /// Try to parse a chunk-size line from `self.buf`.
-    /// Returns `true` if a size line was consumed, `false` if incomplete.
+    /// Consume a chunk-size line from `self.buf`; `false` if incomplete.
     ///
-    /// Per RFC 9112 §7.1.1 `chunk-size = 1*HEXDIG`. The lexer rejects
-    /// leading `+`/`-`, any whitespace inside the size token, more than
-    /// 16 hex digits (u64 cap), and accumulates via `checked_shl` so
-    /// silent overflow is impossible on either 64- or 32-bit platforms.
-    /// References: nginx CVE-2013-2028, hyper GHSA-5h46-h7hh-c6x9,
-    /// HAProxy `BUG/MAJOR: mux_h1: fix stack buffer overflow in
-    /// h1_append_chunk_size`.
+    /// RFC 9112 §7.1.1 `chunk-size = 1*HEXDIG`: leading `+`/`-`, any internal
+    /// whitespace, and more than 16 hex digits all reject (nginx
+    /// CVE-2013-2028, hyper GHSA-5h46-h7hh-c6x9, HAProxy `BUG/MAJOR: mux_h1:
+    /// fix stack buffer overflow in h1_append_chunk_size`).
     fn try_read_size(&mut self) -> Result<bool, H1Error> {
         let Some(crlf_pos) = find_crlf_in(&self.buf) else {
             return Ok(false);
@@ -141,19 +130,15 @@ impl ChunkedDecoder {
             .get(..crlf_pos)
             .ok_or(H1Error::InvalidChunkEncoding)?;
 
-        // The hex portion is bytes before the first `;` (chunk-ext
-        // separator per RFC 9112 §7.1.1). Operate on raw bytes — do
-        // NOT decode as UTF-8 or trim whitespace; whitespace inside
-        // or around the size token is a protocol violation.
+        // RAW BYTES before the first `;` (chunk-ext) — do NOT decode as UTF-8
+        // or trim: whitespace around the size token is a protocol violation.
         let hex_part: &[u8] = size_line.split(|&b| b == b';').next().unwrap_or(size_line);
 
         let chunk_size_u64 = parse_chunk_size_hex(hex_part)?;
-        // Framing consumers key on `usize`; reject sizes that would
-        // not fit (32-bit platforms — defence vs. silent truncation).
+        // Reject sizes that would not fit `usize` (32-bit truncation guard).
         let chunk_size =
             usize::try_from(chunk_size_u64).map_err(|_| H1Error::InvalidChunkEncoding)?;
 
-        // Consume the size line + CRLF.
         let _ = self.buf.split_to(crlf_pos + 2);
 
         if chunk_size == 0 {
@@ -166,7 +151,7 @@ impl ChunkedDecoder {
         Ok(true)
     }
 
-    /// Try to read trailers (or just the terminating CRLF).
+    /// Read trailers, or just the terminating CRLF.
     fn try_read_trailers(&mut self) -> Result<bool, H1Error> {
         if self.buf.len() < 2 {
             return Ok(false);
@@ -178,12 +163,11 @@ impl ChunkedDecoder {
             return Ok(true);
         }
 
-        // There are trailers — we need to find \r\n\r\n.
         let Some(end_pos) = find_double_crlf_in(&self.buf) else {
             return Ok(false);
         };
 
-        // Include the trailing \r\n so the last trailer line has its CRLF terminator.
+        // Include the trailing CRLF so the last line is terminated.
         let trailer_block = self
             .buf
             .get(..end_pos + 2)
@@ -201,10 +185,8 @@ impl ChunkedDecoder {
             let line_str = core::str::from_utf8(line).map_err(|_| H1Error::InvalidChunkEncoding)?;
 
             if let Some(colon) = line_str.find(':') {
-                // ROUND8-L7-03: mirror the strict RFC 9110 §5.1
-                // header-name rules in trailer parsing. Empty name
-                // or non-tchar bytes reject (HAProxy CVE-2023-25725
-                // / nginx CVE-2019-9516).
+                // ROUND8-L7-03: trailers get the SAME strict RFC 9110 §5.1
+                // name rules (HAProxy CVE-2023-25725 / nginx CVE-2019-9516).
                 let raw_name = line_str.get(..colon).ok_or(H1Error::InvalidChunkEncoding)?;
                 if raw_name.is_empty()
                     || !raw_name.bytes().all(crate::parse::__is_tchar_for_trailer)
@@ -224,7 +206,6 @@ impl ChunkedDecoder {
             pos += line_end + 2;
         }
 
-        // Consume trailers + \r\n\r\n.
         let _ = self.buf.split_to(end_pos + 4);
         self.state = DecoderState::Done;
         Ok(true)
@@ -250,11 +231,10 @@ impl ChunkedEncoder {
         Self { finished: false }
     }
 
-    /// Encode a body chunk into chunked transfer encoding format.
+    /// Encode a body chunk.
     ///
     /// # Errors
-    ///
-    /// Returns `H1Error::InvalidChunkEncoding` if called after [`finish`](Self::finish).
+    /// `H1Error::InvalidChunkEncoding` if called after [`finish`](Self::finish).
     pub fn encode(&mut self, data: &[u8]) -> Result<Bytes, H1Error> {
         if self.finished {
             return Err(H1Error::InvalidChunkEncoding);
@@ -273,8 +253,7 @@ impl ChunkedEncoder {
     /// Emit the final zero-length chunk, optionally with trailers.
     ///
     /// # Errors
-    ///
-    /// Returns `H1Error::InvalidChunkEncoding` if called more than once.
+    /// `H1Error::InvalidChunkEncoding` if called more than once.
     pub fn finish(&mut self, trailers: &[(String, String)]) -> Result<Bytes, H1Error> {
         if self.finished {
             return Err(H1Error::InvalidChunkEncoding);
@@ -300,23 +279,14 @@ impl Default for ChunkedEncoder {
     }
 }
 
-/// Hand-rolled RFC 9112 §7.1.1 `chunk-size` lexer.
+/// RFC 9112 §7.1.1 `chunk-size` lexer, `1*HEXDIG` only: empty input, >16 hex
+/// digits (the nginx CVE-2013-2028 leading-zero pad class), and any byte
+/// outside `0-9A-Fa-f` all reject.
 ///
-/// Accepts `1*HEXDIG` (case-insensitive) only. Rejects:
-/// - empty input (no digits);
-/// - more than 16 hex digits (u64 cap, prevents leading-zero pad
-///   attacks like nginx CVE-2013-2028);
-/// - any byte outside `0-9A-Fa-f` (catches `+`, `-`, space, tab, NUL,
-///   and Unicode digits — every variant HAProxy and hyper paid for).
-///
-/// F-PARSE-3 (S38): the 16-hex-digit cap above is the REAL overflow
-/// defense — a 16-digit hex number is always ≤ `u64::MAX`, so no shift
-/// can lose a bit. The `value.checked_shl(4)` below is INERT belt-and-
-/// braces under that cap: `checked_shl` only returns `None` when the
-/// shift amount (4) ≥ the bit width (64), which never happens here; it
-/// does NOT detect a high nibble shifted out. It would only matter if a
-/// future change RELAXED the 16-digit cap — do not rely on it as the
-/// overflow guard; keep the digit cap.
+/// F-PARSE-3: the 16-digit cap IS the overflow defense — the
+/// `value.checked_shl(4)` below is INERT belt-and-braces under it (the shift
+/// amount is never ≥ the bit width, and it cannot see a high nibble shifted
+/// out). Do NOT rely on it as the guard; keep the digit cap.
 fn parse_chunk_size_hex(line: &[u8]) -> Result<u64, H1Error> {
     if line.is_empty() {
         return Err(H1Error::InvalidChunkEncoding);
@@ -338,14 +308,12 @@ fn parse_chunk_size_hex(line: &[u8]) -> Result<u64, H1Error> {
     Ok(value)
 }
 
-/// Find `\r\n` in `buf`, returning index of `\r`.
 fn find_crlf_in(buf: &[u8]) -> Option<usize> {
     let len = buf.len();
     (0..len.saturating_sub(1))
         .find(|&i| buf.get(i).copied() == Some(b'\r') && buf.get(i + 1).copied() == Some(b'\n'))
 }
 
-/// Find `\r\n\r\n` in `buf`, returning index of the first `\r`.
 fn find_double_crlf_in(buf: &[u8]) -> Option<usize> {
     let len = buf.len();
     (0..len.saturating_sub(3)).find(|&i| {

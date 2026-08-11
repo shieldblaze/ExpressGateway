@@ -1,7 +1,4 @@
-//! HTTP/1.1 to HTTP/2 bridge.
-//!
-//! Converts HTTP/1.1 requests to HTTP/2 by adding pseudo-headers and removing
-//! connection-specific headers that are not valid in HTTP/2.
+//! HTTP/1.1 → HTTP/2 bridge: add pseudo-headers, drop connection-specific ones.
 
 use crate::{Bridge, BridgeRequest, BridgeResponse, L7Error, Protocol, check_header_count};
 
@@ -17,7 +14,7 @@ const HOP_BY_HOP_HEADERS: &[&str] = &[
     "te",
 ];
 
-/// Collect the header names listed in the `Connection` header value.
+/// Collect the header names listed inside the `Connection` value.
 fn connection_named_headers(headers: &[(String, String)]) -> Vec<String> {
     headers
         .iter()
@@ -42,14 +39,12 @@ impl Bridge for H1ToH2Bridge {
         let mut pseudo_headers: Vec<(String, String)> = Vec::new();
         let mut regular_headers: Vec<(String, String)> = Vec::new();
 
-        // Extract authority from Host header.
         let authority = req
             .headers
             .iter()
             .find(|(k, _)| k.eq_ignore_ascii_case("host"))
             .map(|(_, v)| v.clone());
 
-        // Build pseudo-headers.
         let scheme = req.scheme.as_deref().unwrap_or("https");
         pseudo_headers.push((":method".to_owned(), req.method.clone()));
         pseudo_headers.push((":path".to_owned(), req.uri.clone()));
@@ -59,14 +54,12 @@ impl Bridge for H1ToH2Bridge {
             pseudo_headers.push((":authority".to_owned(), auth));
         }
 
-        // Filter out hop-by-hop headers, host (replaced by :authority), and
-        // any headers named in the Connection value.
         for (k, v) in &req.headers {
             let lower = k.to_lowercase();
             if lower == "host" {
                 continue;
             }
-            // Allow TE only if the value is "trailers" (RFC 7540 sect. 8.1.2.2).
+            // TE may only be `trailers` (RFC 7540 §8.1.2.2).
             if lower == "te" {
                 if v.trim().eq_ignore_ascii_case("trailers") {
                     regular_headers.push((lower, "trailers".to_owned()));
@@ -91,7 +84,6 @@ impl Bridge for H1ToH2Bridge {
             headers: pseudo_headers,
             body: req.body.clone(),
             scheme: req.scheme.clone(),
-            // PROTO-2-12: forward request trailers (RFC 9110 §6.6).
             trailers: req.trailers.clone(),
         })
     }
@@ -123,7 +115,6 @@ impl Bridge for H1ToH2Bridge {
             status: resp.status,
             headers,
             body: resp.body.clone(),
-            // PROTO-2-12: forward response trailers (RFC 9110 §6.6).
             trailers: resp.trailers.clone(),
         })
     }

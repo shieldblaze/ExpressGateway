@@ -1,8 +1,5 @@
-//! Control plane for configuration distribution and cluster management.
-//!
-//! Provides a `ConfigBackend` trait for pluggable storage, a file-backed
-//! implementation, an in-memory implementation for testing, and a
-//! `ConfigManager` for standalone SIGHUP-style reload with rollback.
+//! Config distribution: a pluggable `ConfigBackend`, and a `ConfigManager` driving SIGHUP-style
+//! reload with rollback.
 #![deny(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -41,26 +38,14 @@ pub enum ControlPlaneError {
 
 /// Trait for configuration storage backends.
 pub trait ConfigBackend: Send + Sync + std::fmt::Debug {
-    /// Load the current configuration as a string.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ControlPlaneError` if the read fails.
+    /// Load the current configuration.
     fn load(&self) -> Result<String, ControlPlaneError>;
 
-    /// Store a configuration string.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ControlPlaneError` if the write fails.
+    /// Store a configuration.
     fn store(&self, config: &str) -> Result<(), ControlPlaneError>;
 }
 
-/// File-backed configuration storage.
-///
-/// Writes are atomic: data is written to a temporary file in the same directory,
-/// then renamed into place. This ensures the config file is never left in a
-/// partial state after a crash.
+/// File-backed storage; the temp file is in the SAME directory, or the rename is not atomic.
 #[derive(Debug)]
 pub struct FileBackend {
     path: PathBuf,
@@ -111,11 +96,7 @@ impl InMemoryBackend {
         }
     }
 
-    /// Update the stored config (simulates an external write).
-    ///
-    /// # Errors
-    ///
-    /// Returns `ControlPlaneError::LockPoisoned` if the lock is poisoned.
+    /// Update the stored config, simulating an external write.
     pub fn set(&self, config: &str) -> Result<(), ControlPlaneError> {
         let mut guard = self
             .data
@@ -147,11 +128,7 @@ impl ConfigBackend for InMemoryBackend {
     }
 }
 
-/// Configuration manager for standalone mode (SIGHUP reload).
-///
-/// Tracks the current config string, a monotonic version counter,
-/// and supports reload, validation, and rollback (both explicit and
-/// automatic to the previous config).
+/// SIGHUP reload manager: current config, monotonic version, and rollback.
 #[derive(Debug)]
 pub struct ConfigManager {
     backend: Box<dyn ConfigBackend>,
@@ -161,11 +138,7 @@ pub struct ConfigManager {
 }
 
 impl ConfigManager {
-    /// Load the initial config from the backend and create a manager.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ControlPlaneError` if the initial load fails.
+    /// Create a manager, loading the initial config.
     pub fn new(backend: Box<dyn ConfigBackend>) -> Result<Self, ControlPlaneError> {
         let config = backend.load()?;
         Self::validate(&config)?;
@@ -177,15 +150,7 @@ impl ConfigManager {
         })
     }
 
-    /// Reload the config from the backend.
-    ///
-    /// Returns `true` if the config changed, `false` otherwise.
-    /// On a successful change, the old config is saved for rollback via
-    /// [`rollback_to_previous`](Self::rollback_to_previous).
-    ///
-    /// # Errors
-    ///
-    /// Returns `ControlPlaneError` if the load or validation fails.
+    /// Reload from the backend; `true` if it changed, saving the old one for rollback.
     pub fn reload(&mut self) -> Result<bool, ControlPlaneError> {
         let new_config = self.backend.load()?;
         if new_config == self.current_config {
@@ -216,14 +181,7 @@ impl ConfigManager {
         self.previous_config.as_deref()
     }
 
-    /// Validate a configuration string.
-    ///
-    /// The config must be non-empty and must parse as valid TOML.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ControlPlaneError::InvalidConfig` if the config is empty or
-    /// is not valid TOML.
+    /// Validate a config: non-empty and parseable as TOML.
     pub fn validate(config: &str) -> Result<(), ControlPlaneError> {
         if config.trim().is_empty() {
             return Err(ControlPlaneError::InvalidConfig(
@@ -236,11 +194,7 @@ impl ConfigManager {
         Ok(())
     }
 
-    /// Rollback: store the given config to the backend and reload.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ControlPlaneError` if the store or reload fails.
+    /// Store `config` and reload from it.
     pub fn rollback(&mut self, previous: &str) -> Result<(), ControlPlaneError> {
         Self::validate(previous)?;
         self.backend.store(previous)?;
@@ -250,15 +204,7 @@ impl ConfigManager {
         Ok(())
     }
 
-    /// Rollback to the previously loaded config (saved automatically during
-    /// [`reload`](Self::reload)).
-    ///
-    /// Returns `Ok(true)` if the rollback was applied, `Ok(false)` if there
-    /// is no previous config to roll back to.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ControlPlaneError` if the store fails.
+    /// Roll back to the config saved by the last [`Self::reload`]; `Ok(false)` if there is none.
     pub fn rollback_to_previous(&mut self) -> Result<bool, ControlPlaneError> {
         let Some(prev) = self.previous_config.take() else {
             return Ok(false);
@@ -290,14 +236,7 @@ impl HaPoller {
         }
     }
 
-    /// Poll the primary for a config change.
-    ///
-    /// Returns `Some(new_config)` if the config changed since the last poll,
-    /// or `None` if unchanged.
-    ///
-    /// # Errors
-    ///
-    /// Returns `ControlPlaneError` if the load fails.
+    /// Poll the primary; `Some` only when the config changed since the last poll.
     pub fn poll(&mut self) -> Result<Option<String>, ControlPlaneError> {
         self.poll_count += 1;
         let config = self.primary.load()?;
@@ -353,7 +292,6 @@ mod tests {
         let backend = InMemoryBackend::new("key = \"v1\"");
         let mut mgr = ConfigManager::new(Box::new(backend)).unwrap();
 
-        // Simulate an external config change via the backend.
         mgr.backend.store("key = \"v2\"").unwrap();
         assert!(mgr.reload().unwrap());
         assert_eq!(mgr.current_config(), "key = \"v2\"");
@@ -370,7 +308,6 @@ mod tests {
         assert!(mgr.reload().unwrap());
         assert_eq!(mgr.current_config(), "key = \"v2\"");
 
-        // Rollback to v1.
         assert!(mgr.rollback_to_previous().unwrap());
         assert_eq!(mgr.current_config(), "key = \"v1\"");
         assert_eq!(mgr.version(), 3);
@@ -381,7 +318,6 @@ mod tests {
         let backend = InMemoryBackend::new("key = \"v1\"");
         let mut mgr = ConfigManager::new(Box::new(backend)).unwrap();
 
-        // No previous config yet.
         assert!(!mgr.rollback_to_previous().unwrap());
     }
 
@@ -423,11 +359,9 @@ host = "localhost"
         let loaded = backend.load().unwrap();
         assert_eq!(loaded, "key = \"value\"");
 
-        // Verify the temp file was cleaned up (rename removes it).
         let tmp_path = dir.join(".test-config.toml.tmp");
         assert!(!tmp_path.exists());
 
-        // Clean up.
         let _ = std::fs::remove_dir_all(&dir);
     }
 

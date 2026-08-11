@@ -1,49 +1,22 @@
-//! REL-2-07: W3C trace-context (`traceparent` / `tracestate`)
-//! propagation helpers.
-//!
-//! `proto`, `sec`, and the L7 crates call into this module at every
-//! L7 entry/exit point to extract the inbound trace context and to
-//! inject a refreshed context onto outbound requests. The full OTLP
-//! exporter is feature-gated (`otlp`); the propagation helpers are
-//! always available so the hot path keeps the parser even when OTLP
-//! is off.
-//!
-//! Wire format reference: <https://www.w3.org/TR/trace-context/>
-//!
-//! Format (version-00):
-//!   `00-<trace-id 32 hex>-<parent-id 16 hex>-<flags 2 hex>`
-//!
-//! Span-name convention (locked here so emitters across crates agree):
-//!   - L7 inbound request:        `lb.l7.<proto>.request`
-//!   - L7 outbound (upstream):    `lb.l7.<proto>.upstream`
-//!   - L4 connection:             `lb.l4.<proto>.conn`
-//!   - Upstream connect:          `lb.upstream_dial`
-//!   - Upstream first byte:       `lb.upstream_first_byte`
-//!
-//! `<proto>` is one of `h1`, `h2`, `h3`, `quic`, `tcp`, `ws`, `grpc`.
+//! W3C trace-context propagation (<https://www.w3.org/TR/trace-context/>), version-00 wire format
+//! `00-<trace-id 32 hex>-<parent-id 16 hex>-<flags 2 hex>`. Propagation stays compiled in even when
+//! the `otlp` feature is off, so headers are extracted and re-injected on a build exporting nothing.
 
 /// W3C `traceparent` header name (lower-case canonical form).
 pub const TRACEPARENT_HEADER: &str = "traceparent";
 
-/// W3C `tracestate` header name. We pass tracestate byte-for-byte
-/// after a length check; we do not parse the inner vendor fields.
+/// `tracestate` header. Passed through byte-for-byte after a length check — never parsed.
 pub const TRACESTATE_HEADER: &str = "tracestate";
 
 /// Maximum allowed `tracestate` length per the W3C spec (§3.3.1.1).
 pub const TRACESTATE_MAX_LEN: usize = 512;
 
-/// Configured tracing exporter knob. Populated from
-/// `[observability].otlp_endpoint` at startup; an absent endpoint
-/// disables OTLP entirely while leaving the propagation helpers
-/// active (so we still extract / re-inject headers even when we are
-/// not sending spans anywhere).
+/// Exporter config. An absent endpoint disables OTLP but leaves propagation active.
 #[derive(Clone, Debug, Default)]
 pub struct OtlpConfig {
-    /// OTLP/gRPC endpoint, e.g. `http://otel-collector:4317`. `None`
-    /// disables export but keeps in-process propagation.
+    /// OTLP/gRPC endpoint; `None` disables export, not propagation.
     pub endpoint: Option<String>,
-    /// Parent-based ratio sampler. `1.0` = always; `0.0` = never;
-    /// any value in `[0.0, 1.0]` is honoured.
+    /// Parent-based sample ratio in `[0.0, 1.0]`.
     pub sampler_ratio: f64,
 }
 
@@ -58,8 +31,7 @@ impl OtlpConfig {
     }
 }
 
-/// Decoded W3C trace-context. `flags` is a bitfield — bit 0 is the
-/// `sampled` flag; other bits are reserved.
+/// Decoded trace-context; `flags` bit 0 is `sampled`, the rest reserved.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct TraceContext {
     /// 16-byte trace id, big-endian. All-zero is invalid per spec.
@@ -77,14 +49,12 @@ impl TraceContext {
         (self.flags & 0x01) != 0
     }
 
-    /// Encode back to the wire-format `traceparent` header value
-    /// (version `00`).
+    /// Encode as a version-`00` `traceparent` value.
     #[must_use]
     pub fn to_header(&self) -> String {
         let mut s = String::with_capacity(55);
         s.push_str("00-");
         for b in self.trace_id {
-            // hex with no_alloc — two chars per byte.
             s.push(hex_nibble(b >> 4));
             s.push(hex_nibble(b & 0x0f));
         }
@@ -121,10 +91,8 @@ const fn hex_nibble(n: u8) -> char {
     }
 }
 
-/// Parse a `traceparent` header value. Returns `None` on **any**
-/// deviation from the version-`00` wire format — callers must
-/// forward the original header bytes byte-for-byte even when parsing
-/// fails, per W3C §3.2 (forward-compatibility).
+/// Parse a `traceparent`; `None` on ANY deviation from version-`00`. W3C §3.2 still requires the
+/// caller to forward the original bytes unchanged.
 #[must_use]
 pub fn parse_traceparent(value: &str) -> Option<TraceContext> {
     // Format: 2-32-16-2 = 52 hex chars + 3 dashes = 55.
@@ -132,9 +100,7 @@ pub fn parse_traceparent(value: &str) -> Option<TraceContext> {
         return None;
     }
     let bytes = value.as_bytes();
-    // Anchor checks via `.get()` so the index-bounds lint stays
-    // happy and a too-short input falls through to `None` rather
-    // than panicking.
+    // `.get()` so a short input yields `None` instead of panicking.
     if bytes.get(2) != Some(&b'-') || bytes.get(35) != Some(&b'-') || bytes.get(52) != Some(&b'-') {
         return None;
     }
@@ -144,8 +110,7 @@ pub fn parse_traceparent(value: &str) -> Option<TraceContext> {
         return None;
     }
     if version != 0 {
-        // Future versions are forwarded unchanged (handled by the
-        // caller); we only consume `00`.
+        // Only `00` is consumed; the caller forwards future versions unchanged.
         return None;
     }
     let mut trace_id = [0u8; 16];
@@ -189,23 +154,17 @@ const fn decode_hex_nibble(c: u8) -> Option<u8> {
     }
 }
 
-/// Generic header-bag interface so the helpers can call into hyper's
-/// `HeaderMap`, h2's `HeaderMap`, or h3's `HeaderMap` without
-/// depending on any single one. Each L7 crate provides its own thin
-/// adapter at the call site.
+/// Header-bag abstraction so these helpers need no dependency on any one HTTP crate.
 pub trait HeaderBag {
     /// Read the first value associated with `name`.
     fn get_first(&self, name: &str) -> Option<&str>;
-    /// Append (do NOT replace) a header. Idempotent on the caller —
-    /// callers should `remove` first when overwriting is intended.
+    /// APPEND, never replace — `remove` first when overwriting is intended.
     fn append(&mut self, name: &str, value: &str);
     /// Remove every value associated with `name`.
     fn remove(&mut self, name: &str);
 }
 
-/// Extract the inbound trace context from a header bag, returning
-/// both the parsed context and (independently) the raw header bytes
-/// so the caller can forward unchanged if parsing fails.
+/// Extract the inbound context, returning the raw bytes so an unparseable header still forwards.
 #[must_use]
 pub fn extract_parent<H: HeaderBag + ?Sized>(headers: &H) -> ExtractedContext<'_> {
     let traceparent_raw = headers.get_first(TRACEPARENT_HEADER);
@@ -220,22 +179,18 @@ pub fn extract_parent<H: HeaderBag + ?Sized>(headers: &H) -> ExtractedContext<'_
     }
 }
 
-/// Result of [`extract_parent`]. Holds borrowed references back into
-/// the original header bag.
+/// Result of [`extract_parent`]; borrows from the header bag.
 #[derive(Copy, Clone, Debug)]
 pub struct ExtractedContext<'a> {
     /// Parsed [`TraceContext`] if the inbound `traceparent` was valid.
     pub parsed: Option<TraceContext>,
-    /// Raw `traceparent` bytes for byte-for-byte forwarding when
-    /// parsing fails (per W3C §3.2).
+    /// Raw bytes, for verbatim forwarding when parsing fails (W3C §3.2).
     pub traceparent_raw: Option<&'a str>,
     /// Raw `tracestate` bytes after length check (per W3C §3.3.1.1).
     pub tracestate_raw: Option<&'a str>,
 }
 
-/// Inject a `traceparent` (and optionally `tracestate`) into an
-/// outbound header bag. Existing values are replaced; the caller is
-/// responsible for honouring the W3C "always update" rule.
+/// Inject `traceparent` (and optionally `tracestate`), replacing existing values.
 pub fn inject_into<H: HeaderBag + ?Sized>(
     headers: &mut H,
     ctx: &TraceContext,
@@ -251,13 +206,7 @@ pub fn inject_into<H: HeaderBag + ?Sized>(
     }
 }
 
-/// Span-name builder shared across L4 / L7 to keep the convention
-/// in one place.
-///
-/// ```
-/// use lb_observability::tracing_propagation::span_name;
-/// assert_eq!(span_name("l7", "h1", "request"), "lb.l7.h1.request");
-/// ```
+/// Span-name builder; the single source of the `lb.<layer>.<proto>.<op>` convention.
 #[must_use]
 pub fn span_name(layer: &str, proto: &str, kind: &str) -> String {
     format!("lb.{layer}.{proto}.{kind}")
@@ -268,7 +217,6 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    /// Minimal in-memory header bag implementing [`HeaderBag`].
     #[derive(Default)]
     struct TestHeaders(HashMap<String, Vec<String>>);
 
@@ -296,7 +244,6 @@ mod tests {
         let ctx = parse_traceparent(raw).expect("valid traceparent");
         assert!(ctx.sampled());
         assert_eq!(ctx.flags, 0x01);
-        // Trace-id last 4 bytes
         assert_eq!(&ctx.trace_id[12..], &[0x1c, 0x80, 0x31, 0x9c]);
     }
 
@@ -304,19 +251,15 @@ mod tests {
     fn rejects_invalid_traceparent_shapes() {
         assert!(parse_traceparent("").is_none());
         assert!(parse_traceparent("garbage").is_none());
-        // Wrong delimiter positions.
         assert!(
             parse_traceparent("00x0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01").is_none()
         );
-        // Version 0xff forbidden.
         assert!(
             parse_traceparent("ff-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01").is_none()
         );
-        // All-zero trace id.
         assert!(
             parse_traceparent("00-00000000000000000000000000000000-b7ad6b7169203331-01").is_none()
         );
-        // All-zero parent id.
         assert!(
             parse_traceparent("00-0af7651916cd43dd8448eb211c80319c-0000000000000000-01").is_none()
         );
@@ -365,10 +308,8 @@ mod tests {
             "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
         );
         let ex = extract_parent(&headers);
-        // Length cap defends downstream OTel collectors that limit
-        // tracestate to 512 bytes — drop the oversize value.
+        // Downstream OTel collectors cap tracestate at 512 bytes; drop rather than truncate.
         assert!(ex.tracestate_raw.is_none());
-        // traceparent still parses.
         assert!(ex.parsed.is_some());
     }
 

@@ -4,11 +4,7 @@ use rand::{Rng, RngExt};
 
 use crate::{Backend, BalancerError, LoadBalancer};
 
-/// Power-of-two-choices load balancer.
-///
-/// Picks two backends at random and chooses the one with fewer active
-/// connections. This simple algorithm achieves exponentially better load
-/// distribution than pure random (per Mitzenmacher, 2001).
+/// Power-of-two-choices: two random backends, fewer connections wins (Mitzenmacher, 2001).
 #[derive(Debug)]
 pub struct PowerOfTwoChoices<R: Rng> {
     rng: R,
@@ -48,7 +44,7 @@ impl<R: Rng + Send + Sync> LoadBalancer for PowerOfTwoChoices<R> {
                     Ok(b)
                 }
             }
-            // Should not happen given the range checks, but we never panic.
+            // Unreachable after the range checks; the crate denies panics.
             (Some(_), None) => Ok(a),
             (None, Some(_)) => Ok(b),
             (None, None) => Err(BalancerError::Internal("index out of range".to_string())),
@@ -85,7 +81,6 @@ mod tests {
                 *c += 1;
             }
         }
-        // Lightly loaded backends should get the vast majority.
         let light = counts.get(2).copied().unwrap_or(0) + counts.get(3).copied().unwrap_or(0);
         assert!(
             light > 700,

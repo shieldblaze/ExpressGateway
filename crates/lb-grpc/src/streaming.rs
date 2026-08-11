@@ -1,10 +1,6 @@
 //! gRPC streaming mode detection.
 
-/// The four gRPC streaming modes.
-///
-/// Determined by the service definition (`.proto` file). In a proxy context,
-/// the mode can be inferred from the service method descriptor or from
-/// observing the message flow pattern.
+/// The four gRPC streaming modes, set by the `.proto` service definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StreamingMode {
     /// Single request, single response.

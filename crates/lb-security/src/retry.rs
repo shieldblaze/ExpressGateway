@@ -1,47 +1,8 @@
-//! Stateless-retry token mint/verify (RFC 9000 §8.1.3 — address validation).
-//!
-//! A QUIC server that wants to deflect source-address spoofing MAY answer
-//! the first Initial packet from an unknown client with a **Retry** packet
-//! instead of continuing the handshake. The Retry carries an opaque
-//! server-minted token that the client must echo in its next Initial;
-//! the server then recovers the original destination connection ID
-//! (ODCID) from the token and continues. Because the token is bound to
-//! the client's observed peer address and to the ODCID, and because it
-//! has a short expiry, replaying or forging it is not useful.
-//!
-//! `RetryTokenSigner` implements the symmetric side of that exchange:
-//!
-//! * [`mint`](RetryTokenSigner::mint) builds a token from a 32-byte
-//!   server secret + the peer `SocketAddr` + the ODCID + a timestamp,
-//!   authenticated with HMAC-SHA256 (ring's [`hmac::Key`]).
-//! * [`verify`](RetryTokenSigner::verify) parses a received token,
-//!   checks the MAC in constant time, checks the issued-at timestamp
-//!   against `now` and the configured `max_age`, and re-binds the token
-//!   to the peer address presented on this Initial. A token that comes
-//!   from a different peer address, was tampered with, or is older
-//!   than `max_age`, is rejected.
-//!
-//! Wire format (all big-endian):
-//!
-//! ```text
-//!   version (1 byte)     = 0x01
-//!   issued_at (8 bytes)  = milliseconds since Signer construction
-//!   peer_addr_kind (1)   = 4 for IPv4, 6 for IPv6
-//!   peer_addr (4 | 16)   = raw octets
-//!   peer_port (2)        = BE u16
-//!   odcid_len (1)        = bytes
-//!   odcid (0..255)
-//!   mac (32)             = HMAC-SHA256 over everything above
-//! ```
-//!
-//! Pillar 3b.3a ships `RetryTokenSigner` as a standalone, unit-tested
-//! module. `QuicEndpoint::with_retry_signer` in `crates/lb-quic` wires
-//! it through to quiche's server accept path; quiche 0.28's
-//! [`Config::enable_retry`] owns the wire-level Retry-packet handling
-//! today, so the signer's observable surface is the secret-rotation
-//! seam. A custom accept loop that feeds this signer directly will land
-//! when the QUIC listener moves into `crates/lb/src/main.rs` (Pillar
-//! 3b.3c).
+//! Stateless-retry token mint/verify (RFC 9000 §8.1.3 — address validation). The token binds the
+//! peer address and the ODCID under HMAC-SHA256 with a short expiry, so a forged or replayed one
+//! buys a spoofer nothing. Wire format, big-endian, MAC over all of it:
+//! `version(1) | issued_ms(8) | peer_kind(1: 4=v4, 6=v6) | peer_addr(4|16) | port(2) |
+//! odcid_len(1) | odcid(0..255) | mac(32)`.
 
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
@@ -53,33 +14,25 @@ use subtle::ConstantTimeEq;
 /// Secret-key size in bytes.
 pub const RETRY_SECRET_LEN: usize = 32;
 
-/// Maximum length of the ODCID we will round-trip inside a retry token.
-/// QUIC connection IDs are at most 20 bytes on the wire, but allowing
-/// 255 keeps the length field to one byte with room for future
-/// protocol drafts.
+/// ODCID cap. Wire CIDs are ≤20 bytes; 255 keeps the length field to one byte.
 const RETRY_MAX_ODCID: usize = 255;
 
-/// Current wire-format version tag. Bump this (and branch in `verify`)
-/// whenever the token layout changes so old tokens can be cleanly
-/// rejected.
+/// Wire-format version tag; bump it (and branch in `verify`) on any layout change.
 const RETRY_TOKEN_VERSION: u8 = 0x01;
 
-/// HMAC-SHA256 tag size.
 const MAC_LEN: usize = 32;
 
-/// Default retry-token lifetime (RFC 9000 §8.1.3 recommends "short" —
-/// 10 seconds is the IETF quicwg consensus figure and matches quiche's
-/// internal default).
+/// Default retry-token lifetime — RFC 9000 §8.1.3 wants "short"; 10 s matches quiche's default.
 pub const DEFAULT_RETRY_MAX_AGE: Duration = Duration::from_secs(10);
 
 /// Errors raised by [`RetryTokenSigner::verify`].
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum RetryError {
-    /// The token is shorter than the minimum possible well-formed token.
+    /// Shorter than the minimum well-formed token.
     #[error("retry token truncated")]
     Truncated,
 
-    /// The token's version byte does not match the current format.
+    /// Version byte does not match the current format.
     #[error("retry token version mismatch: got {got}, want {want}")]
     VersionMismatch {
         /// Observed version byte.
@@ -88,26 +41,23 @@ pub enum RetryError {
         want: u8,
     },
 
-    /// The peer-address type byte is not 4 (IPv4) or 6 (IPv6).
+    /// Peer-address type byte is neither 4 (IPv4) nor 6 (IPv6).
     #[error("retry token peer-address kind invalid: {0}")]
     InvalidPeerKind(u8),
 
-    /// The token's ODCID-length field claims more bytes than the token
-    /// carries.
+    /// ODCID-length field claims more bytes than the token carries.
     #[error("retry token odcid length field inconsistent")]
     InvalidOdcidLen,
 
-    /// The token's MAC did not validate against the configured secret —
-    /// tampered or forged.
+    /// MAC did not validate — tampered or forged.
     #[error("retry token MAC mismatch")]
     MacMismatch,
 
-    /// The token was minted for a different peer than the one that just
-    /// presented it.
+    /// Minted for a different peer than the one presenting it.
     #[error("retry token peer-address mismatch")]
     PeerMismatch,
 
-    /// The token's `issued_at` is older than `max_age` relative to `now`.
+    /// `issued_at` is older than `max_age` relative to `now`.
     #[error("retry token expired")]
     Expired,
 }
@@ -129,13 +79,7 @@ impl std::fmt::Debug for RetryTokenSigner {
 }
 
 impl RetryTokenSigner {
-    /// Build a signer with a fresh 32-byte secret sampled from the OS
-    /// RNG via [`ring::rand::SystemRandom`].
-    ///
-    /// # Errors
-    ///
-    /// Returns the underlying `ring` error as a string if the RNG is
-    /// unavailable (in practice: never, on any supported platform).
+    /// Build a signer with a fresh 32-byte secret from [`ring::rand::SystemRandom`].
     pub fn new_random() -> Result<Self, String> {
         let mut secret = [0u8; RETRY_SECRET_LEN];
         ring::rand::SystemRandom::new()
@@ -144,8 +88,7 @@ impl RetryTokenSigner {
         Ok(Self::new_with_secret(secret))
     }
 
-    /// Build a signer with an explicit 32-byte secret. Use this for
-    /// test vectors or for operator-supplied secret rotation.
+    /// Build a signer with an explicit secret (test vectors, operator secret rotation).
     #[must_use]
     pub fn new_with_secret(secret: [u8; RETRY_SECRET_LEN]) -> Self {
         Self {
@@ -168,27 +111,15 @@ impl RetryTokenSigner {
         self.max_age
     }
 
-    /// Mint a retry token binding `peer` and `odcid`. Panics at
-    /// construction time (via `assert!`) if `odcid` is longer than
-    /// [`RETRY_MAX_ODCID`]; callers who may see larger values should
-    /// check `odcid.len()` first.
-    ///
-    /// # Panics
-    ///
-    /// This function never calls `panic!`, `unwrap`, or `expect`. It
-    /// returns a `Vec<u8>` of determinate length — see the module-level
-    /// wire format comment.
-    ///
-    /// If `odcid.len() > 255`, it is silently truncated to 255 bytes
-    /// since the wire format carries a `u8` length field. Callers with
-    /// untrusted ODCID bytes should validate length before minting.
+    /// Mint a retry token binding `peer` and `odcid`. Never panics: an over-[`RETRY_MAX_ODCID`]
+    /// `odcid` is SILENTLY TRUNCATED, so a caller holding untrusted bytes must reject it itself
+    /// rather than rely on `verify` round-tripping what it passed in.
     #[must_use]
     pub fn mint(&self, peer: SocketAddr, odcid: &[u8]) -> Vec<u8> {
         self.mint_at(peer, odcid, Instant::now())
     }
 
-    /// Mint variant that takes an explicit `now`. Used by tests to
-    /// simulate the passage of time without sleeping.
+    /// [`Self::mint`] with an explicit `now`, so tests can age a token without sleeping.
     #[must_use]
     pub fn mint_at(&self, peer: SocketAddr, odcid: &[u8], now: Instant) -> Vec<u8> {
         let truncated_odcid = odcid.get(..odcid.len().min(RETRY_MAX_ODCID)).unwrap_or(&[]);
@@ -209,21 +140,14 @@ impl RetryTokenSigner {
         token
     }
 
-    /// Parse `token`, verify its MAC, enforce peer binding and
-    /// expiration, and return the ODCID the token was originally minted
-    /// for.
-    ///
-    /// # Errors
-    ///
-    /// See [`RetryError`] for the error taxonomy.
+    /// Verify the MAC, peer binding and expiry; return the ODCID the token was minted for.
     pub fn verify(
         &self,
         token: &[u8],
         peer: SocketAddr,
         now: Instant,
     ) -> Result<Vec<u8>, RetryError> {
-        // Minimum token: version(1) + issued_ms(8) + peer_kind(1) +
-        // ipv4(4) + port(2) + odcid_len(1) + odcid(0) + mac(32) = 49.
+        // Smallest well-formed token: v4 peer, empty odcid.
         if token.len() < 1 + 8 + 1 + 4 + 2 + 1 + MAC_LEN {
             return Err(RetryError::Truncated);
         }
@@ -239,15 +163,13 @@ impl RetryTokenSigner {
         let body = token.get(..mac_start).ok_or(RetryError::Truncated)?;
         let mac = token.get(mac_start..).ok_or(RetryError::Truncated)?;
 
-        // Verify MAC in constant time. ring's `hmac::verify` is also
-        // constant time; using `subtle::ConstantTimeEq` makes the
-        // intent explicit and gives an identical result.
+        // Constant-time compare — `ct_eq` over `==` is the whole point; do not "simplify" it.
         let expected = hmac::sign(&self.key, body);
         if expected.as_ref().ct_eq(mac).unwrap_u8() != 1 {
             return Err(RetryError::MacMismatch);
         }
 
-        // Parse the body now that we know it is authentic.
+        // Only now is the body authentic enough to parse.
         let mut cursor = 1usize; // skip version
         let issued_ms_bytes = body.get(cursor..cursor + 8).ok_or(RetryError::Truncated)?;
         cursor += 8;
@@ -264,12 +186,10 @@ impl RetryTokenSigner {
             .get(cursor..cursor + odcid_len)
             .ok_or(RetryError::InvalidOdcidLen)?;
 
-        // Peer binding.
         if token_peer != peer {
             return Err(RetryError::PeerMismatch);
         }
 
-        // Expiration.
         let issued_at = self.origin + Duration::from_millis(issued_ms);
         let age = now.saturating_duration_since(issued_at);
         if age > self.max_age {
@@ -328,7 +248,6 @@ mod tests {
     use std::net::Ipv4Addr;
 
     fn test_signer() -> RetryTokenSigner {
-        // Deterministic secret so the tests do not depend on the RNG.
         RetryTokenSigner::new_with_secret([0x5au8; RETRY_SECRET_LEN])
     }
 
@@ -352,7 +271,7 @@ mod tests {
         let signer = test_signer();
         let peer = loopback_peer();
         let mut token = signer.mint(peer, b"odcid");
-        // Flip one byte inside the authenticated region (not in the MAC).
+        // Flip a byte inside the authenticated region, not in the MAC.
         let mid = token.len() / 2;
         token[mid] ^= 0xff;
         let err = signer.verify(&token, peer, Instant::now()).unwrap_err();
@@ -361,7 +280,6 @@ mod tests {
 
     #[test]
     fn verify_rejects_expired_token() {
-        // max_age = 10ms; mint at origin, verify 1 second later.
         let signer = RetryTokenSigner::new_with_secret([0xa5u8; RETRY_SECRET_LEN])
             .with_max_age(Duration::from_millis(10));
         let peer = loopback_peer();

@@ -1,10 +1,4 @@
-//! REL-2-04 proof tests: `/livez`, `/readyz`, `/startupz` semantics
-//! under every [`ProbeState`] transition.
-//!
-//! Spawns the admin HTTP listener on `127.0.0.1:0` against a
-//! synthetic [`ProbeRegistry`], scrapes each endpoint, and asserts
-//! the (status, body) pair matches the table documented in
-//! `crates/lb-observability/src/admin_http.rs`.
+//! Probe-endpoint semantics across every [`ProbeState`] transition.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -37,13 +31,11 @@ async fn http_get(addr: SocketAddr, path: &str) -> (u16, String) {
     let mut buf = Vec::new();
     stream.read_to_end(&mut buf).await.expect("read response");
     let text = String::from_utf8(buf).expect("utf-8 response");
-    // Status line: "HTTP/1.1 <code> <reason>"
     let status_code: u16 = text
         .split_whitespace()
         .nth(1)
         .and_then(|s| s.parse().ok())
         .expect("status code");
-    // Body after the blank line.
     let body = text
         .split_once("\r\n\r\n")
         .map(|(_, b)| b.to_owned())
@@ -56,7 +48,6 @@ async fn test_livez_readyz_startupz_states() {
     let probes = ProbeRegistry::shared();
     let (addr, cancel) = spawn_admin(Arc::clone(&probes)).await;
 
-    // ── Phase 1: Starting ────────────────────────────────────────
     assert_eq!(probes.state(), ProbeState::Starting);
 
     let (livez_code, livez_body) = http_get(addr, "/livez").await;
@@ -80,7 +71,6 @@ async fn test_livez_readyz_startupz_states() {
         "boot startupz body: {startupz_body}",
     );
 
-    // ── Phase 2: Ready ───────────────────────────────────────────
     probes.set_ready();
     let (livez_code, livez_body) = http_get(addr, "/livez").await;
     assert_eq!(livez_code, 200);
@@ -94,7 +84,6 @@ async fn test_livez_readyz_startupz_states() {
     assert_eq!(startupz_code, 200, "/startupz 200 once startup done");
     assert!(startupz_body.contains("\"status\":\"ok\""));
 
-    // ── Phase 3: Draining ────────────────────────────────────────
     probes.set_draining();
     let (livez_code, livez_body) = http_get(addr, "/livez").await;
     assert_eq!(
@@ -114,7 +103,6 @@ async fn test_livez_readyz_startupz_states() {
     );
     assert!(startupz_body.contains("\"status\":\"draining\""));
 
-    // ── back-compat: /healthz aliases /livez ─────────────────────
     let (hz_code, hz_body) = http_get(addr, "/healthz").await;
     let (lv_code, lv_body) = http_get(addr, "/livez").await;
     assert_eq!(hz_code, lv_code);

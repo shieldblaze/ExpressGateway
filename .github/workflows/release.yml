@@ -1,11 +1,8 @@
 name: Release
 
 # Tag push (`v*`)  -> build cross-arch binaries + multi-arch image + GH release.
-# Manual dispatch  -> the RELEASE SOAK GATE: provision a dedicated EC2, run the
-#                     full 12-scenario lb-soak, gate on all-BOUNDED + panic=0,
-#                     and tear the box down. Run this and confirm PASS BEFORE
-#                     tagging a release (hosted CI cannot soak — see
-#                     docs/arch/DEV-SETUP.md "Release soak gate").
+# Manual dispatch  -> the RELEASE SOAK GATE. Run it and confirm PASS BEFORE
+#                     tagging: hosted CI cannot soak (docs/arch/DEV-SETUP.md).
 
 on:
   push:
@@ -28,16 +25,10 @@ permissions:
 
 jobs:
 
-  # ---------------------------------------------------------------
-  # RELEASE SOAK GATE (manual dispatch). Gates RELEASE, not PRs.
-  #
-  # On-demand model (S40): GitHub OIDC assumes a scoped IAM role (no long-lived
-  # keys), scripts/release-soak.sh provisions a c6a.2xlarge (8-core + ENA), runs
-  # the full 12-scenario soak for a release-grade duration, asserts every
-  # scenario BOUNDED + panic=0 (R8), and ALWAYS tears the box down (trap). The
-  # job fails if any scenario is not BOUNDED. Configure the repo vars/secrets
-  # below before first use (documented in scripts/release-soak.sh + DEV-SETUP).
-  # ---------------------------------------------------------------
+  # Gates RELEASE, not PRs. GitHub OIDC assumes a scoped IAM role (no long-lived
+  # keys); release-soak.sh provisions the box, runs the full 12-scenario soak,
+  # asserts every scenario BOUNDED + panic=0 (R8), and ALWAYS tears it down.
+  # Configure the vars/secrets below before first use.
   soak-gate:
     name: Release Soak Gate (12-scenario, dedicated EC2)
     if: github.event_name == 'workflow_dispatch'
@@ -72,9 +63,7 @@ jobs:
           path: /tmp/eg-release-soak-summary.txt
           if-no-files-found: ignore
 
-  # ---------------------------------------------------------------
   # PUBLISH pipeline (tag push only) — cross-arch binaries.
-  # ---------------------------------------------------------------
   build-binary:
     name: Build ${{ matrix.target }}
     if: startsWith(github.ref, 'refs/tags/')

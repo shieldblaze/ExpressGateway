@@ -1,14 +1,6 @@
-//! TLS-handshake timeout helper (SEC-2-10).
-//!
-//! Wraps `tokio_rustls::TlsAcceptor::accept` in
-//! `tokio::time::timeout`. Wave-2c (`crates/lb/src/main.rs`) inserts
-//! the call site; this module ships the API + tests so the wiring
-//! is a one-liner.
-//!
-//! The default 5 s budget is well above a healthy TLS 1.3 handshake
-//! (sub-second on >99.9% of connections) and well below what a
-//! slowloris-style accept-side attacker can sustain without
-//! noticing.
+//! TLS-handshake timeout helper (SEC-2-10) — `TlsAcceptor::accept` under a `tokio::time::timeout`.
+//! The 5 s default sits above a healthy sub-second TLS 1.3 handshake and below what an accept-side
+//! slowloris needs to be worth running.
 
 use std::time::Duration;
 
@@ -17,46 +9,27 @@ use tokio::time::error::Elapsed;
 use tokio_rustls::TlsAcceptor;
 use tokio_rustls::server::TlsStream;
 
-/// Default TLS handshake budget — five seconds, per the SEC-2-10
-/// plan and the rel F-05 cross-reference.
+/// Default TLS handshake budget.
 pub const DEFAULT_HANDSHAKE_TIMEOUT_MS: u64 = 5_000;
 
 /// Outcome of [`timeout_accept`].
 #[derive(Debug, thiserror::Error)]
 pub enum HandshakeError {
-    /// The handshake budget elapsed before the rustls state machine
-    /// reached `Connected`. The caller is expected to close the
-    /// underlying socket with a RST (no `shutdown(Write)`) — the
-    /// peer has not yet received ServerHello so it has no key
-    /// material to ack our close with.
+    /// Budget elapsed before rustls reached `Connected`. Close with a RST, NOT `shutdown(Write)`:
+    /// the peer never got ServerHello, so it holds no key material to ack a clean close with.
     #[error("TLS handshake exceeded {budget_ms}ms timeout")]
     Timeout {
         /// Configured budget that was exceeded.
         budget_ms: u64,
     },
 
-    /// rustls returned a handshake error — this is distinct from a
-    /// timeout because the remediation is different (handshake
-    /// error usually means client mis-config, not attack).
+    /// rustls handshake error — distinct from a timeout: usually mis-configuration, not an attack.
     #[error("TLS handshake failed: {0}")]
     Handshake(#[source] std::io::Error),
 }
 
-/// Wrap `acceptor.accept(stream)` in a `timeout`.
-///
-/// Returns `Ok(TlsStream)` on a clean handshake within budget,
-/// `Err(HandshakeError::Timeout)` on elapsed, or
-/// `Err(HandshakeError::Handshake)` on rustls error.
-///
-/// `budget` must be non-zero — a zero budget would race the
-/// `timeout` future against the handshake future and rejects every
-/// connection. The function panics on zero in debug builds (this is
-/// a programming error in the caller); in release the budget is
-/// silently raised to 1 ms so production stays alive.
-///
-/// # Errors
-///
-/// See [`HandshakeError`].
+/// `acceptor.accept(stream)` under a `budget`. A zero `budget` rejects every connection, so it
+/// debug-asserts and is raised to 1 ms in release rather than taking production down.
 pub async fn timeout_accept<IO>(
     acceptor: &TlsAcceptor,
     stream: IO,
@@ -92,9 +65,7 @@ mod tests {
     use std::task::{Context, Poll};
     use tokio::io::ReadBuf;
 
-    /// A stream that never yields any bytes — feeds the rustls
-    /// state machine no ClientHello so it parks indefinitely. The
-    /// timeout path is the only termination.
+    /// Never yields bytes, so rustls parks forever and only the timeout can terminate the accept.
     #[derive(Debug)]
     struct SilentStream;
 
@@ -125,9 +96,6 @@ mod tests {
     }
 
     fn test_acceptor() -> TlsAcceptor {
-        // Build a minimal rustls server config. The handshake will
-        // never complete because SilentStream feeds no bytes, but
-        // the acceptor itself must construct cleanly.
         let generated = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
         let cert_der: Vec<u8> = generated.cert.der().to_vec();
         let key_der: Vec<u8> = generated.signing_key.serialize_der();
@@ -160,17 +128,11 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn zero_budget_promoted_to_one_ms() {
-        // Documented behaviour: zero is asserted in debug but silently
-        // raised to 1 ms in release. Test in release-like mode by
-        // skipping the debug_assert via release build of the test
-        // (the test binary is compiled with debug-assertions on by
-        // default, so we can't fully exercise the release fallback;
-        // we instead verify the timeout STILL fires with the tiny
-        // budget so the contract holds either way).
+        // Debug-assertions are on in test builds, so the release zero-budget fallback cannot be
+        // exercised directly; 1 ms is the smallest budget that skips the assert and still proves
+        // the timeout fires.
         let acceptor = test_acceptor();
         let stream = SilentStream;
-        // 1 ms is the smallest unit that survives the assert; using
-        // it directly avoids the debug-assert branch entirely.
         let err = timeout_accept(&acceptor, stream, Duration::from_millis(1))
             .await
             .unwrap_err();

@@ -1,31 +1,11 @@
-//! S36-A — H3 CONNECTION RECYCLING (cap → GOAWAY → drain → recycle) e2e.
+//! H3 CONNECTION RECYCLING (cap → GOAWAY → drain → recycle) e2e.
 //!
-//! Proves the `max_requests_per_h3_connection` cap on the SHARED H3 actor
-//! (`lb_quic::run_actor` / `poll_h3`, R12 single-source) actually fires —
-//! the F-CAP-1 trap ("cap masked by backpressure") is avoided by asserting
-//! the GOAWAY/recycle EVENTS, not merely an invariant:
+//! Proves `max_requests_per_h3_connection` actually fires, avoiding the F-CAP-1 trap ("cap masked
+//! by backpressure") by asserting the GOAWAY/recycle EVENTS rather than an invariant.
+//! `cap_zero_is_byte_identical` is the load-bearing R3 negative control.
 //!
-//!   * `cap_trips_goaway_and_recycles` — drive `> cap` requests on ONE real
-//!     quiche::h3 client connection and assert (a) the client observes an
-//!     `Event::GoAway`, (b) the recycle metric incremented
-//!     (`h3_goaway_sent_total == 1`, `h3_connections_recycled_total == 1`),
-//!     (c) the in-flight request at the GOAWAY boundary (the cap-th admitted
-//!     request) COMPLETES with a real `:status 200` (NOT a RST), and (d)
-//!     after the GOAWAY the real client refuses to open a new request on the
-//!     recycling connection (`send_request` → `FrameUnexpected`, RFC 9114
-//!     §5.2) — i.e. a fresh connection is required for subsequent work.
-//!
-//!   * `cap_zero_is_byte_identical` — the load-bearing R3 negative control:
-//!     with `max_requests_per_h3_connection = 0` the actor NEVER sends a
-//!     GOAWAY no matter how many requests ride one connection, and the
-//!     connection stays open (no recycle). Byte-identical to the pre-S36 H3
-//!     front.
-//!
-//! The client is a REAL `quiche::h3::Connection` (not the hand-rolled
-//! testcodec) precisely because GOAWAY handling lives in quiche's h3 layer:
-//! it surfaces `Event::GoAway` and enforces the "no new requests after a
-//! peer GOAWAY" rule, so the test exercises the exact behaviour a
-//! production H3 client would.
+//! The client is a REAL `quiche::h3::Connection` precisely because GOAWAY handling lives in
+//! quiche's h3 layer — it surfaces the event and enforces the no-new-requests rule.
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
@@ -50,10 +30,6 @@ const MAX_UDP: usize = 65_535;
 const TEST_SNI: &str = "expressgateway.test";
 const H3_ALPN_PROTOS: &[&[u8]] = &[b"h3"];
 const HANDSHAKE_BUDGET: Duration = Duration::from_secs(5);
-
-// --------------------------------------------------------------------
-// cert + config helpers (mirror round8_h3_authority_enforced.rs)
-// --------------------------------------------------------------------
 
 struct CertTempFile(PathBuf);
 
@@ -95,9 +71,8 @@ fn build_config(server: bool, cert_path: &str, key_path: &str) -> quiche::Config
     cfg.set_initial_max_stream_data_bidi_local(1024 * 1024);
     cfg.set_initial_max_stream_data_bidi_remote(1024 * 1024);
     cfg.set_initial_max_stream_data_uni(1024 * 1024);
-    // Allow plenty of concurrent bidi streams so a > cap request burst is
-    // not throttled by the transport flow-control window (the cap must be
-    // what stops new requests, not stream-credit exhaustion — F-CAP-1).
+    // Plenty of concurrent bidi streams so a > cap burst is not throttled by the transport
+    // window — the CAP must be what stops new requests, not stream credit (F-CAP-1).
     cfg.set_initial_max_streams_bidi(64);
     cfg.set_initial_max_streams_uni(16);
     cfg.set_disable_active_migration(true);
@@ -117,13 +92,11 @@ fn scid_bytes(salt: u32) -> [u8; quiche::MAX_CONN_ID_LEN] {
     let mut b = [0u8; quiche::MAX_CONN_ID_LEN];
     use ring::rand::SecureRandom;
     ring::rand::SystemRandom::new().fill(&mut b).unwrap();
-    // Mix the salt so two conns in one test never collide.
     b[0] ^= u8::try_from(salt & 0xff).unwrap_or(0);
     b
 }
 
-/// A real listening backend that returns a minimal well-formed H1 200 for
-/// every accepted connection and counts the hits.
+/// A real listening backend returning a minimal well-formed H1 200 per connection, counting hits.
 async fn spawn_probe_backend() -> (SocketAddr, Arc<AtomicU32>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -146,9 +119,8 @@ async fn spawn_probe_backend() -> (SocketAddr, Arc<AtomicU32>) {
     (addr, count)
 }
 
-/// A probe backend that delays `delay` before sending the 200 — so a
-/// response that is still in flight when the cap GOAWAY fires lets us prove
-/// the actor DRAINS it (completes the 200) rather than force-closing (RST).
+/// Delays before the 200, so a response still in flight when the cap GOAWAY fires proves the
+/// actor DRAINS it rather than force-closing.
 async fn spawn_slow_probe_backend(delay: Duration) -> (SocketAddr, Arc<AtomicU32>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -223,7 +195,6 @@ async fn try_recv_one(
     }
 }
 
-/// Per-stream client-side response accounting.
 #[derive(Default, Clone)]
 struct StreamOutcome {
     status: Option<u16>,
@@ -232,14 +203,11 @@ struct StreamOutcome {
     reset_code: Option<u64>,
 }
 
-/// What one `cap_trips_goaway_and_recycles`-style run observed.
 struct RunResult {
-    /// Per-stream outcomes keyed by client stream id.
     outcomes: std::collections::HashMap<u64, StreamOutcome>,
     /// The GOAWAY id the client observed (None ⇒ no GOAWAY seen).
     goaway_id: Option<u64>,
-    /// `true` once the client's `send_request` was refused with
-    /// `FrameUnexpected` (the post-GOAWAY "open a new connection" rule).
+    /// `true` once `send_request` was refused with `FrameUnexpected` (the post-GOAWAY rule).
     send_refused_after_goaway: bool,
     /// Recycle metric snapshot AFTER the actor task joined.
     goaway_sent_total: u64,
@@ -248,10 +216,8 @@ struct RunResult {
     backend_hits: u32,
 }
 
-/// Drive `n_requests` GET requests over ONE real quiche::h3 client
-/// connection against a `run_actor` server configured with
-/// `max_requests_per_h3_connection = cap`. Returns everything the
-/// assertions need.
+/// Drive `n_requests` GETs over ONE quiche::h3 client connection against a `run_actor` server
+/// configured with `max_requests_per_h3_connection = cap`.
 async fn drive(cap: u32, n_requests: usize) -> RunResult {
     drive_with_backend_delay(cap, n_requests, Duration::ZERO).await
 }
@@ -306,7 +272,6 @@ async fn drive_with_backend_delay(
     let mut out = vec![0u8; MAX_UDP];
     let mut in_buf = vec![0u8; MAX_UDP];
 
-    // Handshake pump.
     let deadline = tokio::time::Instant::now() + HANDSHAKE_BUDGET;
     while !(server_conn.is_established() && client_conn.is_established()) {
         if tokio::time::Instant::now() > deadline {
@@ -332,13 +297,11 @@ async fn drive_with_backend_delay(
         .await;
     }
 
-    // Build the client h3 layer on the established transport.
     let h3_cfg = quiche::h3::Config::new().unwrap();
     let mut client_h3 = quiche::h3::Connection::with_transport(&mut client_conn, &h3_cfg).unwrap();
 
-    // Hand the established server conn to the REAL actor; a forwarder task
-    // drains the server UDP socket into the actor's inbound channel (the
-    // router is simulated, the actor itself is real).
+    // The router is simulated by a forwarder task draining the server socket into the actor's
+    // inbound channel; the actor itself is real.
     let (tx, rx) = mpsc::channel::<InboundPacket>(256);
     let cancel = CancellationToken::new();
     let fwd_socket = Arc::clone(&server_socket);
@@ -392,18 +355,13 @@ async fn drive_with_backend_delay(
     let mut sent = 0usize;
     let mut body_buf = [0u8; 4096];
 
-    // Issue requests + pump until all sent requests reach a terminal state
-    // (Finished or Reset) and a GOAWAY has been observed (when a cap is in
-    // play), or a generous budget expires.
     let run_deadline = tokio::time::Instant::now() + Duration::from_secs(20);
     loop {
         if tokio::time::Instant::now() > run_deadline {
             break;
         }
 
-        // Open one more request per iteration until we've sent n_requests,
-        // unless the client has seen a GOAWAY (then `send_request` is a
-        // protocol error — capture that and stop opening new ones).
+        // Stop opening new requests once a GOAWAY was seen — `send_request` is then an error.
         if sent < n_requests {
             match client_h3.send_request(&mut client_conn, &req_headers(), true) {
                 Ok(sid) => {
@@ -411,9 +369,8 @@ async fn drive_with_backend_delay(
                     sent += 1;
                 }
                 Err(quiche::h3::Error::FrameUnexpected) if goaway_id.is_some() => {
-                    // RFC 9114 §5.2: a client that received a GOAWAY MUST NOT
-                    // open new requests on that connection. quiche enforces
-                    // this — the proof that the client must reconnect.
+                    // RFC 9114 §5.2: a client that received a GOAWAY MUST NOT open new
+                    // requests. quiche enforces it — the proof that the client must reconnect.
                     send_refused_after_goaway = true;
                     sent = n_requests; // stop trying to open more
                 }
@@ -434,7 +391,6 @@ async fn drive_with_backend_delay(
         )
         .await;
 
-        // Drain client h3 events.
         loop {
             match client_h3.poll(&mut client_conn) {
                 Ok((sid, quiche::h3::Event::Headers { list, .. })) => {
@@ -468,17 +424,14 @@ async fn drive_with_backend_delay(
                 Ok((_sid, _other)) => {}
                 Err(quiche::h3::Error::Done) => break,
                 Err(e) => {
-                    // The connection may go away as the server recycles it;
-                    // that is expected once a GOAWAY was seen.
+                    // The connection may go away as the server recycles it; expected post-GOAWAY.
                     let _ = e;
                     break;
                 }
             }
         }
 
-        // Termination: every opened request reached a terminal state
-        // (Finished or Reset). For a capped run we also require the GOAWAY
-        // to have been observed; for cap==0 no GOAWAY will ever come.
+        // A capped run must also have observed the GOAWAY; for cap == 0 none ever comes.
         let all_terminal = !outcomes.is_empty()
             && outcomes
                 .values()
@@ -493,12 +446,9 @@ async fn drive_with_backend_delay(
         }
     }
 
-    // Post-GOAWAY "must reconnect" proof, timing-independent: if the client
-    // saw a GOAWAY, an explicit fresh `send_request` on THIS connection must
-    // be refused with `FrameUnexpected` (RFC 9114 §5.2). (During the burst
-    // above the client may have already queued every request before it
-    // processed the GOAWAY, so this explicit probe is the load-bearing
-    // assertion rather than the opportunistic in-loop capture.)
+    // Post-GOAWAY "must reconnect" proof, timing-independent. During the burst the client may
+    // have queued everything before processing the GOAWAY, so this explicit fresh `send_request`
+    // — not the opportunistic in-loop capture — is the load-bearing assertion.
     if goaway_id.is_some() && !send_refused_after_goaway {
         match client_h3.send_request(&mut client_conn, &req_headers(), true) {
             Err(quiche::h3::Error::FrameUnexpected) => {
@@ -512,8 +462,7 @@ async fn drive_with_backend_delay(
         }
     }
 
-    // Let the server actor observe the drained, idle connection and run its
-    // drain-then-recycle close; pump a little so the CONNECTION_CLOSE lands.
+    // Let the actor observe the drained, idle connection and run its drain-then-recycle close.
     let settle = tokio::time::Instant::now() + Duration::from_secs(3);
     while tokio::time::Instant::now() < settle && !client_conn.is_closed() {
         flush(&mut client_conn, &client_socket, &mut out).await;
@@ -525,7 +474,6 @@ async fn drive_with_backend_delay(
             Duration::from_millis(30),
         )
         .await;
-        // Drain any late events (e.g. a trailing GoAway / Reset).
         loop {
             match client_h3.poll(&mut client_conn) {
                 Ok((id, quiche::h3::Event::GoAway)) => goaway_id = Some(id),
@@ -559,15 +507,11 @@ async fn drive_with_backend_delay(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cap_trips_goaway_and_recycles() {
-    // cap = 3, attempt 10 requests on ONE connection. The 3rd admitted
-    // request trips the cap → GOAWAY; once the client processes it (after a
-    // sub-ms loopback round-trip, long before all 10 are opened) it refuses
-    // to open the rest, and any racing in-flight opens past the GOAWAY id
-    // are rejected by the server (H3_REQUEST_REJECTED).
+    // cap = 3 over 10 attempts: the 3rd admitted trips the cap, the client then refuses the
+    // rest, and any racing opens past the GOAWAY id are rejected server-side.
     let cap = 3u32;
     let res = drive(cap, 10).await;
 
-    // (a) the client observed a GOAWAY.
     assert!(
         res.goaway_id.is_some(),
         "S36-A: the client MUST observe an H3 GOAWAY once the connection \
@@ -575,8 +519,8 @@ async fn cap_trips_goaway_and_recycles() {
         res.outcomes.len()
     );
 
-    // (b) the recycle metric incremented — the branch is PROVABLY TAKEN
-    // (not just an invariant; avoids the F-CAP-1 backpressure-masked trap).
+    // (b) the recycle metric incremented — the branch is PROVABLY TAKEN, not merely an
+    // invariant (the F-CAP-1 backpressure-masked trap).
     assert_eq!(
         res.goaway_sent_total, 1,
         "S36-A: exactly one GOAWAY must be recorded at the cap (got {})",
@@ -589,10 +533,8 @@ async fn cap_trips_goaway_and_recycles() {
         res.connections_recycled_total
     );
 
-    // (c) at least `cap` admitted requests completed with a real 200 (the
-    // boundary request — the cap-th — drains correctly, it is NOT RST). The
-    // probe backend returns 200; a recycle that truncated an in-flight
-    // request would surface a Reset or a missing 200 here.
+    // (c) the boundary request drains correctly rather than being RST: a recycle that truncated
+    // an in-flight request would surface a Reset or a missing 200.
     let completed_200 = res
         .outcomes
         .values()
@@ -609,8 +551,6 @@ async fn cap_trips_goaway_and_recycles() {
             .collect::<Vec<_>>()
     );
 
-    // Every completed request that got a status got exactly 200 (no
-    // per-request correctness regression on the admitted set).
     for (sid, o) in &res.outcomes {
         if let Some(st) = o.status {
             assert_eq!(
@@ -620,8 +560,7 @@ async fn cap_trips_goaway_and_recycles() {
         }
     }
 
-    // (d) after the GOAWAY the real client refused to open new requests on
-    // the recycling connection (must reconnect) — RFC 9114 §5.2.
+    // (d) after the GOAWAY the real client refused to open new requests — RFC 9114 §5.2.
     assert!(
         res.send_refused_after_goaway,
         "S36-A: after the GOAWAY the client MUST refuse new requests on the \
@@ -639,12 +578,8 @@ async fn cap_trips_goaway_and_recycles() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn in_flight_at_boundary_drains_not_rst() {
-    // The pointed drain-correctness proof (R3): a SLOW backend holds every
-    // response open ~400 ms. With cap=2, the GOAWAY fires (control stream)
-    // while the admitted responses are STILL IN FLIGHT. The actor MUST drain
-    // them — every admitted request completes with a clean 200 and NONE is
-    // reset — and only THEN recycle (a force-close would surface a Reset /
-    // missing 200 on the boundary request).
+    // The pointed drain-correctness proof (R3): a SLOW backend holds every response open, so the
+    // GOAWAY fires while admitted responses are STILL IN FLIGHT and must all drain cleanly first.
     let cap = 2u32;
     let res = drive_with_backend_delay(cap, 8, Duration::from_millis(400)).await;
 
@@ -659,12 +594,10 @@ async fn in_flight_at_boundary_drains_not_rst() {
         res.connections_recycled_total
     );
 
-    // No admitted request was reset, and at least `cap` completed with 200
-    // (the in-flight boundary responses drained, not truncated/RST).
+    // No admitted request was reset, and at least `cap` completed with 200.
     let any_admitted_reset = res.outcomes.values().any(|o| {
-        // An admitted request is one that got a status (reached upstream);
-        // a post-GOAWAY rejected stream has H3_REQUEST_REJECTED and never a
-        // status. Such a rejected stream IS allowed to carry a reset_code.
+        // An admitted request got a status; a post-GOAWAY rejected stream never does and IS
+        // allowed to carry a reset code.
         o.status.is_some() && o.reset_code.is_some()
     });
     assert!(
@@ -691,8 +624,7 @@ async fn in_flight_at_boundary_drains_not_rst() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn cap_zero_is_byte_identical() {
-    // R3 negative control: cap = 0 ⇒ NO GOAWAY, NO recycle, regardless of
-    // how many requests ride one connection.
+    // R3 negative control: cap = 0 ⇒ NO GOAWAY, NO recycle, however many requests ride one conn.
     let res = drive(0, 6).await;
 
     assert!(
@@ -717,8 +649,6 @@ async fn cap_zero_is_byte_identical() {
         "R3: cap=0 ⇒ the client is never refused (no GOAWAY ever sent)"
     );
 
-    // All six requests should have completed cleanly with 200 — the
-    // disabled path forwards every request exactly as before.
     let completed_200 = res
         .outcomes
         .values()
@@ -735,16 +665,12 @@ async fn cap_zero_is_byte_identical() {
     );
 }
 
-// --------------------------------------------------------------------
-// FRESH-CONNECTION-SERVES proof — through the REAL QuicListener (router +
-// per-CID dispatch), so a SECOND client connection spawns a SECOND actor.
-// This also exercises the full binary wiring path the unit tests bypass:
-// QuicListenerParams::with_h3_request_cap → RouterParams → ActorParams.
-// --------------------------------------------------------------------
+// FRESH-CONNECTION-SERVES through the REAL QuicListener, so a SECOND client connection spawns a
+// SECOND actor — exercising the binary wiring (`with_h3_request_cap` → RouterParams →
+// ActorParams) the unit tests bypass.
 
-/// Drive ONE client connection against an already-bound server addr (the
-/// real listener owns its receive socket). Sends up to `n_requests` GET
-/// requests, returns (clean-200 count, saw_goaway).
+/// Drive ONE client connection against an already-bound server addr → (clean-200 count,
+/// saw_goaway).
 async fn drive_one_client_against(
     server_addr: SocketAddr,
     cert_path: &str,
@@ -774,7 +700,6 @@ async fn drive_one_client_against(
     let mut out = vec![0u8; MAX_UDP];
     let mut in_buf = vec![0u8; MAX_UDP];
 
-    // Handshake.
     let deadline = tokio::time::Instant::now() + HANDSHAKE_BUDGET;
     while !client_conn.is_established() {
         if tokio::time::Instant::now() > deadline {
@@ -911,7 +836,6 @@ async fn fresh_connection_serves_after_recycle() {
 
     let (backend, _hits) = spawn_probe_backend().await;
 
-    // A retry-secret path the listener generates if missing.
     let retry_path = std::env::temp_dir().join(format!(
         "lb-quic-s36-recycle-retry-{}-{}.key",
         std::process::id(),
@@ -953,11 +877,10 @@ async fn fresh_connection_serves_after_recycle() {
          (>= cap={cap} 200s); got {c1_200}"
     );
 
-    // Give the listener a beat to finish recycling connection #1.
     tokio::time::sleep(Duration::from_millis(300)).await;
 
-    // Connection #2: a FRESH connection (new SCID ⇒ new actor) must serve
-    // its requests normally — the recycle of #1 did not poison the listener.
+    // Connection #2: a FRESH connection (new SCID ⇒ new actor) must serve normally — the
+    // recycle of #1 did not poison the listener.
     let (c2_200, _c2_goaway) = drive_one_client_against(server_addr, &cert_path, 2, 22).await;
     assert_eq!(
         c2_200, 2,
@@ -965,7 +888,6 @@ async fn fresh_connection_serves_after_recycle() {
          requests (got {c2_200} clean 200s on connection #2)"
     );
 
-    // The recycle metric saw at least connection #1's recycle.
     assert!(
         metrics.goaway_sent_total.get() >= 1,
         "S36-A: at least one GOAWAY recorded across the two connections (got {})",
