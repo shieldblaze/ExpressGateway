@@ -31,7 +31,6 @@ impl Maglev {
         })
     }
 
-    /// Compute offset and skip for a backend based on its id hash.
     #[allow(clippy::cast_possible_truncation)]
     fn permutation(id: &str) -> (usize, usize) {
         let h1 = Self::hash_str(id, 0);
@@ -43,7 +42,6 @@ impl Maglev {
         (offset, skip)
     }
 
-    /// Simple multiply-shift string hash.
     fn hash_str(s: &str, seed: u64) -> u64 {
         let mut h = seed;
         for byte in s.bytes() {
@@ -59,7 +57,6 @@ impl Maglev {
         h
     }
 
-    /// Populate the Maglev lookup table using the permutation algorithm.
     fn populate(backends: &[Backend]) -> Vec<usize> {
         let n = backends.len();
 

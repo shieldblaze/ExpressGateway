@@ -20,7 +20,6 @@ const RETRY_MAX_ODCID: usize = 255;
 /// Wire-format version tag; bump it (and branch in `verify`) on any layout change.
 const RETRY_TOKEN_VERSION: u8 = 0x01;
 
-/// HMAC-SHA256 tag size.
 const MAC_LEN: usize = 32;
 
 /// Default retry-token lifetime — RFC 9000 §8.1.3 wants "short"; 10 s matches quiche's default.

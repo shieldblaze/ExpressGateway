@@ -120,7 +120,6 @@ impl UpstreamQuicConn {
     }
 }
 
-/// Interior mutable pool state shared between every [`QuicUpstreamPool`] clone.
 struct QuicPoolInner {
     config: QuicPoolConfig,
     config_factory: Arc<dyn Fn() -> Result<quiche::Config, quiche::Error> + Send + Sync>,
@@ -273,7 +272,6 @@ impl QuicUpstreamPool {
         }
     }
 
-    /// Dial a fresh connection and drive it to established, then pool it.
     async fn dial_new(&self, addr: SocketAddr, sni: &str) -> io::Result<PooledQuic> {
         let mut config = (self.inner.config_factory)()
             .map_err(|e| io::Error::other(format!("quic_pool config_factory: {e}")))?;
@@ -337,7 +335,6 @@ impl QuicUpstreamPool {
     }
 }
 
-/// Established parts from [`connect_and_drive`], before pooling or hand-off.
 struct DialedUpstream {
     conn: quiche::Connection,
     socket: Arc<UdpSocket>,

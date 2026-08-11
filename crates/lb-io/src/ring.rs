@@ -146,7 +146,6 @@ fn reap_cqe(ring: &mut IoUring) -> io::Result<cqueue::Entry> {
         .ok_or_else(|| io::Error::other("io_uring completion queue empty after submit_and_wait"))
 }
 
-/// Decode a CQE: negative is errno, non-negative is the op's return value.
 fn check_cqe(cqe: &cqueue::Entry) -> io::Result<i32> {
     let code = cqe.result();
     if code < 0 {
@@ -156,14 +155,12 @@ fn check_cqe(cqe: &cqueue::Entry) -> io::Result<i32> {
     }
 }
 
-/// Widen a [`check_cqe`]-validated non-negative `i32` to `usize` without a lossy cast.
 #[inline]
 fn usize_from_nonneg_i32(n: i32) -> usize {
     // `n >= 0` is an invariant of our callers; fall back to 0 otherwise.
     usize::try_from(n).unwrap_or(0)
 }
 
-/// Widen a [`check_cqe`]-validated non-negative `i32` to `u32` without a lossy cast.
 #[inline]
 fn u32_from_nonneg_i32(n: i32) -> u32 {
     u32::try_from(n).unwrap_or(0)

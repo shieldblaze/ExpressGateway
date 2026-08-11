@@ -234,7 +234,6 @@ pub fn apply_udp(socket: &UdpSocket, cfg: &UdpSockOpts) -> io::Result<()> {
     Ok(())
 }
 
-/// Linux-only helper: set an integer-valued socket option.
 #[cfg(target_os = "linux")]
 fn set_int(
     fd: libc::c_int,

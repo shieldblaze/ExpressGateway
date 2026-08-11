@@ -238,17 +238,14 @@ impl Default for RuntimeWatchdogConfig {
     }
 }
 
-/// Serde default for `RuntimeWatchdogConfig::header_deadline_ms`.
 const fn default_watchdog_header_deadline_ms() -> u64 {
     5_000
 }
 
-/// Serde default for `RuntimeWatchdogConfig::body_progress_min_bps`.
 const fn default_watchdog_body_progress_min_bps() -> u64 {
     64
 }
 
-/// Serde default for `RuntimeWatchdogConfig::sweep_interval_ms`.
 const fn default_watchdog_sweep_interval_ms() -> u64 {
     1_000
 }
@@ -263,7 +260,6 @@ pub struct RuntimeTlsConfig {
     pub tls13_only: bool,
 }
 
-/// Serde default for `RuntimeConfig::drain_timeout_ms`.
 const fn default_drain_timeout_ms() -> u64 {
     10_000
 }
@@ -278,7 +274,6 @@ const fn default_handshake_timeout_ms() -> u64 {
     5_000
 }
 
-/// Serde default for `RuntimeConfig::max_inflight_connections`.
 const fn default_max_inflight_connections() -> u32 {
     65_536
 }
@@ -288,7 +283,6 @@ const fn default_connect_timeout_ms() -> u64 {
     5_000
 }
 
-/// Serde default for `RuntimeConfig::per_ip_connection_cap`.
 const fn default_per_ip_cap() -> u32 {
     1_024
 }
@@ -690,7 +684,6 @@ const fn default_passthrough_min_client_dcid_len() -> usize {
     8
 }
 
-/// Per-flow datagram backlog between the recv loop and the forward task.
 const fn default_passthrough_per_flow_backlog() -> usize {
     32
 }
@@ -710,7 +703,6 @@ const fn default_passthrough_mint_retry() -> bool {
     true
 }
 
-/// Idle-flow reaper default; the standard stateless-passthrough reclamation window.
 const fn default_passthrough_flow_idle_timeout_ms() -> u64 {
     60_000
 }
@@ -1122,7 +1114,6 @@ fn validate_backend_list(i: usize, listener: &ListenerConfig) -> Result<(), Conf
     Ok(())
 }
 
-/// H3 backends must supply a `tls_ca_path` or explicitly opt out via `tls_verify_peer = false`.
 fn validate_backend_h3_tls(i: usize, j: usize, backend: &BackendConfig) -> Result<(), ConfigError> {
     if backend.protocol != "h3" {
         if backend.tls_ca_path.is_some()

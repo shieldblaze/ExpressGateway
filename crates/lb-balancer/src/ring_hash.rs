@@ -2,10 +2,8 @@
 
 use crate::{Backend, BalancerError, KeyedLoadBalancer, backend_identity_hash};
 
-/// Number of virtual nodes per backend on the ring.
 const VNODES_PER_BACKEND: u32 = 150;
 
-/// A point on the hash ring: (hash value, backend index).
 #[derive(Debug, Clone)]
 struct RingPoint {
     hash: u64,
@@ -49,7 +47,6 @@ impl RingHash {
         })
     }
 
-    /// Hash a backend id with a virtual node index using multiply-shift.
     fn hash_vnode(id: &str, vnode: u32) -> u64 {
         let mut h: u64 = 0xcbf2_9ce4_8422_2325; // FNV offset basis
         for byte in id.bytes() {
@@ -66,7 +63,6 @@ impl RingHash {
         h
     }
 
-    /// Hash a key value.
     const fn hash_key(key: u64) -> u64 {
         let mut h = key;
         h ^= h >> 33;

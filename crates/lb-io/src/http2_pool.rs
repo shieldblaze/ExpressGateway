@@ -69,7 +69,6 @@ impl Default for Http2PoolConfig {
     }
 }
 
-/// Per-peer cached entry: a `SendRequest` handle plus the driver task.
 struct PeerEntry {
     sender: SendRequest<H2ReqBody>,
     driver: JoinHandle<()>,
@@ -219,7 +218,6 @@ impl Http2Pool {
         }
     }
 
-    /// Sender for `addr`, dialing fresh when the cached entry is missing or dead.
     async fn acquire_sender(
         &self,
         addr: SocketAddr,
@@ -467,7 +465,6 @@ mod tests {
             .unwrap()
     }
 
-    /// Success arm: acquire_sender → handshake → `idle_bounded_send` → 200.
     #[tokio::test]
     async fn send_request_idle_success_arm() {
         use http_body_util::Full;

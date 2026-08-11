@@ -218,7 +218,6 @@ impl LbConfig {
     }
 }
 
-/// Diff two listeners that share a bind address.
 fn diff_listener(old: &crate::ListenerConfig, new: &crate::ListenerConfig, plan: &mut ReloadPlan) {
     let addr = &old.address;
 

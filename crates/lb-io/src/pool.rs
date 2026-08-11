@@ -56,14 +56,12 @@ impl Default for PoolConfig {
     }
 }
 
-/// An idle connection parked in the pool.
 struct IdleConn {
     stream: StdTcpStream,
     created_at: Instant,
     last_used: Instant,
 }
 
-/// Interior mutable state shared between every [`TcpPool`] clone.
 struct TcpPoolInner {
     config: PoolConfig,
     connect_opts: BackendSockOpts,
@@ -140,7 +138,6 @@ impl TcpPool {
         self.dial_new_async(addr).await
     }
 
-    /// Pop the oldest idle entry (FIFO), decrementing the total counter.
     fn pop_idle(&self, addr: SocketAddr) -> Option<IdleConn> {
         let idle = {
             let entry = self.inner.per_peer.get(&addr)?;
@@ -181,7 +178,6 @@ impl TcpPool {
         }
     }
 
-    /// Fresh dial + setsockopt via [`Runtime::connect`].
     fn dial_new(&self, addr: SocketAddr) -> io::Result<PooledTcp> {
         let stream = self.inner.runtime.connect(addr, &self.inner.connect_opts)?;
         let created_at = Instant::now();
@@ -195,7 +191,6 @@ impl TcpPool {
         ))
     }
 
-    /// Fresh async dial under the connect deadline, then post-connect sockopts.
     async fn dial_new_async(&self, addr: SocketAddr) -> io::Result<PooledTcp> {
         let connect_fut = TcpStream::connect(addr);
         let stream =
@@ -218,7 +213,6 @@ impl TcpPool {
     }
 }
 
-/// Reason a pooled connection was rejected by [`TcpPool::validate_and_upgrade`].
 enum ValidationOutcome {
     /// Discard this entry and try the next one (or dial fresh).
     Discard,
@@ -688,7 +682,6 @@ mod tests {
         assert!(pool.idle_count() <= 5);
     }
 
-    /// `acquire_async` parks back into the per-peer queue exactly like the blocking path.
     #[tokio::test]
     async fn acquire_async_dials_then_parks() {
         let (_l, addr, _stop) = echo_listener();

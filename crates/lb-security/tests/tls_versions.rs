@@ -48,7 +48,6 @@ fn tls13_only_config_builds_without_tls12() {
     let _ = cfg;
 }
 
-/// A TLS 1.2-only client against a `tls13_only` server must fail with a version alert.
 #[tokio::test]
 async fn test_tls13_only_rejects_tls12() {
     use tokio::io::AsyncWriteExt;

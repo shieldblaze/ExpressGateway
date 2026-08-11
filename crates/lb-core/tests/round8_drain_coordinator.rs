@@ -22,7 +22,6 @@ impl DrainObserver for CountingObserver {
     }
 }
 
-/// Every phase observes exactly once, in declared order.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn run_drain_phases_in_order() {
     let shutdown = Shutdown::new();
@@ -64,7 +63,6 @@ async fn run_drain_phases_in_order() {
     );
 }
 
-/// C-10: two quick SIGTERMs must drain exactly once.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn run_drain_idempotent_c10() {
     let shutdown = Shutdown::new();
@@ -112,7 +110,6 @@ async fn run_drain_idempotent_c10() {
     );
 }
 
-/// C-7: an uncooperative task records `TimedOut` with the remaining count.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn run_drain_inflight_timeout_c7() {
     let shutdown = Shutdown::new();
@@ -151,7 +148,6 @@ async fn run_drain_inflight_timeout_c7() {
     );
 }
 
-/// C-8: an XDP detach timeout must still let the coordinator proceed to exit.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn run_drain_xdp_detach_timeout_c8() {
     let shutdown = Shutdown::new();
@@ -177,7 +173,6 @@ async fn run_drain_xdp_detach_timeout_c8() {
     );
 }
 
-/// C-13: `xdp_detach_deadline = None` skips phase 6 entirely.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn run_drain_admin_skips_xdp_c13() {
     let shutdown = Shutdown::new();

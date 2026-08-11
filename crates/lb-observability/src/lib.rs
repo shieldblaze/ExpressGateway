@@ -53,7 +53,6 @@ pub use xdp_metrics::{ConntrackFamily, SamplerBaseline, XdpMetrics, stat_slot_la
 /// Advisory series cap; past it a warning is emitted but registration still SUCCEEDS.
 const CARDINALITY_WARN_THRESHOLD: usize = 10_000;
 
-/// Handle-cache entries, keeping the typed handle registered under each name.
 #[derive(Clone)]
 enum Handle {
     Counter(IntCounter),

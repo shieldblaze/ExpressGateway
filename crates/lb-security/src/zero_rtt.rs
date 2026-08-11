@@ -138,7 +138,6 @@ impl ZeroRttReplayGuard {
         Ok(())
     }
 
-    /// Allocate an arena slot for `digest`, reusing a free-list slot when one exists.
     fn alloc_node(&mut self, digest: [u8; 32]) -> usize {
         if self.free_head == NIL {
             let idx = self.arena.len();
@@ -182,7 +181,6 @@ impl ZeroRttReplayGuard {
         }
     }
 
-    /// Push `idx` onto the MRU end of the LRU list.
     fn push_back(&mut self, idx: usize) {
         let prev_back = self.back;
         if let Some(node) = self.arena.get_mut(idx) {
@@ -220,7 +218,6 @@ impl ZeroRttReplayGuard {
         self.push_back(idx);
     }
 
-    /// Evict the LRU node and return its slot to the free list.
     fn evict_lru(&mut self) {
         let idx = self.front;
         if idx == NIL {

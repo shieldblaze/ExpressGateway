@@ -24,7 +24,6 @@ use crate::MetricsRegistry;
 use crate::probes::{ProbeRegistry, ProbeState};
 use crate::prometheus_exposition::{CONTENT_TYPE, render_text};
 
-/// HTTP request handler that exposes the admin endpoints.
 #[derive(Clone)]
 struct AdminService {
     registry: Arc<MetricsRegistry>,
@@ -108,7 +107,6 @@ fn readyz_response(probes: &ProbeRegistry) -> Response<Full<Bytes>> {
     json_status(status, state)
 }
 
-/// `/startupz` — 200 once the process is no longer `Starting`.
 fn startupz_response(probes: &ProbeRegistry) -> Response<Full<Bytes>> {
     let state = probes.state();
     let status = if probes.is_started() {

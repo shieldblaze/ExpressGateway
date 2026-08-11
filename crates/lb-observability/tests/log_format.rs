@@ -12,7 +12,6 @@ use tracing::subscriber::with_default;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt;
 
-/// `io::Write` buffer whose guard serialises concurrent writes.
 #[derive(Clone, Default)]
 struct CaptureWriter {
     buf: Arc<Mutex<Vec<u8>>>,

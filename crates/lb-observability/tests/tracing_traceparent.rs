@@ -7,7 +7,6 @@ use lb_observability::tracing_propagation::{
     parse_traceparent, span_name,
 };
 
-/// Minimal in-memory header bag for cross-crate testing.
 #[derive(Default)]
 struct Bag(HashMap<String, Vec<String>>);
 

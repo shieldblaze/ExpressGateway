@@ -217,7 +217,6 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    /// Minimal in-memory header bag implementing [`HeaderBag`].
     #[derive(Default)]
     struct TestHeaders(HashMap<String, Vec<String>>);
 

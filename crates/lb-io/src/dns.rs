@@ -62,7 +62,6 @@ pub enum DnsError {
     },
 }
 
-/// What kind of value a cache entry holds.
 #[derive(Debug, Clone)]
 enum ResolveResult {
     Positive(Arc<Vec<SocketAddr>>),
@@ -115,7 +114,6 @@ impl CacheKey {
     }
 }
 
-/// Pluggable resolve backend; defaults to [`ToSocketAddrs`], swapped for a stub in tests.
 type ResolveFn =
     Arc<dyn Fn(&str, u16) -> Result<Vec<SocketAddr>, io::Error> + Send + Sync + 'static>;
 
