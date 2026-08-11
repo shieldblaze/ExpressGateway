@@ -1,34 +1,17 @@
 #!/usr/bin/env bash
 # EBPF-2-07 / ROUND8-L4-10: per-kernel verifier-log capture driver.
 #
-# Boots a kernel image via lvh (little-vm-helper) at one of the
-# supported LTS versions, loads `crates/lb-l4-xdp/src/lb_xdp.bin`
-# with `BPF_LOG_LEVEL=2`, and writes the captured verifier log to
-# `audit/ebpf/verifier-logs/<kver>.log`. CI diffs the result against
-# the committed snapshot and fails on drift.
+# Boots a kernel via lvh, loads crates/lb-l4-xdp/src/lb_xdp.bin at BPF_LOG_LEVEL=2,
+# and writes audit/ebpf/verifier-logs/<kver>.log. CI diffs against the committed
+# snapshot and fails on drift. Kernels are the LTS floor (5.15), current (6.1) and
+# rolling (6.6) per DEPLOYMENT.md §27.
 #
-# Usage:
-#   scripts/verify-xdp.sh --kernel 5.15
-#   scripts/verify-xdp.sh --kernel 6.1
-#   scripts/verify-xdp.sh --kernel 6.6
-#   scripts/verify-xdp.sh --kernel 6.1 --update-baseline   # refresh
+# Needs --privileged + bpffs for the lvh container; off Docker, rely on the CI matrix.
 #
-# Deprecated positional form (will warn):
-#   scripts/verify-xdp.sh 5.15
+#   scripts/verify-xdp.sh --kernel 6.1 [--update-baseline]
 #
-# Supported kernel versions are the LTS floor (5.15), current LTS
-# (6.1), and rolling LTS (6.6) per DEPLOYMENT.md §27.
-#
-# Local sandbox note: the lvh container needs --privileged and bpffs.
-# CI carries those; developers running this on a non-Docker machine
-# should rely on the CI matrix instead.
-#
-# Exit codes:
-#   0 — log matches baseline (or --update-baseline succeeded)
-#   1 — log drift from baseline (intentional or accidental — refresh + commit)
-#   2 — missing baseline (developer must commit it via --update-baseline)
-#   3 — environment problem (docker missing, image pull fail, ELF missing)
-#   64 — usage error
+# Exit: 0 match · 1 drift (refresh + commit) · 2 missing baseline · 3 environment
+# (docker/image/ELF) · 64 usage.
 
 set -euo pipefail
 
@@ -99,12 +82,9 @@ case "${KVER}" in
         ;;
 esac
 
-# ROUND8-L4-10: pinned lvh-images digests per kernel. The first
-# CI green run captures the digest; the entries below are populated
-# at that time. Until then, the pin table contains the floating tag
-# *and* the script refuses to run without an explicit
-# `EG_ALLOW_FLOATING_IMAGE=1` env override, so reproducibility is
-# preserved by construction.
+# ROUND8-L4-10: pinned lvh-images digests per kernel. Until an entry is a real
+# digest it holds the floating tag, and the script REFUSES to run without an
+# explicit EG_ALLOW_FLOATING_IMAGE=1 — reproducibility preserved by construction.
 IMAGE_BASE="quay.io/lvh-images/kernel-images"
 case "${KVER}" in
     5.15)
@@ -157,23 +137,16 @@ docker run --rm --privileged \
     "${IMAGE}" \
     bash -c '
         set -euo pipefail
-        # The lvh image already mounts bpffs and has bpftool. Load the
-        # program with verbose verifier log; capture stderr (where
-        # the verifier writes).
+        # The verifier writes to stderr, so that is what gets captured.
         bpftool prog load /work/crates/lb-l4-xdp/src/lb_xdp.bin /sys/fs/bpf/probe \
             type xdp \
             2> /tmp/verifier.log || true
         cat /tmp/verifier.log
 
-        # ROUND8-L4-10 correctness step: BPF_PROG_TEST_RUN with a
-        # synthetic Ethernet+IPv4+TCP packet. Asserts the program
-        # actually executes the rewrite path, not merely that it
-        # loads. The synthetic packet matches a probe-CT entry that
-        # CI inserts; outside CI the assertion is best-effort.
+        # BPF_PROG_TEST_RUN with a synthetic Ethernet+IPv4+TCP packet: proves the
+        # program EXECUTES the rewrite path, not merely that it loads. The packet
+        # matches a probe-CT entry CI inserts; outside CI it is best-effort.
         if [ -e /sys/fs/bpf/probe ]; then
-            # bpftool prog run accepts --pin-path and emits the
-            # verdict + output bytes. We dump them to a file the
-            # outer script then sanity-checks.
             bpftool prog run pinned /sys/fs/bpf/probe \
                 data_in /work/scripts/_probe_packet.bin \
                 data_out /tmp/probe_out.bin \
@@ -184,8 +157,8 @@ docker run --rm --privileged \
         cat /tmp/verifier.log.extra >> /tmp/verifier.log 2>/dev/null || true
     ' > "${OUT_LOG}.raw"
 
-# Normalise to suppress address/insn-count churn (the verifier log
-# has stable structural output but variable absolutes per build).
+# Normalise away address/insn-count churn: the log is structurally stable but its
+# absolutes vary per build.
 sed -E \
     -e 's/0x[0-9a-f]{16}/0xADDR/g' \
     -e 's/processed [0-9]+ insns/processed N insns/' \
@@ -196,8 +169,7 @@ rm "${OUT_LOG}.raw"
 
 say "captured verifier log → ${OUT_LOG}"
 
-# ROUND8-L4-10: the diff-gate. The previous version silently passed
-# when ${OUT_LOG}.committed was absent. We now hard-fail.
+# The diff-gate hard-fails on a MISSING baseline; it used to pass silently.
 if [ "${UPDATE_BASELINE}" -eq 1 ]; then
     cp "${OUT_LOG}" "${OUT_LOG}.committed"
     say "wrote new baseline → ${OUT_LOG}.committed"

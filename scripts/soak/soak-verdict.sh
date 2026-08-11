@@ -1,21 +1,13 @@
 #!/usr/bin/env bash
-# soak-verdict.sh — the RELEASE soak GATE verdict.
+# The RELEASE soak GATE verdict, over an OUT_DIR produced by run-soak.sh.
 #
-# Reads a completed soak OUT_DIR (per-scenario `*.soak_complete.marker` +
-# `*.stdout.log` produced by scripts/soak/run-soak.sh) and decides PASS/FAIL:
+# PASS iff every EXPECTED scenario has a marker reading `overall=BOUNDED` AND no
+# scenario log contains a panic (panic=0, R8). A MISSING marker is a FAIL, not a
+# skip — read the verdict only from a COMPLETED run (R15).
 #
-#   PASS iff  — every EXPECTED scenario has a marker AND its `overall=BOUNDED`
-#             — AND zero panics across all scenario logs (panic=0, R8)
+# Writes a COMPACT summary, never the raw CSVs (the S37/S39 disk lesson).
 #
-# It writes a COMPACT summary (release-soak-summary.txt) — per-scenario verdict
-# + sample count + any panic hits — NOT the raw multi-sample CSVs (the S37/S39
-# disk lesson: ship verdicts/summaries, not 100M-row time-series).
-#
-# Exit 0 on PASS, non-zero on FAIL. Read the verdict ONLY from a COMPLETED run
-# (R15) — a missing marker == FAIL (incomplete scenario), not a skip.
-#
-# Usage: soak-verdict.sh <out_dir> [scenario ...]
-#   With no scenario list, defaults to the canonical 12-scenario release set.
+# Usage: soak-verdict.sh <out_dir> [scenario ...]   (default: the canonical 12)
 set -uo pipefail
 
 OUT="${1:?usage: soak-verdict.sh <out_dir> [scenario ...]}"
@@ -51,10 +43,8 @@ for sc in "${EXPECTED[@]}"; do
   overall=$(sed -nE 's/.*overall=([A-Za-z]+).*/\1/p' "$marker")
   samples=$(sed -nE 's/.*samples=([0-9]+).*/\1/p' "$marker")
 
-  # panic=0 (R8): scan this scenario's log for a Rust panic hook message OR a
-  # genuinely non-zero `panic_total` metric. Precise awk avoids the false match
-  # on the zero-valued metric line `panic_total 0` (a plain grep for
-  # `panic_total[^0]` matches the trailing space and over-counts).
+  # awk, not grep: `grep panic_total[^0]` matches the trailing space on the
+  # zero-valued metric line `panic_total 0` and over-counts.
   panics=0
   if [ -f "$log" ]; then
     panics=$(awk '

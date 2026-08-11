@@ -1,8 +1,6 @@
 version: 2
 
-# Dependabot configuration: checks for dependency updates on a daily basis.
-# You can adjust the package-ecosystem entries or add more as needed (e.g. "github-actions").
-# See https://docs.github.com/en/code-security/supply-chain-security/keeping-your-dependencies-updated-automatically/configuration-options-for-dependency-updates
+# Dependabot: daily dependency update checks.
 updates:
   - package-ecosystem: "cargo"
     directory: "/"
@@ -23,9 +21,9 @@ updates:
       actions:
         patterns:
           - "*"
-        # dtolnay/rust-toolchain is versioned by RUST TOOLCHAIN (e.g. @1.88),
-        # not by action release. Dependabot's "*" group mistook the toolchain
-        # tag for an action version and proposed a bogus @1.100 bump (#214).
-        # Exclude it; the toolchain version is governed by rust-toolchain.toml.
+        # dtolnay/rust-toolchain is versioned by RUST TOOLCHAIN (@1.88), not by
+        # action release — the "*" group read the toolchain tag as an action
+        # version and proposed a bogus @1.100 bump (#214). rust-toolchain.toml
+        # governs it.
         exclude-patterns:
           - "dtolnay/rust-toolchain"

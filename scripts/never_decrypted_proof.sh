@@ -1,81 +1,32 @@
 #!/usr/bin/env bash
-# S15 A2-7 — NEVER-DECRYPTED LINKAGE proof.
+# S15 A2-7 — NEVER-DECRYPTED LINKAGE proof (audit/quic/s15-design.md §9.5).
 #
-# audit/quic/s15-design.md owner ruling §9.5 primary item 1
-# (verbatim):
+# Builds lb-quic with `--no-default-features --features quic-passthrough-only` and
+# greps `cargo bloat --filter quiche` for quiche::Connection / BoringSSL handshake
+# symbols. Any hit = FAIL = the cfg-gate around the quiche-bearing mod tree has
+# regressed. Exit 0 PASS, 1 FAIL, 2 `cargo bloat` missing (blocker, not a failure).
 #
-#   "PRIMARY (load-bearing, by-construction):
-#    1. Linkage: `cargo bloat -p lb-quic --filter quiche` shows
-#       ZERO quiche::Connection / BoringSSL decrypt symbols on the
-#       Mode A passthrough path, with cfg(not(feature =
-#       "quic-passthrough-only")) guards around any
-#       quiche::Connection / crypto use."
+# SCOPE: this binds at the **lb-quic CRATE** boundary, NOT the `lb` BINARY.
 #
-# Target is the **lb-quic CRATE** (lib), not the lb BINARY. The
-# binary side has its own (still-open) gating gap tracked under
-# CF-S15-LB-BIN-FEATURE-GATING — see commit body. The owner's
-# proof binds at the lb-quic boundary: `quic-terminate` off,
-# `quic-passthrough-only` on, no quiche::Connection symbol in the
-# crate's compiled artifact.
-#
-# Method:
-#   1. Build `lb-quic` (release) with the gating combo above.
-#   2. `cargo bloat -p lb-quic` (symbol-level, --filter quiche) →
-#      /tmp/never-decrypted-bloat.txt.
-#   3. grep for termination/decryption symbols (quiche::Connection,
-#      BoringSSL handshake entry points). Hit ⇒ FAIL.
-#
-# Expected: PASS — lb-quic's quic-terminate-gated mod tree
-# (router.rs, conn_actor.rs, h3_bridge.rs, listener.rs, quiche
-# dep, tokio-quiche dep, lb-h3 dep) is excluded under
-# `--no-default-features --features quic-passthrough-only`, so
-# nothing in the lb-quic compilation unit references quiche.
-#
-# Exit codes:
-#   0 — PASS: zero terminating-side symbols on the lb-quic Mode A
-#       compilation unit.
-#   1 — FAIL: quiche / BoringSSL symbol found (offending lines
-#       echoed; see /tmp/never-decrypted-bloat.txt for full output).
-#       Indicates the cfg-gate around quiche-bearing modules has
-#       regressed.
-#   2 — TOOLING: `cargo bloat` missing; advise install. Not a
-#       proof failure but a verification blocker.
-#
-# CARRY-FORWARD: **CF-S15-LB-BIN-FEATURE-GATING** — the `lb`
-# binary itself still links quiche via THREE paths under
-# `--no-default-features --features quic-passthrough-only`:
-#   1. `lb` → `quiche` direct dep (lb/Cargo.toml; main.rs:52 H3
-#      upstream-pool `quiche::Config` factory).
-#   2. `lb` → `lb-l7` → `lb-quic` (default features = quic-terminate).
-#   3. `lb` → `lb-quic` (gated default-features=false by S15 A2-8) —
-#      this path IS clean.
-# Closing the binary-side gap is a Phase A3 candidate (or
-# post-S15 carry-forward) that needs:
-#   - `lb-l7` features mirror (default = ["quic-terminate"],
-#     `quic-passthrough-only` marker) + cfg-gating on H3-upstream
-#     paths inside lb-l7.
-#   - `lb/Cargo.toml`: gate `quiche` direct dep + `lb-l7` dep
-#     behind `quic-terminate`.
-#   - `lb/src/main.rs`: cfg-gate spawn_quic + every
-#     QuicListener / Http2Pool / H3 upstream factory call-site.
-# Symbol footprint to close (today): quiche::Connection 100+ KiB,
-# bssl::ssl_*_handshake 25 KiB.
+# CARRY-FORWARD **CF-S15-LB-BIN-FEATURE-GATING** (this file is its only record):
+# under the same feature combo the `lb` binary STILL links quiche by two of three
+# paths — (1) its direct `quiche` dep, used by the H3 upstream-pool Config factory,
+# and (2) `lb` -> `lb-l7` -> `lb-quic` with lb-l7's default quic-terminate. Only
+# (3) `lb` -> `lb-quic` is gated clean (S15 A2-8). Closing it needs a feature
+# mirror on lb-l7 plus cfg-gating of the spawn_quic / QuicListener / H3-upstream
+# call-sites. Footprint: quiche::Connection 100+ KiB, bssl::ssl_*_handshake 25 KiB.
 
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
 
-# CARGO_TARGET_DIR is shared with the rest of the workspace
-# tooling (see CLAUDE.md / spawn brief). Falls back to ./target
-# when unset.
+# Shared with the rest of the workspace tooling; falls back to ./target.
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/home/ubuntu/Code/eg-target}"
 
 BLOAT_OUT="${BLOAT_OUT:-/tmp/never-decrypted-bloat.txt}"
 
-# Step 0 — tooling probe. `cargo bloat` is a third-party
-# subcommand; we don't auto-install (slow, and the script is
-# expected to run inside CI/verifier sessions that pre-warm the
-# toolchain).
+# `cargo bloat` is a third-party subcommand; deliberately NOT auto-installed —
+# callers are CI/verifier sessions that pre-warm the toolchain.
 if ! cargo bloat --version >/dev/null 2>&1; then
     echo "FAIL: cargo bloat not installed"
     echo "REMEDIATION: cargo install cargo-bloat --locked"

@@ -1,12 +1,10 @@
 name: Scheduled Scans
 
-# Informational / continuous-monitoring scans that do NOT need to block every
-# PR. They run weekly (plus manual dispatch). Keeping them off the PR critical
-# path but still RUNNING is the point: they catch drift that accrues against an
-# unchanged tree between PRs.
+# Informational scans, weekly + manual dispatch. Off the PR critical path but
+# still RUNNING is the point: they catch drift that accrues against an UNCHANGED
+# tree between PRs.
 #
-# S40: renamed from scheduled-scans.yml (content preserved). See
-# audit/release/s40-gate-map.md.
+# S40: renamed from scheduled-scans.yml, content preserved (s40-gate-map.md).
 
 on:
   schedule:
@@ -20,10 +18,8 @@ env:
 
 jobs:
   audit:
-    # The SAME strict cargo-audit as the per-PR `audit` gate in ci.yml. Run
-    # weekly to catch advisories newly published against UNCHANGED deps between
-    # PRs (the value of the schedule). Folds the old misnamed codeql.yml weekly
-    # audit, strengthened to -D warnings.
+    # The SAME strict cargo-audit as ci.yml's per-PR gate — run weekly to catch
+    # advisories newly published against UNCHANGED deps.
     name: Dependency Audit (weekly, strict)
     runs-on: ubuntu-latest
     steps:
@@ -31,14 +27,12 @@ jobs:
       - uses: ./.github/actions/rust-setup
       - name: Install cargo-audit
         run: cargo +stable install cargo-audit --locked
-      # SEC-2-07: fail on ANY RUSTSEC advisory. Explicit ignores live in
-      # .cargo/audit.toml with a justification + link.
+      # SEC-2-07: ignores live in .cargo/audit.toml with a justification.
       - run: cargo audit -D warnings
 
   geiger:
-    # cargo-geiger counts unsafe blocks. Informational — every unsafe site is
-    # justified in audit/unsafe-justifications.md per Round-7 spec, so we capture
-    # the JSON inventory and archive it rather than failing the build.
+    # Informational: every unsafe site is already justified in
+    # audit/unsafe-justifications.md, so archive the inventory, do not fail.
     name: Unsafe Inventory (cargo-geiger)
     runs-on: ubuntu-latest
     continue-on-error: true
@@ -58,10 +52,9 @@ jobs:
           retention-days: 30
 
   machete:
-    # cargo-machete flags unused dependencies. GREEN as of S35 (17 genuinely-
-    # unused deps removed). Off the PR critical path: a future unused dep makes
-    # THIS weekly run red (surfaced, loud) without blocking PRs — matching
-    # machete's documented false-positive-prone nature on feature-gated re-exports.
+    # Off the PR critical path deliberately: machete false-positives on
+    # feature-gated re-exports, so an unused dep reddens THIS weekly run (loud)
+    # without blocking PRs.
     name: Unused Deps (cargo-machete)
     runs-on: ubuntu-latest
     steps:

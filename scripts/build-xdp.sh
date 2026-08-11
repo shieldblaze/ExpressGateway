@@ -1,20 +1,13 @@
 #!/usr/bin/env bash
-# Pillar 4a + 4b-1: build the standalone eBPF crate into a loadable BPF ELF.
+# Build the standalone eBPF crate into a loadable BPF ELF at
+# crates/lb-l4-xdp/src/lb_xdp.bin, which build.rs detects to emit cfg(lb_xdp_elf)
+# and expose lb_l4_xdp::LB_XDP_ELF.
 #
-# Two toolchains:
-#   - workspace:  stable 1.85 (pinned by root rust-toolchain.toml)
-#   - lb-xdp-ebpf:  nightly pinned by crates/lb-l4-xdp/ebpf/rust-toolchain.toml,
-#                   required by aya-ebpf + bpf-linker.
+# The ebpf crate needs its OWN nightly (crates/lb-l4-xdp/ebpf/rust-toolchain.toml),
+# not the workspace stable — aya-ebpf + bpf-linker require it.
 #
-# On success the ELF (~3 KiB for the 301-line Pillar 4a program) is copied to
-# crates/lb-l4-xdp/src/lb_xdp.bin. crates/lb-l4-xdp/build.rs detects it and
-# emits cfg(lb_xdp_elf) so lb_l4_xdp::LB_XDP_ELF becomes available in
-# dependent crates and integration tests.
-#
-# Pillar 4b-1: this script is now a HARD dependency for updating the checked-in
-# ELF. If bpf-linker is absent the script still exits 0 after logging the
-# remediation — cached ELF remains in place, so downstream builds keep
-# working from the committed artifact.
+# Exits 0 even when bpf-linker is absent, logging the remediation instead: the
+# committed ELF stays in place so downstream builds keep working.
 
 set -euo pipefail
 
@@ -37,13 +30,10 @@ if [ -z "${NIGHTLY}" ]; then
 fi
 say "ebpf crate pinned to rustc ${NIGHTLY}"
 
-# Make sure rustup has the pinned nightly with rust-src. NOTE: do NOT pass
-# `--target bpfel-unknown-none` here. The BPF target has no prebuilt
-# `rust-std`; we compile `core` from source via `-Z build-std=core`
-# (rust-src). Passing the target made `rustup toolchain install` try to
-# download a nonexistent rust-std and fail, which the `|| exit 0` then
-# turned into a silent "skip ELF build" — leaving the stale committed
-# lb_xdp.bin in place (the Round-8 D-1/D-2 root cause).
+# Do NOT add `--target bpfel-unknown-none` here: that target has no prebuilt
+# rust-std (we build `core` from source via -Z build-std), so rustup tries to
+# download a nonexistent component and fails — which `|| exit 0` then turned into a
+# silent "skip ELF build" leaving a STALE committed lb_xdp.bin. Round-8 D-1/D-2.
 if ! rustup toolchain list 2>/dev/null | grep -q "^${NIGHTLY}\|^nightly"; then
   say "Installing ${NIGHTLY} toolchain…"
   rustup toolchain install "${NIGHTLY}" --component rust-src --profile minimal || {
@@ -51,12 +41,11 @@ if ! rustup toolchain list 2>/dev/null | grep -q "^${NIGHTLY}\|^nightly"; then
     exit 0
   }
 else
-  # Ensure rust-src is present on the pinned channel (build-std needs it).
+  # build-std needs rust-src on the pinned channel.
   rustup component add rust-src --toolchain "${NIGHTLY}" >/dev/null 2>&1 || true
 fi
 
-# bpf-linker must match rustc's LLVM major; install with the pinned nightly
-# so its transitive MSRV (1.88+ at time of writing) is satisfied.
+# bpf-linker must match rustc's LLVM major — install it with the pinned nightly.
 if ! command -v bpf-linker >/dev/null 2>&1; then
   say "bpf-linker not in PATH; installing with ${NIGHTLY}…"
   if ! cargo "+${NIGHTLY}" install bpf-linker --locked 2>&1; then
@@ -69,12 +58,9 @@ fi
 
 say "bpf-linker: $(bpf-linker --version 2>/dev/null || echo unknown)"
 say "Building lb-xdp-ebpf for bpfel-unknown-none…"
-# EBPF-2-01: emit DWARF (`-Cdebuginfo=2`) so bpf-linker can lower it to
-# BTF / BTF.ext. `-C link-arg=--btf` enables BTF emission. NOTE: the
-# separate `-C link-arg=-g` was removed — bpf-linker 0.10.3 dropped the
-# `-g` flag (it errors `unexpected argument '-g'`); BTF/BTF.ext is now
-# derived from the `-Cdebuginfo=2` DWARF + `--btf` alone. RUSTFLAGS is
-# preserved on top of whatever the caller may have set.
+# EBPF-2-01: `-Cdebuginfo=2` emits the DWARF that `--btf` lowers to BTF/BTF.ext.
+# Do NOT re-add `-C link-arg=-g` — bpf-linker 0.10.3 errors `unexpected argument
+# '-g'`; debuginfo=2 + --btf alone are sufficient.
 export RUSTFLAGS="${RUSTFLAGS:-} -Cdebuginfo=2 -Clink-arg=--btf"
 pushd "${EBPF_DIR}" >/dev/null
 if cargo "+${NIGHTLY}" build --release \
@@ -82,12 +68,9 @@ if cargo "+${NIGHTLY}" build --release \
       -Z build-std=core 2>&1; then
   BUILT="target/bpfel-unknown-none/release/lb_xdp"
   if [ -f "${BUILT}" ]; then
-    # EBPF-2-01 budget guard: -Cdebuginfo=2 (needed so bpf-linker can
-    # lower DWARF -> BTF/BTF.ext) leaves ~90 KiB of .debug_* sections
-    # the kernel never reads at load. Strip them AFTER BTF generation —
-    # this keeps `xdp`, `license`, `maps`, `.BTF`, `.BTF.ext` and drops
-    # the ELF from ~180 KiB to ~36 KiB, back under MAX_ELF_BYTES (64 KiB)
-    # so build.rs re-embeds it instead of panicking.
+    # Strip .debug_* only AFTER BTF generation: debuginfo=2 leaves ~90 KiB the
+    # kernel never reads, and the ELF must land under build.rs's MAX_ELF_BYTES
+    # (64 KiB) or it panics instead of embedding. ~180 KiB -> ~36 KiB.
     STRIP="$(command -v llvm-objcopy-21 || command -v llvm-objcopy || command -v objcopy)"
     if [ -n "${STRIP}" ]; then
       "${STRIP}" --strip-debug "${BUILT}" "${BUILT}.lean" && BUILT="${BUILT}.lean"
