@@ -19,6 +19,101 @@ Commits (branch `feature/de-slop-s45a`):
 - `4bf9f8ef` lb-l7/tests
 - `8b235f3a` lb-h1 / lb-h2 / lb-h3-testcodec / lb-grpc
 
+## Mandatory self-check — lead-required proof
+
+### 1. `s45a-code-identity.py main` — no lb-l7-area file listed
+
+```
+$ python3 audit/craft/s45a-code-identity.py main
+S45A code-identity proof — 228 .rs files changed vs main
+  2 file(s) with real code changes — each needs justification:
+    CODE DIFFERS   crates/lb-observability/src/xdp_metrics.rs
+    CODE DIFFERS   crates/lb-quic/src/h3_bridge.rs
+```
+
+Neither file is in my area (lb-l7 / lb-h1 / lb-h2 / lb-grpc / lb-h3-testcodec).
+Independently re-run across all 53 of my changed `.rs` files: **53 checked, 0 with
+code differences.**
+
+### 2. No attribute line removed
+
+```
+$ git diff main -- crates/lb-l7 crates/lb-h1 crates/lb-h2 crates/lb-grpc \
+      crates/lb-h3-testcodec | grep -E '^-\s*#\['
+(no output)
+```
+
+Per-file attribute counts (`^\s*#!?\[`) compared main vs HEAD across all 53 changed
+files: **identical in every file.** No `#[inline]`, `#[allow]`, `#[cfg]`,
+`#[derive]`, `#[must_use]`, `#[test]`, `#[tokio::test]` or `#![...]` line was lost.
+
+### 3. `test-gauges` gated statics intact with attributes
+
+```
+crates/lb-l7/src/h1_proxy.rs
+2677:#[cfg(any(test, feature = "test-gauges"))]
+2678-pub static H1_REQ_MAX_RETAINED_BODY_BYTES: std::sync::atomic::AtomicUsize =
+2683:#[cfg(any(test, feature = "test-gauges"))]
+2684-pub fn record_retained_h1(n: usize) {
+
+crates/lb-l7/src/h2_proxy.rs
+2846:#[cfg(any(test, feature = "test-gauges"))]
+2847-pub static H2_REQ_MAX_RETAINED_BODY_BYTES: std::sync::atomic::AtomicUsize =
+2852:#[cfg(any(test, feature = "test-gauges"))]
+2853-pub fn record_retained(n: usize) {
+```
+
+Occurrences of that exact gate string — `h1_proxy.rs` main=6 head=6,
+`h2_proxy.rs` main=7 head=7. The root `tests/` crate importers
+(`tests/h1h1_md_streaming_verify.rs:386,446,471`, `tests/h2h1_md_coverage_driver.rs`)
+still resolve.
+
+### 4. Test-asserted source strings — assertion site and grep proof
+
+`crates/lb-l7/tests/round8_body_overread.rs` reads `crates/lb-l7/src/h1_proxy.rs`:
+
+```
+:69   src.contains("ROUND8-L7-10 — take-and-discard upstream stream pattern"),
+:76   src.contains("set_reusable(false)"),
+
+$ grep -cF 'ROUND8-L7-10 — take-and-discard upstream stream pattern' crates/lb-l7/src/h1_proxy.rs
+1
+$ grep -cF 'set_reusable(false)'                                     crates/lb-l7/src/h1_proxy.rs
+1
+```
+
+`crates/lb-l7/tests/h2_connect_protocol_settings.rs` reads `crates/lb-l7/src/h2_proxy.rs`:
+
+```
+:26   src.contains("enable_connect_protocol()"),
+:35   src.contains("if self.h2_extended_connect_enabled"),
+
+$ grep -cF 'enable_connect_protocol()'           crates/lb-l7/src/h2_proxy.rs
+1
+$ grep -cF 'if self.h2_extended_connect_enabled' crates/lb-l7/src/h2_proxy.rs
+2
+```
+
+`crates/lb-l7/tests/round8_underscore_policy.rs` reads BOTH proxies:
+
+```
+:101 / :117   src.contains("ROUND8-L7-05"),
+:106 / :122   src.contains("with_header_underscore_policy"),
+
+$ grep -cF 'ROUND8-L7-05'                  crates/lb-l7/src/h1_proxy.rs   -> 5
+$ grep -cF 'with_header_underscore_policy' crates/lb-l7/src/h1_proxy.rs   -> 1
+$ grep -cF 'ROUND8-L7-05'                  crates/lb-l7/src/h2_proxy.rs   -> 4
+$ grep -cF 'with_header_underscore_policy' crates/lb-l7/src/h2_proxy.rs   -> 1
+```
+
+The assertion sites themselves are untouched: `git diff main` shows **0** changed
+`assert` / `src.contains` / `let src` lines in all three test files.
+
+Cross-check for the lb-io sweeper — `round8_body_overread.rs` also asserts two
+strings outside my area, both still present:
+`'ROUND8-L7-10 — API contract for future H1 upstream reuse'` in `lb-io/src/pool.rs` (1),
+`'ROUND8-L7-10 — H2 cousin of the H1 take-and-discard pattern'` in `lb-io/src/http2_pool.rs` (1).
+
 ## No-behaviour-change proof
 
 Every edited file was verified byte-identical to its pre-edit version after
