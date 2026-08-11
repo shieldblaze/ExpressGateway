@@ -1,31 +1,10 @@
 //! TLS 1.3 0-RTT replay protection.
 //!
-//! Maintains a fixed-capacity LRU window of recently seen 0-RTT tokens.
-//! When the window is full, the **least-recently-used** entry is
-//! evicted. Touching an entry that is already present (on a replay)
-//! refreshes it to most-recently-used so that a long-lived replay
-//! stream keeps the originating token observable instead of pushing
-//! it out the back of a FIFO.
-//!
-//! Tokens are hashed to a fixed-size `[u8; 32]` digest via a
-//! process-local keyed HMAC-SHA256 before storage. The key is generated
-//! via `ring::rand::SystemRandom` at construction and never leaves the
-//! struct, so an attacker cannot precompute collisions from source
-//! inspection (the pre-auditor-signoff `hash_token` used source-visible
-//! multiply-shift seeds — flagged in the 2026-04-23 auditor signoff as
-//! a precompute-collision risk; this module now uses HMAC-SHA256 as a
-//! drop-in replacement).
-//!
-//! Window-size policy (SEC-2-05)
-//! -----------------------------
-//!
-//! The window size is configurable via
-//! `[security].zero_rtt_replay_window_size` (Wave-2c
-//! `crates/lb-config`). Default is [`DEFAULT_ZERO_RTT_REPLAY_WINDOW_SIZE`]
-//! = `65_536` entries — sized to bound a unique-token spray at
-//! ~64 k entries before collapse, while keeping memory under
-//! 4 MB (entry size: 32 bytes digest + ~16 B linked-list overhead per
-//! entry × 65 536 ≈ 3 MB).
+//! Two attack-driven choices, both of which look like arbitrary taste from the code alone:
+//! * **LRU, not FIFO** (SEC-2-05): a FIFO lets a sustained unique-token spray push the in-flight
+//!   replayee out of the window before its replay arrives, so the window must be use-bounded.
+//! * **HMAC-SHA256, not multiply-shift** (auditor finding 2026-04-23): the old source-visible
+//!   seeds let an attacker precompute digest collisions and walk straight through the dedup.
 
 use std::collections::HashMap;
 
@@ -34,20 +13,11 @@ use ring::rand::{SecureRandom, SystemRandom};
 
 use crate::SecurityError;
 
-/// Default capacity of the 0-RTT replay window (SEC-2-05 default for
-/// the `[security].zero_rtt_replay_window_size` config knob). 65 536
-/// digests × 32 B each (plus a small per-entry overhead) — ~3 MB
-/// resident.
+/// Default capacity of the 0-RTT replay window (`[security].zero_rtt_replay_window_size`); ~3 MB.
 pub const DEFAULT_ZERO_RTT_REPLAY_WINDOW_SIZE: usize = 65_536;
 
-/// Non-public hash producing a 32-byte digest via HMAC-SHA256 under a
-/// process-local secret key.
-///
-/// An attacker without the key cannot craft two tokens with the same digest
-/// short of breaking HMAC-SHA256, so the `HashSet` dedup can't be bypassed
-/// by a precomputation attack. The key is generated fresh per
-/// `ZeroRttReplayGuard` instance so cross-instance correlation is also
-/// denied.
+/// Keyed digest. The per-instance key is what denies collision precomputation and cross-instance
+/// correlation — never swap this for an unkeyed hash.
 fn hash_token(key: &hmac::Key, token: &[u8]) -> [u8; 32] {
     let tag = hmac::sign(key, token);
     let mut out = [0u8; 32];
@@ -61,15 +31,8 @@ fn hash_token(key: &hmac::Key, token: &[u8]) -> [u8; 32] {
     out
 }
 
-/// Derive a fresh 32-byte secret for the keyed hash via
-/// `ring::rand::SystemRandom`.
-///
-/// Infallible in practice on any Linux/BSD with `/dev/urandom`. If the
-/// kernel RNG surface truly fails (kernel panic territory), we fall back
-/// to a time-mixed secret so the guard stays usable; an attacker in that
-/// mode can guess the secret, but their ability to replay tokens is also
-/// bounded by the ring-buffer capacity, so the downgrade is strictly
-/// better than a hardcoded public seed.
+/// Fresh 32-byte secret from the OS RNG. The time-mixed fallback is a deliberate degradation for
+/// the kernel-RNG-failed case: guessable, but still better than a hardcoded public seed.
 fn fresh_secret() -> [u8; 32] {
     let rng = SystemRandom::new();
     let mut secret = [0u8; 32];
@@ -87,13 +50,8 @@ fn fresh_secret() -> [u8; 32] {
     secret
 }
 
-/// Doubly-linked node inside the LRU's internal arena.
-///
-/// Indices into [`ZeroRttReplayGuard::arena`]; `usize::MAX` is the
-/// sentinel for "no neighbour". A node's `prev` points toward LRU
-/// (front), `next` points toward MRU (back). Eviction pops from
-/// `front`; insertion pushes to `back`; replay-touch unlinks the
-/// node and pushes it to `back`.
+/// Arena node. `prev` points toward LRU (`front`), `next` toward MRU (`back`); [`NIL`] means no
+/// neighbour.
 struct Node {
     digest: [u8; 32],
     prev: usize,
@@ -102,63 +60,39 @@ struct Node {
 
 const NIL: usize = usize::MAX;
 
-/// Fixed-capacity LRU replay guard for TLS 1.3 0-RTT early data tokens.
-///
-/// Replaced the prior FIFO ring buffer per SEC-2-05: under sustained
-/// unique-token spray a FIFO can push an in-flight replayee out of
-/// the window before the legitimate replay attempt arrives. LRU
-/// semantics keep frequently-checked tokens at the back so the
-/// replay-detection window is *use*-bounded, not *time*-bounded.
-///
-/// Memory: 32-byte digest + 2 × usize (16 B on 64-bit) per slot +
-/// a `HashMap<digest, usize>` index. ~3 MB at the default 65 536
-/// capacity.
+/// Fixed-capacity LRU replay guard for TLS 1.3 0-RTT early-data tokens.
 pub struct ZeroRttReplayGuard {
     max_tokens: usize,
-    /// Slab of node records. Indexed by the HashMap. Vacant slots
-    /// are tracked via the `free_head` free-list embedded in
-    /// `Node::next` (when on the free list, `prev` = NIL,
-    /// `next` = next free slot or NIL).
+    /// Node slab. Vacant slots live on the `free_head` list embedded in `Node::next`, where
+    /// `prev` = NIL.
     arena: Vec<Node>,
     /// Head of the free-list inside `arena`.
     free_head: usize,
-    /// Index of the least-recently-used node (eviction candidate).
+    /// Least-recently-used node — the eviction candidate.
     front: usize,
-    /// Index of the most-recently-used node.
+    /// Most-recently-used node.
     back: usize,
-    /// Digest -> arena index. Membership in O(1); promotion on hit
-    /// is O(1) via the doubly-linked list.
+    /// Digest -> arena index.
     index: HashMap<[u8; 32], usize>,
-    /// Process-local HMAC-SHA256 key. Never leaves this struct;
-    /// prevents source-inspection collision precomputation
-    /// (auditor finding 2026-04-23).
+    /// Process-local HMAC key; never leaves this struct.
     key: hmac::Key,
 }
 
 impl ZeroRttReplayGuard {
-    /// Create a new guard with the given capacity and a freshly generated
-    /// HMAC-SHA256 key.
-    ///
-    /// # Arguments
-    ///
-    /// * `max_tokens` - Maximum number of tokens to remember before
-    ///   evicting the LRU. A value of `0` is coerced to `1`.
+    /// New guard with a freshly generated HMAC key; `max_tokens` of `0` is coerced to `1`.
     #[must_use]
     pub fn new(max_tokens: usize) -> Self {
         Self::new_with_secret(max_tokens, &fresh_secret())
     }
 
-    /// Create a guard pre-sized to
-    /// [`DEFAULT_ZERO_RTT_REPLAY_WINDOW_SIZE`].
+    /// Guard pre-sized to [`DEFAULT_ZERO_RTT_REPLAY_WINDOW_SIZE`].
     #[must_use]
     pub fn with_default_window() -> Self {
         Self::new(DEFAULT_ZERO_RTT_REPLAY_WINDOW_SIZE)
     }
 
-    /// Create a new guard with the given capacity and caller-supplied
-    /// HMAC secret. Useful for tests that need deterministic digest
-    /// equality across instances; production code should use
-    /// [`Self::new`] so each instance has an unrelated key.
+    /// Guard with a caller-supplied secret — TESTS ONLY, for cross-instance digest equality.
+    /// Production must use [`Self::new`] so each instance keys independently.
     #[must_use]
     pub fn new_with_secret(max_tokens: usize, secret: &[u8]) -> Self {
         let max_tokens = if max_tokens == 0 { 1 } else { max_tokens };
@@ -192,34 +126,24 @@ impl ZeroRttReplayGuard {
         self.max_tokens
     }
 
-    /// Check whether a 0-RTT token has been seen before.
-    ///
-    /// On a hit, the matching entry is promoted to most-recently-used
-    /// so frequently-checked tokens are not evicted under spray.
-    ///
-    /// On a miss, the token is recorded and (if the window is at
-    /// capacity) the least-recently-used entry is evicted first.
+    /// Record a 0-RTT token, evicting the LRU entry if the window is full.
     ///
     /// # Errors
     ///
-    /// Returns [`SecurityError::ZeroRttReplay`] if the token is
-    /// already in the window (replay detected).
+    /// [`SecurityError::ZeroRttReplay`] if the token is already in the window.
     pub fn check_and_record(&mut self, token: &[u8]) -> Result<(), SecurityError> {
         let digest = hash_token(&self.key, token);
 
         if let Some(&idx) = self.index.get(&digest) {
-            // Replay — promote to MRU so the replayee stays observable
-            // even under sustained unique-token spray, then surface.
+            // Promote before surfacing: keeps the replayee observable under unique-token spray.
             self.move_to_back(idx);
             return Err(SecurityError::ZeroRttReplay);
         }
 
-        // Evict LRU if at capacity.
         if self.index.len() >= self.max_tokens {
             self.evict_lru();
         }
 
-        // Insert at MRU.
         let idx = self.alloc_node(digest);
         self.push_back(idx);
         self.index.insert(digest, idx);
@@ -227,8 +151,7 @@ impl ZeroRttReplayGuard {
         Ok(())
     }
 
-    /// Allocate an arena slot for `digest`. Reuses a free-list slot
-    /// when available; otherwise extends the `Vec`.
+    /// Allocate an arena slot for `digest`, reusing a free-list slot when one exists.
     fn alloc_node(&mut self, digest: [u8; 32]) -> usize {
         if self.free_head == NIL {
             let idx = self.arena.len();
@@ -240,12 +163,8 @@ impl ZeroRttReplayGuard {
             idx
         } else {
             let idx = self.free_head;
-            // free_head was populated by `free_node` which guarantees
-            // the slot exists and `next` points at the next free slot
-            // (or NIL). If the invariant is violated (cannot happen
-            // under normal use), fall back to extending the arena so
-            // we still produce a valid index — the released slot is
-            // simply orphaned rather than reused.
+            // The None arm is unreachable while the free-list invariant holds; it exists so a
+            // violated invariant orphans a slot instead of panicking on a security path.
             match self.arena.get_mut(idx) {
                 Some(node) => {
                     self.free_head = node.next;
@@ -292,9 +211,7 @@ impl ZeroRttReplayGuard {
         self.back = idx;
     }
 
-    /// Unlink `idx` from the LRU list. The slot stays valid; the
-    /// caller is responsible for either re-linking (promotion) or
-    /// freeing it.
+    /// Unlink `idx`. The slot stays valid — the caller must re-link or free it.
     fn unlink(&mut self, idx: usize) {
         let (prev, next) = self.arena.get(idx).map_or((NIL, NIL), |n| (n.prev, n.next));
         if prev == NIL {
@@ -317,8 +234,7 @@ impl ZeroRttReplayGuard {
         self.push_back(idx);
     }
 
-    /// Evict the front node (LRU). Removes from the `index` map and
-    /// returns the slot to the free list.
+    /// Evict the LRU node and return its slot to the free list.
     fn evict_lru(&mut self) {
         let idx = self.front;
         if idx == NIL {
@@ -332,17 +248,11 @@ impl ZeroRttReplayGuard {
         self.free_node(idx);
     }
 
-    /// Gateway-facing entry point named for its call site in the QUIC
-    /// server accept loop (Pillar 3b.3a). Semantically identical to
-    /// [`check_and_record`](Self::check_and_record); the separate name
-    /// documents the wiring point so a reader of the accept loop can
-    /// follow the crate boundary without chasing a generic-sounding
-    /// helper.
+    /// Alias of [`check_and_record`](Self::check_and_record), named for the QUIC accept loop.
     ///
     /// # Errors
     ///
-    /// Returns [`SecurityError::ZeroRttReplay`] if the token has been
-    /// seen since the buffer was last evicted.
+    /// [`SecurityError::ZeroRttReplay`] on a replay.
     pub fn check_0rtt_token(&mut self, token: &[u8]) -> Result<(), SecurityError> {
         self.check_and_record(token)
     }

@@ -1,38 +1,12 @@
 //! Per-IP and per-listener concurrent-connection cap (SEC-2-04).
 //!
-//! [`ConnGate::admit`] is the synchronous accept-time check the
-//! listener loop calls right after `TcpStream::accept` returns. On
-//! success it produces a [`ConnPermit`], an RAII handle that bumps
-//! both the per-IP counter and the per-listener counter; dropping the
-//! permit releases both. On failure the gate returns [`OverCap`] and
-//! the listener loop is expected to RST the socket without writing a
-//! response — preventing the cap from being used as an amplification
-//! lever.
+//! [`ConnGate::admit`] runs at accept time and never blocks; on [`OverCap`] the listener must RST
+//! the socket WITHOUT writing a response, or the cap itself becomes an amplification lever.
 //!
-//! Wave-2c (`crates/lb/src/main.rs`) inserts the call. This crate
-//! ships the API + tests. The Wave-2a deliverable is the public
-//! surface; the trusted-CIDR allowlist field is accepted so the
-//! Wave-2c call site doesn't have to bump the constructor signature
-//! later, but the actual CIDR-prefix match is deferred to
-//! `audit/deferred.md` per L-002.
+//! The per-listener counter uses AcqRel rather than Relaxed per SEC-2-16: it gates a security
+//! decision, so the consume edge has to observe every prior decrement.
 //!
-//! Counter semantics
-//! -----------------
-//!
-//! * `per_listener: AtomicU32` — single atomic, AcqRel on the
-//!   success-path `compare_exchange` per SEC-2-16 (the gate counter
-//!   is a security-gating value, so the consume edge must observe
-//!   all previous decrements). Saturated at `listener_cap`.
-//! * `per_ip: DashMap<IpAddr, u32>` — concurrent map; mutation under
-//!   the bucket's lock. Entries are GC'd lazily on permit drop
-//!   (decrement to 0 removes the key).
-//!
-//! Failure mode under flood
-//! -----------------------
-//!
-//! [`ConnGate::admit`] never blocks. Overflow returns immediately
-//! with [`OverCap::Listener`] or [`OverCap::PerIp`] so the caller can
-//! close the socket on the same scheduler tick.
+//! The trusted-CIDR field is carried but NOT matched — deferred per `audit/deferred.md` L-002.
 
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -57,13 +31,7 @@ pub enum OverCap {
     },
 }
 
-/// Placeholder type for the deferred trusted-CIDR allowlist.
-///
-/// Holds the prefix and prefix length verbatim. The actual prefix
-/// match is deferred per `audit/deferred.md` L-002. Round-4 ships
-/// the field on [`ConnGate`] so callers (Wave-2c `lb/src/main.rs`)
-/// can compile against the final constructor signature; once L-002
-/// lands the match becomes a single method change here.
+/// Trusted-CIDR prefix. Stored verbatim — nothing matches against it yet (L-002).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IpNet {
     /// Prefix base address.
@@ -80,8 +48,7 @@ impl IpNet {
     }
 }
 
-/// Internal shared state. Held behind `Arc` so [`ConnPermit::drop`]
-/// can decrement counters without borrowing the gate.
+/// Shared state behind an `Arc` so [`ConnPermit::drop`] can decrement without borrowing the gate.
 struct GateInner {
     per_ip: DashMap<IpAddr, u32>,
     per_listener: AtomicU32,
@@ -90,17 +57,13 @@ struct GateInner {
     trusted_cidrs: Vec<IpNet>,
 }
 
-/// Per-IP / per-listener gate.
-///
-/// Cheap to clone (`Arc` newtype). Shared across all listener accept
-/// loops that should observe the same caps.
+/// Per-IP / per-listener gate; cheap to clone, shared across accept loops that share caps.
 #[derive(Clone)]
 pub struct ConnGate {
     inner: Arc<GateInner>,
 }
 
-/// RAII handle returned by [`ConnGate::admit`]. Dropping releases
-/// both the per-IP and per-listener counter slots.
+/// RAII handle from [`ConnGate::admit`]; dropping releases both counter slots.
 pub struct ConnPermit {
     inner: Arc<GateInner>,
     peer: IpAddr,
@@ -115,12 +78,7 @@ impl std::fmt::Debug for ConnPermit {
 }
 
 impl ConnGate {
-    /// Build a new gate.
-    ///
-    /// * `listener_cap` — maximum concurrent permits across all peers.
-    /// * `per_ip_cap` — maximum concurrent permits per source IP.
-    /// * `trusted_cidrs` — exemption list; **match deferred** per
-    ///   L-002. Pass an empty `Vec` if unused.
+    /// Build a gate. `trusted_cidrs` is stored but not matched (L-002); pass an empty `Vec`.
     #[must_use]
     pub fn new(listener_cap: u32, per_ip_cap: u32, trusted_cidrs: Vec<IpNet>) -> Self {
         Self {
@@ -146,8 +104,7 @@ impl ConnGate {
         self.inner.per_ip_cap
     }
 
-    /// Current per-listener count (snapshot; non-authoritative under
-    /// concurrent admits). Useful for metrics.
+    /// Per-listener count — a metrics snapshot, not authoritative under concurrent admits.
     #[must_use]
     pub fn current_listener_count(&self) -> u32 {
         self.inner.per_listener.load(Ordering::Acquire)
@@ -165,16 +122,14 @@ impl ConnGate {
         &self.inner.trusted_cidrs
     }
 
-    /// Admit a new connection from `peer`.
+    /// Admit a connection from `peer`.
     ///
-    /// Bumps the per-listener counter via AcqRel `compare_exchange`
-    /// (security-gating per SEC-2-16). On success, bumps the per-IP
-    /// counter under the bucket lock. On per-IP overflow, rolls the
-    /// per-listener counter back so cap accounting stays consistent.
+    /// The per-IP overflow path MUST roll the per-listener counter back (it was already bumped);
+    /// without the rollback a sustained over-cap stream silently erodes the listener cap.
     ///
     /// # Errors
     ///
-    /// Returns [`OverCap::Listener`] or [`OverCap::PerIp`].
+    /// [`OverCap::Listener`] or [`OverCap::PerIp`].
     pub fn admit(&self, peer: IpAddr) -> Result<ConnPermit, OverCap> {
         let mut cur = self.inner.per_listener.load(Ordering::Acquire);
         loop {
@@ -221,8 +176,7 @@ impl Drop for ConnPermit {
             }
         }
         if should_gc {
-            // Best-effort GC: race with another admit on this IP is
-            // safe; the next admit will re-insert via `entry().or_insert(0)`.
+            // Racing an admit here is safe — it re-inserts via `entry().or_insert(0)`.
             self.inner.per_ip.remove_if(&self.peer, |_, v| *v == 0);
         }
         let prev = self.inner.per_listener.fetch_sub(1, Ordering::AcqRel);

@@ -1,11 +1,5 @@
-//! Integration coverage for the production [`HooksBundle`] —
-//! every [`SecurityReject`] arm is exercised end-to-end through the
-//! public [`SecurityHooks`] trait.
-//!
-//! Companion to the in-crate unit tests under `src/hooks.rs::tests`.
-//! Lives in `tests/` so it consumes the crate as a downstream
-//! Wave-2b caller will, asserting the public API surface is
-//! self-sufficient (no `pub(crate)` reach-through).
+//! Every [`SecurityReject`] arm through the public [`SecurityHooks`] trait. Lives in `tests/` on
+//! purpose: it proves the public surface is self-sufficient, with no `pub(crate)` reach-through.
 
 use std::net::{IpAddr, Ipv4Addr};
 
@@ -115,9 +109,7 @@ fn admit_per_ip_full_rolls_back_listener_count() {
         Err(SecurityReject::OverCap(_)) => {}
         other => panic!("expected per-ip OverCap, got {other:?}"),
     }
-    // Per-ip overflow must roll back the listener counter so it
-    // doesn't leak. Otherwise the listener cap would erode under any
-    // sustained over-cap stream.
+    // Without the rollback the listener cap erodes under any sustained over-cap stream.
     assert_eq!(gate.current_listener_count(), 1);
 }
 

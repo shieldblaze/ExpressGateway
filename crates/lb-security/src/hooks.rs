@@ -1,35 +1,7 @@
-//! Production [`SecurityHooks`] surface for the proxy hot path.
+//! Production [`SecurityHooks`] surface for the proxy hot path (SEC-2-01).
 //!
-//! Wave-2a SEC-2-01 (API half) — paired with `lb-l7`'s
-//! `security_hooks::SecurityHooks` trait shim (Wave-2b CODE-2-01 follow-up
-//! in `crates/lb-l7/src/security_hooks.rs`). `lb-l7` cannot publish the
-//! trait yet without the call-site rewrite in `h{1,2}_proxy.rs`; in the
-//! meantime this crate publishes a structurally-equivalent trait so the
-//! production [`HooksBundle`] is unit-testable end-to-end and the
-//! Wave-2b refactor only has to flip the import.
-//!
-//! ## Wire shape (final, mirrored by Wave-2b)
-//!
-//! ```ignore
-//! pub trait SecurityHooks: Send + Sync + 'static {
-//!     fn inspect_request<B>(
-//!         &self,
-//!         req: &http::Request<B>,
-//!         peer: std::net::IpAddr,
-//!     ) -> Result<(), SecurityReject>;
-//!
-//!     fn admit_connection(
-//!         &self,
-//!         peer: std::net::IpAddr,
-//!     ) -> Result<ConnPermit, SecurityReject>;
-//! }
-//! ```
-//!
-//! [`SecurityReject`] enumerates the short-circuit outcomes that the
-//! proxy converts to a 400 (smuggling), 429 (rate-limited), 408
-//! (slow-handshake), or RST-without-response (over-cap). [`ConnPermit`]
-//! is an RAII handle returned by [`ConnGate::admit`] — dropping it
-//! decrements the per-IP and per-listener counters.
+//! Deliberately duplicates the shape of `lb-l7`'s `security_hooks::SecurityHooks` shim so the
+//! bundle is testable ahead of the call-site rewrite — keep the two in sync.
 
 use std::net::IpAddr;
 
@@ -39,84 +11,58 @@ use crate::SecurityError;
 use crate::conn_gate::{ConnGate, ConnPermit, OverCap};
 use crate::smuggle::{SmuggleDetector, SmuggleMode};
 
-/// Short-circuit reason for a rejected request or connection.
-///
-/// The proxy hot path converts these to an HTTP status (or a TCP RST
-/// for `OverCap`) without consulting the bridge or upstream selector.
+/// Short-circuit reason for a rejected request or connection, resolved before the bridge or
+/// upstream selector runs.
 #[derive(Debug, thiserror::Error)]
 pub enum SecurityReject {
-    /// Request matched a smuggling pattern (CL+TE, duplicate CL with
-    /// differing values, H2-downgrade with forbidden hop-by-hop
-    /// headers, strict-TE violation, ...). Reply with HTTP 400.
+    /// Matched a smuggling pattern. Reply 400.
     #[error("request smuggling: {0}")]
     Smuggle(#[source] SecurityError),
 
-    /// Connection was admitted but later upgraded to rate-limited.
-    /// Reply with HTTP 429.
+    /// Rate-limited after admission. Reply 429.
     #[error("rate-limited")]
     RateLimited,
 
-    /// TLS / HTTP handshake exceeded the timeout. Reply with HTTP 408
-    /// or RST depending on which phase was active.
+    /// Handshake timed out. Reply 408, or RST if no response phase was reached.
     #[error("slow handshake")]
     SlowHandshake,
 
-    /// Per-IP or per-listener connection cap exhausted. RST the socket
-    /// without writing a response (no amplification surface).
+    /// Connection cap exhausted. RST WITHOUT a response — a reply here is an amplification lever.
     #[error("over-cap: {0}")]
     OverCap(#[source] OverCap),
 }
 
-/// Trait the proxy hot path calls into for security decisions.
-///
-/// `Send + Sync + 'static` so it can live behind `Arc<dyn SecurityHooks>`
-/// in the proxy's shared state. The Wave-2b shim in `lb-l7` republishes
-/// this exact shape; the production [`HooksBundle`] in this crate is the
-/// one impl callers actually wire up.
+/// Security decisions the proxy hot path calls into.
 pub trait SecurityHooks: Send + Sync + 'static {
-    /// Inspect a parsed request and run all admission-time security
-    /// checks before the bridge / upstream-acquire path runs.
+    /// Run every admission-time check before the bridge / upstream-acquire path.
     ///
     /// # Errors
     ///
-    /// Returns a [`SecurityReject`] describing the rejection class.
+    /// [`SecurityReject`].
     fn inspect_request<B>(&self, req: &Request<B>, peer: IpAddr) -> Result<(), SecurityReject>;
 
-    /// Admit a new connection. The returned [`ConnPermit`] holds the
-    /// per-IP / per-listener counters for the lifetime of the
-    /// connection; drop releases them.
+    /// Admit a connection; the [`ConnPermit`] must be held for the connection's whole life.
     ///
     /// # Errors
     ///
-    /// Returns [`SecurityReject::OverCap`] when either counter is
-    /// saturated.
+    /// [`SecurityReject::OverCap`] when either counter is saturated.
     fn admit_connection(&self, peer: IpAddr) -> Result<ConnPermit, SecurityReject>;
 }
 
-/// Production [`SecurityHooks`] impl.
-///
-/// Bundles the [`ConnGate`] (per-IP / per-listener cap) and a strict-TE
-/// flag for the [`SmuggleDetector::check_all_mode`] call-site. Wave-2b
-/// will pass an `Arc<HooksBundle>` into the proxy constructor; tests
-/// (and `NoopHooks` in the Wave-2b shim) construct it directly.
+/// Production [`SecurityHooks`] impl: a [`ConnGate`] plus the smuggle mode to check under.
 pub struct HooksBundle {
     gate: ConnGate,
     smuggle_mode: SmuggleMode,
 }
 
 impl HooksBundle {
-    /// Build a bundle from a constructed [`ConnGate`] and smuggle mode.
-    ///
-    /// `smuggle_mode` is `SmuggleMode::H1` for default (lenient TE) or
-    /// `SmuggleMode::H1Strict` to reject any non-`chunked` codec in
-    /// `Transfer-Encoding` per SEC-2-15 matrix.
+    /// Build a bundle from a [`ConnGate`] and a [`SmuggleMode`].
     #[must_use]
     pub const fn new(gate: ConnGate, smuggle_mode: SmuggleMode) -> Self {
         Self { gate, smuggle_mode }
     }
 
-    /// Borrow the inner [`ConnGate`]. Useful for metrics or sharing the
-    /// counters across listener loops.
+    /// Borrow the inner [`ConnGate`], for metrics or to share counters across listeners.
     #[must_use]
     pub const fn gate(&self) -> &ConnGate {
         &self.gate
@@ -125,11 +71,6 @@ impl HooksBundle {
 
 impl SecurityHooks for HooksBundle {
     fn inspect_request<B>(&self, req: &Request<B>, _peer: IpAddr) -> Result<(), SecurityReject> {
-        // Collect headers into the existing `(String, String)` shape the
-        // detector uses. The hot-path version (Wave-2b) will adapt the
-        // detector to read directly from `http::HeaderMap` to avoid the
-        // allocation; for the API surface, the slice shape is what the
-        // existing unit tests cover.
         let mut pairs: Vec<(String, String)> = Vec::with_capacity(req.headers().len());
         for (name, value) in req.headers() {
             let value_str = value.to_str().unwrap_or("");
@@ -205,13 +146,11 @@ mod tests {
         let lenient = bundle();
         let strict = strict_bundle();
         let r = req_with(&[("transfer-encoding", "gzip, chunked")], Version::HTTP_11);
-        // Lenient: final codec is chunked, accepted.
         assert!(
             lenient
                 .inspect_request(&r, Ipv4Addr::LOCALHOST.into())
                 .is_ok()
         );
-        // Strict: any codec beyond `chunked` rejected.
         assert!(
             strict
                 .inspect_request(&r, Ipv4Addr::LOCALHOST.into())

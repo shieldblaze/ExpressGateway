@@ -1,33 +1,12 @@
 //! TLS session-ticket-key rotator (Pingora EC-11).
 //!
-//! A TLS session ticket is an opaque, server-encrypted blob that a resuming
-//! client presents to skip a full handshake. The blob is encrypted with a
-//! server-held key. If that key is long-lived, forward secrecy on resumed
-//! sessions collapses to the lifetime of the key — every resumption since
-//! the key was issued becomes decryptable by an attacker who later steals
-//! it. The industry answer is scheduled key rotation with a short overlap
-//! window: produce new tickets with the fresh key; accept tickets
-//! encrypted with the previous key for one overlap period; then drop the
-//! old key so recorded traffic cannot be decrypted.
+//! A long-lived ticket key collapses forward secrecy on every session resumed under it: steal the
+//! key later and all of that recorded traffic decrypts. Hence scheduled rotation with a short
+//! overlap — encrypt with the fresh key, still decrypt with the previous one for one overlap
+//! window, then drop it.
 //!
-//! This module provides a generic, transport-agnostic rotator. Wiring
-//! into an active TLS listener belongs to Pillar 3b alongside
-//! `crates/lb/src/main.rs`. Here we expose:
-//!
-//! * [`TicketKey`] — an opaque handle to a single ticket-encryption key.
-//!   Under the hood it is an `Arc<dyn rustls::server::ProducesTickets>`
-//!   produced by [`rustls::crypto::ring::Ticketer::new`], which bundles a
-//!   ChaCha20-Poly1305 AEAD key plus a 128-bit random `key_name` prefix
-//!   used as AEAD-AAD and for constant-time ticket-to-key matching. The
-//!   task spec sketched an `[u8; 80]` byte layout; rustls 0.23 does not
-//!   expose that layout directly, so the opaque handle is the
-//!   version-stable shape that actually ships.
-//! * [`TicketRotator`] — holds `current` and optional `previous` keys
-//!   with a `rotation_interval` and an `overlap` window.
-//! * [`RotatingTicketer`] — an `Arc`-wrapped
-//!   [`rustls::server::ProducesTickets`] impl that encrypts with
-//!   [`TicketRotator::current`] and decrypts with current-or-previous
-//!   (subject to the overlap).
+//! [`TicketKey`] is an opaque `Arc<dyn ProducesTickets>` rather than the spec's `[u8; 80]` layout
+//! because rustls 0.23 does not expose that layout — the handle is the version-stable shape.
 
 use std::fmt;
 use std::io::BufReader;
@@ -48,45 +27,36 @@ pub enum TicketError {
     #[error("ticket key generation failed: {0}")]
     KeyGen(String),
 
-    /// Building a [`rustls::ServerConfig`] failed — usually because the
-    /// certificate chain and private key do not match, or the chosen
-    /// protocol versions are incompatible with the `ring` provider.
+    /// `ServerConfig` build failed — usually a cert/key mismatch or a version/provider clash.
     #[error("tls server config build failed: {0}")]
     ServerConfig(String),
 }
 
-/// A single ticket-encryption key. Opaque handle over a rustls
-/// [`ProducesTickets`] AEAD ticketer.
+/// A single ticket-encryption key, opaque over a rustls [`ProducesTickets`] AEAD ticketer.
 #[derive(Clone)]
 pub struct TicketKey {
     inner: Arc<dyn ProducesTickets>,
 }
 
 impl TicketKey {
-    /// Generate a fresh key using the OS RNG and
-    /// [`rustls::crypto::ring::Ticketer::new`] (ChaCha20-Poly1305 + 16-byte
-    /// random `key_name`).
+    /// Fresh ChaCha20-Poly1305 key with a random `key_name`, from the OS RNG.
     ///
     /// # Errors
     ///
-    /// Returns [`TicketError::KeyGen`] if the RNG fails.
+    /// [`TicketError::KeyGen`] if the RNG fails.
     pub fn generate() -> Result<Self, TicketError> {
         let inner = rustls::crypto::ring::Ticketer::new()
             .map_err(|e| TicketError::KeyGen(e.to_string()))?;
         Ok(Self { inner })
     }
 
-    /// Encrypt `plain` with this key, returning the ticket ciphertext.
-    /// `None` indicates the AEAD refused to seal (ring is infallible for
-    /// sealing under non-malicious inputs; `None` here is a hard failure).
+    /// Encrypt `plain`; `None` means the AEAD refused to seal, which is a hard failure.
     #[must_use]
     pub fn encrypt(&self, plain: &[u8]) -> Option<Vec<u8>> {
         self.inner.encrypt(plain)
     }
 
-    /// Decrypt `cipher` with this key. Returns `None` if the ciphertext
-    /// was not produced by this key (wrong `key_name`) or if the AEAD
-    /// authenticator rejects it.
+    /// Decrypt `cipher`; `None` on a wrong `key_name` or a failed AEAD authenticator.
     #[must_use]
     pub fn decrypt(&self, cipher: &[u8]) -> Option<Vec<u8>> {
         self.inner.decrypt(cipher)
@@ -100,17 +70,8 @@ impl fmt::Debug for TicketKey {
     }
 }
 
-/// A rotating pool of TLS session-ticket keys.
-///
-/// Holds a `current` key used to encrypt new tickets and an optional
-/// `previous` key that is still accepted for decryption during the
-/// `overlap` window following the last rotation. Once `overlap` has
-/// elapsed since that rotation, the previous key is dropped and recorded
-/// traffic encrypted with it can no longer be decrypted on this server.
-///
-/// Rotation is driven externally by calling
-/// [`rotate_if_due`](Self::rotate_if_due) on a periodic task. The rotator
-/// itself has no timer thread.
+/// A rotating pool of TLS session-ticket keys. There is no timer thread — something must call
+/// [`rotate_if_due`](Self::rotate_if_due) periodically or keys never rotate.
 pub struct TicketRotator {
     current: Arc<TicketKey>,
     previous: Option<Arc<TicketKey>>,
@@ -120,11 +81,11 @@ pub struct TicketRotator {
 }
 
 impl TicketRotator {
-    /// Build a new rotator, generating a fresh current key immediately.
+    /// Build a rotator, minting the first current key immediately.
     ///
     /// # Errors
     ///
-    /// Returns [`TicketError::KeyGen`] if the RNG fails.
+    /// [`TicketError::KeyGen`] if the RNG fails.
     pub fn new(rotation_interval: Duration, overlap: Duration) -> Result<Self, TicketError> {
         let current = Arc::new(TicketKey::generate()?);
         Ok(Self {
@@ -136,15 +97,13 @@ impl TicketRotator {
         })
     }
 
-    /// Configured rotation interval — the period after which `current` is
-    /// demoted to `previous` and a new `current` is generated.
+    /// Period after which `current` is demoted to `previous`.
     #[must_use]
     pub const fn rotation_interval(&self) -> Duration {
         self.rotation_interval
     }
 
-    /// Configured overlap — the grace period after rotation during which
-    /// the demoted key is still accepted for decryption.
+    /// Grace period during which the demoted key still decrypts.
     #[must_use]
     pub const fn overlap(&self) -> Duration {
         self.overlap
@@ -156,7 +115,7 @@ impl TicketRotator {
         Arc::clone(&self.current)
     }
 
-    /// Access the previous (decrypt-only, overlap-bounded) key, if any.
+    /// The previous (decrypt-only, overlap-bounded) key, if any.
     #[must_use]
     pub fn previous(&self) -> Option<Arc<TicketKey>> {
         self.previous.as_ref().map(Arc::clone)
@@ -168,25 +127,13 @@ impl TicketRotator {
         self.rotated_at
     }
 
-    /// Drive the rotator forward given `now`.
-    ///
-    /// * If `now - rotated_at >= rotation_interval`, demote `current` to
-    ///   `previous`, generate a fresh `current`, and bump `rotated_at` to
-    ///   `now`.
-    /// * If the previous key has outlived its overlap window — measured
-    ///   from the most recent `rotated_at` — drop it.
-    ///
-    /// Both checks run on every call so that a rotator polled
-    /// infrequently still erases stale key material on the next poll.
-    ///
-    /// Returns `Ok(true)` if a rotation happened on this call, `Ok(false)`
-    /// otherwise. Dropping an expired previous key alone does not count
-    /// as a rotation for the boolean signal.
+    /// Drive the rotator to `now`. Both the rotate check and the previous-key expiry run on every
+    /// call, so an infrequently polled rotator still erases stale key material on its next poll.
+    /// `Ok(true)` only for an actual rotation — expiring the previous key alone does not count.
     ///
     /// # Errors
     ///
-    /// Returns [`TicketError::KeyGen`] if the RNG fails while minting the
-    /// new current key. On failure the rotator is left unchanged.
+    /// [`TicketError::KeyGen`]; the rotator is left unchanged on failure.
     pub fn rotate_if_due(&mut self, now: Instant) -> Result<bool, TicketError> {
         let elapsed = now.saturating_duration_since(self.rotated_at);
         let rotated = if elapsed >= self.rotation_interval {
@@ -199,11 +146,7 @@ impl TicketRotator {
             false
         };
 
-        // Expire `previous` if it has outlived its overlap window measured
-        // from the most recent rotation. A freshly-rotated pair (rotated
-        // this call) has age 0, so this is a no-op in that case; it only
-        // fires when the rotator was last rotated >= overlap ago without
-        // a new rotation happening this call.
+        // A pair rotated on this call has age 0, so this only fires when no rotation happened.
         if self.previous.is_some() {
             let age_since_rotation = now.saturating_duration_since(self.rotated_at);
             if age_since_rotation >= self.overlap {
@@ -214,9 +157,7 @@ impl TicketRotator {
         Ok(rotated)
     }
 
-    /// Wrap this rotator in an `Arc<Mutex<_>>` and expose it as a
-    /// rustls [`ProducesTickets`] via [`RotatingTicketer`]. The returned
-    /// handle is cheaply cloneable and thread-safe.
+    /// Consume the rotator into a cloneable rustls [`ProducesTickets`] handle.
     #[must_use]
     pub fn into_rustls_ticketer(self) -> Arc<dyn ProducesTickets> {
         Arc::new(RotatingTicketer {
@@ -224,10 +165,7 @@ impl TicketRotator {
         })
     }
 
-    /// Observe this rotator through a rustls [`ProducesTickets`] view
-    /// without losing access to the rotator state. Returns the shared
-    /// `Arc<Mutex<_>>` handle and the trait object; both point at the
-    /// same rotator.
+    /// Like [`Self::into_rustls_ticketer`], but also returns the shared handle to the same rotator.
     #[must_use]
     pub fn as_rustls_ticketer(self) -> (Arc<Mutex<Self>>, Arc<dyn ProducesTickets>) {
         let rot = Arc::new(Mutex::new(self));
@@ -248,12 +186,8 @@ impl fmt::Debug for TicketRotator {
     }
 }
 
-/// rustls [`ProducesTickets`] impl backed by a [`TicketRotator`].
-///
-/// * `encrypt` always uses `current`.
-/// * `decrypt` tries `current` first, then `previous` (if present).
-/// * `lifetime` reports `rotation_interval + overlap` in seconds,
-///   saturated at `u32::MAX`.
+/// rustls [`ProducesTickets`] backed by a [`TicketRotator`]: encrypt with `current`, decrypt with
+/// `current` then `previous`.
 pub struct RotatingTicketer {
     rot: Arc<Mutex<TicketRotator>>,
 }
@@ -264,10 +198,7 @@ impl RotatingTicketer {
         u32::try_from(total.as_secs()).unwrap_or(u32::MAX)
     }
 
-    /// Build an `Arc<dyn ProducesTickets>` view backed by an existing
-    /// `Arc<Mutex<TicketRotator>>` handle. Used by [`TlsConfigBundle`]
-    /// loaders that want to preserve the session-ticket rotator across
-    /// a cert reload.
+    /// Ticketer view over an existing handle — this is how a cert reload keeps the same rotator.
     #[must_use]
     pub fn ticketer_from(rot: Arc<Mutex<TicketRotator>>) -> Arc<dyn ProducesTickets> {
         Arc::new(Self { rot })
@@ -304,30 +235,13 @@ impl ProducesTickets for RotatingTicketer {
     }
 }
 
-/// Build a rustls [`rustls::ServerConfig`] that terminates TLS with the
-/// provided certificate chain and private key, and mints session tickets
-/// via the shared [`TicketRotator`].
-///
-/// `alpn_protocols` is the ordered list of wire-format protocol tokens
-/// to advertise during ALPN negotiation (e.g. `b"h2"`, `b"http/1.1"`).
-/// An empty slice disables ALPN advertisement, which is appropriate
-/// for TLS-over-TCP listeners that proxy the raw byte stream without
-/// inspecting application data.
-///
-/// The returned config is cheap to clone (internally an [`Arc`]).
-/// Callers wiring it into a listener should share the returned
-/// `Arc<ServerConfig>` across all connections on that listener so the
-/// rotator's hot-path `Mutex` is observed by every session.
-///
-/// Uses the `ring` [`CryptoProvider`](rustls::crypto::CryptoProvider)
-/// explicitly so the call is independent of whichever provider is
-/// installed as the process default.
+/// Terminating [`rustls::ServerConfig`] whose tickets come from the shared [`TicketRotator`].
+/// Empty `alpn_protocols` disables ALPN advertisement. Pins the `ring` provider explicitly so the
+/// result does not depend on whichever provider is installed as the process default.
 ///
 /// # Errors
 ///
-/// Returns [`TicketError::ServerConfig`] if the cert chain / key pair
-/// does not agree with the `ring` provider's supported signatures, or
-/// if the provider rejects the default protocol versions.
+/// [`TicketError::ServerConfig`] on a cert/key or version/provider disagreement.
 pub fn build_server_config(
     rotator: Arc<Mutex<TicketRotator>>,
     cert_chain: Vec<CertificateDer<'static>>,
@@ -337,15 +251,8 @@ pub fn build_server_config(
     build_server_config_with_policy(rotator, cert_chain, key_der, alpn_protocols, false)
 }
 
-/// PROTO-2-14: like [`build_server_config`] but with an explicit
-/// `tls13_only` policy flag. When `tls13_only` is `true`, rustls is
-/// configured with `versions(&[&rustls::version::TLS13])` so the
-/// listener refuses TLS 1.2 ClientHellos. When `false`, the default
-/// rustls protocol set (`&[&TLS12, &TLS13]`) is used (matches
-/// [`build_server_config`]).
-///
-/// Wave-2c binary wiring threads the value from
-/// `lb_config::RuntimeTlsConfig::tls13_only`.
+/// [`build_server_config`] with an explicit `tls13_only` flag (PROTO-2-14): `true` refuses TLS 1.2
+/// ClientHellos, `false` keeps the rustls default set.
 ///
 /// # Errors
 ///
@@ -378,29 +285,11 @@ pub fn build_server_config_with_policy(
     Ok(Arc::new(cfg))
 }
 
-// ── REL-2-03 Wave 2c-2: hot-reloadable TLS cert bundle ─────────────────
-//
-// Every TLS listener holds a `SharedTlsBundle` (an `Arc<ArcSwap<…>>`) and
-// reads `bundle.load()` per accept. Reload is triggered by SIGUSR1 (and
-// optionally an inotify watcher in the binary). Failed reloads keep the
-// old bundle live so a botched cert push cannot blackhole the listener.
-//
-// Validation on every load:
-//   * The cert chain parses as DER + the key parses as a private key.
-//   * `rustls::ServerConfig::with_single_cert` smoke-builds — this is
-//     rustls's own cert-vs-key match check, which catches the
-//     operationally most common mistake (uploaded mismatched files).
-//   * Chain depth ≤ 6 (RFC 5280 in practice caps at single digits; deep
-//     chains are an attack-surface signal more than a hard error, so we
-//     warn-and-reject).
-//   * `not_after > now + 24h` is a *warn-only* check — refusing to load
-//     near-expiry certs would be exactly the wrong move during an
-//     emergency rotation.
-//
-// The bundle exposes its `ServerConfig` so the binary can pre-build a
-// `TlsAcceptor` per accept that snapshots whatever bundle was live at
-// that moment. In-flight handshakes keep their bundle; new handshakes
-// pick up the swapped one.
+// REL-2-03 hot-reloadable TLS cert bundle. Three contracts a reader would otherwise break:
+// a FAILED reload must keep the old bundle live, so a botched cert push cannot blackhole the
+// listener; the chain-depth cap (≤6) rejects, but near-expiry `not_after` is WARN-ONLY because
+// refusing near-expiry certs is exactly wrong during an emergency rotation; and in-flight
+// handshakes keep the bundle they snapshotted at accept while new ones pick up the swap.
 
 /// Errors raised when loading or rebuilding a [`TlsConfigBundle`].
 #[derive(Debug, thiserror::Error)]
@@ -440,8 +329,7 @@ pub enum TlsBundleError {
         /// Configured maximum.
         max: usize,
     },
-    /// Rustls refused to build a `ServerConfig` from the parsed material —
-    /// the most common cause is a cert / key mismatch.
+    /// Rustls refused the material — usually a cert/key mismatch.
     #[error("tls bundle: rustls config build failed (cert/key mismatch?): {0}")]
     KeyMismatch(String),
 }
@@ -463,27 +351,18 @@ impl TlsBundleError {
     }
 }
 
-/// Default cap on cert-chain depth. RFC 5280 imposes no upper bound but
-/// real chains rarely exceed 4; deeper chains hint at a misconfigured
-/// bundle file (e.g. a glob accidentally including unrelated certs).
+/// Cert-chain depth cap. Real chains rarely exceed 4; deeper ones signal a bad bundle glob.
 pub const DEFAULT_MAX_CHAIN_DEPTH: usize = 6;
 
-/// A validated TLS cert + key snapshot. Every TLS listener holds one of
-/// these inside a [`SharedTlsBundle`] (an `ArcSwap`), reading
-/// `bundle.load()` per accept so a hot-reload swaps the bundle out under
-/// new connections without disturbing in-flight handshakes.
+/// A validated TLS cert + key snapshot, read per accept out of a [`SharedTlsBundle`].
 pub struct TlsConfigBundle {
     /// Parsed cert chain in leaf-first order (rustls convention).
     pub cert_chain: Vec<CertificateDer<'static>>,
     /// Parsed private key matching the leaf cert.
     pub key: PrivateKeyDer<'static>,
-    /// Best-effort parse of the leaf's `notAfter`. `SystemTime::UNIX_EPOCH`
-    /// is returned when parsing fails (we keep the rotation hot path
-    /// independent of x509-parsing crates).
+    /// Leaf `notAfter`, best-effort; `UNIX_EPOCH` when unparsed.
     pub not_after: SystemTime,
-    /// Rustls server config built from the cert+key. Callers wire it
-    /// into a fresh `TlsAcceptor` per accept (cheap: `TlsAcceptor::from`
-    /// is a one-field move).
+    /// Server config built from the cert+key; wire into a fresh `TlsAcceptor` per accept.
     pub server_config: Arc<rustls::ServerConfig>,
     /// Monotonic-clock instant the bundle was loaded.
     loaded_at: Instant,
@@ -501,24 +380,15 @@ impl fmt::Debug for TlsConfigBundle {
     }
 }
 
-/// `Arc<ArcSwap<TlsConfigBundle>>` — the shape every TLS listener holds.
-/// Cloning a `SharedTlsBundle` is `Arc::clone`; reading is `.load()`
-/// which returns an `Arc<TlsConfigBundle>` snapshot.
+/// The hot-reloadable bundle handle every TLS listener holds.
 pub type SharedTlsBundle = Arc<ArcSwap<TlsConfigBundle>>;
 
 impl TlsConfigBundle {
-    /// Load a fresh bundle from disk, validate it, and build the
-    /// rustls `ServerConfig` smoke-test.
-    ///
-    /// `alpn` is the ordered list of wire-format ALPN tokens (e.g.
-    /// `[b"h2", b"http/1.1"]` for an H1s listener; pass `&[]` to skip
-    /// ALPN advertisement).
+    /// Load, validate and smoke-build a bundle from disk. Never partially constructed.
     ///
     /// # Errors
     ///
-    /// Returns [`TlsBundleError`] for any I/O, parse, or validation
-    /// failure. The bundle is never partially constructed — either every
-    /// invariant holds or no `TlsConfigBundle` is returned.
+    /// [`TlsBundleError`] on any I/O, parse or validation failure.
     pub fn load_from_paths(
         cert: &Path,
         key: &Path,
@@ -527,14 +397,12 @@ impl TlsConfigBundle {
         Self::load_from_paths_with(cert, key, alpn, DEFAULT_MAX_CHAIN_DEPTH, None)
     }
 
-    /// Variant of [`load_from_paths`](Self::load_from_paths) that takes
-    /// an optional `ticketer` (REL-2-03: reload preserves the
-    /// session-ticket rotator across cert swaps) and an explicit
-    /// maximum chain depth.
+    /// [`Self::load_from_paths`] with an explicit depth cap and a `ticketer` to carry the
+    /// session-ticket rotator across a cert swap (REL-2-03).
     ///
     /// # Errors
     ///
-    /// Same shape as [`load_from_paths`](Self::load_from_paths).
+    /// Same shape as [`Self::load_from_paths`].
     pub fn load_from_paths_with(
         cert: &Path,
         key: &Path,
@@ -542,7 +410,6 @@ impl TlsConfigBundle {
         max_depth: usize,
         ticketer: Option<Arc<dyn ProducesTickets>>,
     ) -> Result<Self, TlsBundleError> {
-        // ── cert chain ──
         let cert_file = std::fs::File::open(cert).map_err(|e| TlsBundleError::Io {
             path: cert.to_path_buf(),
             source: e,
@@ -561,7 +428,6 @@ impl TlsConfigBundle {
             });
         }
 
-        // ── key ──
         let key_file = std::fs::File::open(key).map_err(|e| TlsBundleError::Io {
             path: key.to_path_buf(),
             source: e,
@@ -574,13 +440,11 @@ impl TlsConfigBundle {
             })?
             .ok_or_else(|| TlsBundleError::NoKey(key.to_path_buf()))?;
 
-        // ── leaf notAfter (best-effort, never fails the load) ──
-        // x509-parsing crates would add a heavy supply-chain edge for a
-        // single warn-only field; instead we expose the parsed cert DER
-        // and let observability layers compute the gauge.
+        // Left unparsed on purpose: an x509 crate is a heavy supply-chain edge for one warn-only
+        // field, so observability computes the expiry gauge from the exposed cert DER instead.
         let not_after = SystemTime::UNIX_EPOCH;
 
-        // ── rustls smoke-build (cert/key match check) ──
+        // rustls's own cert-vs-key match check — catches the mismatched-upload mistake.
         let provider = Arc::new(rustls::crypto::ring::default_provider());
         let builder = rustls::ServerConfig::builder_with_provider(provider)
             .with_safe_default_protocol_versions()
@@ -625,22 +489,12 @@ impl TlsConfigBundle {
     }
 }
 
-/// Atomically replace `bundle`'s contents with a freshly-loaded copy.
-///
-/// On success the old bundle is dropped after every reader currently
-/// holding a snapshot has released it; in-flight TLS handshakes stay on
-/// the bundle they snapshotted at accept time.
-///
-/// On failure the old bundle stays live and the error is returned so the
-/// caller can bump a metric / log it.
-///
-/// `ticketer` preserves the session-ticket rotator across cert swaps so
-/// resumed sessions keep working through a rotation; pass `None` to drop
-/// the ticketer (and force full handshakes on every new connection).
+/// Atomically swap in a freshly-loaded bundle. A FAILED reload leaves the old bundle live.
+/// `ticketer` carries the rotator across the swap; `None` forces full handshakes afterwards.
 ///
 /// # Errors
 ///
-/// Returns the same shape as [`TlsConfigBundle::load_from_paths`].
+/// Same shape as [`TlsConfigBundle::load_from_paths`].
 pub fn reload_tls_bundle(
     bundle: &SharedTlsBundle,
     cert: &Path,
@@ -736,8 +590,6 @@ mod tests {
 
     #[test]
     fn build_server_config_round_trip_encrypts_and_decrypts_with_current_key() {
-        // Generate an in-memory self-signed cert+key (rcgen is already a
-        // dev-dep for this crate) and feed both into `build_server_config`.
         let generated = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
         let cert_der: Vec<u8> = generated.cert.der().to_vec();
         let key_der: Vec<u8> = generated.signing_key.serialize_der();
@@ -750,9 +602,6 @@ mod tests {
         let rot_arc = Arc::new(Mutex::new(rot));
         let server_cfg = build_server_config(Arc::clone(&rot_arc), cert_chain, key, &[]).unwrap();
 
-        // The config's ticketer encrypts with the rotator's current key:
-        // we encrypt through the ServerConfig's ticketer and decrypt
-        // directly with the rotator's current TicketKey.
         let plain = sample_plain();
         let ct = server_cfg
             .ticketer
@@ -763,8 +612,7 @@ mod tests {
             .expect("current rotator key decrypts its own tickets");
         assert_eq!(recovered, plain);
 
-        // ticketer.enabled() must be true so rustls actually advertises
-        // session tickets to clients.
+        // Must be true or rustls never advertises session tickets at all.
         assert!(server_cfg.ticketer.enabled());
     }
 
@@ -788,8 +636,6 @@ mod tests {
             "ticket encrypted with expired previous key must not decrypt"
         );
     }
-
-    // ── REL-2-03 TlsConfigBundle tests ─────────────────────────────────
 
     fn write_self_signed(dir: &Path, cn: &str) -> (PathBuf, PathBuf) {
         let generated = rcgen::generate_simple_self_signed(vec![cn.to_string()]).unwrap();
@@ -897,10 +743,7 @@ mod tests {
     fn tempdir() -> PathBuf {
         use std::sync::atomic::{AtomicU64, Ordering};
         static N: AtomicU64 = AtomicU64::new(0);
-        // CODE-2-04 follow-on: tempdir-suffix generation in test code;
-        // counter is monotonic and uniqueness is the only property —
-        // no enforcement gate depends on this load. Stats-class per
-        // docs/decisions/atomics.md (S/G/L policy).
+        // Stats-class per docs/decisions/atomics.md: uniqueness is the only property.
         let id = N.fetch_add(1, Ordering::Relaxed); // CLIPPY-OK: stats-class, tempdir id generation
         let pid = std::process::id();
         let p = std::env::temp_dir().join(format!("eg-tls-bundle-{pid}-{id}"));

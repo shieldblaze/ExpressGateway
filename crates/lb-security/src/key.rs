@@ -1,51 +1,16 @@
-//! POSIX file-permission helpers for sensitive on-disk material
-//! (SEC-2-08).
+//! POSIX file-permission helpers for sensitive on-disk material (SEC-2-08).
 //!
-//! Wave-2a delivers the helper. The call-site insertion in
-//! `crates/lb/src/main.rs::{load_private_key, load_cert_chain}` is a
-//! Wave-2c follow-up owned by `code` (main.rs is code-§D-assigned);
-//! this module ships the API + test sweep so the wiring is two
-//! one-liners.
-//!
-//! Policy
-//! ------
-//!
-//! [`assert_owner_only`] inspects the POSIX permission bits of
-//! `path` and:
-//!
-//! * In **lax** mode (`strict=false`) — warns via a returned
-//!   [`KeyPermAdvice::TooPermissive`] and returns `Ok`. The caller
-//!   is expected to thread the advice into a `tracing::warn!`.
-//! * In **strict** mode (`strict=true`) — returns
-//!   [`KeyPermError::TooPermissive`].
-//!
-//! "Too permissive" = any of the group / other bits are set
-//! (`mode & 0o077 != 0`). The check covers regular files; symlinks
-//! are resolved via `fs::metadata` (which follows them), and
-//! directories are accepted unchanged because the caller does not
-//! pass directory paths here.
-//!
-//! Non-Unix targets
-//! ----------------
-//!
-//! On non-Unix the function is a no-op (returns
-//! `Ok(KeyPermAdvice::NotApplicable)`); operators on those targets
-//! enforce permissions via the platform-native ACL surface, not
-//! through this helper.
+//! "Too permissive" means any group/other bit set (`mode & 0o077 != 0`). On non-Unix targets this
+//! is a NO-OP returning [`KeyPermAdvice::NotApplicable`] — those platforms enforce via ACLs.
 
 use std::path::Path;
 
-/// Result class returned in the **lax** (non-strict) mode.
-///
-/// Conveyed via `Ok` so the caller can keep going (load the key)
-/// while still surfacing the deviation through a tracing layer.
+/// Lax-mode outcome, carried in `Ok` so the caller still loads the key but can warn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyPermAdvice {
-    /// Permissions are tight (`mode & 0o077 == 0` on Unix; no
-    /// non-owner read/write/exec bits).
+    /// No non-owner bits set.
     Ok,
-    /// At least one group/other bit is set. The caller should
-    /// `tracing::warn!`.
+    /// At least one group/other bit set — the caller should `tracing::warn!`.
     TooPermissive {
         /// Observed mode bits (low 12, i.e. `mode & 0o7777`).
         mode: u32,
@@ -80,20 +45,12 @@ pub enum KeyPermError {
     },
 }
 
-/// Inspect `path` and either pass, advise (lax mode), or fail
-/// (strict mode).
-///
-/// # Arguments
-///
-/// * `path` — file to inspect. Must be a regular file. Symlinks are
-///   followed.
-/// * `strict` — when `true`, return [`KeyPermError::TooPermissive`]
-///   on loose perms instead of [`KeyPermAdvice::TooPermissive`].
+/// Inspect `path` (a regular file; symlinks followed) and pass, advise, or — under `strict` —
+/// fail on loose permissions.
 ///
 /// # Errors
 ///
-/// * [`KeyPermError::TooPermissive`] — strict mode, loose perms.
-/// * [`KeyPermError::Io`] — file system access failed.
+/// [`KeyPermError`].
 pub fn assert_owner_only<P: AsRef<Path>>(
     path: P,
     strict: bool,
@@ -137,8 +94,6 @@ mod tests_unix {
 
     fn temp_path(name: &str) -> PathBuf {
         let mut p = std::env::temp_dir();
-        // Each test gets a unique-enough name; we don't pull
-        // `tempfile` for one test file.
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
@@ -195,7 +150,6 @@ mod tests_unix {
 
     #[test]
     fn mode_0640_group_read_only_still_advises() {
-        // 0o040 = group read. Any non-zero in `& 0o077` triggers.
         let p = temp_path("0640-lax");
         write_with_mode(&p, 0o640);
         let advice = assert_owner_only(&p, false).unwrap();
@@ -205,7 +159,6 @@ mod tests_unix {
 
     #[test]
     fn mode_0700_passes() {
-        // 0o700 has no non-owner bits set.
         let p = temp_path("0700-strict");
         write_with_mode(&p, 0o700);
         let advice = assert_owner_only(&p, true).unwrap();

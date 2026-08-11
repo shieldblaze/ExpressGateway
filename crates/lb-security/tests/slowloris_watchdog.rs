@@ -1,9 +1,4 @@
-//! Proof for the slowloris / slow-POST watchdog (SEC-2-03 API half).
-//!
-//! Wave-2b's `crates/lb-l7/src/h{1,2}_proxy.rs` and Wave-2c's
-//! `crates/lb/src/main.rs` accept loop drive this watchdog. This test
-//! file exercises the public API surface end-to-end so the call-site
-//! insertion is a pure plumbing change.
+//! Proof for the slowloris / slow-POST watchdog (SEC-2-03).
 
 use std::net::Ipv4Addr;
 use std::thread::sleep;
@@ -17,11 +12,8 @@ fn conn(seq: u64) -> ConnId {
 
 #[test]
 fn test_slow_progress_fires_eviction() {
-    // Headline test the plan calls out by name. A connection registers
-    // with a tight rate floor; we feed it `progress` calls at a rate
-    // below the floor and assert eviction fires with WatchdogError::SlowRate.
+    // Feed progress below the rate floor; eviction must fire as SlowRate.
     let wd = Watchdog::new(WatchdogConfig {
-        // 10 kB/s floor — well above the trickle we'll feed.
         min_rate_bps: 10_000,
         rate_window: Duration::from_millis(50),
         max_registered: 8,
@@ -30,14 +22,11 @@ fn test_slow_progress_fires_eviction() {
     let deadline = Instant::now() + Duration::from_secs(60);
     assert!(wd.register(id, deadline));
 
-    // First progress sample establishes the window. Push only a
-    // single byte cumulatively.
+    // First sample establishes the window.
     wd.progress(id, 1).unwrap();
-    // Sleep past the window so the next progress call triggers the
-    // rate evaluation.
+    // Sleep past the window so the next call evaluates the rate.
     sleep(Duration::from_millis(80));
-    // Second sample: still only 2 bytes total — observed rate is
-    // roughly 12.5 B/s, far below the 10 000 B/s floor.
+    // 2 bytes total ≈ 12.5 B/s, far below the floor.
     let err = wd.progress(id, 2).unwrap_err();
     match err {
         WatchdogError::SlowRate {
@@ -51,8 +40,7 @@ fn test_slow_progress_fires_eviction() {
         }
         other => panic!("expected SlowRate, got {other:?}"),
     }
-    // The watchdog must evict the entry on the same call so a
-    // subsequent progress lookup fails as Unknown.
+    // Eviction happens on the same call, so the next lookup must be Unknown.
     assert!(matches!(
         wd.progress(id, 3).unwrap_err(),
         WatchdogError::Unknown(_)
@@ -61,8 +49,7 @@ fn test_slow_progress_fires_eviction() {
 
 #[test]
 fn fast_progress_passes() {
-    // Regression guard: a connection feeding bytes at a rate above
-    // the floor must not be evicted.
+    // Regression guard: an above-floor connection must never be evicted.
     let wd = Watchdog::new(WatchdogConfig {
         min_rate_bps: 100,
         rate_window: Duration::from_millis(20),
@@ -70,10 +57,7 @@ fn fast_progress_passes() {
     });
     let id = conn(2);
     wd.register(id, Instant::now() + Duration::from_secs(60));
-    // Repeatedly feed bytes well above the 100 B/s floor for ~120ms.
-    // Each iteration pushes 100_000 bytes over a 10ms tick =
-    // 10 MB/s — orders of magnitude above the floor — so no window
-    // can fall below 100 B/s.
+    // 10 MB/s sustained — no window can dip below the 100 B/s floor.
     let mut cumulative: u64 = 0;
     for _ in 0..12 {
         cumulative += 100_000;
@@ -98,8 +82,7 @@ fn deadline_evicts() {
 
 #[test]
 fn sweep_expired_evicts_stalled() {
-    // Exercises the sweeper entry point for connections that are
-    // completely stalled (no progress calls).
+    // The sweeper is the only thing that catches a fully stalled connection.
     let wd = Watchdog::new(WatchdogConfig {
         min_rate_bps: 0,
         rate_window: Duration::from_secs(1),
@@ -124,9 +107,7 @@ fn max_registered_caps_the_table() {
     });
     assert!(wd.register(conn(1), Instant::now() + Duration::from_secs(60)));
     assert!(wd.register(conn(2), Instant::now() + Duration::from_secs(60)));
-    // Third registration must be refused (structural cap; the
-    // listener should treat refusal as a connection cap exhaustion
-    // and RST the socket — same disposition as ConnGate overflow).
+    // Refusal is a cap exhaustion: the listener RSTs, same as a ConnGate overflow.
     assert!(!wd.register(conn(3), Instant::now() + Duration::from_secs(60)));
 }
 
