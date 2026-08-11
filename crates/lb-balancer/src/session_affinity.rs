@@ -1,15 +1,8 @@
-//! Session affinity (sticky sessions) load balancer.
-//!
-//! Uses a hash-based approach: the same session key always maps to the same
-//! backend, as long as the backend set does not change.
+//! Sticky sessions by key hash; stable only while the backend set is unchanged.
 
 use crate::{Backend, BalancerError, KeyedLoadBalancer};
 
-/// Hash-based session affinity balancer.
-///
-/// For a given key, consistently returns the same backend index. This uses
-/// a simple modulo approach with a mixing function on the key to avoid
-/// patterns in sequential keys.
+/// Sticky-session balancer. Mixes before the modulo so sequential keys do not land in a pattern.
 #[derive(Debug, Default)]
 pub struct SessionAffinity;
 
@@ -20,7 +13,7 @@ impl SessionAffinity {
         Self
     }
 
-    /// Mix a key to distribute it uniformly.
+    /// Mix a key to break sequential patterns.
     const fn mix(key: u64) -> u64 {
         let mut h = key;
         h ^= h >> 33;

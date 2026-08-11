@@ -2,8 +2,7 @@
 
 use crate::{Backend, BalancerError, LoadBalancer};
 
-/// Picks the backend with the fewest active connections.
-/// Ties are broken by index (lower index wins).
+/// Fewest active connections; ties go to the lower index.
 #[derive(Debug, Default)]
 pub struct LeastConnections;
 
@@ -61,7 +60,6 @@ mod tests {
             Backend::new("b", 1),
             Backend::new("c", 1),
         ];
-        // All have 0 connections -- index 0 wins.
         assert_eq!(lb.pick(&backends).unwrap(), 0);
     }
 }

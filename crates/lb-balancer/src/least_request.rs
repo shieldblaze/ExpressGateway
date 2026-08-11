@@ -2,8 +2,7 @@
 
 use crate::{Backend, BalancerError, LoadBalancer};
 
-/// Picks the backend with the fewest active (in-flight) requests.
-/// Ties are broken by index (lower index wins).
+/// Fewest in-flight requests; ties go to the lower index.
 #[derive(Debug, Default)]
 pub struct LeastRequest;
 

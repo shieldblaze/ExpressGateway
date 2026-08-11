@@ -1,7 +1,4 @@
-//! Ring-based consistent hashing with virtual nodes.
-//!
-//! Each backend is placed at multiple positions (virtual nodes) on a hash ring.
-//! Keys are mapped to the ring and routed to the nearest backend clockwise.
+//! Ring-based consistent hashing; keys route clockwise to the nearest virtual node.
 
 use crate::{Backend, BalancerError, KeyedLoadBalancer, backend_identity_hash};
 
@@ -25,11 +22,11 @@ pub struct RingHash {
 }
 
 impl RingHash {
-    /// Build a new hash ring for the given backends.
+    /// Build the ring.
     ///
     /// # Errors
     ///
-    /// Returns `BalancerError::NoBackends` if the backend slice is empty.
+    /// `BalancerError::NoBackends` on an empty slice.
     pub fn new(backends: &[Backend]) -> Result<Self, BalancerError> {
         if backends.is_empty() {
             return Err(BalancerError::NoBackends);
@@ -63,10 +60,8 @@ impl RingHash {
             h ^= u64::from(byte);
             h = h.wrapping_mul(0x0100_0000_01b3); // FNV prime
         }
-        // Mix in the vnode number.
         h ^= u64::from(vnode);
         h = h.wrapping_mul(0x517c_c1b7_2722_0a95);
-        // Finalizer
         h ^= h >> 33;
         h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
         h ^= h >> 33;
@@ -103,7 +98,6 @@ impl KeyedLoadBalancer for RingHash {
 
         let h = Self::hash_key(key);
 
-        // Binary search for the first ring point >= h.
         let pos = match self.ring.binary_search_by_key(&h, |p| p.hash) {
             Ok(i) => i,
             Err(i) => {
@@ -161,7 +155,7 @@ mod tests {
         ];
         let ring = RingHash::new(&backends_orig).unwrap();
 
-        // Replace ring-backend-1 with ring-backend-X at the same index.
+        // Same count, different identity.
         let backends_swapped = vec![
             Backend::new("ring-backend-0", 1),
             Backend::new("ring-backend-X", 1),
