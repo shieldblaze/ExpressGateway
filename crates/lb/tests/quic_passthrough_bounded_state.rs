@@ -1,24 +1,4 @@
 //! S15 A2 verify gate (iv) — Bounded-state proof (R13 a/b/c).
-//!
-//! Drives the [`PassthroughListener`] with synthetic, valid-Initial
-//! datagrams carrying pre-minted Retry tokens. Each datagram carries a
-//! distinct client DCID so it counts as a NEW flow in the LB's
-//! dispatch table — exercising the cap + LRU eviction path
-//! (`evict_oldest` in passthrough.rs) without the full quiche
-//! handshake.
-//!
-//! Three sub-cases, matching the design §A2 verify-bar:
-//!
-//! (a) burst-open many distinct DCIDs; assert `flows_len() ≤ cap`, no
-//!     panic, RSS bounded. We use cap=2048 + 4096 distinct DCIDs here
-//!     (the spec's 200_000 is a memory-shape proof; 2048 is the same
-//!     LRU code path in CI without burning 8 GB).
-//!
-//! (b) cap+1 opens force eviction of the oldest entry. The
-//!     `FlowEntry::dropped` test-gauge (Arc<AtomicBool> set by Drop)
-//!     observes the eviction. Repeat ≥50× to drive out races.
-//!
-//! (c) cap-1 opens: no eviction observed (sanity / negative control).
 
 #![allow(clippy::expect_used, clippy::unwrap_used)]
 
@@ -63,30 +43,17 @@ fn varint(v: u64, out: &mut Vec<u8>) {
     }
 }
 
-/// Build a syntactically-valid QUIC v1 Initial with `dcid` as the
-/// destination CID and `token` in the token field.
-///
-/// Payload is the minimum-length 1-byte placeholder; the LB only
-/// validates the public header + token, so the payload content does
-/// not need to be encrypted-valid. Matches the parser's tolerance:
-/// `length` declared, `>= length` bytes follow.
+/// Build a syntactically-valid QUIC v1 Initial with `dcid` as the destination CID and `token` in the token field.
 fn build_initial(dcid: &[u8], scid: &[u8], token: &[u8]) -> Vec<u8> {
     let mut pkt = Vec::with_capacity(64 + token.len());
-    // byte0: long header (1), fixed bit (1), Initial type (00), 4 PN
-    // length bits zero (PN unused by parser).
     pkt.push(0b1100_0000);
-    // Version 1.
     pkt.extend_from_slice(&0x0000_0001u32.to_be_bytes());
-    // DCID.
     pkt.push(u8::try_from(dcid.len()).unwrap());
     pkt.extend_from_slice(dcid);
-    // SCID.
     pkt.push(u8::try_from(scid.len()).unwrap());
     pkt.extend_from_slice(scid);
-    // Token-len varint + token.
     varint(token.len() as u64, &mut pkt);
     pkt.extend_from_slice(token);
-    // Length varint + payload (one byte).
     varint(1, &mut pkt);
     pkt.push(0u8);
     pkt
@@ -101,9 +68,7 @@ fn dcid_for(i: u32) -> [u8; 12] {
     d
 }
 
-/// Spawn a no-op backend that accepts UDP on a fresh local port. The
-/// passthrough listener will forward to it after Retry-verify; the
-/// backend just drains. Returns the bound addr.
+/// Spawn a no-op backend that accepts UDP on a fresh local port.
 async fn spawn_void_backend() -> SocketAddr {
     let sock = UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
         .await
@@ -120,8 +85,7 @@ async fn spawn_void_backend() -> SocketAddr {
     addr
 }
 
-/// Spawn the passthrough listener with `cap`, a known retry secret,
-/// and a single void backend. Returns the listener + its bound addr.
+/// Spawn the passthrough listener with `cap`, a known retry secret, and a single void backend.
 async fn spawn_listener(cap: usize) -> (PassthroughListener, SocketAddr, CancellationToken) {
     let dir = make_dir();
     let retry_path = dir.join("retry.bin");
@@ -134,10 +98,7 @@ async fn spawn_listener(cap: usize) -> (PassthroughListener, SocketAddr, Cancell
         retry_path,
     );
     params.max_quic_connections = cap;
-    // Use the smallest min-DCID floor that still admits an 8-byte
-    // DCID. Our test uses 12 bytes; 8 is the production floor.
     params.min_client_dcid_len = 8;
-    // Per-flow backlog 1; nothing reads the backend socket.
     params.per_flow_backlog = 1;
     params.audit_throttle_window = Duration::from_secs(60);
 
@@ -151,8 +112,6 @@ async fn spawn_listener(cap: usize) -> (PassthroughListener, SocketAddr, Cancell
 
 #[tokio::test(flavor = "current_thread")]
 async fn r13_a_burst_distinct_dcids_stays_bounded() {
-    // (a) burst N=4096 distinct DCIDs into a cap=2048 LB; assert
-    // flows_len <= 2*cap. No panic.
     const CAP: usize = 2048;
     const BURST: u32 = 4096;
     let (listener, lb_addr, cancel) = spawn_listener(CAP).await;
@@ -160,17 +119,6 @@ async fn r13_a_burst_distinct_dcids_stays_bounded() {
 
     for i in 0..BURST {
         let dcid = dcid_for(i);
-        // Each packet's source peer is a fresh ephemeral port — bind a
-        // socket per send. The token must be minted for THAT exact
-        // 4-tuple. We approximate by minting per the bind addr the
-        // client will use; sleep 0 to let recv-loops drain.
-        //
-        // Simpler shape: bind a long-lived client, mint the token for
-        // its addr, reuse it across all sends. The DCID is what
-        // distinguishes flows in the table; the peer is the same
-        // across all of them. (Production code paths register one
-        // table entry per DCID irrespective of peer.)
-        // We bind one client at the top.
         let client = UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
             .await
             .expect("client bind");
@@ -179,28 +127,18 @@ async fn r13_a_burst_distinct_dcids_stays_bounded() {
         let scid = [0x22u8; 8];
         let pkt = build_initial(&dcid, &scid, &token);
         let _ = client.send_to(&pkt, lb_addr).await;
-        // Light yield to let the listener process; without it the
-        // recv loop trails far behind in tight loops.
         if i % 64 == 0 {
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
     }
-    // Give the listener time to drain the queue.
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     let flows = listener.flows_len();
-    // The dispatch table holds ≤ 2*cap entries because each flow may
-    // own up to two routing keys (client-DCID and backend-SCID; the
-    // latter only after a long-header reverse packet arrives, which
-    // never happens in this synthetic test because the backend is a
-    // void sink). So the practical bound here is `2*CAP`; the more
-    // common bound in steady state is `CAP`.
     assert!(
         flows <= 2 * CAP,
         "flows_len={flows} exceeded 2*cap={}",
         2 * CAP
     );
-    // And at least some flows accepted (sanity).
     assert!(flows > 0, "no flows installed despite {BURST} initials");
 
     cancel.cancel();
@@ -209,8 +147,6 @@ async fn r13_a_burst_distinct_dcids_stays_bounded() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn r13_c_under_cap_no_eviction() {
-    // (c) negative control: only CAP-1 distinct DCIDs; no eviction
-    // observed (flows_len strictly grows, never shrinks).
     const CAP: usize = 256;
     const N: u32 = 250; // CAP - 6 with margin for table-doubling.
     let (listener, lb_addr, cancel) = spawn_listener(CAP).await;
@@ -234,10 +170,6 @@ async fn r13_c_under_cap_no_eviction() {
     }
     tokio::time::sleep(Duration::from_millis(100)).await;
     let final_len = listener.flows_len();
-    // No eviction happened — the final size should not have shrunk
-    // below `peak`. (We can't assert exact equality because the recv
-    // loop may still be draining inflight initials at observation
-    // time.) The strict R13(c) property is: no flow ever got evicted.
     assert!(
         final_len >= peak,
         "final_len={final_len} < peak={peak} (eviction happened — R13(c) violated)"
@@ -254,9 +186,6 @@ async fn r13_c_under_cap_no_eviction() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn r13_b_cap_plus_one_drives_eviction_repeated() {
-    // (b) ≥50-iter isolation burst: open cap+1 distinct DCIDs; check
-    // that `flows_len()` stays ≤ 2*cap. Each iter uses a fresh
-    // listener so prior state can't mask the observation.
     const CAP: usize = 64;
     const ITERS: u32 = 50;
     let signer = RetryTokenSigner::new_with_secret(RETRY_SECRET);
@@ -265,8 +194,6 @@ async fn r13_b_cap_plus_one_drives_eviction_repeated() {
         let (listener, lb_addr, cancel) = spawn_listener(CAP).await;
         let burst = u32::try_from(CAP).unwrap() + 4;
         for i in 0..burst {
-            // Use iter-mixed DCIDs so they're distinct across iters
-            // too (defence against any cross-test pollution).
             let dcid = dcid_for(iter.wrapping_mul(1_000_003).wrapping_add(i));
             let client = UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
                 .await

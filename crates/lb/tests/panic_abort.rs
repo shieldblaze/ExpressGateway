@@ -1,32 +1,9 @@
-//! CODE-2-02 proof — release-build smoke test that asserts a `panic!()`
-//! inside a tokio task aborts the process when built under
-//! `panic = "abort"`.
-//!
-//! Strategy: we don't have a "panic on demand" hook in the
-//! `expressgateway` binary, so we test the profile policy directly.
-//!
-//! Two assertions:
-//!
-//! 1. **Static**: the workspace `Cargo.toml` `[profile.release]` block
-//!    has `panic = "abort"`. This is the line CODE-2-02 introduced;
-//!    if a future commit reverts it without updating this test the
-//!    failure mode is loud.
-//! 2. **Dynamic**: spawn a tiny ad-hoc helper that builds + runs a
-//!    one-line program with `panic = "abort"` in its profile, panics
-//!    from inside a tokio task, and asserts the child died with
-//!    SIGABRT (exit code 134 on Linux, or a `code() == None` +
-//!    signal == ABRT on Unix). Skipped when `cargo` is not available
-//!    on the test host (e.g. some sandboxed CI runners).
-//!
-//! The Prometheus counter assertion (panic_total += 1) is deferred to
-//! rel REL-2-07 / REL-2-15 in Wave 2 — see the comment on
-//! `PANIC_TOTAL` in `lb/src/main.rs`.
+//! CODE-2-02 proof — release-build smoke test that asserts a `panic!()` inside a tokio task aborts the process when built under `panic = "abort"`.
 
 use std::path::Path;
 
 #[test]
 fn release_profile_has_panic_abort() {
-    // Walk up from CARGO_MANIFEST_DIR (crates/lb) to the workspace root.
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let workspace_root = Path::new(manifest_dir)
         .ancestors()
@@ -36,8 +13,6 @@ fn release_profile_has_panic_abort() {
     let body = std::fs::read_to_string(&cargo_toml)
         .unwrap_or_else(|e| panic!("read {}: {e}", cargo_toml.display()));
 
-    // Crude but resilient: find the `[profile.release]` header, then
-    // require a `panic = "abort"` line before the next `[` section.
     let start = body
         .find("[profile.release]")
         .expect("[profile.release] block must exist");
@@ -50,22 +25,13 @@ fn release_profile_has_panic_abort() {
     );
 }
 
-/// Dynamic proof. Compiles + runs a tiny throwaway crate in release
-/// mode with `panic = "abort"` and a tokio runtime, panics from
-/// inside a `tokio::spawn`'d task, asserts the child dies via SIGABRT
-/// (Unix) / exit code 0x80000003 (Windows-equivalent — not run).
-///
-/// Skipped when:
-///   - `cargo` is not on PATH (sandboxed runner without rustup).
-///   - The test is running under miri / wasm.
+/// Dynamic proof.
 #[test]
 #[cfg(unix)]
 fn panic_in_tokio_task_aborts_release_process() {
     use std::os::unix::process::ExitStatusExt;
     use std::process::Command;
 
-    // Locate cargo. If the test host lacks it, skip (the static test
-    // above is still a hard regression gate).
     let cargo = match std::env::var("CARGO") {
         Ok(c) => c,
         Err(_) => match Command::new("cargo").arg("--version").output() {
@@ -77,8 +43,6 @@ fn panic_in_tokio_task_aborts_release_process() {
         },
     };
 
-    // Build a throwaway crate in a temp dir so its target/ never
-    // contaminates the workspace target/.
     let tmp = std::env::temp_dir().join(format!("code-2-02-panic-abort-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(tmp.join("src")).expect("mkdir tmp");
@@ -121,13 +85,9 @@ fn main() {
     std::fs::write(tmp.join("Cargo.toml"), cargo_toml).expect("write Cargo.toml");
     std::fs::write(tmp.join("src/main.rs"), main_rs).expect("write main.rs");
 
-    // Build release.
     let build = Command::new(&cargo)
         .args(["build", "--release", "--quiet"])
         .current_dir(&tmp)
-        // Drop any inherited CARGO_TARGET_DIR so cargo writes the probe
-        // to <tmp>/target (current_dir/target), matching the run step
-        // below and keeping it out of the shared workspace target/.
         .env_remove("CARGO_TARGET_DIR")
         .output()
         .expect("invoke cargo build");
@@ -137,8 +97,6 @@ fn main() {
             String::from_utf8_lossy(&build.stdout),
             String::from_utf8_lossy(&build.stderr)
         );
-        // Don't fail — the static test is the hard gate; this dynamic
-        // test is a smoke gate that requires network for crates.io.
         let _ = std::fs::remove_dir_all(&tmp);
         return;
     }
@@ -146,10 +104,6 @@ fn main() {
     let bin = tmp.join("target/release/code202_panic_probe");
     let run = Command::new(&bin).output().expect("invoke probe");
 
-    // Under `panic = "abort"` the child must die with SIGABRT (signal 6),
-    // not exit cleanly and not return exit code 7 (which is the
-    // "survived" sentinel). Exit code 7 means panic did not abort —
-    // that is the regression case.
     assert_ne!(
         run.status.code(),
         Some(7),
@@ -159,7 +113,6 @@ fn main() {
         String::from_utf8_lossy(&run.stderr),
     );
 
-    // On Unix the abort manifests as termination by SIGABRT (signal 6).
     let signal = run.status.signal();
     assert_eq!(
         signal,

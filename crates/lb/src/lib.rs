@@ -1,28 +1,10 @@
-//! Library-side surface of the `lb` crate.
+//! Library-side surface of the `lb` crate — a MINIMAL subset of the binary's modules so
+//! integration tests can exercise them without recompiling the whole `main.rs` startup graph.
 //!
-//! `lb` is primarily the `expressgateway` binary (see `main.rs`).
-//! This `lib.rs` exposes a *minimal* subset of the binary's modules
-//! so integration tests under `crates/lb/tests/` can exercise them
-//! without re-compiling the entire `main.rs` startup graph.
-//!
-//! Today's exports are scoped to:
-//!
-//! * [`xdp`] — the XDP attach helper and its
-//!   capability-probe (SEC-2-11 fallback policy).
-//!
-//! ## Why both `main.rs` and `lib.rs` declare `mod xdp;`
-//!
-//! Cargo compiles the binary and the library as separate crates;
-//! each needs its own `mod` declaration. Both `mod xdp;` lines
-//! resolve to the same `src/xdp.rs` file. There is no duplication
-//! at runtime — the binary uses *its* copy, integration tests use
-//! the library copy.
-//!
-//! Keep this file thin: anything `main.rs` owns exclusively (the
-//! Tokio runtime bring-up, the listener-spawn graph, the
-//! shutdown wiring) MUST stay private to the binary. Only modules
-//! whose contracts are operator-facing and benefit from
-//! integration-test coverage belong here.
+//! Cargo compiles the binary and the library as separate crates, so both `main.rs` and this file
+//! declare `mod xdp;` against the same file — there is no runtime duplication. Keep this thin:
+//! anything `main.rs` owns exclusively (runtime bring-up, listener-spawn graph, shutdown wiring)
+//! MUST stay private to the binary.
 #![deny(
     clippy::unwrap_used,
     clippy::expect_used,

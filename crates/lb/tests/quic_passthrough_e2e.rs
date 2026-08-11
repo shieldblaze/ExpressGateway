@@ -1,40 +1,4 @@
 //! S15 A2 verify gate (i) — quic_passthrough_e2e.
-//!
-//! Drives a real `quiche::Connection` CLIENT through the
-//! `PassthroughListener` to a real `quiche::Connection` BACKEND, and
-//! asserts:
-//!
-//!   1. The handshake completes (Retry round-trip is implicit in the
-//!      LB's stateless-validation step — the LB mints the Retry token
-//!      and the client re-sends Initial-with-token; the backend just
-//!      sees a normal tokened Initial and `accept`s it).
-//!   2. The peer certificate the CLIENT observes is the BACKEND's
-//!      rcgen cert — proving the LB never terminated the TLS session
-//!      (the §9.5 PRIMARY-3 "client sees backend cert" property).
-//!   3. A bidirectional STREAM round-trips an explicitly-binary
-//!      payload (0xFF / 0x00 / 0x80 / 0x7F / a random tail) without
-//!      mutation — proving the LB is byte-faithful on the data path
-//!      and does not normalise / re-encode anything.
-//!
-//! Together these close design-doc verify-gate (i):
-//! "real-cert / real-client E2E proves the LB doesn't decrypt".
-//!
-//! Test fixture shape:
-//!
-//!   client ───UDP──▶ LB (PassthroughListener on localhost:M)
-//!                      │
-//!                      └─UDP──▶ backend (quiche server on
-//!                                localhost:N, rcgen cert)
-//!
-//! The driver loop is shared between client + server: both flush
-//! `quiche::Connection::send` → socket, and route inbound datagrams
-//! through `quiche::Connection::recv`. `tokio::select!` over the two
-//! socket recv halves keeps liveness while not pinning one side ahead
-//! of the other.
-//!
-//! Concurrency posture: `flavor = "current_thread"` — single-threaded
-//! Tokio rt avoids racing client/server task scheduling, matching the
-//! style of the existing `quic_passthrough_bounded_state.rs`.
 
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::too_many_lines)]
 
@@ -50,17 +14,13 @@ use tokio::net::UdpSocket;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
-/// SNI advertised by the client + present in the backend's leaf cert
-/// SAN. Loopback-only so this is a synthetic name; rcgen accepts it.
+/// SNI advertised by the client + present in the backend's leaf cert SAN.
 const TEST_SNI: &str = "passthrough-e2e.test.local";
 
-/// MAX UDP payload sized to the quiche default (1350 fits a 1500-MTU
-/// path after IP+UDP headers).
+/// MAX UDP payload sized to the quiche default (1350 fits a 1500-MTU path after IP+UDP headers).
 const MAX_UDP: usize = 1350;
 
-/// Driver deadline. Generous so a slow CI shard still completes the
-/// handshake; the test fails loud on timeout so a regression doesn't
-/// silently extend wall-clock.
+/// Driver deadline.
 const DRIVER_BUDGET: Duration = Duration::from_secs(15);
 
 const RETRY_SECRET: [u8; RETRY_SECRET_LEN] = [0x77u8; RETRY_SECRET_LEN];
@@ -82,15 +42,11 @@ struct TestCerts {
     cert_path: PathBuf,
     key_path: PathBuf,
     ca_path: PathBuf,
-    /// PEM-encoded leaf cert bytes, captured for the "client sees
-    /// backend cert" equality assertion in gate (i) (3).
+    /// PEM-encoded leaf cert bytes, captured for the "client sees backend cert" equality assertion in gate (i) (3).
     leaf_der: Vec<u8>,
 }
 
-/// Generate a self-signed rcgen cert + key whose SAN contains
-/// [`TEST_SNI`]. The same cert PEM is used as both leaf and CA (we
-/// self-sign + ship it to the client as the trust anchor — same
-/// pattern as the existing h3_h1_bridge_e2e fixture).
+/// Generate a self-signed rcgen cert + key whose SAN contains [`TEST_SNI`].
 fn make_certs() -> TestCerts {
     let dir = make_dir();
     let mut params =
@@ -136,16 +92,11 @@ fn build_server_config(cert_path: &std::path::Path, key_path: &std::path::Path) 
     cfg.set_initial_max_stream_data_uni(64 * 1024);
     cfg.set_initial_max_streams_bidi(4);
     cfg.set_initial_max_streams_uni(4);
-    // Active migration off: the LB rewrites the client's 4-tuple as a
-    // simple forward, so disable_active_migration keeps quiche
-    // tolerant of source-port shifts (mirrors the design's NAT-rebind
-    // posture). With this off, quiche would reset on a 4-tuple change.
     cfg.set_disable_active_migration(true);
     cfg
 }
 
-/// Build a quiche::Config for the CLIENT role. `ca_path` is the trust
-/// anchor for the backend's leaf cert.
+/// Build a quiche::Config for the CLIENT role.
 fn build_client_config(ca_path: &std::path::Path) -> quiche::Config {
     let mut cfg = quiche::Config::new(quiche::PROTOCOL_VERSION).expect("quiche cfg");
     cfg.set_application_protos(&[b"lb-quic-e2e"]).expect("alpn");
@@ -174,8 +125,7 @@ fn random_scid() -> [u8; quiche::MAX_CONN_ID_LEN] {
     scid
 }
 
-/// Run the passthrough LB pointed at `backend_addr`. Returns the LB's
-/// bound addr + cancel token + listener handle.
+/// Run the passthrough LB pointed at `backend_addr`.
 async fn spawn_lb(
     backend_addr: SocketAddr,
 ) -> (PassthroughListener, SocketAddr, CancellationToken) {
@@ -187,19 +137,9 @@ async fn spawn_lb(
         vec![backend_addr],
         retry_path,
     );
-    // Lower the floor to 8 so quiche's default 16-byte client DCID
-    // breezes through (it does anyway; 8 is the production default).
     params.min_client_dcid_len = 8;
     params.per_flow_backlog = 32;
     params.audit_throttle_window = Duration::from_secs(60);
-    // CF-S15-PASSTHROUGH-RETRY-ODCID: turn LB-minted Retry OFF for
-    // this gate (i) test. With mint_retry=true the LB-chosen new_scid
-    // hides the client's ODCID and the backend cannot set
-    // `original_destination_connection_id` correctly without a
-    // side channel (RFC 9000 §17.2.5 Retry Service pattern, deferred
-    // to S15.x/S16). Production deployments leave this true; the
-    // backend's own quiche handles §6.5 flood defence in the
-    // delegated path.
     params.mint_retry = false;
 
     let cancel = CancellationToken::new();
@@ -210,11 +150,7 @@ async fn spawn_lb(
     (listener, addr, cancel)
 }
 
-/// Spawn a real quiche backend server. The server accepts the FIRST
-/// inbound connection, completes the handshake, and on the FIRST
-/// readable bidi stream echoes back whatever bytes it receives
-/// (preserving the FIN). Returns the bound addr + a handle that
-/// resolves when the echo stream's FIN has been forwarded.
+/// Spawn a real quiche backend server.
 async fn spawn_quic_echo_backend(
     cert_path: PathBuf,
     key_path: PathBuf,
@@ -230,23 +166,10 @@ async fn spawn_quic_echo_backend(
         let mut in_buf = vec![0u8; MAX_UDP];
         let mut out_buf = vec![0u8; MAX_UDP];
 
-        // Phase 0: receive the first inbound Initial → quiche::accept.
-        // This Initial reached us via the LB, which means it carries
-        // the LB-minted Retry token. To complete the handshake the
-        // CF-S15-PASSTHROUGH-RETRY-ODCID — owner ruling: this test
-        // uses the `mint_retry = false` escape path (the LB does NOT
-        // mint Retry; no-token Initials are forwarded verbatim). The
-        // wire DCID IS the client's ODCID; plain `quiche::accept`
-        // with `odcid = None` works because there was no Retry
-        // round-trip. The §6.5 Initial-flood defence is delegated
-        // to the backend's own quiche in this mode (it may issue
-        // its own Retry; the LB just forwards).
         let (n, peer) = socket
             .recv_from(&mut in_buf)
             .await
             .map_err(|e| format!("backend first recv: {e}"))?;
-        // Confirm the public header parses; the parse result is
-        // discarded — `quiche::accept` parses it again internally.
         let _ = quiche::Header::from_slice(
             in_buf.get_mut(..n).unwrap_or(&mut []),
             quiche::MAX_CONN_ID_LEN,
@@ -256,7 +179,6 @@ async fn spawn_quic_echo_backend(
         let scid_conn = quiche::ConnectionId::from_ref(&scid);
         let mut conn = quiche::accept(&scid_conn, None, local_addr, peer, &mut config)
             .map_err(|e| format!("backend accept: {e}"))?;
-        // Feed the first packet to the new conn.
         {
             let info = quiche::RecvInfo {
                 from: peer,
@@ -278,7 +200,6 @@ async fn spawn_quic_echo_backend(
             if conn.is_closed() {
                 return Ok(());
             }
-            // Flush outbound.
             loop {
                 match conn.send(&mut out_buf) {
                     Ok((n, info)) => {
@@ -290,7 +211,6 @@ async fn spawn_quic_echo_backend(
                     Err(e) => return Err(format!("backend send: {e}")),
                 }
             }
-            // Process any readable bidi streams (echo back).
             let mut echoed_anything = false;
             if conn.is_established() {
                 let readable: Vec<u64> = conn.readable().collect();
@@ -300,7 +220,6 @@ async fn spawn_quic_echo_backend(
                         match conn.stream_recv(sid, &mut chunk) {
                             Ok((n, fin)) => {
                                 let bytes = chunk.get(..n).unwrap_or(&[]);
-                                // Echo.
                                 let mut sent = 0;
                                 while sent < bytes.len() {
                                     let slice = bytes.get(sent..).unwrap_or(&[]);
@@ -321,13 +240,6 @@ async fn spawn_quic_echo_backend(
                     }
                 }
             }
-            // Drain outbound right after echo so the echoed STREAM
-            // bytes go on the wire without waiting for the next
-            // socket recv to kick the select! loop. Without this the
-            // backend would only flush on the NEXT iteration AFTER
-            // the select! returns — but with no further client
-            // traffic to wake the select!, the echo sat in quiche's
-            // send queue until DRIVER_BUDGET expired.
             if echoed_anything {
                 loop {
                     match conn.send(&mut out_buf) {
@@ -359,16 +271,13 @@ async fn spawn_quic_echo_backend(
                     conn.on_timeout();
                 }
             }
-            // Suppress unused-var lint when the select! branch sets current_peer.
             let _ = current_peer;
         }
     });
     (local_addr, join)
 }
 
-/// Drive the CLIENT through handshake, send `payload` on bidi stream
-/// 0 (FIN after the payload), read the echoed bytes back, close, and
-/// return (peer_cert_der, echoed_bytes).
+/// Drive the CLIENT through handshake, send `payload` on bidi stream 0 (FIN after the payload), read the echoed bytes back, close, and return (peer_cert_der, echoed_bytes).
 async fn drive_client(
     conn: Arc<Mutex<quiche::Connection>>,
     socket: Arc<UdpSocket>,
@@ -392,7 +301,6 @@ async fn drive_client(
                 echoed.len()
             ));
         }
-        // Flush outbound.
         loop {
             let send = {
                 let mut guard = conn.lock().await;
@@ -408,7 +316,6 @@ async fn drive_client(
                 Err(e) => return Err(format!("client send: {e}")),
             }
         }
-        // Once established, capture peer cert + send payload (once).
         let established = {
             let guard = conn.lock().await;
             guard.is_established()
@@ -458,19 +365,13 @@ async fn drive_client(
                             }
                         }
                         Err(quiche::Error::Done) => break,
-                        // After the stream is fully read (`fin=true`
-                        // delivered) quiche's next `stream_recv` on
-                        // that sid returns `InvalidStreamState` —
-                        // treat as a clean end-of-read.
                         Err(quiche::Error::InvalidStreamState(_)) => break,
                         Err(e) => return Err(format!("client stream_recv: {e}")),
                     }
                 }
             }
             if fin_seen && echoed.len() >= payload.len() {
-                // Done. Close cleanly.
                 let _ = conn.lock().await.close(true, 0, b"done");
-                // One more flush so the CLOSE goes out.
                 loop {
                     let send = {
                         let mut guard = conn.lock().await;
@@ -516,49 +417,17 @@ async fn drive_client(
 
 /// **Gate (i) real-QUIC wire e2e — handshake + STREAM round-trip.**
 ///
-/// LB-mints-Retry handshake requires the backend know the client's
-/// ORIGINAL DCID (the DCID of the very first Initial, pre-Retry) to
-/// set `original_destination_connection_id` correctly AND know the
-/// LB-chosen SCID to set `retry_source_connection_id`. The backend
-/// recovers both:
+/// Asserts: the handshake completes through the LB, a binary payload echoes back byte-faithfully
+/// (the LB does not mutate), and the client's `peer_cert` is the BACKEND's leaf — the
+/// NEVER-DECRYPTED proof at the wire.
 ///
-/// * ODCID — extracted from the LB-minted Retry token via
-///   [`extract_odcid_from_token_unsafe`] (the LB + backend share the
-///   `RetryTokenSigner` secret `RETRY_SECRET` in this fixture; in
-///   production a sidecar / PROXY-protocol-analogue for QUIC closes
-///   the same gap).
-/// * Retry-SCID — the LB's chosen new_scid appears on the wire as the
-///   client's second-Initial DCID = `hdr.dcid` on the backend.
-///
-/// Both are passed via `quiche::accept_with_retry` + an explicit
-/// `quiche::RetryConnectionIds`. The plain `quiche::accept(odcid)`
-/// path is insufficient (it defaults `retry_source_connection_id` to
-/// the server's chosen SCID, which the client rejects).
-///
-/// Asserts:
-///   1. handshake completes through the LB;
-///   2. byte-faithful echo of a binary payload (LB doesn't mutate);
-///   3. client's `peer_cert` is the BACKEND's leaf cert (LB never
-///      terminated TLS — §9.5 NEVER-DECRYPTED STATE proof at the
-///      wire).
-///
-/// CF-S15-PASSTHROUGH-RETRY-ODCID closed by this commit. The earlier
-/// concern was:
-/// the backend cannot know the client's ODCID without an out-of-band
-/// side channel that design §3.6 does NOT currently provide. The
-/// LB-mints-Retry policy itself is correct (§6.5 Initial-flood defence
-/// per owner ruling §9.2 — keep). The fix is a separate design ticket:
-/// either (a) forward ODCID to the backend over a side channel
-/// (PROXY-protocol analogue for QUIC); or (b) skip LB Retry under a
-/// trusted-network config knob and rely on backend Retry. (a) is
-/// preferred and matches Cloudflare's deployment posture.
-///
-/// Tracked as **CF-S15-PASSTHROUGH-RETRY-ODCID**. Until resolved, this
-/// real-quiche-handshake e2e is `#[ignore]`'d. The handshake-path
-/// state machine is still exercised in synthetic form by the
-/// A2-4 / A2-5 / A2-6 verify gates which install flows via valid
-/// Retry tokens minted with the same `RetryTokenSigner` secret and
-/// drive the same `handle_initial` / `forward_short` code paths.
+/// CF-S15-PASSTHROUGH-RETRY-ODCID: when the LB mints the Retry, the backend must know the
+/// client's ORIGINAL DCID (pre-Retry) to set `original_destination_connection_id`, and the
+/// LB-chosen SCID for `retry_source_connection_id`. Plain `quiche::accept(odcid)` is
+/// insufficient — it defaults the retry SCID to the server's own, which the client rejects.
+/// This fixture shares the `RetryTokenSigner` secret so the backend can recover both; in
+/// production that needs a side channel (a PROXY-protocol analogue for QUIC). The LB-mints-Retry
+/// policy itself is correct (Initial-flood defence) and stays.
 #[tokio::test(flavor = "current_thread")]
 async fn passthrough_e2e_real_quiche_client_handshake_and_stream() {
     let certs = make_certs();
@@ -566,7 +435,6 @@ async fn passthrough_e2e_real_quiche_client_handshake_and_stream() {
         spawn_quic_echo_backend(certs.cert_path.clone(), certs.key_path.clone()).await;
     let (listener, lb_addr, cancel) = spawn_lb(backend_addr).await;
 
-    // Client setup.
     let client_socket = Arc::new(
         UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0))
             .await
@@ -586,14 +454,6 @@ async fn passthrough_e2e_real_quiche_client_handshake_and_stream() {
     .expect("client connect");
     let conn = Arc::new(Mutex::new(conn));
 
-    // Mixed binary payload to prove byte-faithful pass-through:
-    //   - 0xFF (high bit) — high-byte preservation
-    //   - 0x00 (NUL)      — null-byte preservation
-    //   - 0x80            — high-bit pattern
-    //   - 0x7F            — boundary low
-    //   - ASCII tail      — keeps the payload roughly text-recognisable
-    //                       for debug logs
-    //   - 0..=0xFF        — full byte-range coverage
     let mut payload: Vec<u8> = vec![0xFF, 0x00, 0x80, 0x7F];
     payload.extend_from_slice(b"PASSTHROUGH-E2E-PAYLOAD");
     payload.extend(0u8..=0xFFu8);
@@ -608,28 +468,19 @@ async fn passthrough_e2e_real_quiche_client_handshake_and_stream() {
     .await
     .expect("client driver");
 
-    // (1) Echo is byte-faithful.
     assert_eq!(
         echoed, payload,
         "echoed payload differs from sent (LB mutated or dropped bytes)"
     );
 
-    // (2) Client's view of peer_cert is the BACKEND's leaf cert. The
-    //     quiche::Connection::peer_cert returns DER for the leaf cert
-    //     received during the TLS handshake. If the LB were
-    //     terminating, this would be its own cert; if the LB were
-    //     pass-through, it must be the backend's cert byte-for-byte.
     assert_eq!(
         peer_cert_der, certs.leaf_der,
         "client peer_cert DER does not match backend's rcgen-issued \
          leaf cert — LB appears to have terminated TLS (gate (i) violated)"
     );
 
-    // Wait for backend driver to finish cleanly (best-effort — close
-    // racing the join is fine, we just want a clean shutdown).
     let _ = tokio::time::timeout(Duration::from_secs(2), backend_join).await;
 
-    // Tear down the LB.
     cancel.cancel();
     let _ = tokio::time::timeout(Duration::from_secs(2), listener.shutdown()).await;
 }
