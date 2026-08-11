@@ -2555,9 +2555,9 @@ fn split_host_port(s: &str) -> (&str, Option<&str>) {
     }
 }
 
-/// Max instantaneous inbound-request memory the ingress pump retains (lookahead
-/// + in-flight channel). A whole-body-buffering variant would grow with request
-/// size; the bounded window keeps this flat. Test-only.
+/// Max instantaneous inbound-request memory the ingress pump retains (lookahead plus
+/// in-flight channel). A whole-body-buffering variant would grow with request size;
+/// the bounded window keeps this flat. Test-only.
 #[cfg(any(test, feature = "test-gauges"))]
 pub static H2_REQ_MAX_RETAINED_BODY_BYTES: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
