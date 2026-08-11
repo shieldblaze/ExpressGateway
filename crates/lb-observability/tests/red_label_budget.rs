@@ -9,7 +9,6 @@ fn test_budget_refuses_start_on_overflow() {
     let err = b
         .check()
         .expect_err("budget must refuse oversize config shape");
-    // The error must name the offending family.
     assert!(
         err.to_string().contains("backend_requests_total")
             || err.to_string().contains("http_requests_total"),
@@ -20,7 +19,6 @@ fn test_budget_refuses_start_on_overflow() {
 
 #[test]
 fn test_realistic_budget_passes() {
-    // A realistic shape, well under the ceiling.
     let b = LabelBudget::from_config_shape(8, 32, 16, DEFAULT_MAX_LABEL_CARDINALITY);
     b.check().expect("realistic config should pass");
 }

@@ -1,7 +1,6 @@
-//! POSIX file-permission helpers for sensitive on-disk material (SEC-2-08).
-//!
-//! "Too permissive" means any group/other bit set (`mode & 0o077 != 0`). On non-Unix targets this
-//! is a NO-OP returning [`KeyPermAdvice::NotApplicable`] — those platforms enforce via ACLs.
+//! POSIX file-permission helpers for sensitive on-disk material (SEC-2-08). "Too permissive" means
+//! any group/other bit set (`mode & 0o077 != 0`); on non-Unix this is a NO-OP returning
+//! [`KeyPermAdvice::NotApplicable`], since those platforms enforce via ACLs.
 
 use std::path::Path;
 

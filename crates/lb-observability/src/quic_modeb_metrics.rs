@@ -1,7 +1,6 @@
-//! `quic_modeb_*` metrics for the Mode B raw-QUIC proxy.
-//!
-//! Bumped ONLY at actor-lifetime and once-per-pass sites, never inside the per-stream or
-//! per-datagram helpers, so the relay hot path stays untouched.
+//! `quic_modeb_*` metrics for the Mode B raw-QUIC proxy. Bumped ONLY at actor-lifetime and
+//! once-per-pass sites, never inside the per-stream or per-datagram helpers, so the relay hot path
+//! stays untouched.
 
 use prometheus::{IntCounter, IntGauge};
 

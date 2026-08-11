@@ -97,7 +97,6 @@ impl SamplerBaseline {
     #[must_use]
     pub fn delta(&mut self, summed: &[u64]) -> Vec<u64> {
         if self.last_summed.len() != summed.len() {
-            // First tick or schema change.
             self.last_summed = summed.to_vec();
             return vec![0; summed.len()];
         }

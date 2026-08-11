@@ -10,7 +10,6 @@ async fn test_drain_cancels_clean() {
     let shutdown = Shutdown::new();
     let token = shutdown.token().clone();
 
-    // Cooperative task: exits as soon as the token fires.
     let handle = shutdown.tracker().spawn(async move {
         tokio::select! {
             biased;
@@ -36,7 +35,6 @@ async fn test_drain_cancels_clean() {
 async fn test_drain_times_out_returns_remaining() {
     let shutdown = Shutdown::new();
 
-    // Ignores the token and blocks for a virtual hour.
     let _handle = shutdown.tracker().spawn(async move {
         // Deliberately no cancel arm.
         tokio::time::sleep(Duration::from_secs(3600)).await;
@@ -57,7 +55,6 @@ async fn test_drain_times_out_returns_remaining() {
 
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn drain_zero_tasks_is_clean() {
-    // Sanity: an idle Shutdown should drain Clean instantly.
     let shutdown = Shutdown::new();
     let outcome = shutdown.drain(Duration::from_millis(1)).await;
     assert_eq!(outcome, DrainOutcome::Clean);

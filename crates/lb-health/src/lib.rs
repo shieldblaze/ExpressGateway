@@ -1,7 +1,6 @@
-//! Backend health state transitions.
-//!
-//! NOT DRIVEN IN PRODUCTION: `record_success` / `record_failure` have no callers outside this
-//! crate's own tests, so every checker the binary seeds stays `Unknown` forever.
+//! Backend health state transitions. NOT DRIVEN IN PRODUCTION: `record_success` / `record_failure`
+//! have no callers outside this crate's own tests, so every checker the binary seeds stays
+//! `Unknown` forever.
 #![deny(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -142,7 +141,6 @@ mod tests {
         checker.record_failure();
         checker.record_success();
         checker.record_failure();
-        // Only one consecutive failure, not two
         assert_ne!(checker.status(), HealthStatus::Unhealthy);
     }
 

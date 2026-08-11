@@ -34,7 +34,6 @@ fn deltas_apply_per_slot() {
     let reg = MetricsRegistry::new();
     let m = XdpMetrics::register(&reg).unwrap();
 
-    // Ordered as `stat_slot_labels()`, one distinct delta per slot.
     let deltas: Vec<u64> = (1..=NUM_SLOTS as u64).collect();
     apply_packet_deltas(&m, &deltas);
 

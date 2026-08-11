@@ -1,7 +1,6 @@
-//! Central tracing/log subscriber init; JSON or text per `LB_LOG_FORMAT` (default `json`).
-//!
-//! The JSON schema is forward-compatible by contract: keys may be ADDED, never removed or
-//! renamed, because log shippers parse it.
+//! Central tracing/log subscriber init; JSON or text per `LB_LOG_FORMAT` (default `json`). The JSON
+//! schema is forward-compatible by contract: keys may be ADDED, never removed or renamed, because
+//! log shippers parse it.
 
 use std::sync::OnceLock;
 
@@ -88,7 +87,6 @@ pub fn init_tracing(cfg: &TracingConfig) -> Result<(), TracingError> {
 
     match install_result {
         Ok(()) => {
-            // Cache the choice for `current_format()` introspection.
             let _ = INIT.set(format);
             Ok(())
         }

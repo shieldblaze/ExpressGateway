@@ -12,7 +12,6 @@ fn conn(seq: u64) -> ConnId {
 
 #[test]
 fn test_slow_progress_fires_eviction() {
-    // Feed progress below the rate floor; eviction must fire as SlowRate.
     let wd = Watchdog::new(WatchdogConfig {
         min_rate_bps: 10_000,
         rate_window: Duration::from_millis(50),

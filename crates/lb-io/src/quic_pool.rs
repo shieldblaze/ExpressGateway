@@ -236,7 +236,6 @@ impl QuicUpstreamPool {
         if qconn.send_ack_eliciting().is_err() {
             return Err(());
         }
-        // Flush whatever quiche wants to send, including the PING.
         let mut out = vec![0u8; 2048];
         loop {
             match qconn.send(&mut out) {
@@ -685,7 +684,6 @@ mod tests {
         push_into_pool(&pool, peer, conn);
 
         let before = pool.probe_discards();
-        // Only the probe side effect matters; the follow-on dial failure is expected.
         let _ = pool.acquire(peer, "test").await;
         let after = pool.probe_discards();
         assert!(

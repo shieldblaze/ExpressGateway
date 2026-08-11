@@ -169,7 +169,6 @@ impl Watchdog {
                             });
                         }
                     }
-                    // Roll the window forward regardless of outcome.
                     entry.bytes_at_window_start = bytes_read;
                     entry.window_started_at = now;
                 }

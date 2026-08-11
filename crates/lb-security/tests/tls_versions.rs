@@ -1,10 +1,7 @@
-//! PROTO-2-14 — `tls13_only` policy knob proof tests.
-//!
-//! Proof shape is a live TLS 1.2-only client against a `tls13_only = true` listener, because a
-//! faked ClientHello bit-pattern would need a whole TLS 1.2 client implementation.
-//!
-//! The new `build_server_config_with_policy` shadows the unchanged `build_server_config` shim so
-//! the rest of the codebase does not see a rename.
+//! PROTO-2-14 — `tls13_only` proof tests. The shape is a live TLS 1.2-only client against a
+//! `tls13_only = true` listener, because a faked ClientHello would need a whole TLS 1.2 client.
+//! `build_server_config_with_policy` shadows the unchanged `build_server_config` shim so the rest
+//! of the codebase does not see a rename.
 
 use std::sync::Arc;
 use std::time::Duration;

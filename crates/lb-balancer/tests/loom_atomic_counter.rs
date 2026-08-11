@@ -1,10 +1,6 @@
-//! Loom model of the accept-site `fetch_add(Release)` against the scheduler's `load(Acquire)`:
-//! the loaded value must be `{old, old+1}` and never below `old`.
-//!
-//! Loom SUBSTITUTES `std::sync::atomic`, so this must never enter a normal test build — it is
-//! gated behind `cfg(loom)` and runs only under
-//! `RUSTFLAGS="--cfg loom" cargo test -p lb-balancer --test loom_atomic_counter`. Scaffolding,
-//! not exhaustive coverage.
+//! Loom model of the accept-site `fetch_add(Release)` against the scheduler's `load(Acquire)`: the
+//! loaded value must be `{old, old+1}` and never below `old`. Loom SUBSTITUTES `std::sync::atomic`,
+//! so this is gated behind `cfg(loom)` and must never enter a normal test build.
 
 #![cfg(loom)]
 
@@ -19,13 +15,12 @@ fn atomic_counter_race_publishes_correctly() {
 
         let counter_writer = Arc::clone(&counter);
         let t1 = thread::spawn(move || {
-            // Release publishes for the scheduler's Acquire load.
             counter_writer.fetch_add(1, Ordering::Release);
         });
 
         let counter_reader = Arc::clone(&counter);
         let observed = thread::spawn(move || {
-            // Acquire observes T1's increment in causal order.
+            // Acquire pairs with T1's Release.
             counter_reader.load(Ordering::Acquire)
         });
 

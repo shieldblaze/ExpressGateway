@@ -1,8 +1,6 @@
-//! JSON log-schema proof.
-//!
-//! `init_tracing` CANNOT be used here — it installs a process-global default and a second test
-//! would race it — so the formatter construction is mirrored under `with_default` instead. Keep
-//! the mirror in sync with `lb_observability::log`.
+//! JSON log-schema proof. `init_tracing` CANNOT be used here — it installs a process-global default
+//! and a second test would race it — so the formatter construction is mirrored under `with_default`.
+//! Keep the mirror in sync with `lb_observability::log`.
 
 use std::io;
 use std::sync::{Arc, Mutex};

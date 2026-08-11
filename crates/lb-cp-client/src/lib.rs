@@ -1,8 +1,6 @@
-//! Control-plane client SHELL.
-//!
-//! No transport is implemented — there is no socket, no protocol and no config exchange anywhere
-//! in this crate, and nothing outside it links against the crate. [`CpClient::connect`] only
-//! flips a bool.
+//! Control-plane client SHELL. No transport is implemented — no socket, no protocol, no config
+//! exchange anywhere in this crate, and nothing outside it links against it. [`CpClient::connect`]
+//! only flips a bool.
 #![deny(
     clippy::unwrap_used,
     clippy::expect_used,

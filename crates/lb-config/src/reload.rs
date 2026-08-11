@@ -292,7 +292,6 @@ fn diff_runtime(
         (None, None) => {}
         (Some(o), Some(n)) if o == n => {}
         (None, Some(_)) | (Some(_), None) => {
-            // The whole block appeared or disappeared; report once.
             plan.restart_required
                 .push(RestartRequiredChange::RuntimeField { field: "runtime" });
         }

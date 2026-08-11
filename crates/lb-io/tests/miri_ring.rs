@@ -1,9 +1,7 @@
-//! Miri harness for lb-io's ring bookkeeping. It models the head/tail arithmetic rather than
-//! calling io_uring, because miri cannot model the syscalls.
-//!
-//! DUAL-MODE by design: it asserts real arithmetic under plain `cargo test -p lb-io`, and catches
-//! raw-pointer UB under `cargo +nightly miri test -p lb-io --test miri_ring --
-//! -Zmiri-disable-isolation`. It is scaffolding, not exhaustive coverage.
+//! Miri harness for lb-io's ring bookkeeping: it models the head/tail arithmetic rather than
+//! calling io_uring, because miri cannot model the syscalls. DUAL-MODE by design — real arithmetic
+//! under plain `cargo test -p lb-io`, raw-pointer UB under `cargo +nightly miri test -p lb-io
+//! --test miri_ring -- -Zmiri-disable-isolation`. Scaffolding, not exhaustive coverage.
 
 /// SPSC ring math: head==tail is empty, tail-head==N is full.
 #[test]

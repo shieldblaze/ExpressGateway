@@ -59,7 +59,6 @@ fn test_acceptor() -> TlsAcceptor {
 
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn test_slow_handshake_times_out() {
-    // A parked rustls state machine must surface as HandshakeError::Timeout.
     let acceptor = test_acceptor();
     let err = timeout_accept(&acceptor, SilentStream, Duration::from_millis(500))
         .await

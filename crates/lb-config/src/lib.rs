@@ -854,7 +854,6 @@ fn validate_runtime(rt: &RuntimeConfig) -> Result<(), ConfigError> {
             rt.max_inflight_connections
         )));
     }
-    // Same range as `handshake_timeout_ms`; both bound a stall that would pin a worker.
     if !(100..=60_000).contains(&rt.connect_timeout_ms) {
         return Err(ConfigError::Validation(format!(
             "runtime.connect_timeout_ms={} out of range 100..=60000",

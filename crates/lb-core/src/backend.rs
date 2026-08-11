@@ -80,11 +80,8 @@ impl BackendState {
         self.active_connections.load(Ordering::Relaxed)
     }
 
-    /// Increment the active connection count.
-    ///
-    /// `AcqRel`, unlike the `Relaxed` request counters, because the SCHEDULER reads this value to
-    /// drive a pick — it is an enforcement-gate input. Free on x86 (same `lock xadd`); on
-    /// aarch64 it is the ordering fix, which is why the inconsistency here is deliberate.
+    /// Increment the active connection count. `AcqRel`, unlike the `Relaxed` request counters,
+    /// because the SCHEDULER reads it to drive a pick — the asymmetry is deliberate, not an oversight.
     pub fn inc_connections(&self) {
         // CLIPPY-OK: G-site. AcqRel publishes to the scheduler's paired Acquire load.
         self.active_connections.fetch_add(1, Ordering::AcqRel);
@@ -92,7 +89,6 @@ impl BackendState {
 
     /// Decrement the active connection count by one (saturating).
     pub fn dec_connections(&self) {
-        // Saturating: fetch_sub with underflow protection via compare-exchange loop.
         let mut current = self.active_connections.load(Ordering::Relaxed);
         loop {
             let new = current.saturating_sub(1);

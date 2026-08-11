@@ -1,13 +1,8 @@
-//! The single authority-value predicate shared by EVERY inbound parser (RFC 9110 §4, RFC 3986
-//! §3.2).
-//!
-//! It lives in this leaf crate on purpose. HAProxy shipped `BUG/MEDIUM: h1: Enforce the authority
-//! validation during H1 request parsing` precisely because the check existed as a function that
-//! the H1 parser did not call — one implementation everyone depends on is what stops a new
-//! protocol parser silently skipping it.
-//!
-//! Deliberately NO loopback exemption and NO empty/absent gate: the loopback carve-out belongs to
-//! the SNI-vs-Host AGREEMENT check, not here.
+//! The single authority-value predicate shared by EVERY inbound parser (RFC 9110 §4, RFC 3986 §3.2).
+//! It lives in this leaf crate on purpose: HAProxy shipped `BUG/MEDIUM: h1: Enforce the authority
+//! validation during H1 request parsing` because the check existed as a function the H1 parser did
+//! not call. Deliberately NO loopback exemption and NO empty/absent gate — the loopback carve-out
+//! belongs to the SNI-vs-Host AGREEMENT check, not here.
 
 /// Reason an authority value was rejected.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -113,7 +113,6 @@ async fn run_drain_idempotent_c10() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn run_drain_inflight_timeout_c7() {
     let shutdown = Shutdown::new();
-    // Spawn a task that ignores cancel.
     shutdown.tracker().spawn(async {
         tokio::time::sleep(Duration::from_secs(30)).await;
     });
@@ -159,7 +158,6 @@ async fn run_drain_xdp_detach_timeout_c8() {
         jitter_max: Duration::ZERO,
         mark_draining: None,
         xdp_detach: Some(Box::pin(async {
-            // Simulate a stuck kernel call.
             tokio::time::sleep(Duration::from_secs(60)).await;
             XdpDetachOutcome::Clean
         })),

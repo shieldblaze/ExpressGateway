@@ -297,7 +297,6 @@ impl PooledTcp {
 
     /// Detach the stream so the pool never recycles it.
     pub fn take_stream(mut self) -> Option<TcpStream> {
-        // Stops Drop from re-entering the pool.
         self.pool = None;
         self.stream.take()
     }

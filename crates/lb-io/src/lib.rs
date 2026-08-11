@@ -1,8 +1,6 @@
-//! I/O abstraction layer with `io_uring` and epoll fallback.
-//!
-//! The backend selection is a live capability PROBE, not a version check. Full io_uring
-//! ACCEPT/RECV/SEND/SPLICE is not implemented — the enum selects the probe result, not the
-//! datapath.
+//! I/O abstraction layer with `io_uring` and epoll fallback. The backend selection is a live
+//! capability PROBE, not a version check. Full io_uring ACCEPT/RECV/SEND/SPLICE is not implemented
+//! — the enum selects the probe result, not the datapath.
 #![deny(
     clippy::unwrap_used,
     clippy::expect_used,

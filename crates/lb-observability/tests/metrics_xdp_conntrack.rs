@@ -20,7 +20,6 @@ fn test_counter_reflects_stats_slot() {
         "v6 row not pre-seeded: {body}",
     );
 
-    // Simulates a sampler slot delta.
     record_conntrack_full(&m, ConntrackFamily::V4, 7);
     record_conntrack_full(&m, ConntrackFamily::V6, 2);
 

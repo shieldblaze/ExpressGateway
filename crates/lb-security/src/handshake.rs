@@ -1,5 +1,4 @@
 //! TLS-handshake timeout helper (SEC-2-10) — `TlsAcceptor::accept` under a `tokio::time::timeout`.
-//!
 //! The 5 s default sits above a healthy sub-second TLS 1.3 handshake and below what an accept-side
 //! slowloris needs to be worth running.
 
@@ -30,10 +29,8 @@ pub enum HandshakeError {
     Handshake(#[source] std::io::Error),
 }
 
-/// `acceptor.accept(stream)` under a `budget`.
-///
-/// A zero `budget` rejects every connection, so it debug-asserts and is raised to 1 ms in release
-/// rather than taking production down.
+/// `acceptor.accept(stream)` under a `budget`. A zero `budget` rejects every connection, so it
+/// debug-asserts and is raised to 1 ms in release rather than taking production down.
 pub async fn timeout_accept<IO>(
     acceptor: &TlsAcceptor,
     stream: IO,

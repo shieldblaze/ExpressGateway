@@ -1,8 +1,6 @@
 //! EWMA latency-based balancer: lowest `latency_ewma_ns * (active_connections + 1)` wins.
-//!
-//! INERT IN PRODUCTION — nothing feeds `latency_ewma_ns` (see the field docs on
-//! [`crate::Backend`]), so every backend takes the cold-start branch and this degrades to
-//! least-connections.
+//! INERT IN PRODUCTION — nothing feeds `latency_ewma_ns` (see [`crate::Backend`]), so every backend
+//! takes the cold-start branch and this degrades to least-connections.
 
 use crate::{Backend, BalancerError, LoadBalancer};
 

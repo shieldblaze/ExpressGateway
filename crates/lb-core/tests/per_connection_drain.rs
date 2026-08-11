@@ -1,9 +1,7 @@
-//! The per-connection drain contract: a cancelled connection must bump the abort counter, never
-//! be silently dropped.
-//!
-//! The real task lives in the `lb` binary with no lib surface, so this REPRODUCES its
-//! `select! { biased; cancel => abort++; work => ... }` shape. Real time, not `start_paused` —
-//! paused time is non-deterministic across the select! drop boundary here.
+//! The per-connection drain contract: a cancelled connection must bump the abort counter, never be
+//! silently dropped. The real task lives in the `lb` binary with no lib surface, so this REPRODUCES
+//! its `select! { biased; cancel => abort++; ... }` shape. Real time, not `start_paused` — paused
+//! time is non-deterministic across the select! drop boundary here.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -28,8 +26,7 @@ async fn simulate_per_connection_task(
         let _result: Result<&str, &str> = tokio::select! {
             biased;
             () = cancel.cancelled() => {
-                // The cancel arm: bump and exit.
-                abort_counter.fetch_add(1, Ordering::AcqRel);
+                        abort_counter.fetch_add(1, Ordering::AcqRel);
                 Err("connection cancelled by shutdown")
             }
             r = work => {
@@ -55,7 +52,6 @@ async fn test_inflight_request_completes_when_under_budget() {
     )
     .await;
 
-    // The task already exited, so the drain budget is irrelevant here.
     tokio::time::sleep(Duration::from_millis(150)).await;
     let outcome = shutdown.drain(Duration::from_millis(500)).await;
 
@@ -95,7 +91,6 @@ async fn test_inflight_request_completes_or_cancels_on_sigterm() {
     tokio::task::yield_now().await;
     tokio::time::sleep(Duration::from_millis(20)).await;
 
-    // The biased select must take the cancel arm, bump, and exit cooperatively.
     let outcome = shutdown.drain(Duration::from_millis(200)).await;
 
     // Clean drain OR a bumped counter; "silently dropped" is the only forbidden outcome.

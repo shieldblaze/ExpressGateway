@@ -1,7 +1,5 @@
-//! Production [`SecurityHooks`] surface for the proxy hot path (SEC-2-01).
-//!
-//! Deliberately duplicates the shape of `lb-l7`'s `security_hooks::SecurityHooks` shim so the
-//! bundle is testable ahead of the call-site rewrite — keep the two in sync.
+//! Production [`SecurityHooks`] surface for the proxy hot path (SEC-2-01). Deliberately duplicates
+//! the shape of `lb-l7`'s `security_hooks::SecurityHooks` shim — keep the two in sync.
 
 use std::net::IpAddr;
 
