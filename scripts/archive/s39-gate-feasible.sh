@@ -14,7 +14,7 @@
 #      actually changed)
 #   3. clippy --workspace --all-targets --all-features -D warnings  +  fmt --check
 #
-# If the operator clears the Java caches, run the full `s39-x3.sh` instead.
+# If the operator clears the Java caches, run the full `scripts/archive/s39-x3.sh` instead.
 set -uo pipefail
 export CARGO_TARGET_DIR=/home/ubuntu/Code/eg-target
 export CARGO_BUILD_JOBS=4

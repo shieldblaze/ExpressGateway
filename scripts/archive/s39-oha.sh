@@ -6,7 +6,7 @@
 # eg-bench's H1/H2 numbers agree with oha within noise, the custom harness is
 # trustworthy (lending credibility to the H3/QUIC numbers oha can't measure).
 #
-# Usage: scripts/perf/s39-oha.sh <out_dir>
+# Usage: scripts/archive/s39-oha.sh <out_dir>
 set -uo pipefail
 export CARGO_TARGET_DIR=/home/ubuntu/Code/eg-target
 BIN="$CARGO_TARGET_DIR/release/eg-bench"

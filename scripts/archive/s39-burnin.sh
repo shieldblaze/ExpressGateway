@@ -7,7 +7,7 @@
 # established S31/S33 full-suite pattern; each scenario is light at scale=1 and
 # isolates its own gateway child so per-scenario RSS/fd are clean).
 #
-# Usage: scripts/perf/s39-burnin.sh [duration_secs=14400] [sample_secs=30]
+# Usage: scripts/archive/s39-burnin.sh [duration_secs=14400] [sample_secs=30]
 set -uo pipefail
 export CARGO_TARGET_DIR=/home/ubuntu/Code/eg-target
 cd /home/ubuntu/Code/ExpressGateway || exit 99

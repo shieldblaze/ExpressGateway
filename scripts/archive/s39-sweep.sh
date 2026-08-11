@@ -8,7 +8,7 @@
 # is a SYSTEM number (caveat in the report); the box-independent signal is the
 # gateway CPU-us/request (cpu% / rps). Completed runs only (R15).
 #
-# Usage: scripts/perf/s39-sweep.sh <out_dir> [protocols...]
+# Usage: scripts/archive/s39-sweep.sh <out_dir> [protocols...]
 set -uo pipefail
 export CARGO_TARGET_DIR=/home/ubuntu/Code/eg-target
 BIN="$CARGO_TARGET_DIR/release/eg-bench"
