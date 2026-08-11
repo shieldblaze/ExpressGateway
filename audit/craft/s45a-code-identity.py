@@ -104,8 +104,14 @@ for f in files:
     except FileNotFoundError:
         changed.append((f, "DELETED"))
         continue
-    if strip_comments(old) != strip_comments(new):
-        changed.append((f, "CODE DIFFERS"))
+    so, sn = strip_comments(old), strip_comments(new)
+    if so != sn:
+        # A rustfmt reflow (one line becoming three, or vice versa) changes the
+        # line layout but not the token stream. That is behaviour-neutral; a
+        # differing token stream is not. Distinguish them.
+        kind = "REFLOW ONLY" if so.replace("\n", " ").split() == sn.replace("\n", " ").split() \
+            else "TOKENS DIFFER"
+        changed.append((f, kind))
 
 print(f"S45A code-identity proof — {len(files)} .rs files changed vs {BASE}")
 if not changed:
@@ -113,7 +119,7 @@ if not changed:
           "(stripped source is identical).")
     sys.exit(0)
 
-print(f"  {len(changed)} file(s) with real code changes — each needs justification:")
+print(f"  {len(changed)} file(s) differ: TOKENS DIFFER = real code change; REFLOW ONLY = rustfmt layout, behaviour-neutral")
 for f, why in changed:
     print(f"    {why:14s} {f}")
 sys.exit(1)
