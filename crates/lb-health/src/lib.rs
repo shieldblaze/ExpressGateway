@@ -1,7 +1,7 @@
-//! Active and passive health checking for upstream backends.
+//! Backend health state transitions.
 //!
-//! Provides `HealthStatus` for representing backend health and `HealthChecker`
-//! for tracking health state transitions.
+//! NOT DRIVEN IN PRODUCTION: `record_success` / `record_failure` have no callers outside this
+//! crate's own tests, so every checker the binary seeds stays `Unknown` forever.
 #![deny(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -48,8 +48,7 @@ pub enum HealthError {
     CheckFailed(String),
 }
 
-/// Simple health checker that tracks consecutive successes and failures
-/// against configurable thresholds.
+/// Tracks consecutive successes and failures against thresholds.
 #[derive(Debug)]
 pub struct HealthChecker {
     status: HealthStatus,
@@ -60,12 +59,8 @@ pub struct HealthChecker {
 }
 
 impl HealthChecker {
-    /// Create a new `HealthChecker` with the given thresholds.
-    ///
-    /// * `healthy_threshold` -- consecutive successes required to become healthy.
-    ///   Clamped to a minimum of 1.
-    /// * `unhealthy_threshold` -- consecutive failures required to become unhealthy.
-    ///   Clamped to a minimum of 1.
+    /// New checker; both thresholds are CLAMPED to a minimum of 1, so 0 does not mean
+    /// "transition immediately".
     #[must_use]
     pub const fn new(healthy_threshold: u32, unhealthy_threshold: u32) -> Self {
         let ht = if healthy_threshold == 0 {

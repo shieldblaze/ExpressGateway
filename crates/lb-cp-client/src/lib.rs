@@ -1,7 +1,8 @@
-//! Control plane client for agent-to-controlplane communication.
+//! Control-plane client SHELL.
 //!
-//! Provides the `CpClient` struct for connecting to and exchanging
-//! configuration with the control plane.
+//! No transport is implemented — there is no socket, no protocol and no config exchange anywhere
+//! in this crate, and nothing outside it links against the crate. [`CpClient::connect`] only
+//! flips a bool.
 #![deny(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -27,10 +28,7 @@ pub enum CpClientError {
     NoEndpoint,
 }
 
-/// Control plane client.
-///
-/// Manages the connection to the control plane server and provides methods
-/// for config synchronization.
+/// Control-plane client state; holds no connection.
 #[derive(Debug)]
 pub struct CpClient {
     endpoint: Option<String>,
@@ -65,11 +63,11 @@ impl CpClient {
         self.connected
     }
 
-    /// Simulate a connection attempt.
+    /// Mark the client connected. Performs NO I/O — it only checks that an endpoint is set.
     ///
     /// # Errors
     ///
-    /// Returns `CpClientError::NoEndpoint` if no endpoint is configured.
+    /// `CpClientError::NoEndpoint`.
     pub fn connect(&mut self) -> Result<(), CpClientError> {
         if self.endpoint.is_none() {
             return Err(CpClientError::NoEndpoint);
