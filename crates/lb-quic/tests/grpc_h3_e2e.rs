@@ -1567,8 +1567,9 @@ fn init_probe_tracing() {
     use std::sync::Once;
     static ONCE: Once = Once::new();
     ONCE.call_once(|| {
-        let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("lb_quic=debug,lb_io=debug,warn"));
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            tracing_subscriber::EnvFilter::new("lb_quic=debug,lb_io=debug,warn")
+        });
         let _ = tracing_subscriber::fmt()
             .with_env_filter(filter)
             .with_test_writer()
