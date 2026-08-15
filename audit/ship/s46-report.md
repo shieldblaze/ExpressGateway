@@ -652,30 +652,104 @@ should yield 413, got Some(502)
   left: Some(502)   right: Some(413)
 ```
 
-**Classification: the known pre-existing CF-FCAP1-FLAKE. NOT a regression.** Four independent
-grounds, each checkable:
+**Classification: NOT a regression — independently VERIFIED.** And the *mechanism* is now proven
+(§G.2), which the received "known flake" story had wrong.
 
-1. The identical assertion appears in **31 CI job logs spanning 2026-06-11 → 2026-08-12**, all
-   predating this branch.
-2. `wrote N bytes` varies from **327,680 to 65,863,680** across those occurrences — the mechanism
-   showing itself: a race on how much is written before the cap trips, matching the repo's own
-   `fcap1-overcap-arm-backpressure-masked` note.
-3. `tests/h2h1_md_streaming_verify.rs` is **unchanged** on this branch
-   (`git log a63776e9..HEAD -- <file>` → empty).
-4. The test never calls `with_health()`, so P3's `health` field is `None` and `record_health` is a
-   **no-op** — P3's behavioural addition is inert here; and the test never references
-   `lb_quic`/`conn_actor`, so the CF-S44 fix (H3 front only) cannot reach the H2→H1 path.
+**The decisive control (found by the verifier, at zero cost): two CI jobs ran on our exact base
+commit `a63776e9` and failed this same test.**
 
-**NEW and useful: it is 100% reproducible on 2 vCPU, even in isolation** — 3/3 armed, 3/3 isolated
-(`written` = 6,094,848 / 51,445,760 / 11,010,048). CI has only ever seen it intermittently. **This
-converts a two-month-old "known flake" into a deterministic reproducer**, which is the hard part of
-fixing it. Fixing it is out of scope; the reproducer is the decisive next probe and is recorded here
-for whoever takes it.
+```
+94035323924  HEAD is now at 2c844a4 Merge … into a63776e9bbaced94efb3a3a9cd3afe5388a0b8c7
+  FAIL [ 90.779s] lb-integration-tests::h2h1_md_streaming_verify fcap1_h2_over_cap_upload_yields_413
+  FCAP1_H2_OVER_CAP status=Some(502) written=2752512
+94035324018  (same base) attempt 1 FAILED status=Some(502) written=19398656 → retry 413 ok
+```
 
-⚠️ **Perf-shaped observation, per the box policy:** "deterministic on 2 cores vs intermittent on CI"
-is a property of **this hardware**, reported as a FUNCTIONAL characteristic only. It is
-**NOT-COMPARABLE** to the S39 baseline (c6a.2xlarge) and is not a regression claim.
+Supporting proof, each independently sufficient:
 
-**Honest framing of the gate:** R1's bar is ×3 **all-pass**. This is ×3 **all-pass except one proven
-pre-existing failure**. That is not reclassified as green; the no-regression evidence above is what
-carries the promote decision.
+1. **The entire H1-upstream leg of `h2_proxy.rs` is BYTE-IDENTICAL between `a63776e9` and `HEAD`** —
+   418 lines (`proxy_request` → `finalize_response`), `diff` empty. That block contains **every**
+   site deciding this test's outcome: all three `> MAX_REQUEST_BODY_BYTES` cap checks and both
+   `ProxyErr::BodyTooLarge` constructions (the only sources of the 413), and all four 502 strings.
+   So the refactor could not change *which* error is produced, because it changed no error-producing
+   code on this path.
+2. **`UpstreamUnattributable` is unconstructible against an H1 backend** — all three construction
+   sites are `Http2PoolError::Send(_)` arms requiring an `Http2Pool`; this test's backend is H1.
+3. **No `_ =>` wildcard exists in any of the five `ProxyErr` match sites**, so an added variant
+   cannot silently change behaviour; the mapping is preserved arm-for-arm.
+4. `h1_proxy::ProxyErr` gained **no** variant at all.
+5. The identical assertion appears in **30 CI log files / 34 occurrences, 2026-06-11 → 2026-08-12**,
+   all predating this branch's first commit (2026-08-15). Grepping all 142 logs for the session's
+   15 SHAs returns **zero** hits.
+6. The test file is **unchanged** on this branch; it never calls `with_health()` (so P3 is inert —
+   `health` is `None`, `record_health` a no-op); it never references `lb_quic`/`conn_actor` (so the
+   CF-S44 fix is unreachable); and it builds `H2Proxy::with_security` **in-process**, so `main.rs`'s
+   364 changed lines are unreachable too.
+
+**Correction to an earlier draft of this report:** it listed `e8a82d70` as the only session commit
+touching this area. Incomplete — `69cc070a` also touched `crates/lb-io/src/http2_pool.rs`
+(`Send(e.to_string())` → `Send(error_chain(&e))`). Also cleared: H2-pool only, string-only, and
+unreachable from an H1 backend.
+
+### G.2 The mechanism — PROVEN, and it is a TEST defect, not a gateway defect
+
+**The test's own draining backend gives up after 90 seconds and closes the socket**
+(`tests/h2h1_md_streaming_verify.rs:781`):
+
+```rust
+match tokio::time::timeout(Duration::from_secs(90), sock.read(&mut buf)).await {
+    Ok(Ok(0)) | Err(_) => break,     // Err(_) IS the timeout — it breaks, closing the socket
+```
+
+The gateway's H1 upstream then dies and `h2_proxy.rs:1481` falls through to
+`ProxyErr::Upstream(format!("send_request: {e}"))` → **502**, before the client can push past the
+64 MiB cap.
+
+**The data confirms it exactly.** Across all 142 logs, `written` separates the two outcomes with the
+separatrix precisely at `MAX_REQUEST_BODY_BYTES = 67,108,864`, zero overlap:
+
+| outcome | `written` |
+|---|---|
+| **413 (pass)** | only ever 67,174,400 or 67,239,936 — **above** the cap |
+| **502 (fail)** | 327,680 … 65,863,680 — **every one below** the cap |
+
+The test yields 413 **iff** the client actually cleared 64 MiB before the harness backend quit.
+
+**Three received explanations are REFUTED by this:**
+
+- ❌ *"A slow box ran out of budget."* The test's own gateway budgets are `body/total/head = 300 s`
+  (`:1817-1822`), yet every run aborts at **~91 s with ~200 s unspent** — local (91.05 / 101.20 /
+  92.68 s) **and CI at base (90.779 s)**. It is a fixed 90 s harness timeout, not a budget.
+- ❌ *"Deterministic on 2 cores because it's a timing race on a slow box."* The **4-core CI runner
+  aborts at the same ~91 s**. Core count is not what differs; throughput only decides whether
+  64 MiB is cleared *within* the fixed 90 s.
+- ❌ *"`written` varying enormously is the mechanism."* The variance is a **symptom**; the mechanism
+  is the sub-cap abort at the fixed 90 s, and the perfect 64 MiB separation is the evidence.
+
+The test's own comment (`:772-774`) states the assumption behind bumping 30 s → 90 s: *"the
+unsaturated push completes in well under 10 s."* **That assumption is false on a slow or saturated
+box**, which is exactly why it is intermittent on fast CI and deterministic here.
+
+**Consequence: the gateway's cap enforcement is NOT in question.** This is a harness defect.
+
+### G.3 Two pre-existing issues this surfaces (NOT introduced here, NOT fixed here)
+
+1. **`ci.yml`'s escalation criterion is mis-calibrated.** It states that failing all 3 attempts is
+   *"a real cap-enforcement failure, not an env flake"*. Our isolated 3/3 trips that rule — but by
+   §G.2 it means the harness backend timed out three times, not that the cap failed. The criterion
+   never anticipated the fixed 90 s abort.
+2. **CI has QUARANTINED this test since before this branch** — `--skip
+   fcap1_h2_over_cap_upload_yields_413`, present verbatim at `a63776e9`. **Our R1 gate ran WITHOUT
+   that skip, i.e. strictly harsher than the project's own gate**, which is why "1564/1565, only
+   fcap1" is exactly what the CI configuration predicts. The session's `ci.yml` diff adds only
+   `timeout-minutes:` and **does not touch the quarantine or the retry count** — no gate weakened.
+
+**Honest framing of the gate:** R1's bar is ×3 **all-pass**. This is ×3 **all-pass except one
+proven-pre-existing, now-mechanism-explained harness failure that CI itself skips**. It is not
+reclassified as green.
+
+**What is NOT claimed:** that CF-FCAP1-FLAKE was previously *understood* — its documented mechanism
+did not match the data. And while there is no evidence that P3's marginally larger `H2Proxy` nudged
+the race (local `written` values sit inside the base CI distribution; abort time matches base to
+~1 s), "no evidence of a shift" is not "proof of no shift". It does not affect the ruling, because
+the failure reproduces fully at base.
