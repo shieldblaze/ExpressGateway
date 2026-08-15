@@ -1555,3 +1555,130 @@ async fn grpc_h3_burst_50_unary_cycles() {
         assert!(out.fin, "iter {i}: clean FIN");
     }
 }
+
+/// One cell of the [`s46_cfs44_size_vs_position_probe`] matrix.
+#[derive(Debug)]
+struct ProbeCell {
+    arm: &'static str,
+    /// 1-based request index within the arm's shared gateway; position 1 dials fresh, ≥2 reuses.
+    pos: usize,
+    sz: usize,
+    status: Option<u16>,
+    grpc_status: Option<String>,
+    fin: bool,
+    reset: bool,
+}
+
+impl ProbeCell {
+    fn ok(&self) -> bool {
+        self.status == Some(200) && self.grpc_status.as_deref() == Some("0") && self.fin
+    }
+}
+
+/// CF-S44 PROBE (S46) — separate the two variables the S44 failure confounds.
+///
+/// `grpc_h3_trailer_survives_all_response_sizes` sweeps `[1, 256K, 512K, 1M]` against ONE gateway
+/// and ONE backend built before the loop, so the observed `sz=262144 → 502` is equally consistent
+/// with two very different stories:
+///   - **size**: 256 KiB is genuinely mishandled on the H3-egress/trailer path; or
+///   - **position**: request #2 is simply the first to REUSE a pooled upstream H2 connection
+///     (`Http2Pool::acquire_sender` returns a cached sender and does NOT retry if the subsequent
+///     send fails — `crates/lb-io/src/http2_pool.rs:221`), and 256 KiB is incidental.
+///
+/// Four arms hold one variable each. The whole matrix is collected and PRINTED before any
+/// assertion, so a failure names the exact cell instead of aborting at the first one.
+///   A `fresh-256k`  — fresh gateway+backend per request, 256 KiB each: isolates SIZE.
+///   B `reuse-256k`  — one gateway+backend, 256 KiB repeated: isolates POSITION.
+///   C `orig-order`  — one gateway+backend, the original `[1, 256K, 512K, 1M]`.
+///   D `rev-order`   — one gateway+backend, reversed `[1M, 512K, 256K, 1]`.
+///
+/// Reading it: failures at position ≥2 independent of size ⇒ connection reuse. Failures tracking
+/// 256 KiB across arms A and D ⇒ size. Arm A clean but B failing ⇒ reuse, conclusively.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn s46_cfs44_size_vs_position_probe() {
+    serial_guard!();
+    const K256: usize = 256 * 1024;
+    const PROBE_TIMEOUT: Duration = Duration::from_secs(45);
+    let mut cells: Vec<ProbeCell> = Vec::new();
+
+    async fn drive_one(
+        gw: SocketAddr,
+        ca: &std::path::Path,
+        sz: usize,
+        arm: &'static str,
+        pos: usize,
+    ) -> ProbeCell {
+        let payload = Bytes::from(vec![0xABu8; sz]);
+        let body = frame_messages(std::slice::from_ref(&payload));
+        let out = drive_grpc_h3(
+            gw,
+            ca,
+            GrpcDriveCfg {
+                path: "/echo.Echo/S46Probe",
+                req_chunks: vec![body],
+                extra_headers: vec![],
+                content_type: None,
+            },
+            PROBE_TIMEOUT,
+        )
+        .await;
+        ProbeCell {
+            arm,
+            pos,
+            sz,
+            status: out.status,
+            grpc_status: out.field("grpc-status").map(str::to_owned),
+            fin: out.fin,
+            reset: out.reset,
+        }
+    }
+
+    // A — fresh infrastructure every request: only SIZE varies from a cold start.
+    for pos in 1..=4 {
+        let certs = generate_loopback_certs();
+        let (backend, _st, _bh) = spawn_h2_grpc_backend(GrpcBackendMode::Echo).await;
+        let (_l, gw, _sd) = start_h3_listener_h2(&certs, backend).await;
+        cells.push(drive_one(gw, &certs.ca, K256, "fresh-256k", pos).await);
+    }
+
+    // B — one gateway, one size: only POSITION varies.
+    {
+        let certs = generate_loopback_certs();
+        let (backend, _st, _bh) = spawn_h2_grpc_backend(GrpcBackendMode::Echo).await;
+        let (_l, gw, _sd) = start_h3_listener_h2(&certs, backend).await;
+        for pos in 1..=4 {
+            cells.push(drive_one(gw, &certs.ca, K256, "reuse-256k", pos).await);
+        }
+    }
+
+    // C and D — the original sweep and its reverse, both against one gateway. If the failure is
+    // positional it stays at index 2 in BOTH; if it is size-bound it moves with 256 KiB.
+    for (arm, sizes) in [
+        ("orig-order", [1usize, K256, 512 * 1024, 1024 * 1024]),
+        ("rev-order", [1024 * 1024, 512 * 1024, K256, 1usize]),
+    ] {
+        let certs = generate_loopback_certs();
+        let (backend, _st, _bh) = spawn_h2_grpc_backend(GrpcBackendMode::Echo).await;
+        let (_l, gw, _sd) = start_h3_listener_h2(&certs, backend).await;
+        for (i, sz) in sizes.into_iter().enumerate() {
+            cells.push(drive_one(gw, &certs.ca, sz, arm, i + 1).await);
+        }
+    }
+
+    for c in &cells {
+        println!(
+            "S46-PROBE arm={:<11} pos={} sz={:>8} status={:?} grpc-status={:?} fin={} reset={} {}",
+            c.arm,
+            c.pos,
+            c.sz,
+            c.status,
+            c.grpc_status,
+            c.fin,
+            c.reset,
+            if c.ok() { "OK" } else { "**BAD**" }
+        );
+    }
+
+    let bad: Vec<&ProbeCell> = cells.iter().filter(|c| !c.ok()).collect();
+    assert!(bad.is_empty(), "CF-S44 probe cells failed: {bad:#?}");
+}
