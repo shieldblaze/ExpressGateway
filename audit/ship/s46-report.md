@@ -432,4 +432,49 @@ per-request rate, `P(0 failures in 300) ≈ 0.97³⁰⁰ ≈ 1×10⁻⁴` — th
 **Severity.** Reachable on **any** H3 request with a body over ~64 KiB, on every H3 egress cell and
 gRPC-over-H3. Live for two months at ~38% of exposed CI runs and repeatedly dismissed as a flake.
 
+### 1.12 R3 / R12 no-regression evidence
+
+Full `lb-quic` suite, `--all-features --no-fail-fast`, t3a.large, **after** the fix:
+
+```
+Summary [ 386.073s] 230 tests run: 230 passed (3 slow), 0 skipped
+```
+
+Zero failures, zero timeouts. The R8 in-flight-bound assertions — the tests that would catch the
+fix quietly relaxing the memory bound, and therefore the real gate on this change — all pass:
+
+```
+PASS  grpc_h3_server_stream_bounded_memory_r8
+PASS  t5_single_large_data_frame_is_memory_bounded_through_stalled_upstream
+PASS  h2_e2e_request_memory_bounded_through_stalled_backend
+PASS  h2_e2e_response_memory_bounded_through_stalled_client
+PASS  h3h3_e2e_request_memory_bounded_through_stalled_backend
+PASS  h3h3_e2e_response_memory_bounded_through_stalled_client
+PASS  r2_response_memory_bounded_through_stalled_client
+PASS  c5_resp_retained_ceiling_is_sound_and_much_less_than_1mib
+PASS  r8_chunked_response_trailers_delivered_to_h3_client
+```
+
+All three H3 egress cells (H3→H1, H3→H2, H3→H3) and gRPC-over-H3 are regression-free, confirming
+the reserved slot carries only the terminal event and never body bytes.
+
+**Process note (R15).** An earlier attempt at this run returned `rc=104`, "creating test list
+failed … No such file or directory". That was **not** a code fault: a disk-reclaim glob of mine
+deleted `round8_h3_authority_enforced`'s binary, which belongs to `lb-quic`, not to the
+integration-test crate it was aimed at. Cargo saw an intact fingerprint and did not relink it. The
+target was touched and the run repeated. No verdict was taken from the incomplete run.
+
+### 1.13 CF-S44 VERDICT
+
+**PROVEN-and-fixed.** Mechanism proven by instrumented reproduction, fix negative-control-verified,
+R3/R12 clean.
+
+**Carried, explicitly NOT closed by this fix:**
+- **The HANG is a separate, still-unexplained bug.** Disjoint from the 502 by payload size (hangs
+  only on 5 B–30 B payloads; 502s only on ≥256 KiB), and instrumented-`Coverage`-only (7/71 Coverage
+  jobs, 0/71 `Test` jobs). Four different tests have hung. P2's `terminate-after` now converts it
+  into a bounded, reported failure that names the test — containment, not a fix.
+- **`ACTOR_CHANNEL_DEPTH = 32` router packet drops** (§1.9) — a capacity finding, not the
+  discriminant, and not connected to the 502 by evidence.
+
 *(Phases 2–4 appended as each completes.)*
