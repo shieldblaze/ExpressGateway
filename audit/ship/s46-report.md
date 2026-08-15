@@ -367,4 +367,69 @@ iterations too, so they are not sufficient to cause the 502. QUIC retransmits, s
 correctness bug. It is a capacity finding on large bodies, invisible at default log levels, and it
 is a plausible *contributor* to whatever drops the body sender. Not yet connected by evidence.
 
+### 1.10 ROOT CAUSE — a dropped completion signal on a deliberately-full queue
+
+The trigger probe settled the last ambiguity: **3/3 failures reported
+`trigger=PRODUCER_DROPPED`**, never `RESET`. The abort is `Poll::Ready(None)` — the ingress body
+sender dropped **without ever sending `End`**.
+
+The site is the `Finished` handler in `conn_actor.rs`:
+
+```rust
+if let Some(tx) = body_tx_by_stream.remove(&sid) {      // sender removed UNCONDITIONALLY
+    ...
+    let _ = tx.try_send(ReqBodyEvent::End { trailers }); // fails when Full — error DISCARDED
+}                                                        // tx dropped here
+```
+
+`H3_BODY_CHANNEL_DEPTH = 8` × `H3_BODY_CHUNK_MAX` ≈ 8 KiB is the R8 in-flight bound, and
+`drain_request_body`'s gate **deliberately keeps that channel full** for the whole of a large body
+(it stops reading while `capacity() == 0`). So when the stream's `Finished` event lands while the 8
+slots are occupied, `try_send` returns `Full`, `let _ =` swallows it, the sender is dropped, and the
+consumer sees a closed channel instead of a completion:
+
+> `H3ReqStreamBody` → `Err(H3ReqAbort)` → hyper RST_STREAM(INTERNAL_ERROR) →
+> `Http2PoolError::Send` → **502**
+
+**A request the backend served correctly is reported to the client as 502.** Every observed property
+follows: it needs a body large enough to fill 8×8 KiB (**>64 KiB** — matching "≥256 KiB fails,
+`sz=1` never fails"); it is a race on whether a slot drained before `Finished` arrived (hence ~3%,
+not 100%); it is fast, reuse-independent and instrumentation-independent.
+
+**The asymmetry is the defect.** The same `let _ = try_send(..)` guards the `Reset` sends, but a
+lost `Reset` still yields an abort — the intended outcome. A lost `End` converts **success into
+failure**.
+
+### 1.11 THE FIX + LOAD-BEARING NEGATIVE CONTROL
+
+**Fix:** allocate `H3_BODY_CHANNEL_CAPACITY = H3_BODY_CHANNEL_DEPTH + 1` and gate body reads on
+`capacity() > 1`, reserving one slot exclusively for the terminal event. The terminal send becomes
+**infallible by construction** instead of depending on a drain winning a race. No new state, no
+retry loop, no extra pass.
+
+- **R8 preserved.** Body chunks are still capped at `H3_BODY_CHANNEL_DEPTH`, so the ≈64 KiB
+  in-flight bound and the three tests asserting it (`h3_h1_stream_body_e2e.rs:633`,
+  `h3_h3_stream_e2e.rs:1102`, `h3_h2_stream_e2e.rs:822`) are unaffected. The reserved slot only ever
+  carries one terminal event — trailers at most, never body bytes.
+- **Second fault repaired.** The same lost `try_send` on the F-CAP-1 over-cap path could answer
+  **502 instead of 413**.
+- **R12 blast radius, checked not assumed.** The `End` send lives in `conn_actor` and is shared by
+  all three H3 egress cells, so H3→H1, H3→H2, H3→H3 and gRPC-over-H3 all inherit the fix.
+  `lb-l7`'s H1/H2 fronts were inspected and are **NOT** affected — they use `.send(..).await`, which
+  blocks until capacity rather than failing (`h1_proxy.rs:1547+`, `h2_proxy.rs:1944+`). Only the QUIC
+  actor uses `try_send`, because it is a synchronous poll loop that cannot await.
+
+**Negative control — same probe, same box, same conditions:**
+
+| | Reps | Failures | Rate |
+|---|---|---|---|
+| pre-fix | 950 | 34 | **≈3.6%** |
+| **post-fix** | 300 | **0** | **0.00%** |
+
+Zero abort triggers, zero `send_request` failures, zero 502 chains post-fix. At the measured ~3%
+per-request rate, `P(0 failures in 300) ≈ 0.97³⁰⁰ ≈ 1×10⁻⁴` — the clean run is not chance.
+
+**Severity.** Reachable on **any** H3 request with a body over ~64 KiB, on every H3 egress cell and
+gRPC-over-H3. Live for two months at ~38% of exposed CI runs and repeatedly dismissed as a flake.
+
 *(Phases 2–4 appended as each completes.)*
