@@ -105,11 +105,13 @@ The workspace members are listed in the root [`Cargo.toml`](../../Cargo.toml)
   request-smuggling CL.TE/TE.CL/H2-downgrade, 0-RTT replay guard, retry-token
   signer, ticket rotator). Protocol-specific flood/bomb detectors live next to
   their codec (`lb-h2/src/security.rs`, `lb-h3-testcodec/src/security.rs`).
-- `lb-health` — **passive** per-backend health-status tracking
-  (consecutive-success/failure state, default 3 successes → Healthy, 2 failures
-  → Unhealthy). In this build it is seeded but **not yet wired into backend
-  selection** (the balancer does not consult it); **active probing**
-  (interval/path/expected-status) is **deferred (REL-2-05)**.
+- `lb-health` — **passive** per-backend health tracking plus **outlier
+  ejection**: `HealthChecker` is the consecutive-success/failure state machine,
+  and `HealthRegistry` adds the ejection window, half-open re-admission and the
+  minimum-healthy floor. It is wired into the L7 datapath — the proxies feed
+  `HealthRegistry::record` and `upstream::HealthFilteredPicker` consults
+  `AdmissionGate::admits`. **Active probing** (interval/path/expected-status)
+  is still **deferred (REL-2-05)**.
 - `lb-observability` — the metrics registry (`DashMap<String, AtomicU64>`),
   Prometheus exposition, and tracing init.
 - `lb-core` — foundation types (`Backend`, `Cluster`, `LbPolicy`, `Shutdown`).

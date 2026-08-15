@@ -18,6 +18,10 @@ pub enum SwappableChange {
     },
     /// `[runtime].max_keepalive_requests` changed; applied by rebuilding EVERY L7 proxy.
     RuntimeMaxKeepaliveRequests,
+    /// `[runtime.outlier_detection]` changed; applied by pushing the new policy into every live
+    /// `HealthRegistry`. NO proxy rebuild — the registries outlive a reload on purpose, so that
+    /// ejection state is not reset by an operator's reload loop.
+    RuntimeOutlierDetection,
 }
 
 impl SwappableChange {
@@ -35,6 +39,10 @@ impl SwappableChange {
                 "runtime.max_keepalive_requests changed — applied live (all L7 listeners)"
                     .to_owned()
             }
+            Self::RuntimeOutlierDetection => {
+                "runtime.outlier_detection changed — applied live (all health registries)"
+                    .to_owned()
+            }
         }
     }
 
@@ -44,6 +52,7 @@ impl SwappableChange {
         match self {
             Self::ListenerL7 { .. } => "listener.l7",
             Self::RuntimeMaxKeepaliveRequests => "max_keepalive_requests",
+            Self::RuntimeOutlierDetection => "outlier_detection",
         }
     }
 
@@ -52,7 +61,7 @@ impl SwappableChange {
     pub fn address(&self) -> Option<&str> {
         match self {
             Self::ListenerL7 { address, .. } => Some(address),
-            Self::RuntimeMaxKeepaliveRequests => None,
+            Self::RuntimeMaxKeepaliveRequests | Self::RuntimeOutlierDetection => None,
         }
     }
 }
@@ -288,6 +297,15 @@ fn diff_runtime(
             .push(SwappableChange::RuntimeMaxKeepaliveRequests);
     }
 
+    // Same effective-value discipline: an absent `[runtime.outlier_detection]` means the defaults,
+    // so `None` -> `Some(defaults)` is correctly seen as NO change.
+    let eff_outlier =
+        |c: Option<&crate::RuntimeConfig>| c.and_then(|r| r.outlier_detection).unwrap_or_default();
+    if eff_outlier(old) != eff_outlier(new) {
+        plan.swappable
+            .push(SwappableChange::RuntimeOutlierDetection);
+    }
+
     match (old, new) {
         (None, None) => {}
         (Some(o), Some(n)) if o == n => {}
@@ -322,7 +340,8 @@ fn diff_runtime(
             rt_field!(per_ip_connection_cap, "per_ip_connection_cap");
             rt_field!(watchdog, "watchdog");
             rt_field!(header_underscore_policy, "header_underscore_policy");
-            // `max_keepalive_requests` is handled swappably above, deliberately not here.
+            // `max_keepalive_requests` and `outlier_detection` are handled swappably above,
+            // deliberately not here.
             rt_field!(
                 max_requests_per_h3_connection,
                 "max_requests_per_h3_connection"
@@ -524,7 +543,8 @@ mod tests {
     fn l7_fields(change: &SwappableChange) -> Vec<&'static str> {
         match change {
             SwappableChange::ListenerL7 { fields, .. } => fields.clone(),
-            SwappableChange::RuntimeMaxKeepaliveRequests => Vec::new(),
+            SwappableChange::RuntimeMaxKeepaliveRequests
+            | SwappableChange::RuntimeOutlierDetection => Vec::new(),
         }
     }
 
@@ -566,6 +586,59 @@ mod tests {
                 .iter()
                 .any(|c| c.field() == "max_keepalive_requests"),
             "max_keepalive_requests must NOT be reported restart-required"
+        );
+    }
+
+    #[test]
+    fn outlier_detection_change_is_swappable() {
+        // Via `parse_config` so the block gets serde defaults, mirroring the keepalive test.
+        let base = "[[listeners]]\naddress = \"0.0.0.0:8080\"\nprotocol = \"h1\"\n\
+                    [[listeners.backends]]\naddress = \"10.0.0.1:80\"\nweight = 1\n";
+        let a = crate::parse_config(&format!(
+            "{base}[runtime.outlier_detection]\nconsecutive_failures = 5\n"
+        ))
+        .unwrap();
+        let b = crate::parse_config(&format!(
+            "{base}[runtime.outlier_detection]\nconsecutive_failures = 9\n"
+        ))
+        .unwrap();
+        let plan = a.diff(&b);
+        assert!(
+            plan.swappable
+                .iter()
+                .any(|c| c.field() == "outlier_detection"),
+            "outlier_detection change must be swappable: {:?}",
+            plan.swappable
+        );
+        assert!(
+            !plan
+                .restart_required
+                .iter()
+                .any(|c| c.field() == "outlier_detection"),
+            "outlier_detection must NOT be reported restart-required"
+        );
+    }
+
+    #[test]
+    fn absent_outlier_block_equals_explicit_defaults() {
+        // EFFECTIVE-value comparison: writing out the defaults must not read as a change, or every
+        // reload would claim to have applied one.
+        let base = "[[listeners]]\naddress = \"0.0.0.0:8080\"\nprotocol = \"h1\"\n\
+                    [[listeners.backends]]\naddress = \"10.0.0.1:80\"\nweight = 1\n";
+        let a = crate::parse_config(base).unwrap();
+        let b = crate::parse_config(&format!(
+            "{base}[runtime.outlier_detection]\nenabled = true\nconsecutive_failures = 5\n\
+             base_ejection_secs = 30\nmax_ejection_secs = 300\nmin_healthy_percent = 50\n"
+        ))
+        .unwrap();
+        let plan = a.diff(&b);
+        assert!(
+            !plan
+                .swappable
+                .iter()
+                .any(|c| c.field() == "outlier_detection"),
+            "explicit defaults must not read as a change: {:?}",
+            plan.swappable
         );
     }
 

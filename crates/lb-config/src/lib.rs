@@ -132,6 +132,11 @@ pub struct RuntimeConfig {
     /// but the rate floor is dormant.
     #[serde(default)]
     pub watchdog: Option<RuntimeWatchdogConfig>,
+    /// `[runtime.outlier_detection]` block (G5 passive health ejection). Absent means the DEFAULTS
+    /// apply, which include `enabled = true` — see [`RuntimeOutlierDetectionConfig`] for why
+    /// on-by-default is safe here and how to turn it off.
+    #[serde(default)]
+    pub outlier_detection: Option<RuntimeOutlierDetectionConfig>,
     /// How to handle `_` in header names. An underscore is an AUTH-BYPASS primitive against backends
     /// that normalise `_` <-> `-`; Envoy and nginx both refuse to pass it through at the edge.
     #[serde(default)]
@@ -236,6 +241,82 @@ impl Default for RuntimeWatchdogConfig {
             sweep_interval_ms: default_watchdog_sweep_interval_ms(),
         }
     }
+}
+
+/// G5 passive outlier detection: eject a backend that fails consecutively, re-admit it through a
+/// half-open probe, and never eject past the minimum-healthy floor. Envoy `outlier_detection` /
+/// HAProxy `observe` + `on-error` semantics, not raw eject-on-error.
+///
+/// ON BY DEFAULT. Routing is byte-identical to an ejection-free build while every backend is
+/// healthy (an unfailed backend is always admitted), so enabling it changes nothing until a backend
+/// actually fails [`Self::consecutive_failures`] times in a row — and at that point the change is
+/// the desired one. The defaults are also strictly gentler than nginx's on-by-default
+/// `max_fails=1 fail_timeout=10s`, which ejects after a SINGLE failure. Set `enabled = false` to
+/// restore pre-G5 behaviour exactly.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeOutlierDetectionConfig {
+    /// Master switch; `false` makes the admission gate a constant `true` and every outcome a no-op.
+    #[serde(default = "default_outlier_enabled")]
+    pub enabled: bool,
+    /// CONSECUTIVE upstream transport/timeout failures before ejection. Range `1..=1_000`.
+    /// `0` is REJECTED rather than clamped — it reads as "disable", and the disable switch is
+    /// [`Self::enabled`]. `1` is accepted but is a foot-gun (one RST during a rolling restart
+    /// ejects a healthy backend).
+    #[serde(default = "default_outlier_consecutive_failures")]
+    pub consecutive_failures: u32,
+    /// First ejection window; Envoy `base_ejection_time` parity. Range `1..=3_600` s.
+    #[serde(default = "default_outlier_base_ejection_secs")]
+    pub base_ejection_secs: u64,
+    /// Backoff ceiling; Envoy `max_ejection_time` parity. Must be `>= base_ejection_secs`.
+    #[serde(default = "default_outlier_max_ejection_secs")]
+    pub max_ejection_secs: u64,
+    /// Percentage of a listener's backends that must stay in rotation, so a CORRELATED failure
+    /// cannot eject everything. Range `0..=100`; an absolute "never eject the last backend" floor
+    /// applies on top, so even `0` cannot empty a listener.
+    ///
+    /// DEPARTURE FROM ENVOY: its `max_ejection_percent` defaults to 10%, which with fewer than 10
+    /// backends means nothing can ever be ejected — inert for the 2-4 backend listeners this
+    /// gateway actually configures. 50% gives real ejection at N=2 while still guaranteeing a
+    /// shared-dependency outage cannot black-hole a listener.
+    #[serde(default = "default_outlier_min_healthy_percent")]
+    pub min_healthy_percent: u8,
+}
+
+impl Default for RuntimeOutlierDetectionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_outlier_enabled(),
+            consecutive_failures: default_outlier_consecutive_failures(),
+            base_ejection_secs: default_outlier_base_ejection_secs(),
+            max_ejection_secs: default_outlier_max_ejection_secs(),
+            min_healthy_percent: default_outlier_min_healthy_percent(),
+        }
+    }
+}
+
+const fn default_outlier_enabled() -> bool {
+    true
+}
+
+/// Envoy `consecutive_gateway_failure` parity.
+const fn default_outlier_consecutive_failures() -> u32 {
+    5
+}
+
+/// Envoy `base_ejection_time` parity.
+const fn default_outlier_base_ejection_secs() -> u64 {
+    30
+}
+
+/// Envoy `max_ejection_time` parity.
+const fn default_outlier_max_ejection_secs() -> u64 {
+    300
+}
+
+/// See [`RuntimeOutlierDetectionConfig::min_healthy_percent`] for why this is not Envoy's 10%.
+const fn default_outlier_min_healthy_percent() -> u8 {
+    50
 }
 
 const fn default_watchdog_header_deadline_ms() -> u64 {
@@ -883,6 +964,44 @@ fn validate_runtime(rt: &RuntimeConfig) -> Result<(), ConfigError> {
             return Err(ConfigError::Validation(format!(
                 "runtime.watchdog.sweep_interval_ms={} out of range 100..=60000",
                 wd.sweep_interval_ms
+            )));
+        }
+    }
+    if let Some(od) = rt.outlier_detection.as_ref() {
+        // `0` is NOT a disable sentinel here: ejecting on zero consecutive failures would eject
+        // every backend on sight. The disable switch is `enabled`.
+        if !(1..=1_000).contains(&od.consecutive_failures) {
+            return Err(ConfigError::Validation(format!(
+                "runtime.outlier_detection.consecutive_failures={} out of range 1..=1000 \
+                 (use enabled=false to disable ejection)",
+                od.consecutive_failures
+            )));
+        }
+        // Floor stops a zero-length ejection that re-admits instantly; the ceiling keeps a
+        // fat-fingered value from parking a recovered backend for a day.
+        if !(1..=3_600).contains(&od.base_ejection_secs) {
+            return Err(ConfigError::Validation(format!(
+                "runtime.outlier_detection.base_ejection_secs={} out of range 1..=3600",
+                od.base_ejection_secs
+            )));
+        }
+        if !(1..=3_600).contains(&od.max_ejection_secs) {
+            return Err(ConfigError::Validation(format!(
+                "runtime.outlier_detection.max_ejection_secs={} out of range 1..=3600",
+                od.max_ejection_secs
+            )));
+        }
+        // A ceiling below the base would silently truncate the FIRST ejection.
+        if od.max_ejection_secs < od.base_ejection_secs {
+            return Err(ConfigError::Validation(format!(
+                "runtime.outlier_detection.max_ejection_secs={} is below base_ejection_secs={}",
+                od.max_ejection_secs, od.base_ejection_secs
+            )));
+        }
+        if od.min_healthy_percent > 100 {
+            return Err(ConfigError::Validation(format!(
+                "runtime.outlier_detection.min_healthy_percent={} out of range 0..=100",
+                od.min_healthy_percent
             )));
         }
     }
@@ -1717,6 +1836,74 @@ header_underscore_policy = "reject"
         assert_eq!(rt.max_requests_per_h3_connection, 1000);
     }
 
+    /// G5 knob plumbing end to end: parses, validates, and the defaults are the documented ones.
+    #[test]
+    fn outlier_detection_parses_and_defaults_are_envoy_shaped() {
+        let base = r#"
+[[listeners]]
+address = "0.0.0.0:8080"
+protocol = "tcp"
+
+[[listeners.backends]]
+address = "127.0.0.1:3000"
+weight = 1
+"#;
+        // Absent block ⇒ defaults, and ON by default.
+        let cfg = parse_config(base).expect("must parse");
+        validate_config(&cfg).expect("must validate");
+        let defaults = RuntimeOutlierDetectionConfig::default();
+        assert!(defaults.enabled, "G5 ships ON by default");
+        assert_eq!(defaults.consecutive_failures, 5);
+        assert_eq!(defaults.base_ejection_secs, 30);
+        assert_eq!(defaults.max_ejection_secs, 300);
+        assert_eq!(defaults.min_healthy_percent, 50);
+
+        let explicit = format!(
+            "{base}\n[runtime.outlier_detection]\nenabled = false\nconsecutive_failures = 7\n\
+             base_ejection_secs = 10\nmax_ejection_secs = 60\nmin_healthy_percent = 75\n"
+        );
+        let cfg = parse_config(&explicit).expect("must parse");
+        validate_config(&cfg).expect("must validate");
+        let od = cfg
+            .runtime
+            .as_ref()
+            .and_then(|r| r.outlier_detection)
+            .expect("block present");
+        assert!(!od.enabled);
+        assert_eq!(od.consecutive_failures, 7);
+        assert_eq!(od.min_healthy_percent, 75);
+    }
+
+    #[test]
+    fn outlier_detection_bad_ranges_rejected() {
+        let base = r#"
+[[listeners]]
+address = "0.0.0.0:8080"
+protocol = "tcp"
+
+[[listeners.backends]]
+address = "127.0.0.1:3000"
+weight = 1
+"#;
+        // `0` must be a hard error, NOT a silent clamp: it reads as "disable", and disabling has
+        // its own switch. A clamp here would eject every backend on its first error.
+        for bad in [
+            "consecutive_failures = 0",
+            "consecutive_failures = 100000",
+            "base_ejection_secs = 0",
+            "max_ejection_secs = 0",
+            "min_healthy_percent = 101",
+            "base_ejection_secs = 300\nmax_ejection_secs = 30",
+        ] {
+            let input = format!("{base}\n[runtime.outlier_detection]\n{bad}\n");
+            let cfg = parse_config(&input).expect("shape is valid TOML");
+            assert!(
+                validate_config(&cfg).is_err(),
+                "must reject outlier_detection with {bad:?}"
+            );
+        }
+    }
+
     #[test]
     fn validate_tls_block_without_tls_protocol_rejected() {
         let config = LbConfig {
@@ -2271,6 +2458,7 @@ xdp_interface = "eth0"
                 max_keepalive_requests: 100,
                 max_requests_per_h3_connection: 1000,
                 xdp_new_flow_cap_per_sec_per_cpu: 125_000,
+                outlier_detection: None,
             }),
             observability: None,
             admin: None,
@@ -2315,6 +2503,7 @@ xdp_interface = "eth0"
                 max_keepalive_requests: 100,
                 max_requests_per_h3_connection: 1000,
                 xdp_new_flow_cap_per_sec_per_cpu: 125_000,
+                outlier_detection: None,
             }),
             observability: None,
             admin: None,
@@ -2554,6 +2743,7 @@ address = "127.0.0.1:3000"
             max_keepalive_requests: 100,
             max_requests_per_h3_connection: 1000,
             xdp_new_flow_cap_per_sec_per_cpu: 125_000,
+            outlier_detection: None,
         }
     }
 

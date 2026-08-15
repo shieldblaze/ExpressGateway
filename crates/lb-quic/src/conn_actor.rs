@@ -37,6 +37,25 @@ use crate::ws_tunnel::{
 /// stops calling `stream_recv`, so quiche does not extend the stream flow-control window.
 pub const H3_BODY_CHANNEL_DEPTH: usize = 8;
 
+/// Allocated capacity of that channel: [`H3_BODY_CHANNEL_DEPTH`] body slots **plus one slot held in
+/// reserve for the TERMINAL event** (`End`/`Reset`).
+///
+/// **CF-S44 (S46).** Terminal events are delivered with `try_send`, which FAILS when the channel is
+/// full — and the R8 backpressure gate deliberately keeps it full for the whole of a large body. The
+/// failure was discarded (`let _ =`) and the sender then dropped, so the consumer saw a closed
+/// channel instead of `End`: `H3ReqStreamBody` reported the request ABORTED, hyper RST_STREAMed the
+/// upstream, and a request the backend had served fine came back to the client as **502**. Measured
+/// at ~3% of 512 KiB H3→H2 requests over 950 local iterations.
+///
+/// Reserving a slot makes the terminal send **infallible by construction** rather than relying on a
+/// drain happening to win a race. It does NOT relax R8: `drain_request_body` gates body reads on
+/// `capacity() > 1`, so in-flight BODY memory is still ≈ `H3_BODY_CHANNEL_DEPTH * H3_BODY_CHUNK_MAX`
+/// and the extra slot only ever carries one terminal event (trailers at most, never body bytes).
+///
+/// It also repairs a second, quieter fault: a lost `Reset` on the F-CAP-1 over-cap path made an
+/// over-large request answer **502 instead of 413**.
+pub const H3_BODY_CHANNEL_CAPACITY: usize = H3_BODY_CHANNEL_DEPTH + 1;
+
 /// Application error code in the `CONNECTION_CLOSE` sent when the listener-wide cancel token
 /// fires — RFC 9114 §8.1's "graceful drain", read by a conformant peer as an orderly shutdown.
 pub const H3_NO_ERROR: u64 = 0x0100;
@@ -768,8 +787,13 @@ fn drain_request_body(
     let mut scratch = [0u8; H3_BODY_CHUNK_MAX];
     loop {
         // Backpressure gate: do not read while the channel is full.
+        //
+        // CF-S44: the threshold is `> 1`, NOT `> 0` — the last slot of
+        // `H3_BODY_CHANNEL_CAPACITY` is reserved for the terminal `End`/`Reset`, which is sent with
+        // `try_send` and would otherwise be silently dropped on a full channel, turning a served
+        // request into a 502. Body bytes must never occupy that slot.
         match body_tx_by_stream.get(&sid) {
-            Some(tx) if tx.capacity() > 0 => {}
+            Some(tx) if tx.capacity() > 1 => {}
             _ => return,
         }
         match h3.recv_body(conn, sid, &mut scratch) {
@@ -992,7 +1016,7 @@ fn poll_h3(
 
                 let bodyless = !more_frames;
                 // Build the bounded request-body + response channels and spawn the producer task.
-                let (btx, brx) = mpsc::channel::<ReqBodyEvent>(H3_BODY_CHANNEL_DEPTH);
+                let (btx, brx) = mpsc::channel::<ReqBodyEvent>(H3_BODY_CHANNEL_CAPACITY);
                 let (resp_tx, resp_rx) = mpsc::channel::<RespEvent>(H3_RESP_CHANNEL_DEPTH);
 
                 let spawned = if let Some((h2pool, addr)) = h2_backend {
@@ -1177,6 +1201,12 @@ fn record_req_retained(
 }
 
 /// Pick a backend. Round-robin-ish: the first for now.
+///
+/// NOT health-filtered (G5 gap, deliberate). The S46 ejection work covers the `lb-l7` datapath,
+/// whose pickers all funnel through `BackendInfoPicker`; this one is a bare `backends[0]` reached
+/// from `conn_actor` with no `HealthRegistry` in scope. Wiring it means threading a registry
+/// through `listener.rs` → `router.rs` → here, which is a separate increment. Until then an H3
+/// FRONT listener keeps sending to `backends[0]` even after the H1/H2 legs eject it.
 fn select_backend(backends: &Arc<Vec<SocketAddr>>) -> Option<SocketAddr> {
     backends.first().copied()
 }

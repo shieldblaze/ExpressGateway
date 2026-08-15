@@ -1605,7 +1605,9 @@ dependencies = [
 name = "lb-health"
 version = "0.1.0"
 dependencies = [
+ "parking_lot",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
@@ -1696,6 +1698,7 @@ dependencies = [
  "lb-core",
  "lb-grpc",
  "lb-h2",
+ "lb-health",
  "lb-io",
  "lb-observability",
  "lb-quic",
@@ -1758,6 +1761,7 @@ dependencies = [
  "tokio-quiche",
  "tokio-util",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]

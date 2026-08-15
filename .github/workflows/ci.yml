@@ -9,6 +9,14 @@ name: CI
 # Weekly informational scans are in scheduled.yml; tag build/publish + the soak
 # release gate are in release.yml. Shared toolchain/cache/system-deps setup is
 # single-sourced via the ./.github/actions/rust-setup composite (R12).
+#
+# S46: EVERY job sets `timeout-minutes:`. Without it a job inherits GitHub's 6-hour
+# ceiling, which is how CF-S44 burned a whole runner silently (run 30755744744, job
+# 91517507600: one hung test, 5 h 06 m, cancelled by hand, never red). Values are
+# >=3x each job's observed maximum over five runs — generous on purpose, because a
+# false red on a slow-but-healthy run is worse than catching a hang a few minutes
+# later. Per-TEST bounds live in .config/nextest.toml; the two are complementary,
+# not redundant (a job timeout also covers the build, which nextest cannot see).
 
 on:
   push:
@@ -33,6 +41,7 @@ jobs:
   fmt:
     name: Format
     runs-on: ubuntu-latest
+    timeout-minutes: 10    # obs max 23s; fmt --check, no build
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/rust-setup
@@ -44,6 +53,7 @@ jobs:
   check:
     name: Check
     runs-on: ubuntu-latest
+    timeout-minutes: 30    # obs max 117s; cold --all-features cargo check is the unknown
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/rust-setup
@@ -54,6 +64,7 @@ jobs:
   clippy:
     name: Clippy
     runs-on: ubuntu-latest
+    timeout-minutes: 30    # obs max 120s; same build shape as `check`
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/rust-setup
@@ -64,6 +75,7 @@ jobs:
   panic-freedom:
     name: Panic Freedom Audit
     runs-on: ubuntu-latest
+    timeout-minutes: 10    # obs max 10s; pure grep, no toolchain
     steps:
       - uses: actions/checkout@v6
       - name: Verify panic-freedom deny lints are present in every library crate
@@ -86,6 +98,7 @@ jobs:
     # claim must resolve to a SHA that actually closes its recommendation).
     name: Doc Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 15    # obs max 9s; fetch-depth:0 + tier-2 SHA walk grows with history
     steps:
       - uses: actions/checkout@v6
         with:
@@ -97,6 +110,7 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    timeout-minutes: 90    # obs max 1251s; MUST exceed the 45+25 step caps below
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/rust-setup
@@ -135,6 +149,7 @@ jobs:
     # The canonical "compiles on the MSRV" gate; full codegen is release-build.
     name: MSRV (1.88)
     runs-on: ubuntu-latest
+    timeout-minutes: 30    # obs max 115s; separate toolchain => colder cache
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/rust-setup
@@ -145,6 +160,7 @@ jobs:
   fuzz-smoke:
     name: Fuzz Smoke Test
     runs-on: ubuntu-latest
+    timeout-minutes: 45    # obs max 293s; cargo-fuzz is built from source
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/rust-setup
@@ -172,6 +188,7 @@ jobs:
   release-build:
     name: Release Build
     runs-on: ubuntu-latest
+    timeout-minutes: 45    # obs max 239s; MUST exceed the 30 step cap below
     needs: [check, clippy, test, fmt, panic-freedom, doc-lint]
     steps:
       - uses: actions/checkout@v6
@@ -183,6 +200,7 @@ jobs:
   audit:
     name: Security Audit
     runs-on: ubuntu-latest
+    timeout-minutes: 30    # obs max 199s; cargo-audit is built from source
     steps:
       - uses: actions/checkout@v6
       # +stable: cargo-audit needs a newer rustc than rust-toolchain.toml's pin.
@@ -198,6 +216,7 @@ jobs:
     # default cannot silently shrink the gate. This is the SINGLE cargo-deny gate.
     name: cargo-deny (licenses/advisories/bans/sources)
     runs-on: ubuntu-latest
+    timeout-minutes: 15    # obs max 26s; prebuilt musl binary, no compile
     steps:
       - uses: actions/checkout@v6
       - name: Install cargo-deny (prebuilt binary)
@@ -215,6 +234,7 @@ jobs:
     # paths; coverage-check.sh is the verdict.
     name: Coverage (per-module hot-path >= 80%)
     runs-on: ubuntu-latest
+    timeout-minutes: 50    # obs max 846s. CF-S44 job. Sits ABOVE nextest global-timeout=40m
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/rust-setup
@@ -230,23 +250,59 @@ jobs:
       - name: Coverage (full workspace suite, --all-features)
         # --ignore-run-fail: this is the COVERAGE gate, not the pass/fail gate —
         # that is the `test` job. Measure coverage even if a test flakes.
+        #
+        # S46: a HANG is not a flake. .config/nextest.toml now TERMINATES a test that
+        # runs past 20 min and reports it as a failure — but --ignore-run-fail hides
+        # that from the exit code too, so the NEXT step converts it into a red. Both
+        # halves are required; the terminate alone only bounds the burn, it does not
+        # fail the job. (CF-S44: run 30755744744 job 91517507600.)
+        env:
+          NEXTEST_PROFILE: ci          # adds the 40m run-level cap; see .config/nextest.toml
         run: |
+          set -o pipefail
           cargo llvm-cov nextest \
             --workspace --all-features --ignore-run-fail \
-            --lcov --output-path coverage.lcov
+            --lcov --output-path coverage.lcov 2>&1 | tee nextest-run.log
+      - name: Fail on a TERMINATED test (--ignore-run-fail must not swallow a hang)
+        # nextest 0.9.135 prints `TIMEOUT [` (long form, what CI uses) or `TMT [`
+        # (compact) for a test killed by slow-timeout.terminate-after, and cancels the
+        # run with reason "global timeout" when global-timeout expires.
+        #
+        # The pattern was R13-tested before being trusted (S46):
+        #   - 0 matches across three REAL coverage logs carrying 1565 PASSes, the
+        #     escalating SLOW markers and 3 genuine FAILs => no false red;
+        #   - fires on TIMEOUT, TMT, a timestamp-prefixed line, and "global timeout";
+        #   - does NOT match `TIMEOUT-PASS`/`TMPASS`, which occur only under
+        #     `on-timeout = "pass"` — a setting this repo does not use.
+        # Runs BEFORE coverage-check.sh on purpose: a run with a killed test has
+        # incomplete profile data, so its coverage number is not trustworthy anyway.
+        run: |
+          PAT='(^|[[:space:]])(TIMEOUT|TMT)[[:space:]]*\['
+          if grep -qE "$PAT" nextest-run.log || grep -q 'global timeout' nextest-run.log; then
+            echo "::error::A test was TERMINATED by the nextest timeout — a CF-S44 class HANG, not a flake. Do NOT just re-run: capture the test named below."
+            grep -E "$PAT" nextest-run.log || true
+            grep -E 'global timeout' nextest-run.log || true
+            exit 1
+          fi
+          echo "No terminated tests."
       - name: Enforce per-module hot-path threshold (charter metric)
         run: bash scripts/ci/coverage-check.sh coverage.lcov
       - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: coverage-lcov
-          path: coverage.lcov
+          # nextest-run.log is archived too: if a test is TERMINATED, this log is the
+          # only record of which one and of the SLOW escalation that preceded it.
+          path: |
+            coverage.lcov
+            nextest-run.log
 
   conformance:
     # H2 + H3 conformance against the REAL gateway. Tool versions are PINNED so
     # the h3spec waiver list (CF-QUICHE-UPGRADE) stays exact.
     name: Conformance (h2spec --strict + h3spec)
     runs-on: ubuntu-latest
+    timeout-minutes: 30    # obs max 212s; h2spec+h3spec are long live-network probes
     env:
       H2SPEC_VER: "v2.6.0"
       H3SPEC_VER: "v0.1.13"
@@ -337,6 +393,7 @@ jobs:
     # slowloris. The 4-hour soak is the release gate, not a PR gate.
     name: Chaos Attack Suite
     runs-on: ubuntu-latest
+    timeout-minutes: 30    # obs max 209s; slowloris cases are wall-clock bound
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/rust-setup
@@ -349,6 +406,13 @@ jobs:
       - name: Run chaos attack suite
         # --all-features keeps the lb-l7/lb-h2 test surface identical to the
         # session gate.
+        #
+        # S46: no hang detector is needed here. This lane does NOT pass
+        # --ignore-run-fail, so a test terminated by .config/nextest.toml's
+        # `[profile.default]` bound already fails the job through nextest's own
+        # non-zero exit. Left on the `default` profile deliberately — no per-test
+        # timing has been measured for this filtered subset, and inventing a
+        # tighter threshold without measurement is how false reds get shipped.
         run: |
           cargo nextest run --all-features --package lb-h2 --package lb-l7 \
             -E 'test(/chaos|rapid_reset|continuation|hpack|slowloris/)'
@@ -360,6 +424,7 @@ jobs:
     # container works: a pre-S35 image had a CMD that could not boot.
     name: Container Image (build + serve smoke + trivy)
     runs-on: ubuntu-latest
+    timeout-minutes: 45    # obs max 362s; docker build has no rust-cache + Trivy DB fetch
     steps:
       - uses: actions/checkout@v6
       - name: Build image
@@ -386,6 +451,7 @@ jobs:
     # matrix — that needs nested virt hosted runners lack (F-ESC-1).
     name: XDP Verifier Smoke (runner kernel)
     runs-on: ubuntu-latest
+    timeout-minutes: 20    # obs max 47s; one test binary + a privileged BPF_PROG_LOAD
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/rust-setup

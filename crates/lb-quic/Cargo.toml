@@ -82,6 +82,11 @@ proptest = { workspace = true }
 # only — the production passthrough binary still links zero quiche
 # symbols (verified by scripts/never_decrypted_proof.sh).
 quiche = { workspace = true }
+# S46 CF-S44: the gateway's own `tracing::warn!` is the ONLY thing that names which
+# `Http2PoolError` variant produced a 502, and it emits nothing without a subscriber —
+# which is exactly why 142 CI logs never captured a mechanism. The CF-S44 probes install
+# one so a reproduced 502 is self-diagnosing. Test-only; production links no subscriber.
+tracing-subscriber = { workspace = true }
 
 [features]
 # Default keeps existing build behaviour: termination router/actor/

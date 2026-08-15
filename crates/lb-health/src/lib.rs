@@ -1,6 +1,11 @@
-//! Backend health state transitions. NOT DRIVEN IN PRODUCTION: `record_success` / `record_failure`
-//! have no callers outside this crate's own tests, so every checker the binary seeds stays
-//! `Unknown` forever.
+//! Backend health state transitions and passive outlier ejection.
+//!
+//! [`HealthChecker`] is the bare consecutive-success/failure state machine. [`ejection`] wraps it
+//! in the per-listener [`HealthRegistry`] the datapath actually drives: the L7 upstream legs feed
+//! [`HealthRegistry::record`] and the backend pickers consult [`AdmissionGate::admits`].
+//!
+//! ACTIVE probing (interval / path / expected-status) is still deferred (REL-2-05); everything here
+//! is passive, driven by real request outcomes.
 #![deny(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -13,6 +18,13 @@
 )]
 #![allow(clippy::pedantic, clippy::nursery)]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
+pub mod ejection;
+
+pub use ejection::{
+    AdmissionGate, AttemptOutcome, BackendHealth, EjectionPolicy, HealthRegistry,
+    UpstreamErrorClass,
+};
 
 /// Health status of an upstream backend.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1555,3 +1555,234 @@ async fn grpc_h3_burst_50_unary_cycles() {
         assert!(out.fin, "iter {i}: clean FIN");
     }
 }
+
+/// Install a `tracing` subscriber once per test process, honouring `RUST_LOG`.
+///
+/// Without this the gateway's `tracing::warn!(error = %e, …, "H3→H2 stream send_request failed")`
+/// (`lb-quic/src/h3_bridge.rs`) emits NOTHING, because `tracing` drops events when no subscriber is
+/// installed — setting `RUST_LOG` alone does nothing. That is precisely why 142 CI job logs contain
+/// a 502 but never a mechanism: the one line that names the `Http2PoolError` variant was always
+/// silently discarded. `try_init` so concurrent tests in one process cannot panic on double-init.
+fn init_probe_tracing() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+            tracing_subscriber::EnvFilter::new("lb_quic=debug,lb_io=debug,warn")
+        });
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_test_writer()
+            .try_init();
+    });
+}
+
+/// One cell of the [`s46_cfs44_size_vs_position_probe`] matrix.
+#[derive(Debug)]
+struct ProbeCell {
+    arm: &'static str,
+    /// 1-based request index within the arm's shared gateway; position 1 dials fresh, ≥2 reuses.
+    pos: usize,
+    sz: usize,
+    status: Option<u16>,
+    grpc_status: Option<String>,
+    fin: bool,
+    reset: bool,
+}
+
+impl ProbeCell {
+    fn ok(&self) -> bool {
+        self.status == Some(200) && self.grpc_status.as_deref() == Some("0") && self.fin
+    }
+}
+
+/// CF-S44 PROBE (S46) — separate the two variables the S44 failure confounds.
+///
+/// `grpc_h3_trailer_survives_all_response_sizes` sweeps `[1, 256K, 512K, 1M]` against ONE gateway
+/// and ONE backend built before the loop, so the observed `sz=262144 → 502` is equally consistent
+/// with two very different stories:
+///   - **size**: 256 KiB is genuinely mishandled on the H3-egress/trailer path; or
+///   - **position**: request #2 is simply the first to REUSE a pooled upstream H2 connection
+///     (`Http2Pool::acquire_sender` returns a cached sender and does NOT retry if the subsequent
+///     send fails — `crates/lb-io/src/http2_pool.rs:221`), and 256 KiB is incidental.
+///
+/// Four arms hold one variable each. The whole matrix is collected and PRINTED before any
+/// assertion, so a failure names the exact cell instead of aborting at the first one.
+///   A `fresh-256k`  — fresh gateway+backend per request, 256 KiB each: isolates SIZE.
+///   B `reuse-256k`  — one gateway+backend, 256 KiB repeated: isolates POSITION.
+///   C `orig-order`  — one gateway+backend, the original `[1, 256K, 512K, 1M]`.
+///   D `rev-order`   — one gateway+backend, reversed `[1M, 512K, 256K, 1]`.
+///
+/// Reading it: failures at position ≥2 independent of size ⇒ connection reuse. Failures tracking
+/// 256 KiB across arms A and D ⇒ size. Arm A clean but B failing ⇒ reuse, conclusively.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn s46_cfs44_size_vs_position_probe() {
+    serial_guard!();
+    init_probe_tracing();
+    const K256: usize = 256 * 1024;
+    const PROBE_TIMEOUT: Duration = Duration::from_secs(45);
+    let mut cells: Vec<ProbeCell> = Vec::new();
+
+    async fn drive_one(
+        gw: SocketAddr,
+        ca: &std::path::Path,
+        sz: usize,
+        arm: &'static str,
+        pos: usize,
+    ) -> ProbeCell {
+        let payload = Bytes::from(vec![0xABu8; sz]);
+        let body = frame_messages(std::slice::from_ref(&payload));
+        let out = drive_grpc_h3(
+            gw,
+            ca,
+            GrpcDriveCfg {
+                path: "/echo.Echo/S46Probe",
+                req_chunks: vec![body],
+                extra_headers: vec![],
+                content_type: None,
+            },
+            PROBE_TIMEOUT,
+        )
+        .await;
+        ProbeCell {
+            arm,
+            pos,
+            sz,
+            status: out.status,
+            grpc_status: out.field("grpc-status").map(str::to_owned),
+            fin: out.fin,
+            reset: out.reset,
+        }
+    }
+
+    // A — fresh infrastructure every request: only SIZE varies from a cold start.
+    for pos in 1..=4 {
+        let certs = generate_loopback_certs();
+        let (backend, _st, _bh) = spawn_h2_grpc_backend(GrpcBackendMode::Echo).await;
+        let (_l, gw, _sd) = start_h3_listener_h2(&certs, backend).await;
+        cells.push(drive_one(gw, &certs.ca, K256, "fresh-256k", pos).await);
+    }
+
+    // B — one gateway, one size: only POSITION varies.
+    {
+        let certs = generate_loopback_certs();
+        let (backend, _st, _bh) = spawn_h2_grpc_backend(GrpcBackendMode::Echo).await;
+        let (_l, gw, _sd) = start_h3_listener_h2(&certs, backend).await;
+        for pos in 1..=4 {
+            cells.push(drive_one(gw, &certs.ca, K256, "reuse-256k", pos).await);
+        }
+    }
+
+    // C and D — the original sweep and its reverse, both against one gateway. If the failure is
+    // positional it stays at index 2 in BOTH; if it is size-bound it moves with 256 KiB.
+    for (arm, sizes) in [
+        ("orig-order", [1usize, K256, 512 * 1024, 1024 * 1024]),
+        ("rev-order", [1024 * 1024, 512 * 1024, K256, 1usize]),
+    ] {
+        let certs = generate_loopback_certs();
+        let (backend, _st, _bh) = spawn_h2_grpc_backend(GrpcBackendMode::Echo).await;
+        let (_l, gw, _sd) = start_h3_listener_h2(&certs, backend).await;
+        for (i, sz) in sizes.into_iter().enumerate() {
+            cells.push(drive_one(gw, &certs.ca, sz, arm, i + 1).await);
+        }
+    }
+
+    for c in &cells {
+        println!(
+            "S46-PROBE arm={:<11} pos={} sz={:>8} status={:?} grpc-status={:?} fin={} reset={} {}",
+            c.arm,
+            c.pos,
+            c.sz,
+            c.status,
+            c.grpc_status,
+            c.fin,
+            c.reset,
+            if c.ok() { "OK" } else { "**BAD**" }
+        );
+    }
+
+    let bad: Vec<&ProbeCell> = cells.iter().filter(|c| !c.ok()).collect();
+    assert!(bad.is_empty(), "CF-S44 probe cells failed: {bad:#?}");
+}
+
+/// CF-S44 VOLUME PROBE (S46) — hammer the MINIMAL failing configuration.
+///
+/// The CI census (`audit/ship/s46-cfs44-base-rate.md`, 66 Coverage runs / 142 logs / 0 missing)
+/// establishes that the simplest failing shape is a SINGLE large request against a FRESH gateway:
+/// `grpc_h3_large_message_roundtrips_byte_identical` issues exactly one 512 KiB request and has
+/// returned 502 in three separate jobs. No loop, no pooled connection to reuse. It also
+/// establishes that `sz=1` has NEVER failed in 13 failing jobs, so a large body is an enabling
+/// condition, and that the failure is NOT instrumentation-only (5 uninstrumented `Test` jobs).
+///
+/// The per-request failure rate implied by the census is roughly 1%, so a handful of iterations
+/// cannot settle anything — the default 12 reps keep the normal gate fast and are NOT a proof of
+/// absence. Raise `S46_REPS` (e.g. 400) to hunt, ideally alongside CPU load.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn s46_cfs44_large_body_volume_probe() {
+    serial_guard!();
+    init_probe_tracing();
+    const SZ: usize = 512 * 1024;
+    let reps: usize = std::env::var("S46_REPS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(12);
+
+    let mut failures: Vec<String> = Vec::new();
+    for i in 0..reps {
+        // Fresh gateway + backend every iteration — mirrors the minimal failing case exactly.
+        let certs = generate_loopback_certs();
+        let (backend, _st, _bh) = spawn_h2_grpc_backend(GrpcBackendMode::Echo).await;
+        let (_l, gw, _sd) = start_h3_listener_h2(&certs, backend).await;
+
+        let payload = Bytes::from(vec![0x5Au8; SZ]);
+        let body = frame_messages(std::slice::from_ref(&payload));
+        let out = drive_grpc_h3(
+            gw,
+            &certs.ca,
+            GrpcDriveCfg {
+                path: "/echo.Echo/S46Volume",
+                req_chunks: vec![body],
+                extra_headers: vec![],
+                content_type: None,
+            },
+            Duration::from_secs(45),
+        )
+        .await;
+
+        let status_ok = out.status == Some(200);
+        let trailer_ok = out.field("grpc-status") == Some("0");
+        let len_ok = out.messages().first().map(|m| m.len()) == Some(SZ);
+        if !(status_ok && trailer_ok && len_ok && out.fin) {
+            // Both known CI signatures are distinguished here: a 502 (status wrong) and an
+            // F-S29-1-style trailer DROP (status 200 but grpc-status absent).
+            let kind = if out.status == Some(502) {
+                "502"
+            } else if status_ok && !trailer_ok {
+                "TRAILER-DROP"
+            } else {
+                "OTHER"
+            };
+            let detail = format!(
+                "iter={i} kind={kind} status={:?} grpc-status={:?} body_len={:?} fin={} reset={}",
+                out.status,
+                out.field("grpc-status"),
+                out.messages().first().map(|m| m.len()),
+                out.fin,
+                out.reset
+            );
+            println!("S46-VOLUME **BAD** {detail}");
+            failures.push(detail);
+        }
+    }
+    println!(
+        "S46-VOLUME reps={reps} failures={} rate={:.2}%",
+        failures.len(),
+        100.0 * failures.len() as f64 / reps as f64
+    );
+    assert!(
+        failures.is_empty(),
+        "CF-S44 volume probe: {}/{reps} large-body requests failed:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}

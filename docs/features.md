@@ -121,14 +121,45 @@ this build. See [`guide/CONFIG.md`](guide/CONFIG.md).
 
 ### Health tracking
 
-ExpressGateway implements **passive** per-backend health tracking — a
-consecutive-success / consecutive-failure state machine (`HealthChecker`,
-rise/fall thresholds). In this build it is **not yet wired into live
-backend selection**: the checkers are seeded at startup but the balancer
-does not consult them, and nothing in the live request path feeds them.
-**Active probing** (interval / path / expected-status) is **deferred
-(REL-2-05)** — it is not implemented. The operator impact is covered in
-[`known-limitations.md`](known-limitations.md).
+ExpressGateway implements **passive outlier ejection**, in the style of
+Envoy's `outlier_detection` and HAProxy's `observe` + `on-error`. The L7
+request path feeds every upstream attempt into a per-listener health
+registry; a backend that fails `consecutive_failures` times in a row
+(default 5) is ejected from rotation, and the backend picker skips it.
+
+Three properties make it safe to run:
+
+- **Threshold** — never eject on a single error. Any success resets the
+  streak.
+- **Re-admission** — an ejection lasts `base_ejection_secs` (default 30 s,
+  exponential backoff to `max_ejection_secs`, default 300 s). After that the
+  backend is admitted again as a half-open probe; one success clears the
+  ejection outright.
+- **Minimum-healthy floor** — at most `100 - min_healthy_percent` of a
+  listener's backends may be ejected (default: at least 50 % stay in), plus an
+  absolute "never eject the last backend" rule. A correlated failure therefore
+  degrades service instead of black-holing the listener, and a suppressed
+  ejection is logged and counted
+  (`backend_ejections_suppressed_total`).
+
+Only **connectivity** faults count — dial, handshake, reset and upstream
+timeout. An application `5xx` is a successful attempt as far as ejection is
+concerned, because a bad deploy returns `500` from every backend at once.
+Malformed client requests are discarded, never charged to the backend, and so
+is a failed send on a *pooled* HTTP/2 connection — that one is
+indistinguishable from our own connection going stale, and the gateway will not
+eject a backend for a race it cannot rule out as its own. Both exclusions and
+their costs are in [`known-limitations.md`](known-limitations.md).
+
+Tunables live in `[runtime.outlier_detection]` and are **hot-reloadable via
+SIGHUP** without resetting ejection state; `enabled = false` restores the
+pre-ejection behaviour exactly. See
+[`guide/CONFIG.md`](guide/CONFIG.md).
+
+**Active probing** (interval / path / expected-status) remains **deferred
+(REL-2-05)** — it is not implemented, so a backend that is down but never
+selected is not discovered until traffic reaches it. Remaining gaps are listed
+in [`known-limitations.md`](known-limitations.md).
 
 ## TLS
 

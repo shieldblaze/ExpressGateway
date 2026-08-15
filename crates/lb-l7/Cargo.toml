@@ -68,6 +68,10 @@ futures-util = { workspace = true }
 # `traceparent`, open a request span, and inject a child context onto
 # the upstream request (incl. the WS-upgrade dial).
 lb-observability = { path = "../lb-observability" }
+# G5 passive ejection: `upstream::HealthFilteredPicker` consults the `AdmissionGate` and the two
+# proxies feed `HealthRegistry::record`. lb-health is a leaf crate (thiserror + parking_lot +
+# tracing, zero lb-* deps), so this edge introduces no cycle.
+lb-health = { path = "../lb-health" }
 
 [dev-dependencies]
 # PROTO-2-18 (Wave 2c-2): the `tests/sni_authority_421.rs` integration

@@ -39,7 +39,7 @@ use lb_config::{
     TlsConfig, WebsocketConfig,
 };
 use lb_controlplane::{ConfigManager, FileBackend};
-use lb_health::{HealthChecker, HealthStatus};
+use lb_health::{AdmissionGate, EjectionPolicy, HealthRegistry, HealthStatus};
 use lb_io::Runtime;
 use lb_io::dns::{DnsResolver, ResolverConfig};
 use lb_io::http2_pool::{Http2Pool, Http2PoolConfig};
@@ -151,7 +151,21 @@ enum ReloadableProxies {
 struct ListenerReloadEntry {
     listener: String,
     proxies: ReloadableProxies,
+    /// G5 — this listener's passive-health registry. Held HERE, not inside the proxies, because a
+    /// reload rebuilds the proxies: rebuilding the registry with them would reset every ejection,
+    /// so an operator's reload loop would silently disable ejection.
+    health: Arc<HealthRegistry>,
 }
+
+/// One entry per listener that has a passive-health registry — L7 AND the plain-TCP/TLS listeners,
+/// which have no reload entry but still eject. Drives the metric pump and the live policy swap.
+#[derive(Clone)]
+struct HealthIndexEntry {
+    listener: String,
+    health: Arc<HealthRegistry>,
+}
+
+type HealthIndex = Arc<PlMutex<Vec<HealthIndexEntry>>>;
 
 #[derive(Clone)]
 struct CertMetrics {
@@ -304,6 +318,7 @@ async fn reload_config(
     config_manager: Option<&mut ConfigManager>,
     applied_config: &mut lb_config::LbConfig,
     listener_reload_registry: &Arc<PlMutex<Vec<ListenerReloadEntry>>>,
+    health_index: &HealthIndex,
     pool: &TcpPool,
     resolver: &DnsResolver,
     hooks: &Arc<HooksBundle>,
@@ -393,7 +408,30 @@ async fn reload_config(
         }
     }
 
+    // G5: an outlier-detection change is applied by pushing the policy into the LIVE registries, so
+    // it needs no proxy rebuild and — critically — does not reset any standing ejection. Driven off
+    // the health index rather than the L7 reload registry so plain-TCP/TLS listeners get it too.
     let mut applied_count = 0_usize;
+    if plan
+        .swappable
+        .iter()
+        .any(|c| matches!(c, lb_config::SwappableChange::RuntimeOutlierDetection))
+    {
+        let new_policy = ejection_policy_from(new_config.runtime.as_ref());
+        let entries: Vec<HealthIndexEntry> = health_index.lock().clone();
+        for e in &entries {
+            e.health.set_policy(new_policy);
+        }
+        applied_count += 1;
+        tracing::info!(
+            listeners = entries.len(),
+            enabled = new_policy.enabled,
+            consecutive_failures = new_policy.consecutive_failures,
+            min_healthy_percent = u32::from(new_policy.min_healthy_percent),
+            "SIGHUP: outlier-detection policy applied live (ejection state preserved)"
+        );
+    }
+
     for address in &to_rebuild {
         let Some(new_l) = new_config.listeners.iter().find(|l| &l.address == address) else {
             continue; // listener no longer present (removed) — handled elsewhere
@@ -418,6 +456,7 @@ async fn reload_config(
             hooks,
             watchdog,
             new_keepalive,
+            &entry.health,
         )
         .await
         {
@@ -467,6 +506,7 @@ async fn reload_config(
 /// PRESERVES the process-wide `hooks` bundle (`strict_te` + per-IP gate) — which is why `diff`
 /// reports those as restart-required. Changing the set here without reclassifying it in `diff`
 /// breaks the invariant the verifier tests.
+#[allow(clippy::too_many_arguments)]
 async fn rebuild_l7_proxies(
     new_l: &lb_config::ListenerConfig,
     handles: &ReloadableProxies,
@@ -475,6 +515,7 @@ async fn rebuild_l7_proxies(
     hooks: &Arc<HooksBundle>,
     watchdog: Option<&Watchdog>,
     max_keepalive_requests: u32,
+    health: &Arc<HealthRegistry>,
 ) -> anyhow::Result<()> {
     let mut addresses = Vec::with_capacity(new_l.backends.len());
     for b in &new_l.backends {
@@ -489,6 +530,11 @@ async fn rebuild_l7_proxies(
         };
         addresses.push(first);
     }
+
+    // G5: re-key the SURVIVING registry onto the new address set. A re-resolved DNS answer is a
+    // legitimately different key, and a dropped backend must not keep occupying the floor. The
+    // registry itself is NOT rebuilt, so standing ejections survive the reload.
+    health.reseed(&addresses);
 
     let hooks_arc_dyn: Arc<dyn lb_l7::security_hooks::DynSecurityHooks> =
         Arc::clone(hooks) as Arc<_>;
@@ -517,6 +563,7 @@ async fn rebuild_l7_proxies(
                 hooks_arc_dyn,
                 watchdog.cloned(),
                 max_keepalive_requests,
+                health,
             )
             .with_context(|| format!("H1 rebuild failed for {}", new_l.address))?;
             proxy.store(rebuilt);
@@ -535,6 +582,7 @@ async fn rebuild_l7_proxies(
                 Arc::clone(&hooks_arc_dyn),
                 watchdog.cloned(),
                 max_keepalive_requests,
+                health,
             )
             .with_context(|| format!("H1s (h1 leg) rebuild failed for {}", new_l.address))?;
             let rebuilt_h2 = build_h2_proxy(
@@ -550,6 +598,7 @@ async fn rebuild_l7_proxies(
                 true,
                 hooks_arc_dyn,
                 watchdog.cloned(),
+                health,
             )
             .with_context(|| format!("H1s (h2 leg) rebuild failed for {}", new_l.address))?;
             // Two independent atomic RCU swaps. A connection snapshotting between them still gets a
@@ -590,6 +639,9 @@ struct ListenerState {
     backends: Vec<Backend>,
     balancer: parking_lot::Mutex<RoundRobin>,
     addresses: Vec<SocketAddr>,
+    /// G5 — same registry the L7 proxies feed. The L4 (`PlainTcp`/`Tls`) accept path consults it
+    /// directly, since it has no `BackendInfoPicker` to wrap.
+    health: Arc<HealthRegistry>,
     metrics: Arc<MetricsRegistry>,
     active_connections: AtomicU64,
     io_runtime: Runtime,
@@ -990,6 +1042,33 @@ fn build_raw_quic_backend(cfg: &lb_config::RawQuicProxyConfig) -> anyhow::Result
     })
 }
 
+/// Resolve the G5 ejection policy from `[runtime.outlier_detection]`. An absent block means the
+/// DEFAULTS, matching `lb_config`'s effective-value reload diff — not "disabled".
+fn ejection_policy_from(rt: Option<&lb_config::RuntimeConfig>) -> EjectionPolicy {
+    let cfg = rt.and_then(|r| r.outlier_detection).unwrap_or_default();
+    EjectionPolicy {
+        enabled: cfg.enabled,
+        consecutive_failures: cfg.consecutive_failures,
+        base_ejection: Duration::from_secs(cfg.base_ejection_secs),
+        max_ejection: Duration::from_secs(cfg.max_ejection_secs),
+        min_healthy_percent: cfg.min_healthy_percent,
+    }
+}
+
+/// Wrap `picker` in the G5 health filter. THE only place the L7 datapath gains ejection: every L7
+/// pick goes through `BackendInfoPicker`, so this one wrapper covers all of them (R12).
+fn health_filtered(
+    picker: Arc<dyn lb_l7::upstream::BackendInfoPicker>,
+    health: &Arc<HealthRegistry>,
+    backend_count: usize,
+) -> Arc<dyn lb_l7::upstream::BackendInfoPicker> {
+    Arc::new(lb_l7::upstream::HealthFilteredPicker::new(
+        picker,
+        Arc::clone(health) as Arc<dyn AdmissionGate>,
+        backend_count,
+    ))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_h1_proxy(
     pool: TcpPool,
@@ -1003,9 +1082,12 @@ fn build_h1_proxy(
     hooks: Arc<dyn lb_l7::security_hooks::DynSecurityHooks>,
     watchdog: Option<Watchdog>,
     max_keepalive_requests: u32,
+    health: &Arc<HealthRegistry>,
 ) -> anyhow::Result<Arc<H1Proxy>> {
+    let backend_count = upstreams.len();
     let picker = RoundRobinUpstreams::new(upstreams)
         .ok_or_else(|| anyhow::anyhow!("H1 listener requires at least one backend"))?;
+    let picker = health_filtered(Arc::new(picker), health, backend_count);
     let alt_svc = alt_svc_cfg.map(|a| H1AltSvcConfig {
         h3_port: a.h3_port,
         max_age: a.max_age,
@@ -1016,9 +1098,12 @@ fn build_h1_proxy(
         total: Duration::from_millis(h.total_timeout_ms),
         head: Duration::from_millis(h.head_timeout_ms),
     });
-    let mut proxy = H1Proxy::with_multi_proto(pool, Arc::new(picker), alt_svc, timeouts, is_https);
+    let mut proxy = H1Proxy::with_multi_proto(pool, picker, alt_svc, timeouts, is_https);
     proxy = proxy.with_max_keepalive_requests(max_keepalive_requests);
     proxy = proxy.with_hooks(hooks);
+    // The SAME registry backs the picker's gate and the outcome sink, or ejection would be fed
+    // into a gate nobody reads.
+    proxy = proxy.with_health(Arc::clone(health));
     if let Some(wd) = watchdog {
         proxy = proxy.with_watchdog(wd);
     }
@@ -1132,9 +1217,12 @@ fn build_h2_proxy(
     is_https: bool,
     hooks: Arc<dyn lb_l7::security_hooks::DynSecurityHooks>,
     watchdog: Option<Watchdog>,
+    health: &Arc<HealthRegistry>,
 ) -> anyhow::Result<Arc<H2Proxy>> {
+    let backend_count = upstreams.len();
     let picker = RoundRobinUpstreams::new(upstreams)
         .ok_or_else(|| anyhow::anyhow!("H2 listener requires at least one backend"))?;
+    let picker = health_filtered(Arc::new(picker), health, backend_count);
     let alt_svc = alt_svc_cfg.map(|a| H1AltSvcConfig {
         h3_port: a.h3_port,
         max_age: a.max_age,
@@ -1146,15 +1234,10 @@ fn build_h2_proxy(
         head: Duration::from_millis(h.head_timeout_ms),
     });
     let security = merge_h2_security(h2_security_cfg);
-    let mut proxy = H2Proxy::with_multi_proto(
-        pool.clone(),
-        Arc::new(picker),
-        alt_svc,
-        timeouts,
-        is_https,
-        security,
-    );
+    let mut proxy =
+        H2Proxy::with_multi_proto(pool.clone(), picker, alt_svc, timeouts, is_https, security);
     proxy = proxy.with_hooks(hooks);
+    proxy = proxy.with_health(Arc::clone(health));
     if let Some(wd) = watchdog {
         proxy = proxy.with_watchdog(wd);
     }
@@ -1470,6 +1553,8 @@ async fn spawn_tcp(
     tls_reload_registry: Arc<PlMutex<Vec<TlsReloadEntry>>>,
     listener_reload_registry: Arc<PlMutex<Vec<ListenerReloadEntry>>>,
     watchdog: Option<Watchdog>,
+    ejection_policy: EjectionPolicy,
+    health_index: HealthIndex,
 ) -> anyhow::Result<tokio::task::JoinHandle<anyhow::Result<()>>> {
     let mut addresses = Vec::with_capacity(listener_cfg.backends.len());
     let mut backends = Vec::with_capacity(listener_cfg.backends.len());
@@ -1496,6 +1581,19 @@ async fn spawn_tcp(
         addresses.push(first);
         backends.push(Backend::new(format!("backend-{i}"), b.weight));
     }
+    // G5: ONE registry per listener, keyed by the RESOLVED addresses, shared by this listener's
+    // picker gate, its proxies' outcome sink, and (for PlainTcp/Tls) the L4 accept filter.
+    let health = Arc::new(HealthRegistry::new(ejection_policy, &addresses));
+    tracing::info!(
+        listener = %listener_cfg.address,
+        backends = addresses.len(),
+        enabled = ejection_policy.enabled,
+        "passive health registry seeded (all backends Unknown → all admitted)"
+    );
+    health_index.lock().push(HealthIndexEntry {
+        listener: listener_cfg.address.clone(),
+        health: Arc::clone(&health),
+    });
     let mode = build_listener_mode(
         listener_cfg,
         pool,
@@ -1506,6 +1604,7 @@ async fn spawn_tcp(
         &shutdown_token,
         watchdog.as_ref(),
         max_keepalive_requests,
+        &health,
     )?;
     match &mode {
         ListenerMode::H1 { proxy } => {
@@ -1514,6 +1613,7 @@ async fn spawn_tcp(
                 proxies: ReloadableProxies::H1 {
                     proxy: Arc::clone(proxy),
                 },
+                health: Arc::clone(&health),
             });
         }
         ListenerMode::H1s {
@@ -1525,6 +1625,7 @@ async fn spawn_tcp(
                     h1_proxy: Arc::clone(h1_proxy),
                     h2_proxy: Arc::clone(h2_proxy),
                 },
+                health: Arc::clone(&health),
             });
         }
         ListenerMode::PlainTcp | ListenerMode::Tls { .. } => {}
@@ -1533,6 +1634,7 @@ async fn spawn_tcp(
         backends,
         balancer: parking_lot::Mutex::new(RoundRobin::new()),
         addresses,
+        health,
         metrics: Arc::clone(metrics),
         active_connections: AtomicU64::new(0),
         io_runtime,
@@ -1565,6 +1667,7 @@ fn build_listener_mode(
     shutdown_token: &CancellationToken,
     watchdog: Option<&Watchdog>,
     max_keepalive_requests: u32,
+    health: &Arc<HealthRegistry>,
 ) -> anyhow::Result<ListenerMode> {
     let hooks_arc_dyn: Arc<dyn lb_l7::security_hooks::DynSecurityHooks> =
         Arc::clone(hooks) as Arc<_>;
@@ -1625,6 +1728,7 @@ fn build_listener_mode(
                 Arc::clone(&hooks_arc_dyn),
                 watchdog.cloned(),
                 max_keepalive_requests,
+                health,
             )
             .with_context(|| format!("H1 setup failed for {}", listener_cfg.address))?;
             tracing::info!(
@@ -1685,6 +1789,7 @@ fn build_listener_mode(
                 Arc::clone(&hooks_arc_dyn),
                 watchdog.cloned(),
                 max_keepalive_requests,
+                health,
             )
             .with_context(|| format!("H1s setup failed for {}", listener_cfg.address))?;
             let h2_proxy = build_h2_proxy(
@@ -1700,6 +1805,7 @@ fn build_listener_mode(
                 true,
                 Arc::clone(&hooks_arc_dyn),
                 watchdog.cloned(),
+                health,
             )
             .with_context(|| format!("H2s setup failed for {}", listener_cfg.address))?;
             tracing::info!(
@@ -1834,6 +1940,140 @@ fn install_hotpath_metrics(
     });
 }
 
+/// G5 observability. `lb-l7` has no metrics-registry dep (see the `keepalive_cap_terminations`
+/// note in `h1_proxy`), so the registry exposes plain counters and the BINARY samples them here.
+///
+/// `backend_ejections_suppressed_total` is the one an operator must page on: it means a backend is
+/// failing AND only the minimum-healthy floor is keeping the listener serving.
+fn install_health_metrics(
+    metrics: &Arc<MetricsRegistry>,
+    health_index: &HealthIndex,
+    tracker: &TaskTracker,
+    cancel: &CancellationToken,
+) {
+    // Registered eagerly so `/metrics` shows a 0 rather than a missing series before the first
+    // ejection — an absent series reads as "not wired", which is exactly the pre-S46 state.
+    for (name, help) in [
+        (
+            "backend_ejections_total",
+            "G5: backends ejected from rotation after consecutive upstream failures",
+        ),
+        (
+            "backend_readmissions_total",
+            "G5: backends re-admitted after a successful half-open probe",
+        ),
+        (
+            "backend_ejections_suppressed_total",
+            "G5: ejections REFUSED by the minimum-healthy floor (failing backend left in rotation)",
+        ),
+    ] {
+        if let Err(e) = metrics.counter_vec(name, help, &["listener"]) {
+            tracing::warn!(metric = name, error = %e, "counter_vec register failed");
+        }
+    }
+    if let Err(e) = metrics.gauge_vec(
+        "backends_ejected",
+        "G5: backends currently NOT admitted on this listener",
+        &["listener"],
+    ) {
+        tracing::warn!(metric = "backends_ejected", error = %e, "gauge_vec register failed");
+    }
+    if let Err(e) = metrics.gauge_vec(
+        "backend_health_status",
+        "G5: per-backend passive health (0=unknown, 1=healthy, 2=unhealthy)",
+        &["listener", "backend"],
+    ) {
+        tracing::warn!(metric = "backend_health_status", error = %e, "gauge_vec register failed");
+    }
+
+    let metrics_clone = Arc::clone(metrics);
+    let index = Arc::clone(health_index);
+    let cancel = cancel.clone();
+    tracker.spawn(async move {
+        let (Ok(ejected_gauge), Ok(status_gauge)) = (
+            metrics_clone.gauge_vec(
+                "backends_ejected",
+                "G5: backends currently NOT admitted on this listener",
+                &["listener"],
+            ),
+            metrics_clone.gauge_vec(
+                "backend_health_status",
+                "G5: per-backend passive health (0=unknown, 1=healthy, 2=unhealthy)",
+                &["listener", "backend"],
+            ),
+        ) else {
+            return;
+        };
+        // Counters are monotonic in the registry, so the pump SETS the delta rather than
+        // re-incrementing from zero — `last_*` is the previously published value per listener.
+        let mut last: std::collections::HashMap<String, (u64, u64, u64)> =
+            std::collections::HashMap::new();
+        let mut ticker = tokio::time::interval(Duration::from_secs(5));
+        loop {
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => {
+                    tracing::debug!("health metric sampler shutting down");
+                    return;
+                }
+                _ = ticker.tick() => {}
+            }
+            let entries: Vec<HealthIndexEntry> = index.lock().clone();
+            for entry in &entries {
+                #[allow(clippy::cast_possible_wrap)]
+                ejected_gauge
+                    .with_label_values(&[entry.listener.as_str()])
+                    .set(entry.health.ejected_count() as i64);
+                for backend in entry.health.snapshot() {
+                    let value = match backend.status {
+                        HealthStatus::Unknown => 0,
+                        HealthStatus::Healthy => 1,
+                        HealthStatus::Unhealthy => 2,
+                    };
+                    let backend_label = backend.addr.to_string();
+                    status_gauge
+                        .with_label_values(&[entry.listener.as_str(), backend_label.as_str()])
+                        .set(value);
+                }
+                let now = (
+                    entry.health.ejections_total(),
+                    entry.health.readmissions_total(),
+                    entry.health.ejections_suppressed_total(),
+                );
+                let prev = last.get(&entry.listener).copied().unwrap_or((0, 0, 0));
+                for (name, help, cur, was) in [
+                    (
+                        "backend_ejections_total",
+                        "G5: backends ejected from rotation after consecutive upstream failures",
+                        now.0,
+                        prev.0,
+                    ),
+                    (
+                        "backend_readmissions_total",
+                        "G5: backends re-admitted after a successful half-open probe",
+                        now.1,
+                        prev.1,
+                    ),
+                    (
+                        "backend_ejections_suppressed_total",
+                        "G5: ejections REFUSED by the minimum-healthy floor (failing backend left in rotation)",
+                        now.2,
+                        prev.2,
+                    ),
+                ] {
+                    if cur > was {
+                        if let Ok(c) = metrics_clone.counter_vec(name, help, &["listener"]) {
+                            c.with_label_values(&[entry.listener.as_str()])
+                                .inc_by(cur - was);
+                        }
+                    }
+                }
+                last.insert(entry.listener.clone(), now);
+            }
+        }
+    });
+}
+
 fn main() -> anyhow::Result<()> {
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -1932,23 +2172,20 @@ async fn async_main() -> anyhow::Result<()> {
     let pool = TcpPool::new(PoolConfig::default(), backend_opts(), io_runtime);
     tracing::info!("TCP backend pool ready (defaults from PROMPT.md §21)");
 
-    let mut health_seed: Vec<(String, HealthChecker)> = Vec::new();
-    for listener in &config.listeners {
-        for backend in &listener.backends {
-            health_seed.push((backend.address.clone(), HealthChecker::new(3, 2)));
-        }
-    }
-    let initial_unknown = health_seed
-        .iter()
-        .filter(|(_, c)| c.status() == HealthStatus::Unknown)
-        .count();
+    // G5: the passive-health policy is process-wide; the REGISTRIES are per-listener and are built
+    // in `spawn_tcp`, after DNS resolution, because the datapath only ever holds a resolved
+    // `SocketAddr` — the pre-S46 seed keyed checkers by the raw config string and so could never
+    // have matched a live request.
+    let ejection_policy = ejection_policy_from(config.runtime.as_ref());
+    let health_index: HealthIndex = Arc::new(PlMutex::new(Vec::new()));
     tracing::info!(
-        backends = health_seed.len(),
-        unknown = initial_unknown,
-        "passive health checkers seeded — active probe loop is Wave-2 (REL-2-05)"
+        enabled = ejection_policy.enabled,
+        consecutive_failures = ejection_policy.consecutive_failures,
+        base_ejection_secs = ejection_policy.base_ejection.as_secs(),
+        max_ejection_secs = ejection_policy.max_ejection.as_secs(),
+        min_healthy_percent = u32::from(ejection_policy.min_healthy_percent),
+        "passive health ejection policy resolved — ACTIVE probing is still deferred (REL-2-05)"
     );
-    // Hold the seed in scope so its existence is observable to the borrow checker.
-    let _health_seed = health_seed;
 
     let resolver = DnsResolver::new(ResolverConfig::default());
     tracing::info!("DNS resolver ready (positive cap 300s, negative TTL 5s)");
@@ -1965,6 +2202,15 @@ async fn async_main() -> anyhow::Result<()> {
         &metrics,
         &pool,
         &resolver,
+        shutdown.tracker(),
+        shutdown.token(),
+    );
+
+    // The sampler re-reads the index every tick, so installing it before the listeners spawn is
+    // fine — it simply reports nothing until the first registry lands.
+    install_health_metrics(
+        &metrics,
+        &health_index,
         shutdown.tracker(),
         shutdown.token(),
     );
@@ -2175,6 +2421,8 @@ async fn async_main() -> anyhow::Result<()> {
             Arc::clone(&tls_reload_registry),
             Arc::clone(&listener_reload_registry),
             Some(watchdog.clone()),
+            ejection_policy,
+            Arc::clone(&health_index),
         )
         .await?;
         listener_handles.push(handle);
@@ -2260,6 +2508,7 @@ async fn async_main() -> anyhow::Result<()> {
                     config_manager.as_mut(),
                     &mut applied_config,
                     &listener_reload_registry,
+                    &health_index,
                     &pool,
                     &resolver,
                     &hooks,
@@ -2749,19 +2998,40 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
             }
         };
 
-        let backend_idx = {
-            let mut balancer = state.balancer.lock();
-            match balancer.pick(&state.backends) {
-                Ok(idx) => idx,
-                Err(e) => {
-                    tracing::error!("balancer pick failed: {e}");
-                    continue;
+        // G5 (L4 leg). Only `PlainTcp`/`Tls` consume `backend_addr`; the H1/H1s arms below route
+        // through their own health-filtered `BackendInfoPicker`, and the retry here would perturb
+        // this balancer's advance rate for them, so it is scoped to the two modes that use it —
+        // keeping R3 exact for the L7 modes.
+        let health_filter = matches!(
+            state.mode,
+            ListenerMode::PlainTcp | ListenerMode::Tls { .. }
+        );
+        // Exhausting the rotation FAILS OPEN on the last pick — serving degraded beats refusing
+        // every connection.
+        let mut picked = None;
+        for _ in 0..state.backends.len().max(1) {
+            let idx = {
+                let mut balancer = state.balancer.lock();
+                match balancer.pick(&state.backends) {
+                    Ok(idx) => idx,
+                    Err(e) => {
+                        tracing::error!("balancer pick failed: {e}");
+                        break;
+                    }
                 }
+            };
+            let Some(addr) = state.addresses.get(idx).copied() else {
+                tracing::error!(idx, "backend index out of range");
+                break;
+            };
+            picked = Some(addr);
+            // The first iteration accepts unconditionally when the filter is off or the backend is
+            // admitted, so a healthy listener advances the balancer exactly once per accept.
+            if !health_filter || state.health.admits(addr) {
+                break;
             }
-        };
-
-        let Some(backend_addr) = state.addresses.get(backend_idx).copied() else {
-            tracing::error!(idx = backend_idx, "backend index out of range");
+        }
+        let Some(backend_addr) = picked else {
             continue;
         };
 
@@ -2790,6 +3060,7 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                             backend_addr,
                             &st.metrics,
                             st.connect_timeout,
+                            Some(st.health.as_ref()),
                         )
                         .await
                     }
@@ -2818,6 +3089,7 @@ async fn run_listener(bind_addr: String, state: Arc<ListenerState>) -> anyhow::R
                                     backend_addr,
                                     &st.metrics,
                                     st.connect_timeout,
+                                    Some(st.health.as_ref()),
                                 )
                                 .await
                             }
@@ -2979,6 +3251,7 @@ async fn proxy_connection<C>(
     backend_addr: SocketAddr,
     metrics: &MetricsRegistry,
     connect_timeout: Duration,
+    health: Option<&HealthRegistry>,
 ) -> anyhow::Result<()>
 where
     C: AsyncRead + AsyncWrite + Unpin,
@@ -2986,10 +3259,22 @@ where
     if let Ok(c) = metrics.counter("pool_acquires_total", "TcpPool acquire attempts") {
         c.inc();
     }
+    // G5 (L4): the DIAL is the only unambiguous per-backend verdict on this path. A later
+    // `copy_bidirectional` error can just as easily be the CLIENT hanging up, so it feeds nothing —
+    // blaming the backend for a client abort would eject on client behaviour.
+    let record = |outcome: lb_health::AttemptOutcome| {
+        if let Some(h) = health {
+            h.record(backend_addr, outcome);
+        }
+    };
     let dial = tokio::time::timeout(connect_timeout, TcpStream::connect(backend_addr)).await;
     let mut backend = match dial {
-        Ok(Ok(s)) => s,
+        Ok(Ok(s)) => {
+            record(lb_health::AttemptOutcome::Success);
+            s
+        }
         Ok(Err(e)) => {
+            record(lb_health::UpstreamErrorClass::Transport.outcome());
             if let Ok(c) = metrics.counter("pool_probe_failures_total", "TcpPool probe failures") {
                 c.inc();
             }
@@ -2997,6 +3282,7 @@ where
                 .with_context(|| format!("cannot connect to backend {backend_addr}"));
         }
         Err(_elapsed) => {
+            record(lb_health::UpstreamErrorClass::Timeout.outcome());
             if let Ok(c) = metrics.counter(
                 "backend_connect_timeout_total",
                 "Backend TcpStream::connect timeouts",
@@ -4978,7 +5264,7 @@ mod tests {
         let metrics = MetricsRegistry::new();
         let (a, _b) = tokio::io::duplex(1024);
         let start = Instant::now();
-        let err = proxy_connection(a, dead, &metrics, Duration::from_millis(120))
+        let err = proxy_connection(a, dead, &metrics, Duration::from_millis(120), None)
             .await
             .unwrap_err();
         let elapsed = start.elapsed();
@@ -5018,6 +5304,7 @@ mod tests {
             Arc::new(PlMutex::new(Vec::new()));
         let tracker = TaskTracker::new();
         let cancel = CancellationToken::new();
+        let health = Arc::new(HealthRegistry::new(EjectionPolicy::default(), &[]));
         let outcome = build_listener_mode(
             &listener_cfg,
             &pool,
@@ -5028,6 +5315,7 @@ mod tests {
             &cancel,
             None,
             100,
+            &health,
         );
         assert!(outcome.is_err(), "typo protocol should have errored");
         let msg = match outcome {
