@@ -43,7 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10    # obs max 23s; fmt --check, no build
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-setup
         with:
           components: rustfmt
@@ -55,7 +55,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30    # obs max 117s; cold --all-features cargo check is the unknown
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-setup
       # --all-features is REQUIRED: the R8 memory tests read lb-l7's
       # `#[cfg(feature = "test-gauges")]` gauges, which are off by default.
@@ -66,7 +66,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30    # obs max 120s; same build shape as `check`
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-setup
         with:
           components: clippy
@@ -77,7 +77,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10    # obs max 10s; pure grep, no toolchain
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Verify panic-freedom deny lints are present in every library crate
         run: |
           MISSING=""
@@ -100,7 +100,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15    # obs max 9s; fetch-depth:0 + tier-2 SHA walk grows with history
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # Tier-2 walks historical SHAs — needs full history.
           fetch-depth: 0
@@ -112,7 +112,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90    # obs max 1251s; MUST exceed the 45+25 step caps below
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-setup
       # The --all-features test build links many large integration binaries and
       # hits ENOSPC on a hosted runner with a warm cache. Frees ~15-20 GB; no
@@ -151,7 +151,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30    # obs max 115s; separate toolchain => colder cache
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-setup
         with:
           toolchain: ${{ env.RUST_MSRV }}
@@ -162,7 +162,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45    # obs max 293s; cargo-fuzz is built from source
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-setup
         with:
           toolchain: nightly
@@ -191,7 +191,7 @@ jobs:
     timeout-minutes: 45    # obs max 239s; MUST exceed the 30 step cap below
     needs: [check, clippy, test, fmt, panic-freedom, doc-lint]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-setup
       - run: cargo build --workspace --release
         timeout-minutes: 30
@@ -202,7 +202,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30    # obs max 199s; cargo-audit is built from source
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       # +stable: cargo-audit needs a newer rustc than rust-toolchain.toml's pin.
       - uses: ./.github/actions/rust-setup
       - name: Install cargo-audit
@@ -218,7 +218,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15    # obs max 26s; prebuilt musl binary, no compile
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install cargo-deny (prebuilt binary)
         run: |
           VER=0.19.6
@@ -236,7 +236,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 50    # obs max 846s. CF-S44 job. Sits ABOVE nextest global-timeout=40m
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-setup
         with:
           toolchain: ${{ env.RUST_MSRV }}
@@ -307,7 +307,7 @@ jobs:
       H2SPEC_VER: "v2.6.0"
       H3SPEC_VER: "v0.1.13"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-setup
         with:
           toolchain: ${{ env.RUST_MSRV }}
@@ -395,7 +395,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30    # obs max 209s; slowloris cases are wall-clock bound
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-setup
         with:
           toolchain: ${{ env.RUST_MSRV }}
@@ -426,7 +426,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45    # obs max 362s; docker build has no rust-cache + Trivy DB fetch
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Build image
         run: |
           docker build -f docker/Dockerfile \
@@ -453,7 +453,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20    # obs max 47s; one test binary + a privileged BPF_PROG_LOAD
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/rust-setup
         with:
           toolchain: ${{ env.RUST_MSRV }}
