@@ -114,4 +114,90 @@ as "a hypothesis, not a finding" and is treated that way here.
 hard timeout. R1 ×3 + clippy + fmt follow. Results recorded in §Gates when the runs COMPLETE
 (R15: no verdict from an incomplete job).
 
-*(Sections for Phases 1–4 are appended as each completes.)*
+---
+
+## Phase 1 — P1: CF-S44
+
+### 1.0 A framing correction that applies to every line number below
+
+Both CF-S44 jobs checked out `0a67d30` = merge of **`6c81222f`** into `eb00081d` — **pre-S45A**. The
+S45A de-slop moved 209/212 lines in `grpc_h3_e2e.rs`, so **the CI panic's `:1242` is NOT today's
+`:1242`** (locally that is `grpc_h3_health_check_forwarded_not_synthesized`). Every claim here was
+checked against BOTH `git show 6c81222f:<file>` and the working tree; the executable code of every
+test involved is identical between them — only comments moved.
+
+The binary contains **16 tests at `6c81222f`, 17 now** (the S46 probe). That count is load-bearing:
+`running 1 test` + `15 filtered out` = 16 is what demonstrates one test process per test.
+
+### 1.1 REFUTED by evidence (each with its citation)
+
+| # | Claim refuted | Evidence |
+|---|---|---|
+| R-1 | **A monotonic response-size threshold at 256 KiB** | In the SAME job `91548350113`: `FAIL [0.232s] … grpc_h3_trailer_survives_all_response_sizes` (log:1939) and `PASS [0.722s] … grpc_h3_trailer_survives_any_frame_granularity` (log:1964). The latter drives 512 KiB **and** 1 MiB under **two** backend modes = four large bodies, all clean, one second later. Non-vacuous: a 502 emits `RespEvent::Head{status, headers: Vec::new()}` (`h3_bridge.rs:1336`) carrying **no** `grpc-status`, and granularity asserts `field("grpc-status") == Some("0")`, so a 502 there **would** have failed it. |
+| R-2 | **Timeout / gate-saturation** | The failing test's TOTAL wall time was **0.232 s**, covering cert-gen, backend spawn, listener spawn, the `sz=1` iteration AND the failing `sz=262144` iteration. Both candidate timeouts far exceed it: `DEFAULT_H2_SEND_TIMEOUT = 30 s` (`http2_pool.rs:39`, used at `:67`; the test uses `Http2PoolConfig::default()` at `grpc_h3_e2e.rs:219`, **no override anywhere in the file**), and — the constant §4b's saturation story actually turns on — `DEFAULT_CONNECT_TIMEOUT_MS = 5_000` (`lb-io/src/pool.rs:29`). The H3→H2 leg uses the **fixed** `send_request` (`h3_bridge.rs:1332`), NOT the shorter `idle_bounded_send`, which would have collapsed onto the same `Timeout` variant. No QUIC-side deadline is shorter (client idle 30 s, driver budget 45 s). |
+| R-3 | **Hang candidate (a): blocked on the suite serial guard** | In hang job `91517507600`, **15 of the binary's 16 tests COMPLETED and PASSED** — every sibling returned and dropped `_suite_serial`, so nothing held it. This argument does not depend on nextest's execution model. Corroboration: the sibling **uninstrumented** jobs `91517507558` / `91548350046` ran `cargo test --workspace --all-features` — one process, guard **genuinely** contended — and passed both tests. Further corroboration: nextest is process-per-test ([nexte.st/docs/design/how-it-works](https://nexte.st/docs/design/how-it-works/)), so the process-global `static SUITE_SERIAL` (`grpc_h3_e2e.rs:44`) is uncontended under nextest anyway. |
+| R-4 | **"We forgot `sender.ready()`"** | For hyper 1.x **http2**, `SendRequest::poll_ready` is *just* an `is_closed()` check (`hyper/src/client/conn/http2.rs:97-103`). Awaiting `ready()` adds nothing beyond what `PeerEntry::is_alive()` already does. This is NOT the defect and should not be chased. |
+| R-5 | **The request-body path** | `h2_request_body_from_rx` 502s only via `builder.body(body).map_err(|_| 502u16)` (`h3_bridge.rs:1290`) — an invalid method/URI/header, size-independent. |
+
+### 1.2 NOT refuted — stated honestly
+
+**Hang candidate (b) is IMPLAUSIBLE, not refuted.** An earlier draft of this report claimed the
+driver loop's "only awaits are bounded". **That claim was wrong and is withdrawn.**
+`drive_grpc_h3_core` (`grpc_h3_e2e.rs:351-501`) contains three awaits: the bounded read at `:478`
+(`tokio::time::timeout(to.min(25 ms), sock.recv_from(..))`), an **unbounded** `sock.send_to(..).await`
+at `:380` sitting inside `while let Ok((n, info)) = conn.send(..)` (`:379`) — an inner loop that
+**never re-checks `deadline`** — and an unbounded `UdpSocket::bind(..).await` at `:359`, pre-loop and
+outside the budget entirely. Setup outside the budget is likewise unbounded (`QuicListener::spawn`
+awaits `UdpSocket::bind`; `spawn_h2_grpc_backend` awaits `TcpListener::bind`). A loopback UDP
+`send_to` wedging for 5 h would be extraordinary, and `conn.send` terminates on `Err(Done)` — hence
+*implausible*. But the honest statement is that the deadline is **not** enforced on every await path,
+which is exactly what candidate (b) asserts.
+
+### 1.3 The GATEWAY-vs-HARNESS ruling
+
+**GATEWAY-GENERATED.** The client received a well-formed H3 response carrying `:status 502`. That
+status originates only in the gateway's own `inline(&resp_tx, 502, b"bad gateway")` paths; the test
+client cannot synthesize one. This does **not** by itself make it a gateway *defect* — the gateway
+may be faithfully reporting a real upstream failure — but the 502 is emitted by gateway code.
+
+### 1.4 What the CI evidence CANNOT settle
+
+**The failure block carries NO gateway log output.** `grep -c RUST_LOG` over the whole job = **0**;
+the coverage step's env block lists only `CARGO_TERM_COLOR`, `RUSTFLAGS`, `RUST_MSRV`, `CARGO_HOME`,
+`CARGO_INCREMENTAL`, `CACHE_ON_FAILURE`; and `grpc_h3_e2e.rs` installs no `tracing_subscriber`. So
+`h3_bridge.rs:1335` `tracing::warn!(error = %e, %addr, "H3→H2 stream send_request failed")` had no
+subscriber and emitted nothing. The discriminating `Http2PoolError` variant
+(`Dial`/`Handshake`/`Send`/`Timeout`) exists **only** in that suppressed line.
+**Naming the mechanism therefore requires a local repro with `RUST_LOG` — it cannot be read out of CI.**
+
+### 1.5 The residual hypothesis (HYPOTHESIS, not finding — R2)
+
+With `Timeout` excluded by arithmetic, a fast 502 must be `Dial`, `Handshake`, or `Send`. The
+structural observation that fits the evidence:
+
+- `PeerEntry::is_alive()` (`http2_pool.rs:78`) is a **TOCTOU** check on a *reused* sender —
+  `!is_closed() && !driver.is_finished()` can be true at check time and false at send time.
+- On failure `send_request` evicts and returns `Err`; `h3_bridge.rs:1336` turns that into a **502
+  with no retry on a fresh connection**.
+- Position fits: in the failing test, one gateway serves all four sizes, so `sz=262144` is the
+  **second** request — the first to reuse the pooled H2 leg. In the PASSING granularity test
+  `start_h3_listener_h2` is called **inside** the loop (`grpc_h3_e2e.rs:1179`), so its 512 KiB is a
+  **first** request on a fresh gateway.
+
+Counter-evidence against a *pure* position story: `grpc_h3_burst_50_unary_cycles` passed (2.170 s),
+driving 50 requests through one gateway — but note these are 50 **fresh QUIC/H3 connections** reusing
+only the **H2 upstream leg**, with ~8-byte payloads. It refutes pure-position for tiny bodies and
+leaves a **size × position interaction** as the live hypothesis. That is precisely what the S46 probe
+(§1.6) is built to separate.
+
+### 1.6 Reproduction attempts (t3a.large — FUNCTIONAL verdicts only)
+
+**Attempt 1 — quiet, serialized, uninstrumented: NEGATIVE (no repro).**
+`s46_cfs44_size_vs_position_probe`, 3 reps, ~10 s each: **48/48 cells clean**, every arm
+(`fresh-256k`, `reuse-256k`, `orig-order`, `rev-order`), every size 1 B → 1 MiB, every position.
+Zero 502s, zero gateway warns. Consistent with CI, where the uninstrumented `Test` job passed both
+times and only the instrumented Coverage job failed.
+
+**Attempt 2 — llvm-cov instrumented, whole binary: IN PROGRESS.**
+
+*(Phases 2–4 appended as each completes.)*
