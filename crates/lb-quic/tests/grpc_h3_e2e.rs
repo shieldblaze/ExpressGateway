@@ -1682,3 +1682,84 @@ async fn s46_cfs44_size_vs_position_probe() {
     let bad: Vec<&ProbeCell> = cells.iter().filter(|c| !c.ok()).collect();
     assert!(bad.is_empty(), "CF-S44 probe cells failed: {bad:#?}");
 }
+
+/// CF-S44 VOLUME PROBE (S46) — hammer the MINIMAL failing configuration.
+///
+/// The CI census (`audit/ship/s46-cfs44-base-rate.md`, 66 Coverage runs / 142 logs / 0 missing)
+/// establishes that the simplest failing shape is a SINGLE large request against a FRESH gateway:
+/// `grpc_h3_large_message_roundtrips_byte_identical` issues exactly one 512 KiB request and has
+/// returned 502 in three separate jobs. No loop, no pooled connection to reuse. It also
+/// establishes that `sz=1` has NEVER failed in 13 failing jobs, so a large body is an enabling
+/// condition, and that the failure is NOT instrumentation-only (5 uninstrumented `Test` jobs).
+///
+/// The per-request failure rate implied by the census is roughly 1%, so a handful of iterations
+/// cannot settle anything — the default 12 reps keep the normal gate fast and are NOT a proof of
+/// absence. Raise `S46_REPS` (e.g. 400) to hunt, ideally alongside CPU load.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn s46_cfs44_large_body_volume_probe() {
+    serial_guard!();
+    const SZ: usize = 512 * 1024;
+    let reps: usize = std::env::var("S46_REPS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(12);
+
+    let mut failures: Vec<String> = Vec::new();
+    for i in 0..reps {
+        // Fresh gateway + backend every iteration — mirrors the minimal failing case exactly.
+        let certs = generate_loopback_certs();
+        let (backend, _st, _bh) = spawn_h2_grpc_backend(GrpcBackendMode::Echo).await;
+        let (_l, gw, _sd) = start_h3_listener_h2(&certs, backend).await;
+
+        let payload = Bytes::from(vec![0x5Au8; SZ]);
+        let body = frame_messages(std::slice::from_ref(&payload));
+        let out = drive_grpc_h3(
+            gw,
+            &certs.ca,
+            GrpcDriveCfg {
+                path: "/echo.Echo/S46Volume",
+                req_chunks: vec![body],
+                extra_headers: vec![],
+                content_type: None,
+            },
+            Duration::from_secs(45),
+        )
+        .await;
+
+        let status_ok = out.status == Some(200);
+        let trailer_ok = out.field("grpc-status") == Some("0");
+        let len_ok = out.messages().first().map(<[u8]>::len) == Some(SZ);
+        if !(status_ok && trailer_ok && len_ok && out.fin) {
+            // Both known CI signatures are distinguished here: a 502 (status wrong) and an
+            // F-S29-1-style trailer DROP (status 200 but grpc-status absent).
+            let kind = if out.status == Some(502) {
+                "502"
+            } else if status_ok && !trailer_ok {
+                "TRAILER-DROP"
+            } else {
+                "OTHER"
+            };
+            let detail = format!(
+                "iter={i} kind={kind} status={:?} grpc-status={:?} body_len={:?} fin={} reset={}",
+                out.status,
+                out.field("grpc-status"),
+                out.messages().first().map(<[u8]>::len),
+                out.fin,
+                out.reset
+            );
+            println!("S46-VOLUME **BAD** {detail}");
+            failures.push(detail);
+        }
+    }
+    println!(
+        "S46-VOLUME reps={reps} failures={} rate={:.2}%",
+        failures.len(),
+        100.0 * failures.len() as f64 / reps as f64
+    );
+    assert!(
+        failures.is_empty(),
+        "CF-S44 volume probe: {}/{reps} large-body requests failed:\n{}",
+        failures.len(),
+        failures.join("\n")
+    );
+}
