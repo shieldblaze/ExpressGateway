@@ -598,4 +598,84 @@ mutation results stand because the *apply* direction uses `write_text()` (mtime 
 a `Compiling` line in four of five logs, and the fifth was **re-run from scratch** rather than
 trusted from scrollback.
 
-*(Phase 4 + gates appended as they complete.)*
+---
+
+## Phase 4 — P4: the arming pack
+
+`audit/release/owner-actions.md` refreshed (216 → 465 lines). Contents: the corrected
+branch-protection ruleset with the current check names read from `ci.yml` **as it now stands**, the
+exact `gh api` command, the verified `SOAK_*` secret-vs-variable split (including
+`SOAK_INSTANCE_TYPE`, omitted from the earlier list), corrected line citations, a warning against
+adding `paths-ignore:` after arming (a required check that never runs blocks every PR forever), and
+a command the owner can run to **watch the hang gate fire** rather than trust it.
+
+**The editorial point, stated before the arming step rather than in a footnote:** requiring
+`Coverage` buys **coverage-threshold signal only, not pass/fail signal**, because `--ignore-run-fail`
+makes it report `success` on runs with failing tests — evidenced by three runs (`31504772378`
+success/1565 passed; `30749813681` **success**/2 failed; `31495640064` **success**/1 failed). `Test`
+is the check that fails on a failing test. Requiring `Coverage` is **safe as of S46** — it was not
+before, because a hang neither failed nor finished.
+
+**The OWNER executes all of it** (repo-admin rights required); the agent cannot.
+
+---
+
+## Gates
+
+| Gate | Result |
+|---|---|
+| `cargo test --workspace --all-features --no-fail-fast` **×3** | **1564/1565 each run.** Sole failure `fcap1_h2_over_cap_upload_yields_413` — proven pre-existing, §G.1 |
+| `cargo fmt --all -- --check` | **PASS** |
+| `cargo clippy --workspace --all-targets --all-features -D warnings` | **PASS** (rc=0) |
+| P2 hang negative control (armed) | **PASS** — `TIMEOUT [20.004s]` + `[20.013s]`, `0 passed, 2 timed out`, rc=100 |
+| P2 hang probe (inert, no env var) | **PASS** — `2 passed` in **0.010 s**; cannot slow the real gate |
+| P3 controls ×4 + R3 proof | **PASS** — all demonstrated against broken builds (§3.3) |
+| P3 crates | **208/208**, clippy `-D warnings` exit 0 |
+| CF-S44 negative control | **~3.6% → 0.00%** |
+| `lb-quic` full suite (R12 siblings) | **230/230**, every R8 bound green |
+
+`clippy --all-targets` is load-bearing here: it catches the `deny(indexing_slicing)` lints in
+`lb-quic`/`lb-l7` that a `--lib`-only run skips.
+
+**Build note.** The full `--all-features` workspace build does **not** fit this box at default debug
+settings (it passed 25 GB with ~half of `lb-integration-tests` done, on a 67 GB disk with ~38 GB of
+non-target usage). With `RUSTFLAGS="-C debuginfo=0"` and `CARGO_INCREMENTAL=0` it completes at
+**22 GB** with 6 GB spare. No gate was weakened and no test skipped — only backtrace richness is
+reduced. **No larger box was provisioned or required.**
+
+### G.1 The one failure — `fcap1_h2_over_cap_upload_yields_413`
+
+```
+tests/h2h1_md_streaming_verify.rs:1888
+assertion `left == right` failed: F-CAP-1: H2→H1 over-cap upload to a draining backend
+should yield 413, got Some(502)
+  left: Some(502)   right: Some(413)
+```
+
+**Classification: the known pre-existing CF-FCAP1-FLAKE. NOT a regression.** Four independent
+grounds, each checkable:
+
+1. The identical assertion appears in **31 CI job logs spanning 2026-06-11 → 2026-08-12**, all
+   predating this branch.
+2. `wrote N bytes` varies from **327,680 to 65,863,680** across those occurrences — the mechanism
+   showing itself: a race on how much is written before the cap trips, matching the repo's own
+   `fcap1-overcap-arm-backpressure-masked` note.
+3. `tests/h2h1_md_streaming_verify.rs` is **unchanged** on this branch
+   (`git log a63776e9..HEAD -- <file>` → empty).
+4. The test never calls `with_health()`, so P3's `health` field is `None` and `record_health` is a
+   **no-op** — P3's behavioural addition is inert here; and the test never references
+   `lb_quic`/`conn_actor`, so the CF-S44 fix (H3 front only) cannot reach the H2→H1 path.
+
+**NEW and useful: it is 100% reproducible on 2 vCPU, even in isolation** — 3/3 armed, 3/3 isolated
+(`written` = 6,094,848 / 51,445,760 / 11,010,048). CI has only ever seen it intermittently. **This
+converts a two-month-old "known flake" into a deterministic reproducer**, which is the hard part of
+fixing it. Fixing it is out of scope; the reproducer is the decisive next probe and is recorded here
+for whoever takes it.
+
+⚠️ **Perf-shaped observation, per the box policy:** "deterministic on 2 cores vs intermittent on CI"
+is a property of **this hardware**, reported as a FUNCTIONAL characteristic only. It is
+**NOT-COMPARABLE** to the S39 baseline (c6a.2xlarge) and is not a regression claim.
+
+**Honest framing of the gate:** R1's bar is ×3 **all-pass**. This is ×3 **all-pass except one proven
+pre-existing failure**. That is not reclassified as green; the no-regression evidence above is what
+carries the promote decision.
