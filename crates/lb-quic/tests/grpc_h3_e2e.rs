@@ -1556,6 +1556,26 @@ async fn grpc_h3_burst_50_unary_cycles() {
     }
 }
 
+/// Install a `tracing` subscriber once per test process, honouring `RUST_LOG`.
+///
+/// Without this the gateway's `tracing::warn!(error = %e, …, "H3→H2 stream send_request failed")`
+/// (`lb-quic/src/h3_bridge.rs`) emits NOTHING, because `tracing` drops events when no subscriber is
+/// installed — setting `RUST_LOG` alone does nothing. That is precisely why 142 CI job logs contain
+/// a 502 but never a mechanism: the one line that names the `Http2PoolError` variant was always
+/// silently discarded. `try_init` so concurrent tests in one process cannot panic on double-init.
+fn init_probe_tracing() {
+    use std::sync::Once;
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("lb_quic=debug,lb_io=debug,warn"));
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            .with_test_writer()
+            .try_init();
+    });
+}
+
 /// One cell of the [`s46_cfs44_size_vs_position_probe`] matrix.
 #[derive(Debug)]
 struct ProbeCell {
@@ -1597,6 +1617,7 @@ impl ProbeCell {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn s46_cfs44_size_vs_position_probe() {
     serial_guard!();
+    init_probe_tracing();
     const K256: usize = 256 * 1024;
     const PROBE_TIMEOUT: Duration = Duration::from_secs(45);
     let mut cells: Vec<ProbeCell> = Vec::new();
@@ -1698,6 +1719,7 @@ async fn s46_cfs44_size_vs_position_probe() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn s46_cfs44_large_body_volume_probe() {
     serial_guard!();
+    init_probe_tracing();
     const SZ: usize = 512 * 1024;
     let reps: usize = std::env::var("S46_REPS")
         .ok()
@@ -1728,7 +1750,7 @@ async fn s46_cfs44_large_body_volume_probe() {
 
         let status_ok = out.status == Some(200);
         let trailer_ok = out.field("grpc-status") == Some("0");
-        let len_ok = out.messages().first().map(<[u8]>::len) == Some(SZ);
+        let len_ok = out.messages().first().map(|m| m.len()) == Some(SZ);
         if !(status_ok && trailer_ok && len_ok && out.fin) {
             // Both known CI signatures are distinguished here: a 502 (status wrong) and an
             // F-S29-1-style trailer DROP (status 200 but grpc-status absent).
@@ -1743,7 +1765,7 @@ async fn s46_cfs44_large_body_volume_probe() {
                 "iter={i} kind={kind} status={:?} grpc-status={:?} body_len={:?} fin={} reset={}",
                 out.status,
                 out.field("grpc-status"),
-                out.messages().first().map(<[u8]>::len),
+                out.messages().first().map(|m| m.len()),
                 out.fin,
                 out.reset
             );

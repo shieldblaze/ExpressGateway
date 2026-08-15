@@ -204,7 +204,39 @@ leaves a **size × position interaction** as the live hypothesis. That is precis
 Zero 502s, zero gateway warns. Consistent with CI, where the uninstrumented `Test` job passed both
 times and only the instrumented Coverage job failed.
 
-**Attempt 2 — llvm-cov instrumented, whole binary: IN PROGRESS.**
+**Attempt 2 — llvm-cov instrumented, whole binary ×6: INVALID, not a result (R15).** The run
+built for 715 s and then failed to compile: the probe source was edited *while the build was in
+flight* and carried a type error (`messages().first()` yields `Option<&Bytes>`, not
+`Option<&[u8]>`). No verdict is taken from it. Every subsequent run is **gated on a compile check
+before any long step**.
+
+**Attempt 3 — VOLUME probe at the minimal failing shape: REPRODUCED. ✅**
+
+```
+S46-VOLUME **BAD** iter=44 kind=502 status=Some(502) grpc-status=None body_len=None fin=true reset=true
+S46-VOLUME **BAD** iter=61 kind=502 status=Some(502) grpc-status=None body_len=None fin=true reset=true
+S46-VOLUME reps=300 failures=9 rate=3.00%
+```
+
+**9 failures in 300 iterations = 3.00% per large-body request**, t3a.large, **uninstrumented**,
+single 512 KiB request against a **fresh** gateway+backend each iteration. This independently
+confirms, on a second machine and a different code path from CI:
+
+- the failure is **real and gateway-generated**, not a CI artifact;
+- it is **not instrumentation-dependent** (this run had no llvm-cov);
+- it needs **no connection reuse** (fresh infrastructure per iteration);
+- it is **not a size threshold** (one fixed size, 3% of attempts fail and 97% succeed).
+
+The rate is a measurable quantity, which is what makes a fix provable: a load-bearing negative
+control must drive 3.00% to 0.00% over a comparable sample, and must still show ~3% on pre-fix code.
+
+**Attempt 3 could NOT name the mechanism** — `RUST_LOG` was set but `tracing` **discards events when
+no subscriber is installed**, and `grpc_h3_e2e.rs` installed none. This is the same reason 142 CI
+logs carry a 502 but never a cause. Fixed by adding `tracing-subscriber` as an `lb-quic` dev-dep and
+`init_probe_tracing()` to both probes.
+
+**Attempt 4 — 400 reps WITH a subscriber: IN PROGRESS.** Expected to yield ~12 failures each
+carrying the discriminating warn line of §1.7.
 
 ### 1.7 LIBRARY-USAGE VALIDATION (R7) — verdict: **NEITHER-BUT-A-DESIGN-GAP**
 
