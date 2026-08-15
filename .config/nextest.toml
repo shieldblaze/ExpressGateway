@@ -1,0 +1,86 @@
+# cargo-nextest configuration — HANG-AS-FAILURE (S46 / CF-S44).
+#
+# WHY THIS FILE EXISTS
+#
+# nextest ships `slow-timeout = { period = "60s" }` with NO `terminate-after`, so a
+# wedged test escalates a SLOW marker forever and is never killed. In run 30755744744
+# job 91517507600 (Coverage) that produced:
+#
+#     SLOW [>17460.000s] lb-quic::grpc_h3_e2e grpc_h3_without_te_header_still_delivers_trailer
+#     SLOW [>17940.000s] ...
+#
+# 17940 / 60 = the 299th escalation. 1564 of 1565 tests had finished; that one never
+# returned. The job ran 18,373 s (5 h 06 m), was cancelled by hand, and would otherwise
+# have burned to GitHub's 6-hour ceiling. It never went red, because the Coverage job
+# passes `--ignore-run-fail` (ci.yml) and a HANG is not a failure.
+# Full write-up: audit/ci/s44-grpc-h3-te-trailer-hang.md
+#
+# `terminate-after` is the knob that converts that into a bounded, REPORTED failure.
+# This is CONTAINMENT, not a fix: the CF-S44 mechanism itself is still open (U5 in
+# audit/ship/s46-report.md). Do not close CF-S44 on the strength of this file.
+#
+# THRESHOLD EVIDENCE — the slowest LEGITIMATE test, measured under llvm-cov
+# instrumentation on the CI runner across three separate runs:
+#
+#   244.117 s  run 31504772378 (job 93823773516)
+#   244.970 s  run 30749813681 (job 91503547633)
+#   245.357 s  run 31495640064 (job 93816169955)
+#   lb-integration-tests::h2h3_md_streaming_verify h2h3_fmd4_request_rst_burst_current_thread
+#
+# Spread 1.24 s over three differently-loaded runs => wall-clock deterministic, not
+# CPU-bound, so the margin below is not eaten by a slower box. Next slowest is 101.3 s;
+# the whole 1565-test suite runs in 341-373 s.
+#
+# Re-derive before changing any number here:
+#   gh api repos/:owner/:repo/actions/jobs/<coverage-job-id>/logs \
+#     | sed 's/\x1b\[[0-9;]*m//g' \
+#     | grep -oE 'PASS \[ *[0-9.]+s\].*' | sed -E 's/PASS \[ *([0-9.]+)s\]/\1/' \
+#     | sort -rn | head
+
+[profile.default]
+# 60 s x 20 = 1200 s (20 min) before SIGTERM, then SIGKILL 20 s later. The test is
+# reported as a FAILURE and nextest exits non-zero.
+#
+# 1200 s is 4.9x the slowest test ever measured here (245 s). That is deliberately more
+# headroom than the CI evidence alone requires: this profile is also what a developer
+# gets from a bare `cargo nextest run`, possibly on a much slower box, and a false red on
+# a slow-but-healthy run is worse than catching a hang ten minutes later. The gain being
+# protected is 18,373 s -> 1,200 s (15x), so buying margin here costs almost nothing.
+#
+# `on-timeout` is deliberately NOT set. Its default is "fail". Setting it to "pass"
+# would silently restore the exact CF-S44 behaviour this file exists to prevent.
+#
+# `grace-period` (default 10 s) is widened to 20 s so a wedged QUIC/tokio binary has a
+# chance to unwind and flush its captured output on SIGTERM — that output is what names
+# the culprit next time. A truly deadlocked process ignores it and SIGKILL follows.
+slow-timeout = { period = "60s", terminate-after = 20, grace-period = "20s" }
+
+# CI-only run-level cap. Selected by the workflow with `NEXTEST_PROFILE: ci`.
+#
+# WHY A SEPARATE PROFILE, rather than putting `global-timeout` on `default`:
+# `global-timeout` bounds the WHOLE run, and `default` is also what developers get
+# locally. A full --all-features suite on a 2-vCPU box legitimately takes far longer than
+# it does on a CI runner, so a run-level cap tuned for CI would produce false reds on
+# developer machines. The per-test `terminate-after` above — the load-bearing hang fix —
+# stays on `default` precisely so it applies everywhere, including under
+# `cargo llvm-cov nextest`, with no environment variable required.
+[profile.ci]
+inherits = "default"
+# Catches what a per-test cap cannot: many tests each sitting just under the per-test
+# cap, or the nextest supervisor itself wedging (the CF-S44 orphan sweep had to kill
+# cargo-nextest, not just the test binary).
+#
+# Observed CI runs are 341-373 s. 40 m is ~6.5x that, and still leaves room under the
+# Coverage job's `timeout-minutes: 50` even in the worst layered case:
+# ~7 m instrumented build + 20 m for one terminated test + ~6 m for the rest + report.
+global-timeout = "40m"
+
+# Fast variant for the R13 negative control ONLY
+# (crates/lb-core/tests/ci_hang_negative_control.rs). Selected explicitly with
+# `-P hang-probe`, so it can never affect the real gate. It exists so the control proves
+# the MECHANISM in ~40 s instead of ~40 min; the shipped 1200 s constant is proved
+# separately by running the control under the default profile.
+[profile.hang-probe]
+inherits = "default"
+slow-timeout = { period = "10s", terminate-after = 2, grace-period = "2s" }
+global-timeout = "3m"

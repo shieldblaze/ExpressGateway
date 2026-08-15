@@ -29,10 +29,21 @@ jobs:
   # keys); release-soak.sh provisions the box, runs the full 12-scenario soak,
   # asserts every scenario BOUNDED + panic=0 (R8), and ALWAYS tears it down.
   # Configure the vars/secrets below before first use.
+  #
+  # ⚠️ DURATION CEILING (S46). release-soak.sh:44 polls for
+  # SOAK_MAX_WAIT_SECS = SOAK_DURATION_SECS + 3600. At the default 14400 (4 h) that is
+  # 18,000 s = 300 min BEFORE provisioning and teardown. GitHub's hard job ceiling is
+  # 360 min, so `timeout-minutes: 350` is the largest safe value — and any dispatch
+  # with soak_duration_secs > 14400 CANNOT complete: the runner is killed mid-soak.
+  # Teardown here is a script trap, not a separate job, so a killed runner can leave
+  # the EC2 instance RUNNING (a standing bill). This timeout makes that visible; it
+  # does not prevent it. Fixing it properly needs input validation or an
+  # `if: always()` teardown job — deliberately NOT done in this pass.
   soak-gate:
     name: Release Soak Gate (12-scenario, dedicated EC2)
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
+    timeout-minutes: 350    # 300m poll budget + provisioning/teardown; ceiling is 360 — see above
     permissions:
       id-token: write          # GitHub OIDC -> assume the soak IAM role
       contents: read
@@ -68,6 +79,7 @@ jobs:
     name: Build ${{ matrix.target }}
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60    # never measured; aarch64 cross-compile with no warm cache
     strategy:
       matrix:
         include:
@@ -107,6 +119,7 @@ jobs:
     name: Docker Multi-Arch
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
+    timeout-minutes: 60    # never measured; 2-platform buildx + GHCR push
     needs: build-binary
     permissions:
       contents: read
@@ -146,6 +159,7 @@ jobs:
     name: Create Release
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
+    timeout-minutes: 15    # never measured; artifact download + release create
     needs: [build-binary, docker]
     permissions:
       contents: write

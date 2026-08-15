@@ -22,6 +22,7 @@ jobs:
     # advisories newly published against UNCHANGED deps.
     name: Dependency Audit (weekly, strict)
     runs-on: ubuntu-latest
+    timeout-minutes: 30    # mirrors ci.yml `audit`; obs max 199s there
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/rust-setup
@@ -35,6 +36,7 @@ jobs:
     # audit/unsafe-justifications.md, so archive the inventory, do not fail.
     name: Unsafe Inventory (cargo-geiger)
     runs-on: ubuntu-latest
+    timeout-minutes: 60    # builds cargo-geiger from source + a full --all-features scan
     continue-on-error: true
     steps:
       - uses: actions/checkout@v6
@@ -57,6 +59,7 @@ jobs:
     # without blocking PRs.
     name: Unused Deps (cargo-machete)
     runs-on: ubuntu-latest
+    timeout-minutes: 30    # cache:'false' => always a cold source install
     steps:
       - uses: actions/checkout@v6
       - uses: ./.github/actions/rust-setup
