@@ -17,6 +17,7 @@ use crate::h2_proxy::{H2_ABORT_OBSERVE_TIMEOUT, ProxyErr as H2ProxyErr, drive_h2
 use hyper::header::{HeaderName, HeaderValue};
 use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::{TokioIo, TokioTimer};
+use lb_health::{AttemptOutcome, HealthRegistry, UpstreamErrorClass};
 use lb_io::http2_pool::Http2Pool;
 use lb_io::pool::TcpPool;
 use lb_io::quic_pool::QuicUpstreamPool;
@@ -216,6 +217,10 @@ pub struct H1Proxy {
     max_keepalive_requests: u32,
     /// An atomic, not a metric handle — lb-l7 has no metrics-registry dep.
     keepalive_cap_terminations: Arc<std::sync::atomic::AtomicU64>,
+    /// G5 passive ejection sink. `None` (the default) leaves the proxy exactly as it was before
+    /// ejection existed — only the binary attaches one, so every test that builds a proxy directly
+    /// keeps its pre-G5 behaviour.
+    health: Option<Arc<HealthRegistry>>,
 }
 
 impl H1Proxy {
@@ -247,6 +252,7 @@ impl H1Proxy {
             expected_sni: None,
             max_keepalive_requests: 100,
             keepalive_cap_terminations: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            health: None,
         }
     }
 
@@ -276,6 +282,7 @@ impl H1Proxy {
             expected_sni: None,
             max_keepalive_requests: 100,
             keepalive_cap_terminations: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            health: None,
         }
     }
 
@@ -293,6 +300,23 @@ impl H1Proxy {
     pub fn with_watchdog(mut self, watchdog: Watchdog) -> Self {
         self.watchdog = Some(watchdog);
         self
+    }
+
+    /// G5 — attach the passive-ejection registry this proxy feeds. The SAME registry must back the
+    /// [`crate::upstream::HealthFilteredPicker`] wrapping this proxy's picker, or outcomes are
+    /// recorded against a gate nobody consults.
+    #[must_use]
+    pub fn with_health(mut self, health: Arc<HealthRegistry>) -> Self {
+        self.health = Some(health);
+        self
+    }
+
+    /// Feed one upstream attempt to the registry. Takes `&self` and returns `()`, and every call
+    /// site invokes it AFTER the response value is built — so it cannot alter a response (R3).
+    fn record_health(&self, addr: SocketAddr, outcome: AttemptOutcome) {
+        if let Some(health) = self.health.as_ref() {
+            health.record(addr, outcome);
+        }
     }
 
     /// Enable strict-TE policy ([`SmuggleMode::H1Strict`]); default lenient.
@@ -763,23 +787,32 @@ impl H1Proxy {
             return error_response(StatusCode::BAD_GATEWAY, "no backend available");
         };
 
-        let resp = match backend.proto {
+        // G5: every arm yields the response AND the health verdict for `backend.addr`, so the
+        // whole attempt is classified once, here, rather than per protocol leg.
+        let (resp, outcome) = match backend.proto {
             UpstreamProto::H1 => match self.proxy_request(backend.addr, stripped).await {
-                Ok(resp) => self.finalize_response(resp),
-                Err(ProxyErr::Upstream(s)) => error_response(StatusCode::BAD_GATEWAY, &s),
-                Err(ProxyErr::Timeout) => {
-                    error_response(StatusCode::GATEWAY_TIMEOUT, "upstream timeout")
+                Ok(resp) => (self.finalize_response(resp), AttemptOutcome::Success),
+                Err(e) => {
+                    let outcome = e.error_class().outcome();
+                    let resp = match e {
+                        ProxyErr::Upstream(s) => error_response(StatusCode::BAD_GATEWAY, &s),
+                        ProxyErr::Timeout => {
+                            error_response(StatusCode::GATEWAY_TIMEOUT, "upstream timeout")
+                        }
+                        // Client's fault → 400; the backend response is never relayed.
+                        ProxyErr::BadRequest(s) => error_response(StatusCode::BAD_REQUEST, &s),
+                        ProxyErr::BodyTooLarge => error_response(
+                            StatusCode::PAYLOAD_TOO_LARGE,
+                            "request body exceeds maximum allowed size",
+                        ),
+                    };
+                    (resp, outcome)
                 }
-                // Client's fault → 400; the backend response is never relayed.
-                Err(ProxyErr::BadRequest(s)) => error_response(StatusCode::BAD_REQUEST, &s),
-                Err(ProxyErr::BodyTooLarge) => error_response(
-                    StatusCode::PAYLOAD_TOO_LARGE,
-                    "request body exceeds maximum allowed size",
-                ),
             },
             UpstreamProto::H2 => Box::pin(self.proxy_h1_to_h2(backend.addr, stripped)).await,
             UpstreamProto::H3 => Box::pin(self.proxy_h1_to_h3(&backend, stripped)).await,
         };
+        self.record_health(backend.addr, outcome);
         // The sweeper covers the abandoned-future case.
         if let (Some(wd), Some(id)) = (self.watchdog.as_ref(), watch_id) {
             wd.deregister(id);
@@ -1202,6 +1235,12 @@ impl H1Proxy {
             return match h2_pool.send_request(backend_addr, upstream_req).await {
                 Ok(resp) => Ok(resp),
                 Err(Http2PoolError::Timeout) => Err(H2ProxyErr::Timeout),
+                // G5: `Send` may never have left this process — see
+                // `h2_proxy::ProxyErr::UpstreamUnattributable`. Formatting the WHOLE
+                // error keeps the 502 body byte-identical to the pre-G5 text.
+                Err(e @ Http2PoolError::Send(_)) => Err(H2ProxyErr::UpstreamUnattributable(
+                    format!("h2 upstream: {e}"),
+                )),
                 Err(e) => Err(H2ProxyErr::Upstream(format!("h2 upstream: {e}"))),
             };
         }
@@ -1408,31 +1447,51 @@ impl H1Proxy {
 
     /// Forward an H1 inbound request to an H2 backend; dispatch shim over the
     /// streaming [`Self::proxy_h1_to_h2_request`]. BOTH legs stream.
+    ///
+    /// Returns the health verdict alongside the response: the error→status mapping stays exactly
+    /// where it was, and the caller records the outcome (G5).
     async fn proxy_h1_to_h2(
         &self,
         backend_addr: SocketAddr,
         req: StrippedRequest<IncomingBody>,
-    ) -> Response<ClientRespBody> {
+    ) -> (Response<ClientRespBody>, AttemptOutcome) {
         let Some(h2_pool) = self.h2_upstream.as_ref() else {
-            return error_response(
-                StatusCode::BAD_GATEWAY,
-                "H2 backend selected but no Http2Pool wired",
+            // A missing pool is OUR mis-wiring, not the backend's fault — record nothing.
+            return (
+                error_response(
+                    StatusCode::BAD_GATEWAY,
+                    "H2 backend selected but no Http2Pool wired",
+                ),
+                UpstreamErrorClass::Misconfigured.outcome(),
             );
         };
         match self
             .proxy_h1_to_h2_request(h2_pool, backend_addr, req)
             .await
         {
-            Ok(resp) => upstream_response_to_h1(resp, self.alt_svc),
-            Err(H2ProxyErr::Upstream(s)) => error_response(StatusCode::BAD_GATEWAY, &s),
-            Err(H2ProxyErr::Timeout) => {
-                error_response(StatusCode::GATEWAY_TIMEOUT, "upstream H2 timeout")
-            }
-            Err(H2ProxyErr::BodyTooLarge) => error_response(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "request body exceeds maximum",
+            Ok(resp) => (
+                upstream_response_to_h1(resp, self.alt_svc),
+                AttemptOutcome::Success,
             ),
-            Err(H2ProxyErr::BadRequest(s)) => error_response(StatusCode::BAD_REQUEST, &s),
+            Err(e) => {
+                let outcome = e.error_class().outcome();
+                let resp = match e {
+                    // Same arm for both: `UpstreamUnattributable` differs ONLY in health
+                    // attribution, never on the wire.
+                    H2ProxyErr::Upstream(s) | H2ProxyErr::UpstreamUnattributable(s) => {
+                        error_response(StatusCode::BAD_GATEWAY, &s)
+                    }
+                    H2ProxyErr::Timeout => {
+                        error_response(StatusCode::GATEWAY_TIMEOUT, "upstream H2 timeout")
+                    }
+                    H2ProxyErr::BodyTooLarge => error_response(
+                        StatusCode::PAYLOAD_TOO_LARGE,
+                        "request body exceeds maximum",
+                    ),
+                    H2ProxyErr::BadRequest(s) => error_response(StatusCode::BAD_REQUEST, &s),
+                };
+                (resp, outcome)
+            }
         }
     }
 
@@ -1452,14 +1511,18 @@ impl H1Proxy {
         &self,
         backend: &UpstreamBackend,
         req: StrippedRequest<IncomingBody>,
-    ) -> Response<ClientRespBody> {
+    ) -> (Response<ClientRespBody>, AttemptOutcome) {
         use hyper::body::Frame;
         use lb_quic::h3_bridge::{H3_BODY_CHUNK_MAX, ReqBodyEvent};
 
         let Some(h3_pool) = self.h3_upstream.as_ref() else {
-            return error_response(
-                StatusCode::BAD_GATEWAY,
-                "H3 backend selected but no QuicUpstreamPool wired",
+            // Mis-wiring, not a backend fault.
+            return (
+                error_response(
+                    StatusCode::BAD_GATEWAY,
+                    "H3 backend selected but no QuicUpstreamPool wired",
+                ),
+                UpstreamErrorClass::Misconfigured.outcome(),
             );
         };
         let sni = backend.sni.as_deref().unwrap_or("").to_owned();
@@ -1469,7 +1532,13 @@ impl H1Proxy {
         let (parts, mut body) = inner.into_parts();
         let headers = match build_h1_to_h3_fieldlist(&parts, &sni, /* https = */ true) {
             Ok(h) => h,
-            Err(s) => return error_response(StatusCode::BAD_GATEWAY, &s),
+            // The INBOUND request could not be expressed as an H3 field list — nothing was dialed.
+            Err(s) => {
+                return (
+                    error_response(StatusCode::BAD_GATEWAY, &s),
+                    UpstreamErrorClass::ClientRequest.outcome(),
+                );
+            }
         };
 
         // Backpressure: a slow QUIC upstream → the connector stops draining →
@@ -1650,21 +1719,32 @@ impl H1Proxy {
                     // WITHOUT a `0\r\n\r\n` — never a smuggled-complete one.
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>);
                 let _ = &pump; // pump is detached; its task owns the request leg
-                build_h1_streaming_response(builder, stream_body.boxed())
+                // A head arrived: the backend answered. Its STATUS is not the detector's business
+                // (see `UpstreamErrorClass`).
+                (
+                    build_h1_streaming_response(builder, stream_body.boxed()),
+                    AttemptOutcome::Success,
+                )
             }
             None | Some(lb_quic::H3RespEvent::Reset) => {
                 pump.abort();
                 connector_handle.abort();
-                error_response(
-                    StatusCode::BAD_GATEWAY,
-                    "H3 upstream produced no response head",
+                (
+                    error_response(
+                        StatusCode::BAD_GATEWAY,
+                        "H3 upstream produced no response head",
+                    ),
+                    UpstreamErrorClass::Transport.outcome(),
                 )
             }
             // Body/Trailers/End before a Head is a connector contract violation.
             Some(_) => {
                 pump.abort();
                 connector_handle.abort();
-                error_response(StatusCode::BAD_GATEWAY, "H3 upstream response head missing")
+                (
+                    error_response(StatusCode::BAD_GATEWAY, "H3 upstream response head missing"),
+                    UpstreamErrorClass::Transport.outcome(),
+                )
             }
         }
     }
@@ -1729,8 +1809,12 @@ impl H1Proxy {
             ws_proxy.clone(),
         );
         let backend_ws = match tokio::time::timeout(self.timeouts.header, upstream_dial).await {
-            Ok(Ok(ws)) => ws,
+            Ok(Ok(ws)) => {
+                self.record_health(backend_addr, AttemptOutcome::Success);
+                ws
+            }
             Ok(Err(ProxyErr::Upstream(msg))) => {
+                self.record_health(backend_addr, UpstreamErrorClass::Transport.outcome());
                 tracing::debug!(backend = %backend_addr, error = %msg, "ws: upstream handshake refused — returning 502 (no 101 emitted)");
                 return error_response(
                     StatusCode::BAD_GATEWAY,
@@ -1738,6 +1822,7 @@ impl H1Proxy {
                 );
             }
             Ok(Err(ProxyErr::Timeout)) => {
+                self.record_health(backend_addr, UpstreamErrorClass::Timeout.outcome());
                 tracing::debug!(backend = %backend_addr, "ws: upstream dial timeout — returning 504 (no 101 emitted)");
                 return error_response(
                     StatusCode::GATEWAY_TIMEOUT,
@@ -1746,12 +1831,15 @@ impl H1Proxy {
             }
             // The WS path never runs the body pump; map defensively to 502.
             Ok(Err(ProxyErr::BadRequest(_) | ProxyErr::BodyTooLarge)) => {
+                self.record_health(backend_addr, UpstreamErrorClass::ClientRequest.outcome());
                 return error_response(
                     StatusCode::BAD_GATEWAY,
                     "websocket upstream handshake failed",
                 );
             }
             Err(_elapsed) => {
+                // The BUDGET elapsed, not an inner deadline — still the backend failing to answer.
+                self.record_health(backend_addr, UpstreamErrorClass::Timeout.outcome());
                 tracing::debug!(backend = %backend_addr, "ws: upstream handshake budget elapsed — returning 504 (no 101 emitted)");
                 return error_response(
                     StatusCode::GATEWAY_TIMEOUT,
@@ -1818,6 +1906,18 @@ enum ProxyErr {
     /// Over [`MAX_REQUEST_BODY_BYTES`] mid-stream → `413`. DISTINCT from an
     /// upstream receiver-drop (F-MD-2), which is NOT a 413.
     BodyTooLarge,
+}
+
+impl ProxyErr {
+    /// Adapt to the shared health taxonomy. This is a type mapping only — whether a class counts
+    /// as a failure is decided once, in [`UpstreamErrorClass::outcome`].
+    const fn error_class(&self) -> UpstreamErrorClass {
+        match self {
+            Self::Upstream(_) => UpstreamErrorClass::Transport,
+            Self::Timeout => UpstreamErrorClass::Timeout,
+            Self::BadRequest(_) | Self::BodyTooLarge => UpstreamErrorClass::ClientRequest,
+        }
+    }
 }
 
 /// ROUND8-L7-01 — dial and drive the RFC 6455 client-side handshake **before**

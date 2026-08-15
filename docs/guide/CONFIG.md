@@ -50,6 +50,7 @@ L-INFRA-1).
 | `[runtime].max_keepalive_requests` | `0` | No proactive H1/H2 keep-alive connection recycling. |
 | `[runtime].max_requests_per_h3_connection` | `0` | **Re-opens the quiche `StreamMap::collected` leak / H3 stream-flood DoS** that S36 closed. Trusted listeners only. |
 | `[runtime].xdp_new_flow_cap_per_sec_per_cpu` | `0` | No per-CPU new-flow (SYN-flood) rate cap in XDP. |
+| `[runtime.outlier_detection].enabled` | `false` | No passive health ejection — a backend that is failing every request stays in rotation and keeps taking its share of traffic. Restores the pre-S46 behaviour exactly. |
 | `[[listeners.backends]].tls_verify_peer` | `false` | **Disables H3-backend certificate verification — accepts a MITM upstream.** Valid only on `h3` backends; rejected elsewhere. |
 | `[passthrough].mint_retry` | `false` | No stateless Retry on Mode A → re-opens the QUIC Initial address-spoof flood vector. |
 | `[passthrough].strict_source_binding` | `false` (default) | Permits NAT-rebind connection migration (the default); `true` hardens against off-path 4-tuple confusion at the cost of breaking legitimate rebinds. |
@@ -258,6 +259,7 @@ block **is** parsed and acted on.)
 | `xdp_new_flow_cap_per_sec_per_cpu` | `u32` | `0` (disable) or `1000..=10000000` | `125000` | Per-CPU new-flow rate cap (Katran parity). |
 | `tls` | `[runtime.tls]` | — | absent | Process-wide TLS policy. |
 | `watchdog` | `[runtime.watchdog]` | — | absent | Slowloris / slow-POST watchdog. |
+| `outlier_detection` | `[runtime.outlier_detection]` | — | absent (= defaults, **enabled**) | Passive health ejection. |
 
 ### `[runtime.tls]`
 
@@ -272,6 +274,47 @@ block **is** parsed and acted on.)
 | `header_deadline_ms` | `u64` | `100..=60000` | `5000` | Per-request header-phase deadline. |
 | `body_progress_min_bps` | `u64` | `0..=10000000` | `64` | Slow-POST rate floor (B/s); `0` disables. |
 | `sweep_interval_ms` | `u64` | `100..=60000` | `1000` | Stalled-connection sweep cadence. |
+
+### `[runtime.outlier_detection]`
+
+Passive health ejection (Envoy `outlier_detection` / HAProxy `observe` +
+`on-error` semantics). **Absent means the defaults below, which are ON** — not
+disabled. This is safe by construction: while every backend is healthy the
+admission gate is a constant `true`, so routing is identical to a build without
+ejection. It only starts changing behaviour once a backend fails
+`consecutive_failures` times in a row.
+
+| Key | Type | Range | Default | Description |
+|-----|------|-------|---------|-------------|
+| `enabled` | `bool` | — | `true` | `false` restores pre-ejection routing exactly. |
+| `consecutive_failures` | `u32` | `1..=1000` | `5` | Consecutive transport/timeout failures before ejection. Envoy `consecutive_gateway_failure` parity. `0` is REJECTED — use `enabled = false`. |
+| `base_ejection_secs` | `u64` | `1..=3600` | `30` | First ejection window; doubles per repeat failure up to `max_ejection_secs`. Envoy `base_ejection_time` parity. |
+| `max_ejection_secs` | `u64` | `1..=3600`, `>= base_ejection_secs` | `300` | Backoff ceiling. Envoy `max_ejection_time` parity. |
+| `min_healthy_percent` | `u8` | `0..=100` | `50` | Percentage of a listener's backends that must stay in rotation. An absolute "never eject the last backend" floor applies on top, so even `0` cannot empty a listener. |
+
+`min_healthy_percent` deliberately departs from Envoy, whose
+`max_ejection_percent` defaults to 10 %: with fewer than 10 backends a 10 % cap
+means nothing can ever be ejected, which would make the feature inert on the
+2–4 backend listeners this gateway is usually configured with. Raise it toward
+Envoy's posture if you run large backend pools and want ejection to be more
+conservative.
+
+Every key is **swappable on SIGHUP** and is applied without resetting ejection
+state — a reload loop cannot silently disable ejection.
+
+Counters to watch on `/metrics`: `backend_ejections_total`,
+`backend_readmissions_total`, `backends_ejected`, `backend_health_status`, and
+above all `backend_ejections_suppressed_total` — a non-zero value means a
+backend is failing and only the floor is keeping the listener serving.
+
+```toml
+[runtime.outlier_detection]
+enabled              = true
+consecutive_failures = 5
+base_ejection_secs   = 30
+max_ejection_secs    = 300
+min_healthy_percent  = 50
+```
 
 ## `[observability]`
 

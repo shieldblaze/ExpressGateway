@@ -477,4 +477,125 @@ R3/R12 clean.
 - **`ACTOR_CHANNEL_DEPTH = 32` router packet drops** (§1.9) — a capacity finding, not the
   discriminant, and not connected to the 502 by evidence.
 
-*(Phases 2–4 appended as each completes.)*
+---
+
+## Phase 2 — P2: hang-as-failure
+
+**Both halves are required; neither works alone.**
+
+1. `.config/nextest.toml` — `slow-timeout = { period = "60s", terminate-after = 20, grace-period
+   = "20s" }` ⇒ a test is **killed at 1200 s**. That is **4.9×** the slowest *legitimate* test,
+   measured under llvm-cov instrumentation across three CI runs: 244.117 s / 244.970 s / 245.357 s
+   (`h2h3_fmd4_request_rst_burst_current_thread`), spread 1.24 s ⇒ wall-clock deterministic, not
+   load-dependent. Plus `[profile.ci]` `global-timeout = "40m"` (selected via `NEXTEST_PROFILE: ci`)
+   and a `hang-probe` profile so the mechanism demonstrates in ~40 s instead of ~20 min.
+2. `ci.yml` — an explicit `TIMEOUT` grep that converts a terminated test into a **red**. Without it
+   `--ignore-run-fail` swallows the terminate exactly as it swallows a failure, and the whole fix
+   would be **inert in the very job where CF-S44 hung**.
+
+The grep pattern was **R13-tested before being trusted**: 0 matches across three real coverage logs
+carrying 1565 passes, the escalating SLOW markers and 3 genuine FAILs (⇒ no false red), while firing
+on `TIMEOUT [` / `TMT [` / a timestamp-prefixed line / `global timeout`, and **not** matching
+`TIMEOUT-PASS`/`TMPASS`.
+
+`timeout-minutes` added to every job across all three workflows, each ≥3× its observed max over five
+runs — generous on purpose, since a false red on a slow-but-healthy run is worse than catching a
+hang a few minutes later. Coverage sits at 50 min, deliberately **above** nextest's 40 min cap so
+nextest fires first and **names the test**.
+
+**CONFIRMED, not assumed — `terminate-after` does fire under `cargo llvm-cov nextest`:** llvm-cov
+internally calls `cargo nextest run` (so nextest owns the kill); `cargo llvm-cov show-env` injects
+no `NEXTEST_*` variables (verified by a `strings` sweep), so it cannot redirect profile/config
+discovery; and our own CF-S44 job emitted nextest's `SLOW` markers while running under llvm-cov.
+
+**Negative control:** `crates/lb-core/tests/ci_hang_negative_control.rs` wedges on demand behind
+`EG_CI_HANG_PROBE`, deliberately **not** `#[ignore]`d ("an ignored test is easy to leave permanently
+un-run"). No existing test is skipped, slowed, or weakened.
+
+⚠️ **This is CONTAINMENT for the CF-S44 hang, not a fix.** The hang remains a separate, unexplained
+bug (§1.13).
+
+---
+
+## Phase 3 — P3: passive health ejection (G5)
+
+### 3.1 A finding that precedes the feature
+
+**The pre-existing seed could never have worked, even if `record_failure` had been called.** It
+keyed checkers by `backend.address` — the raw config string, captured **before DNS resolution** —
+while the datapath only ever holds a resolved `SocketAddr`. Every lookup would have missed. G5 was
+not "wired but unfed"; it was structurally incapable of functioning. The registry is now keyed by
+resolved address.
+
+### 3.2 Design (Envoy/HAProxy outlier-detection semantics, not eject-on-error)
+
+Single-sourced through **one** seam: a `HealthFilteredPicker` decorator over
+`Arc<dyn BackendInfoPicker>`, applied at the binary's construction sites. Filtering the backend
+*slice* before `pick` was rejected for a concrete reason: `LoadBalancer::pick` returns an **index**,
+so removing elements renumbers every index and **remaps every consistent-hash key** for `Maglev` and
+`RingHash` — breaking affinity for *all* traffic, not just traffic to the ejected backend.
+
+- **Threshold** — 5 consecutive failures (Envoy `consecutive_5xx` parity); any success zeroes the
+  streak (pre-existing, already-tested behaviour).
+- **Re-admission** — two independent paths: time-based half-open with exponential backoff
+  (30 s → 300 s cap) **and** `record_success` unconditionally clearing ejection.
+- **Floor** — enforced at *ejection* time (a stable, assertable invariant) rather than pick time
+  (which would flap request-to-request), plus an absolute ≥1 backend, plus fail-open in the picker.
+  **`min_healthy_percent = 50`, a deliberate departure from Envoy's 10%** — at the 2–4 backend
+  listeners this repo actually configures, a 10% cap means *nothing can ever be ejected* and the
+  feature is inert. Hot-reloadable; one-line change for Envoy parity.
+- **`enabled = true`** — R3 makes it inert until a backend fails 5 consecutive times, and nginx's
+  own default (`max_fails=1`) is far more aggressive. Off-by-default would make "G5 closed" mean
+  "closed for whoever finds the knob".
+
+**Interim on `Http2PoolError::Send` → `NotAttempted`.** The pool hands out a cached sender without
+saying it was reused, so **N concurrent requests on one stale sender fail together** — a correlated
+burst the consecutive threshold cannot protect against, and the shape of a rolling restart. Counting
+that as a backend failure would eject a healthy backend for **our** race. Cost, documented at the
+mapping site: a backend that accepts connections but resets every stream is not ejected;
+`Dial`/`Handshake`/`Timeout` still fire. Proper fix (a `reused` bit out of the pool) is logged as
+follow-up work, together with the same-shaped `QuicUpstreamPool::acquire` hazard — **logged, not
+diagnosed**, and explicitly not to be assumed by analogy.
+
+### 3.3 The four controls + the R3 proof — DEMONSTRATED, not argued
+
+Each was **watched failing** against a deliberately broken build, then reverted:
+
+| Mutation | Control | Verbatim evidence |
+|---|---|---|
+| `feed_noop` (the literal pre-S46 state) | (i) eject, (ii) re-admit | `assertion left == right failed: exactly one backend is ejected — left: 0, right: 1` |
+| `floorless` (`can_eject` → `true`) | (iii) floor | `the floor caps ejections at 50% of 3 backends — left: 3, right: 1` |
+| `eject_on_first` (`HealthChecker::new(1,1)`) | (iv) threshold | `a single transient error must NOT eject — left: 1, right: 0` |
+| `noop_wrapper` | R3 non-vacuity | `divergence_is_detectable` **FAILS** while `healthy_routing_is_identical_to_the_unwrapped_build` **PASSES** |
+| `send_is_transport` | the §3.2 interim | `left: Failure, right: NotAttempted` |
+
+**`floorless` producing `left: 3` is the finding that justifies the floor**: without it all three
+backends eject and the listener black-holes — the "worse than nothing" mode, now measured.
+
+**Mutation 4 is the decisive one** and came back exactly as required: a no-op wrapper breaks
+divergence detection **while leaving the identity arm passing**, so the R3 pair is neither vacuous
+nor over-constrained. No test was adjusted to reconcile them.
+
+Positive half: **208/208 passing** (lb-health 23, lb-config 80, lb-l7 105), clippy
+`--all-targets --all-features -D warnings` exit 0, fmt clean, tree verified free of markers and
+backups. All 14 pre-existing `lb-config reload::tests::*` pass — evidence that adding the enum arm
+to `l7_fields` weakened nothing.
+
+### 3.4 ⚠️ A verification-harness defect worth more than the feature
+
+The mutation harness reverted with `shutil.copy2`, which **preserves mtime**. The restored source
+therefore looked *older* than the artifact built from the mutated source, so cargo's mtime-based
+staleness check **skipped the rebuild and kept running the mutated binary**.
+
+In this ordering it produced a **false RED** — loud, and caught. **Reverse the order and the
+identical defect yields a silent false GREEN.** The earlier md5 dry-run provably could not have
+caught it: the bytes were identical; the defect was in the *timestamp*. Finding it required
+re-running the unmutated suite **after** the mutations — the step easiest to skip because it
+"should" pass.
+
+Fixed (`shutil.copy` + explicit `touch`, and every revert now prints a `Compiling` line). The
+mutation results stand because the *apply* direction uses `write_text()` (mtime = now), verified by
+a `Compiling` line in four of five logs, and the fifth was **re-run from scratch** rather than
+trusted from scrollback.
+
+*(Phase 4 + gates appended as they complete.)*

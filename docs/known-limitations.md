@@ -66,24 +66,64 @@ behavior (and the library's status) is documented at
 
 ---
 
-## Passive health tracking is not wired into backend selection
+## Health ejection is passive only, and does not cover every datapath
 
-**What:** ExpressGateway tracks passive per-backend health (a
-consecutive-success/failure state machine), but in this build it is **not
-consulted by the balancer** and is **not fed by live traffic** — it is
-seeded at startup only. **Active probing** (interval/path/expected-status)
-is **deferred (REL-2-05)** and not implemented. The balancer will keep
-sending traffic to a backend that is failing.
+**What:** passive outlier ejection **is** wired into the HTTP/1.1 and
+HTTP/2 request paths and the plain-TCP/TLS accept path (see
+[`features.md`](features.md) "Health tracking").
 
-**Who it affects:** anyone relying on the gateway to automatically eject
-an unhealthy backend from rotation. Not affected: deployments where an
-external system (orchestrator, L4 load balancer, service mesh) already
-performs health-based ejection.
+Participation has two independent halves, and a path can have one without the
+other: **filtered** = ejected backends are skipped when picking; **fed** =
+this path's own failures can cause an ejection. Where a path is filtered but
+not fed, it benefits from ejections other paths caused but can never trigger
+one itself.
 
-**Mitigation:** put health-based ejection in front of, or behind, the
-gateway (e.g. orchestrator readiness gating, or a service registry that
-only publishes healthy backends). Details at [`features.md`](features.md)
-"Load balancing".
+| Datapath | Filtered? | Feeds outcomes? |
+|---|---|---|
+| H1 front → H1/H2/H3 upstream | yes | yes |
+| H2 front → H1/H2/H3 upstream | yes | yes |
+| WebSocket (H1 upgrade, H2 extended-CONNECT) | yes | yes |
+| plain-TCP / TLS accept path (L4) | yes | dial outcome only |
+| gRPC over H2 | yes | **no** |
+| **HTTP/3 *front* listener** (`quic` / `h3-terminate`) | **no** | **no** |
+| Mode A QUIC passthrough | no | no |
+
+The remaining gaps, in the terms of that table:
+
+- **No active probing.** There is no background health check
+  (interval / path / expected-status) — **deferred (REL-2-05)**. A backend is
+  only discovered to be down when a real request reaches it, so a backend that
+  is never selected is never evaluated.
+- **The HTTP/3 *front* listener participates in NEITHER half.** A
+  `quic`/`h3-terminate` listener selects `backends[0]` unconditionally
+  (`lb_quic::conn_actor::select_backend`) with no registry in scope: it keeps
+  sending to a backend the H1/H2 legs ejected, and its own failures never
+  contribute to an ejection. Do not assume H3 traffic participates. Listeners
+  whose *upstream* is H3 are unaffected — those go through the L7 picker and
+  are fully wired.
+- **The gRPC leg is filtered but not fed.** gRPC shares the L7 picker, so it
+  avoids ejected backends; but `GrpcProxy::handle` collapses the upstream
+  result into a gRPC status before returning, so a gRPC failure cannot itself
+  eject anything.
+- **A failed send on a pooled H2 connection is deliberately not counted.**
+  `Http2Pool` hands out a cached sender without reporting that it was reused,
+  so a connection the peer closed while it sat idle is indistinguishable from a
+  backend refusing work. Counting it would let concurrent requests sharing one
+  stale connection eject a *healthy* backend, so `Http2PoolError::Send` is
+  discarded. The cost: a backend that accepts connections but resets every
+  stream is not ejected on that signal alone (dial, handshake and timeout
+  failures still eject it). This is an interim; the fix is a `reused` bit out
+  of the pool.
+
+Mode A QUIC passthrough is out of scope by construction: it is a UDP flow
+relay with no application-level success signal.
+
+**Who it affects:** anyone relying on ejection alone to detect a backend that
+fails without receiving traffic, and anyone terminating H3 at the edge who
+expects the H3 front to honour ejection.
+
+**Mitigation:** keep orchestrator readiness gating in place as the active
+half; it composes with ejection rather than duplicating it.
 
 ---
 

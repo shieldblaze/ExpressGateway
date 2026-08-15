@@ -8,3 +8,8 @@ publish = false
 
 [dependencies]
 thiserror = { workspace = true }
+# G5 passive ejection: `RwLock` guards the per-listener registry (read on the admit path, written
+# only on an outcome), and a SUPPRESSED ejection must never be silent — hence tracing here rather
+# than a return value the caller could drop.
+parking_lot = { workspace = true }
+tracing = { workspace = true }
