@@ -300,4 +300,71 @@ names the variant, and if the variant is `Dial`/`Handshake` then nothing was reu
 finding is **irrelevant** to that failure. A plausible gap must not become an attribution
 (`feedback-symptom-not-attribution`). The design gap is worth fixing on its own merits either way.
 
+### 1.8 THE PROVEN MECHANISM — the gateway aborts its own valid upstream request
+
+**Evidence.** Three independent local runs, t3a.large, uninstrumented, one 512 KiB request against a
+**fresh** gateway+backend per iteration:
+
+| Run | Reps | Failures | Rate |
+|---|---|---|---|
+| hunt | 300 | 9 | 3.00% |
+| hunt2 | 400 | 18 | 4.50% |
+| hunt3 | 250 | 7 | 2.80% |
+| **total** | **950** | **34** | **≈3.6%** |
+
+**Every one of the 7 failures in the instrumented run carried the identical chain** — 7/7, no
+variation:
+
+```
+h2 send_request failed: http2 error <- stream error sent by user: unexpected internal error encountered
+```
+
+**Reading it.** `stream error sent by user` is h2's wording for a RST_STREAM **our own side
+initiated**, carrying `INTERNAL_ERROR` (0x2). hyper sends exactly that when the request-body future
+returns an error. The only body on this path is `H3ReqStreamBody` (`h3_bridge.rs:1205`), whose
+`poll_frame` returns `Err(H3ReqAbort)`.
+
+**The causal chain, end to end:**
+
+1. `H3ReqStreamBody::poll_frame` aborts mid-body → `Err(H3ReqAbort)`.
+2. hyper RST_STREAMs the backend with `INTERNAL_ERROR`.
+3. `Http2Pool::send_request` returns `Http2PoolError::Send`.
+4. `h3_to_h2_stream_resp` (`h3_bridge.rs:1336`) emits **502 bad gateway**.
+
+**The backend never failed.** The gateway kills its own in-flight upstream request on an otherwise
+valid 512 KiB POST and reports 502 to the client. This accounts for **every** observed property:
+fast (no timeout involved), large-body-only (only large bodies stream through `H3ReqStreamBody`),
+reuse-independent (fresh connections fail identically), and present in instrumented **and**
+uninstrumented runs.
+
+**Why two months and 142 CI logs never reached this.** Three independent masks, each sufficient
+on its own:
+1. `hyper::Error`'s `Display` prints only `"http2 error"` and drops the h2 cause
+   (`error.rs:612-616`); `http2_pool.rs` flattened it with `to_string()`. **Fixed** by the
+   `error_chain()` `source()`-walker — the decisive string was being discarded at the point of
+   logging.
+2. `tracing` **discards events entirely when no subscriber is installed**, and no CI job ever set
+   one — `RUST_LOG` appears in 0 of 142 logs. The one warn that names the variant never printed.
+3. The two opposite triggers were collapsed into **one match arm** (below), so even a captured
+   abort could not say which fault occurred.
+
+**The remaining ambiguity, and why it decides the fix.** `poll_frame`'s abort arm fired on either
+`ReqBodyEvent::Reset` (a **deliberate** abort — client RST or F-CAP-1 over-cap) **or**
+`Poll::Ready(None)` (**the producer was dropped without ever sending `End`** — the ingress side
+vanished mid-body). Identical on the wire, opposite in cause: the first is correct behaviour, the
+second is a gateway-side fault on a valid request. The captured logs exclude every *logged* Reset
+path — 0 occurrences of `recv_body error mid-body`, 0 trailer rejections across 400 reps — which
+points at the silent producer-drop. The arm is now **split with distinct logging** to name it.
+
+### 1.9 Ancillary finding — the QUIC router silently drops inbound packets
+
+`router.rs:29` sets `ACTOR_CHANNEL_DEPTH = 32`; on `TrySendError::Full` the router **drops the
+packet** and logs at DEBUG (`router.rs:210-213`). A 512 KiB body is ~430 packets, producing ~30
+drops per request (12,124 across 400 reps).
+
+**Stated honestly: this is NOT the failure discriminant** — the drops occur on successful
+iterations too, so they are not sufficient to cause the 502. QUIC retransmits, so this is not a
+correctness bug. It is a capacity finding on large bodies, invisible at default log levels, and it
+is a plausible *contributor* to whatever drops the body sender. Not yet connected by evidence.
+
 *(Phases 2–4 appended as each completes.)*

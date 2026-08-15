@@ -125,6 +125,24 @@ impl std::fmt::Debug for Http2Pool {
     }
 }
 
+/// Render an error together with its full `source()` chain.
+///
+/// `hyper::Error`'s `Display` prints ONLY its own description — an h2-level failure renders as the
+/// bare string `"http2 error"` and the `h2::Error` that actually names the fault (RST_STREAM,
+/// GOAWAY, flow control, a body error) lives in `source()`. Flattening with `to_string()` therefore
+/// discards the one thing an operator needs. S46/CF-S44 spent a whole investigation reaching a log
+/// line that said `h2 send_request failed: http2 error` and nothing more.
+fn error_chain(e: &(dyn std::error::Error + 'static)) -> String {
+    let mut out = e.to_string();
+    let mut src = e.source();
+    while let Some(cause) = src {
+        out.push_str(" <- ");
+        out.push_str(&cause.to_string());
+        src = cause.source();
+    }
+    out
+}
+
 impl Http2Pool {
     /// New pool dialing backends through `tcp_pool`.
     #[must_use]
@@ -160,7 +178,7 @@ impl Http2Pool {
             Ok(Ok(resp)) => Ok(resp),
             Ok(Err(e)) => {
                 self.evict(addr);
-                Err(Http2PoolError::Send(e.to_string()))
+                Err(Http2PoolError::Send(error_chain(&e)))
             }
             Err(_) => {
                 self.evict(addr);
@@ -200,7 +218,7 @@ impl Http2Pool {
             Ok(Ok(resp)) => Ok(resp),
             Ok(Err(e)) => {
                 self.evict(addr);
-                Err(Http2PoolError::Send(e.to_string()))
+                Err(Http2PoolError::Send(error_chain(&e)))
             }
             Err(idle_err) => {
                 // The phase survives only here — the returned variant is the same either way.

@@ -1234,10 +1234,23 @@ impl hyper::body::Body for H3ReqStreamBody {
                 this.done = true;
                 Poll::Ready(None)
             }
-            Poll::Ready(Some(ReqBodyEvent::Reset)) | Poll::Ready(None) => {
-                // Mid-body RESET / producer dropped before End: error so hyper RST_STREAMs — a
-                // truncated request is NEVER presented as complete. H2 ⇒ a per-stream RST is not
-                // poison.
+            // S46/CF-S44: these two triggers were ONE arm, which is why every prior investigation
+            // dead-ended — the resulting 502 is identical on the wire but the CAUSES are opposite.
+            // `Reset` is a DELIBERATE abort (client RST / over-cap); `None` means the producer was
+            // dropped WITHOUT ever sending `End`, i.e. the ingress side vanished mid-body, which is
+            // a gateway-side fault on an otherwise-valid request. Logged distinctly and loudly.
+            Poll::Ready(Some(ReqBodyEvent::Reset)) => {
+                // Mid-body RESET: error so hyper RST_STREAMs — a truncated request is NEVER
+                // presented as complete. H2 ⇒ a per-stream RST is not poison.
+                tracing::debug!("CF-S44-PROBE: H3→H2 body abort trigger=RESET (deliberate)");
+                this.done = true;
+                Poll::Ready(Some(Err(Box::new(H3ReqAbort))))
+            }
+            Poll::Ready(None) => {
+                tracing::warn!(
+                    "CF-S44-PROBE: H3→H2 body abort trigger=PRODUCER_DROPPED (no End sent) — \
+                     the request was valid; the ingress body sender was dropped mid-body"
+                );
                 this.done = true;
                 Poll::Ready(Some(Err(Box::new(H3ReqAbort))))
             }
