@@ -78,8 +78,14 @@ Two further structural facts, both load-bearing for the hypotheses below:
 - **There is NO retry on a reused pooled connection.** `acquire_sender`
   (`http2_pool.rs:221`) returns a cached sender whenever `entry.is_alive()`; if the subsequent
   `sender.send_request()` fails, the pool evicts the peer and returns `Err` — the caller turns
-  that into a 502 with **no second attempt on a fresh connection**. Envoy/nginx/HAProxy all retry
-  once on a reused-connection failure; this pool does not.
+  that into a 502 with **no second attempt on a fresh connection**. hyper-util, nginx, Envoy,
+  HAProxy and Pingora all distinguish "never reached the server" from "failed at the server" and
+  retry only the former; **this pool does not make that distinction at all.**
+  *(Correction: an earlier draft of this line said "Envoy/nginx/HAProxy all retry once on a
+  reused-connection failure". That **overstates** three of the five for a POST — nginx will not
+  retry a sent POST without `non_idempotent`, HAProxy recommends `disable-l7-retry if METH_POST`,
+  and Pingora requires an idempotent method. Only hyper-util retries a POST, and only because
+  `take_message()` proves nothing was sent. See §1.7.)*
 
 ### 0.4 The sweep-order observation (a candidate confound worth testing explicitly)
 
@@ -199,5 +205,67 @@ Zero 502s, zero gateway warns. Consistent with CI, where the uninstrumented `Tes
 times and only the instrumented Coverage job failed.
 
 **Attempt 2 — llvm-cov instrumented, whole binary: IN PROGRESS.**
+
+### 1.7 LIBRARY-USAGE VALIDATION (R7) — verdict: **NEITHER-BUT-A-DESIGN-GAP**
+
+Performed against **vendored primary source at the locked versions** (hyper 1.10.1, h2 0.4.14,
+hyper-util 0.1.20 under `~/.cargo/registry/src/`), not documentation.
+
+**hyper is not at fault, and our liveness check is not defective.** `PeerEntry::is_alive()` is
+*provably equivalent* to the reference implementation's for h2: hyper-util's poolable liveness is
+`is_open() = !is_poisoned() && is_ready()` (`client/legacy/client.rs:854-856`), and for h2
+`is_ready()` bottoms out at `!giver.is_canceled()` (`dispatch.rs:141-147`) while `is_closed()` **is**
+`giver.is_canceled()` — so `is_ready() == !is_closed()` exactly. Ours is that same test **plus** a
+strictly stronger `!driver.is_finished()`. hyper documents the residual TOCTOU as unavoidable
+(`http2.rs:112-118`: *"even after checking this is ready, sending a request may still fail because
+the connection was closed in the meantime"*). No liveness check can close it; every reference closes
+it downstream instead.
+
+**"We forgot `ready()`" is refuted a second, stronger way:** hyper-util does not call it for h2 at
+all — `PoolTx::Http2(_) => Poll::Ready(Ok(()))` (`client.rs:779-789`), and `poll_ready`'s `_cx` is
+unused so it can never even pend. **Nobody should chase this.**
+
+**The actual gap: we call the wrong API and throw away the decisive information.**
+`SendRequest::send_request` binds the never-sent request to `_req` and **drops** it
+(`http2.rs:150-171`); `try_send_request` hands it **back** via `take_message()`
+(`http2.rs:181-204`) — and its return *is* proof the bytes never reached the server
+(`dispatch.rs:19-24`). `http2_pool.rs:157-169` then flattens every outcome into
+`Http2PoolError::Send(e.to_string())`, conflating "never sent" with "failed at the server" — the
+single distinction all five references are built on (hyper-util `client.rs:248-271`, nginx
+`proxy_next_upstream`/`non_idempotent`, Envoy `reset-before-request`, HAProxy `disable-l7-retry`,
+Pingora `fail_to_connect` "guarantees that nothing was sent upstream").
+
+**The streaming body does NOT block a fix** — this reverses an earlier tentative reading in this
+report. A polled `H3ReqStreamBody` is indeed unreplayable (mpsc cannot be rewound), but in the
+never-sent case hyper refuses the request *before the body is ever polled*: `body_rx` is undrained
+and `first` still holds `b0`, so the request is byte-for-byte replayable **precisely when** replay
+is safe. The two conditions coincide, which is why hyper-util needs neither a replay buffer nor an
+idempotency check.
+
+#### The FALSIFIABLE PREDICTION that settles attribution in one run
+
+`hyper::Error`'s `Display` prints only `description()` (`error.rs:612-616`) and
+`http2_pool.rs:163` uses `e.to_string()`, so the `.with("connection was not ready")` cause is
+dropped. If the stale-pooled TOCTOU is the mechanism, the warn line will read **exactly**:
+
+```
+h2 send_request failed: operation was canceled
+```
+
+`Kind::Canceled` (`error.rs:540`) is a sound never-sent discriminator on the h2 path — its three
+h2-reachable construction sites (`http2.rs:167`, `http2.rs:196`, `dispatch.rs:223`) are all
+never-sent.
+
+| Observed warn line | Meaning | Implicates the retry gap? |
+|---|---|---|
+| `h2 send_request failed: operation was canceled` | never sent — stale-pooled TOCTOU | **YES** |
+| `h2 send_request failed: <anything else>` | sent; upstream genuinely failed | **NO — the 502 is faithful** |
+| `upstream dial failed:` / `h2 handshake failed:` | fresh dial; nothing was reused | **NO** |
+| `h2 send_request timed out` | 30 s elapsed | already refuted at 0.232 s |
+
+**What is explicitly NOT claimed:** that this gap explains CF-S44. It is unproven until a repro
+names the variant, and if the variant is `Dial`/`Handshake` then nothing was reused and this
+finding is **irrelevant** to that failure. A plausible gap must not become an attribution
+(`feedback-symptom-not-attribution`). The design gap is worth fixing on its own merits either way.
 
 *(Phases 2–4 appended as each completes.)*
