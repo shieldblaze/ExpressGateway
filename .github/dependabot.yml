@@ -6,11 +6,55 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
-    open-pull-requests-limit: 1
+    # 2, not 1: the security group and the version group must be able to be
+    # open at the same time. See the group split below for why.
+    open-pull-requests-limit: 2
     groups:
-      dependencies:
+      # SECURITY fixes get their OWN pull request, separate from routine
+      # version bumps.
+      #
+      # Why this split exists: with a single "*" group, every advisory fix was
+      # bundled with every routine bump — including the tokio 1.52 bump this
+      # repo deliberately holds (see `ignore:` below). The bundle was therefore
+      # closed each time it appeared, and Dependabot regenerated it the next
+      # day, unchanged. A security fix inside that bundle could never land on
+      # its own.
+      #
+      # That is not hypothetical. RUSTSEC-2026-0258 (h2 "unbounded empty DATA
+      # frames", published 2026-08-17) rode inside the grouped PR and sat
+      # unfixed for two weeks while the weekly "Dependency Audit (weekly,
+      # strict)" job stayed red, because closing the bundle to reject the tokio
+      # bump also discarded the h2 fix. It was finally landed by hand in the
+      # S47 review. Splitting the groups is the durable fix.
+      security:
+        applies-to: security-updates
         patterns:
           - "*"
+      dependencies:
+        applies-to: version-updates
+        patterns:
+          - "*"
+    # HELD dependencies. Each hold is a measured decision recorded in the
+    # workspace Cargo.toml; without these entries Dependabot rewrites the
+    # manifest constraint itself every day and the whole group gets rejected.
+    #
+    # Both bounds are deliberately narrow: they block only the held major/minor
+    # and leave patch releases — including SECURITY patches — free to land.
+    ignore:
+      # tokio HELD at 1.51.x. tokio 1.52's LIFO slot-stealing revert collapsed
+      # H2->H3 relay throughput ~10x (CF-S37-D-TOKIO-1.52-RELAY): the
+      # h2h3_fcap1 test forwards ~30 MiB/60s on 1.52.3 vs 64 MiB/~5.7s on
+      # 1.51.1, reproduced 3/3. The workspace constraint is ">=1.51, <1.52".
+      # Lift when upstream restores throughput.
+      - dependency-name: "tokio"
+        versions: [">=1.52"]
+      # reqwest HELD at 0.12 (dev-dependency only, never in the release
+      # binary). 0.13 renamed/removed the `rustls-tls` feature and switched its
+      # default crypto provider to aws-lc-rs, away from our ring standard —
+      # dev-only churn with a real crypto-provider consequence
+      # (CF-S37-D-REQWEST-0.13).
+      - dependency-name: "reqwest"
+        versions: [">=0.13"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
