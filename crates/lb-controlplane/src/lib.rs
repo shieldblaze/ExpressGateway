@@ -204,7 +204,31 @@ impl ConfigManager {
         Ok(())
     }
 
+    /// Roll back the IN-MEMORY config to the one saved by the last [`Self::reload`], leaving the
+    /// backend untouched. Returns `false` if there is no previous config to restore.
+    ///
+    /// This is the correct rollback when a config was read, failed validation, and was therefore
+    /// never applied: the backend still holds what the operator wrote, and that is the copy they
+    /// are about to fix. [`Self::rollback_to_previous`] writes to the backend as well, which for a
+    /// `FileBackend` means overwriting the operator's file — appropriate for undoing a config that
+    /// was actually pushed and applied, destructive for one that merely failed to parse.
+    ///
+    /// S47-CFG-01: `main.rs` used the storing variant on both SIGHUP failure paths, so a typo in a
+    /// hand-edited config was silently reverted on disk and the operator lost the edit.
+    pub fn rollback_to_previous_in_memory(&mut self) -> bool {
+        let Some(prev) = self.previous_config.take() else {
+            return false;
+        };
+        let old = std::mem::replace(&mut self.current_config, prev);
+        self.previous_config = Some(old);
+        self.version += 1;
+        true
+    }
+
     /// Roll back to the config saved by the last [`Self::reload`]; `Ok(false)` if there is none.
+    ///
+    /// Writes the restored config through to the backend. For a config that was never applied,
+    /// prefer [`Self::rollback_to_previous_in_memory`] — see its doc for why.
     pub fn rollback_to_previous(&mut self) -> Result<bool, ControlPlaneError> {
         let Some(prev) = self.previous_config.take() else {
             return Ok(false);
@@ -311,6 +335,50 @@ mod tests {
         assert!(mgr.rollback_to_previous().unwrap());
         assert_eq!(mgr.current_config(), "key = \"v1\"");
         assert_eq!(mgr.version(), 3);
+    }
+
+    /// S47-CFG-01 — a rollback for a config that was never applied must not touch the backend.
+    ///
+    /// `main.rs` calls this on both SIGHUP failure paths. With the storing variant, a config that
+    /// is valid TOML but fails ExpressGateway's schema — a mistyped key, the single most common
+    /// operator error — had the PREVIOUS text written back over the operator's own file, so the
+    /// edit they were about to correct was destroyed. The `FileBackend` write is also a
+    /// create-and-rename, so it reset the file's mode and owner too.
+    ///
+    /// The second half is the CONTROL: the storing variant must still store, or this test would
+    /// pass just as well against a backend that had stopped writing entirely.
+    #[test]
+    fn config_manager_rollback_in_memory_does_not_write_the_backend() {
+        let backend = InMemoryBackend::new("key = \"v1\"");
+        let mut mgr = ConfigManager::new(Box::new(backend)).unwrap();
+
+        // Operator edits the file; the gateway reads it, then rejects it downstream.
+        mgr.backend.store("key = \"operator-edit\"").unwrap();
+        assert!(mgr.reload().unwrap());
+        assert_eq!(mgr.current_config(), "key = \"operator-edit\"");
+
+        assert!(mgr.rollback_to_previous_in_memory());
+
+        // In-memory state reverts to the live config...
+        assert_eq!(mgr.current_config(), "key = \"v1\"");
+        // ...but the operator's edit is still on disk, untouched.
+        assert_eq!(
+            mgr.backend.load().unwrap(),
+            "key = \"operator-edit\"",
+            "an in-memory rollback must never overwrite the operator's config file"
+        );
+
+        // CONTROL: the storing variant does write through, so the assertion above is meaningful.
+        let backend2 = InMemoryBackend::new("key = \"v1\"");
+        let mut mgr2 = ConfigManager::new(Box::new(backend2)).unwrap();
+        mgr2.backend.store("key = \"operator-edit\"").unwrap();
+        assert!(mgr2.reload().unwrap());
+        assert!(mgr2.rollback_to_previous().unwrap());
+        assert_eq!(
+            mgr2.backend.load().unwrap(),
+            "key = \"v1\"",
+            "the storing variant must still write through to the backend"
+        );
     }
 
     #[test]

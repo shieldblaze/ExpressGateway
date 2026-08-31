@@ -376,8 +376,12 @@ async fn reload_config(
     let new_config = match lb_config::parse_config(mgr.current_config()) {
         Ok(c) => c,
         Err(e) => {
-            tracing::warn!(error = %e, "SIGHUP: new config failed to parse into LbConfig — rolling back, keeping live config");
-            let _ = mgr.rollback_to_previous();
+            tracing::warn!(error = %e, "SIGHUP: new config failed to parse into LbConfig — keeping live config, config file left untouched");
+            // S47-CFG-01: in-memory rollback ONLY. The storing variant writes the previous text
+            // back through the FileBackend, i.e. over the operator's own config file — so a
+            // mistyped key (valid TOML, invalid schema: the most common operator error) silently
+            // destroyed the edit they were about to fix.
+            mgr.rollback_to_previous_in_memory();
             if let Some(m) = metrics {
                 m.failed_total.inc();
             }
@@ -385,8 +389,9 @@ async fn reload_config(
         }
     };
     if let Err(e) = lb_config::validate_config(&new_config) {
-        tracing::warn!(error = %e, "SIGHUP: new config failed validation — rolling back, keeping live config");
-        let _ = mgr.rollback_to_previous();
+        tracing::warn!(error = %e, "SIGHUP: new config failed validation — keeping live config, config file left untouched");
+        // S47-CFG-01: in-memory rollback ONLY — see the parse-failure arm above.
+        mgr.rollback_to_previous_in_memory();
         if let Some(m) = metrics {
             m.failed_total.inc();
         }

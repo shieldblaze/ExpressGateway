@@ -682,6 +682,23 @@ weight = 1
              (before={failed_before}, after={failed_after})"
         );
 
+        // S47-CFG-01: the operator's file must survive a rejected reload.
+        //
+        // This test wrote `bad` above and, until S47, never looked at the file again — which is
+        // why it stayed green while the gateway quietly overwrote it. The rejected config is
+        // valid TOML that fails `validate_config`, i.e. exactly the shape a typo produces, and
+        // the failure path used to call `rollback_to_previous()`, whose `backend.store()` wrote
+        // the PREVIOUS text back through the `FileBackend` onto this very path. The operator's
+        // edit was destroyed, and the log line ("rolling back, keeping live config") read as an
+        // in-memory-only action.
+        let on_disk = std::fs::read_to_string(dir.join("gateway.toml"))
+            .expect("config file must still exist after a rejected reload");
+        assert_eq!(
+            on_disk, bad,
+            "a rejected SIGHUP must leave the operator's config file byte-for-byte as they \
+             wrote it — the gateway must never overwrite the edit the operator is about to fix"
+        );
+
         drop(child);
         drop(backend_a);
         std::fs::remove_dir_all(&dir).ok();
