@@ -247,6 +247,47 @@ impl H3Request {
     }
 }
 
+/// Is `v` a bare HTTP token, per the `tchar` production in RFC 9110 §5.6.2?
+///
+/// Used to gate `:method` before it reaches [`build_h1_head`]. quiche performs no character
+/// validation on decoded QPACK values (`quiche::h3` documents that "the application should
+/// validate pseudo-headers and headers"), and `String::from_utf8_lossy` preserves CR and LF
+/// byte-for-byte, so this is the only thing standing between a hostile field section and the
+/// backend's request line.
+fn is_http_token(v: &str) -> bool {
+    !v.is_empty()
+        && v.bytes().all(|b| {
+            b.is_ascii_alphanumeric()
+                || matches!(
+                    b,
+                    b'!' | b'#'
+                        | b'$'
+                        | b'%'
+                        | b'&'
+                        | b'\''
+                        | b'*'
+                        | b'+'
+                        | b'-'
+                        | b'.'
+                        | b'^'
+                        | b'_'
+                        | b'`'
+                        | b'|'
+                        | b'~'
+                )
+        })
+}
+
+/// Is `v` free of the bytes that would break out of an HTTP/1.1 request line?
+///
+/// Rejects every octet at or below SP (which covers CR, LF, HTAB and NUL) plus DEL. Deliberately
+/// permissive above that: percent-encoding is left intact, `*` (asterisk-form) passes, and bytes
+/// >= 0x80 are allowed through since they cannot terminate a request line and some clients do send
+/// raw UTF-8 targets. The goal here is request-line integrity, not URI canonicalisation.
+fn is_request_target_safe(v: &str) -> bool {
+    !v.bytes().any(|b| b <= 0x20 || b == 0x7F)
+}
+
 /// RFC 9114 §4.3 / §4.3.1 request pseudo-header validation (h3spec #12–15). Runs BEFORE
 /// [`H3Request::from_headers`] (which silently defaults missing pseudo-headers) and before any
 /// upstream is dialled. A missing `:authority`/`Host` on http/https is STRICT (owner ruling).
@@ -280,6 +321,15 @@ pub fn validate_request_pseudo_headers(
                     if method.is_some() {
                         return Err("h3 duplicate :method pseudo-header (RFC 9114 §4.3.1)");
                     }
+                    // S47-SMG-01: `:method` is spliced verbatim into a hand-built HTTP/1.1
+                    // request line by `build_h1_head`, so a non-token byte here is request
+                    // injection into the backend, not a cosmetic defect.
+                    if !is_http_token(value) {
+                        return Err(
+                            "h3 :method is not a token (RFC 9110 §5.6.2) — refusing to splice \
+                             it into an HTTP/1.1 request line",
+                        );
+                    }
                     method = Some(value);
                 }
                 ":scheme" => {
@@ -291,6 +341,20 @@ pub fn validate_request_pseudo_headers(
                 ":path" => {
                     if seen_path {
                         return Err("h3 duplicate :path pseudo-header (RFC 9114 §4.3.1)");
+                    }
+                    // S47-SMG-01: same sink as `:method` above. A CR, LF or SP here terminates
+                    // the request line `build_h1_head` is assembling and lets the client append
+                    // arbitrary headers and a second, smuggled request.
+                    if !is_request_target_safe(value) {
+                        return Err(
+                            "h3 :path contains a control character, space or DEL — refusing to \
+                             splice it into an HTTP/1.1 request line (RFC 9114 §4.3.1)",
+                        );
+                    }
+                    // RFC 9114 §4.3.1: ":path ... MUST NOT be empty for http or https URIs".
+                    // An empty value also emits a malformed `GET  HTTP/1.1` double-space line.
+                    if value.is_empty() {
+                        return Err("h3 empty :path pseudo-header (RFC 9114 §4.3.1)");
                     }
                     seen_path = true;
                 }
@@ -2074,6 +2138,86 @@ mod tests {
             .iter()
             .map(|(n, v)| ((*n).to_string(), (*v).to_string()))
             .collect()
+    }
+
+    /// S47-SMG-01 — CRITICAL: `:method` and `:path` reach `build_h1_head`, which splices them
+    /// verbatim into a hand-built HTTP/1.1 request line. quiche does not validate decoded QPACK
+    /// values and `String::from_utf8_lossy` preserves CR/LF, so before this gate an H3 client
+    /// could terminate the request line and inject headers plus a whole second request into the
+    /// H1 backend — ACL bypass, `X-Forwarded-For` forgery and cache poisoning.
+    ///
+    /// `:authority` was already validated (`lb_core::authority::validate`); these two were not.
+    #[test]
+    fn pseudo_s47_smg_01_crlf_in_method_or_path_rejected() {
+        // The exact PoC field section: a `:path` that closes the request line and smuggles a
+        // second request behind it.
+        let split = h(&[
+            (":method", "GET"),
+            (":scheme", "https"),
+            (":authority", "gateway.example"),
+            (
+                ":path",
+                "/admin/keys HTTP/1.1\r\nHost: internal-only.svc\r\nX-Forwarded-For: 127.0.0.1\r\n\r\nGET /health",
+            ),
+        ]);
+        assert!(
+            validate_request_pseudo_headers(&split, false).is_err(),
+            "CRLF in :path must be rejected — it is request splitting into the H1 backend"
+        );
+
+        // Each injection byte on its own, in both sinks.
+        for bad in ["\r", "\n", " ", "\t", "\0", "\x7f"] {
+            let p = h(&[
+                (":method", "GET"),
+                (":scheme", "https"),
+                (":authority", "h"),
+                (":path", &format!("/a{bad}b")),
+            ]);
+            assert!(
+                validate_request_pseudo_headers(&p, false).is_err(),
+                "byte {bad:?} must be rejected in :path"
+            );
+            let m = h(&[
+                (":method", &format!("GET{bad}")),
+                (":scheme", "https"),
+                (":authority", "h"),
+                (":path", "/"),
+            ]);
+            assert!(
+                validate_request_pseudo_headers(&m, false).is_err(),
+                "byte {bad:?} must be rejected in :method"
+            );
+        }
+
+        // Empty :path is malformed per RFC 9114 §4.3.1 and would emit `GET  HTTP/1.1`.
+        let empty = h(&[
+            (":method", "GET"),
+            (":scheme", "https"),
+            (":authority", "h"),
+            (":path", ""),
+        ]);
+        assert!(validate_request_pseudo_headers(&empty, false).is_err());
+
+        // NON-VACUOUS CONTROL: the gate must not have become a blanket reject. Percent-encoding,
+        // query strings, asterisk-form and non-token-looking-but-legal methods still pass.
+        for (method, path) in [
+            ("GET", "/a%20b"),
+            ("POST", "/x?y=1&z=%2F"),
+            ("OPTIONS", "*"),
+            ("PATCH", "/p/../q"),
+            ("M-SEARCH", "/"),
+        ] {
+            let ok = h(&[
+                (":method", method),
+                (":scheme", "https"),
+                (":authority", "h"),
+                (":path", path),
+            ]);
+            assert!(
+                validate_request_pseudo_headers(&ok, false).is_ok(),
+                "{method} {path} is legal and must still be accepted"
+            );
+        }
     }
 
     #[test]
