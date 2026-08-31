@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::time::Duration;
 
+use lb_quic::public_header::MIN_INITIAL_DATAGRAM_BYTES;
 use lb_quic::{PassthroughListener, PassthroughParams};
 use lb_security::{RETRY_SECRET_LEN, RetryTokenSigner};
 use tokio::net::UdpSocket;
@@ -110,7 +111,7 @@ fn varint(v: u64, out: &mut Vec<u8>) {
 }
 
 fn build_initial(dcid: &[u8], scid: &[u8], token: &[u8]) -> Vec<u8> {
-    let mut pkt = Vec::with_capacity(64 + token.len());
+    let mut pkt = Vec::with_capacity(MIN_INITIAL_DATAGRAM_BYTES + token.len());
     pkt.push(0b1100_0000);
     pkt.extend_from_slice(&0x0000_0001u32.to_be_bytes());
     pkt.push(u8::try_from(dcid.len()).unwrap());
@@ -121,6 +122,18 @@ fn build_initial(dcid: &[u8], scid: &[u8], token: &[u8]) -> Vec<u8> {
     pkt.extend_from_slice(token);
     varint(1, &mut pkt);
     pkt.push(0u8);
+    // RFC 9000 §14.1: a client MUST expand every datagram carrying an Initial to at least 1200
+    // bytes, and S47-QUIC-1 made the gateway enforce the matching server-side MUST ("discard an
+    // Initial carried in a smaller datagram") — without which an 8-byte spoofed Initial drew a
+    // ~96-byte Retry and the listener was a ~12x UDP reflector.
+    //
+    // These fixtures previously emitted ~22 bytes, which no conforming client could put on the
+    // wire, so they are padded here rather than the gate being relaxed. A real client pads with
+    // PADDING frames inside the encrypted payload; Mode A never decrypts, so trailing zeroes are
+    // a faithful stand-in and leave every header field these tests assert on untouched.
+    if pkt.len() < MIN_INITIAL_DATAGRAM_BYTES {
+        pkt.resize(MIN_INITIAL_DATAGRAM_BYTES, 0u8);
+    }
     pkt
 }
 
