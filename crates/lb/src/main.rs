@@ -2635,11 +2635,30 @@ async fn async_main() -> anyhow::Result<()> {
         observer: Some(observer),
     };
 
-    // Cancel the admin listener BEFORE the coordinator so it does not serve `/readyz` Ready during
-    // the settle window.
-    admin_cancel.cancel();
-
+    // S47-REL-01: the admin listener stays UP for the whole drain, and is cancelled only after
+    // `run_drain` returns (below).
+    //
+    // It used to be cancelled here, BEFORE the coordinator, with the rationale "so it does not
+    // serve `/readyz` Ready during the settle window". That rationale is already satisfied by the
+    // coordinator itself: phase 2 of `run_drain` invokes the `mark_draining` closure above, which
+    // calls `probes.set_draining()` and flips `/readyz` to 503 before anything else happens.
+    //
+    // Cancelling first did not make `/readyz` say "not ready" — it closed the socket, so BOTH
+    // probes became connection-refused. `probes.rs` states the contract this violates:
+    //
+    //     Draining: `/readyz` 503 to stop new traffic, but `/livez` stays 200 or K8s kills the
+    //     pod mid-drain.
+    //
+    // So the early cancel produced exactly the outcome that comment warns about, and it made
+    // phases 2 and 3 (`mark_draining`, `readiness_settle`) pointless: the flag was flipped and the
+    // settle window waited out with nobody able to observe either. It also meant every drain
+    // metric in the report below was written after the scrape socket had closed, so the drain was
+    // unobservable in Prometheus as well.
     let report = shutdown.run_drain(spec).await;
+
+    // Now the drain is complete: no new traffic can arrive, so the probe surface has done its job
+    // and the admin listener can go.
+    admin_cancel.cancel();
     tracing::info!(
         mark_draining_ms = report.mark_draining.duration.as_millis() as u64,
         readiness_settle_ms = report.readiness_settle.duration.as_millis() as u64,
