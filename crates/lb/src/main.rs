@@ -129,6 +129,9 @@ struct TlsReloadEntry {
     cert_path: PathBuf,
     key_path: PathBuf,
     alpn: Vec<Vec<u8>>,
+    /// S47-TLS-01: re-applied on every SIGUSR1 reload, so a cert rotation cannot silently
+    /// re-enable TLS 1.2 on a listener the operator restricted to 1.3.
+    tls13_only: bool,
     bundle: lb_security::SharedTlsBundle,
     /// Held so a reload re-installs the SAME ticketer — session-ticket resumption survives a cert
     /// swap.
@@ -291,12 +294,13 @@ fn reload_all_tls(registry: &[TlsReloadEntry], metrics: Option<&CertMetrics>) ->
         }
         let alpn_slices: Vec<&[u8]> = entry.alpn.iter().map(Vec::as_slice).collect();
         let ticketer = lb_security::RotatingTicketer::ticketer_from(Arc::clone(&entry.rotator));
-        match lb_security::reload_tls_bundle(
+        match lb_security::reload_tls_bundle_with_policy(
             &entry.bundle,
             &entry.cert_path,
             &entry.key_path,
             &alpn_slices,
             Some(ticketer),
+            entry.tls13_only,
         ) {
             Ok(()) => {
                 ok += 1;
@@ -824,6 +828,7 @@ fn assert_key_perm_advisory_with(path: &Path, strict: bool) -> anyhow::Result<()
 fn build_tls_bundle(
     tls_cfg: &TlsConfig,
     alpn: &[&[u8]],
+    tls13_only: bool,
 ) -> anyhow::Result<(lb_security::SharedTlsBundle, Arc<PlMutex<TicketRotator>>)> {
     assert_key_perm_advisory(Path::new(&tls_cfg.key_path))?;
     let interval = Duration::from_secs(tls_cfg.ticket_rotation_interval_seconds);
@@ -832,12 +837,13 @@ fn build_tls_bundle(
         .map_err(|e| anyhow::anyhow!("ticket rotator init failed: {e}"))?;
     let rot_arc = Arc::new(PlMutex::new(rotator));
     let ticketer = lb_security::RotatingTicketer::ticketer_from(Arc::clone(&rot_arc));
-    let bundle = lb_security::TlsConfigBundle::load_from_paths_with(
+    let bundle = lb_security::TlsConfigBundle::load_from_paths_with_policy(
         Path::new(&tls_cfg.cert_path),
         Path::new(&tls_cfg.key_path),
         alpn,
         lb_security::DEFAULT_MAX_CHAIN_DEPTH,
         Some(ticketer),
+        tls13_only,
     )
     .map_err(|e| {
         anyhow::anyhow!(
@@ -1591,6 +1597,8 @@ async fn spawn_tcp(
     watchdog: Option<Watchdog>,
     ejection_policy: EjectionPolicy,
     health_index: HealthIndex,
+    // S47-TLS-01: `[runtime.tls] tls13_only`, forwarded to `build_listener_mode`.
+    tls13_only: bool,
 ) -> anyhow::Result<tokio::task::JoinHandle<anyhow::Result<()>>> {
     let mut addresses = Vec::with_capacity(listener_cfg.backends.len());
     let mut backends = Vec::with_capacity(listener_cfg.backends.len());
@@ -1641,6 +1649,7 @@ async fn spawn_tcp(
         watchdog.as_ref(),
         max_keepalive_requests,
         &health,
+        tls13_only,
     )?;
     match &mode {
         ListenerMode::H1 { proxy } => {
@@ -1704,6 +1713,8 @@ fn build_listener_mode(
     watchdog: Option<&Watchdog>,
     max_keepalive_requests: u32,
     health: &Arc<HealthRegistry>,
+    // S47-TLS-01: `[runtime.tls] tls13_only`, threaded the same way `max_keepalive_requests` is.
+    tls13_only: bool,
 ) -> anyhow::Result<ListenerMode> {
     let hooks_arc_dyn: Arc<dyn lb_l7::security_hooks::DynSecurityHooks> =
         Arc::clone(hooks) as Arc<_>;
@@ -1715,7 +1726,7 @@ fn build_listener_mode(
                     listener_cfg.address
                 );
             };
-            let (bundle, rotator) = build_tls_bundle(tls_cfg, &[])
+            let (bundle, rotator) = build_tls_bundle(tls_cfg, &[], tls13_only)
                 .with_context(|| format!("TLS setup failed for {}", listener_cfg.address))?;
             spawn_rotator_ticker(
                 Arc::clone(&rotator),
@@ -1729,6 +1740,7 @@ fn build_listener_mode(
                 alpn: Vec::new(),
                 bundle: Arc::clone(&bundle),
                 rotator: Arc::clone(&rotator),
+                tls13_only,
             });
             tracing::info!(
                 address = %listener_cfg.address,
@@ -1787,7 +1799,7 @@ fn build_listener_mode(
                 );
             };
             let h1s_alpn: &[&[u8]] = &[b"h2", b"http/1.1"];
-            let (bundle, rotator) = build_tls_bundle(tls_cfg, h1s_alpn)
+            let (bundle, rotator) = build_tls_bundle(tls_cfg, h1s_alpn, tls13_only)
                 .with_context(|| format!("H1s TLS setup failed for {}", listener_cfg.address))?;
             spawn_rotator_ticker(
                 Arc::clone(&rotator),
@@ -1801,6 +1813,7 @@ fn build_listener_mode(
                 alpn: h1s_alpn.iter().map(|p| p.to_vec()).collect(),
                 bundle: Arc::clone(&bundle),
                 rotator: Arc::clone(&rotator),
+                tls13_only,
             });
             let upstreams_h1 = build_upstream_backends(listener_cfg, addresses)?;
             let upstreams_h2 = upstreams_h1.clone();
@@ -2213,6 +2226,19 @@ async fn async_main() -> anyhow::Result<()> {
     // `SocketAddr` — the pre-S46 seed keyed checkers by the raw config string and so could never
     // have matched a live request.
     let ejection_policy = ejection_policy_from(config.runtime.as_ref());
+    // S47-TLS-01: `[runtime.tls] tls13_only` is a process-wide compliance policy
+    // (PCI-DSS 4.0 §4.2.1.1). It was parsed and validated but never reached a listener, so every
+    // `tls`/`h1s` listener kept negotiating TLS 1.2 while the operator believed it was off.
+    let tls13_only = config
+        .runtime
+        .as_ref()
+        .and_then(|r| r.tls.as_ref())
+        .is_some_and(|t| t.tls13_only);
+    if tls13_only {
+        // Log it: the whole failure mode here was a security policy that applied silently, or in
+        // this case did not apply at all. An operator must be able to confirm it took effect.
+        tracing::info!("[runtime.tls] tls13_only = true — TLS listeners restricted to TLS 1.3");
+    }
     let health_index: HealthIndex = Arc::new(PlMutex::new(Vec::new()));
     tracing::info!(
         enabled = ejection_policy.enabled,
@@ -2459,6 +2485,7 @@ async fn async_main() -> anyhow::Result<()> {
             Some(watchdog.clone()),
             ejection_policy,
             Arc::clone(&health_index),
+            tls13_only,
         )
         .await?;
         listener_handles.push(handle);
@@ -3435,6 +3462,7 @@ mod tests {
                 TicketRotator::new(Duration::from_secs(3600), Duration::from_secs(60))
                     .expect("ticket rotator"),
             )),
+            tls13_only: false,
         };
 
         let (ok, fail) = reload_all_tls(std::slice::from_ref(&entry), Some(&metrics));
@@ -5461,6 +5489,7 @@ mod tests {
             None,
             100,
             &health,
+            false,
         );
         assert!(outcome.is_err(), "typo protocol should have errored");
         let msg = match outcome {

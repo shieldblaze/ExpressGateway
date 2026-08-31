@@ -52,7 +52,7 @@ pub use smuggle::{SmuggleDetector, SmuggleMode};
 pub use ticket::{
     DEFAULT_MAX_CHAIN_DEPTH, RotatingTicketer, SharedTlsBundle, TicketError, TicketKey,
     TicketRotator, TlsBundleError, TlsConfigBundle, build_server_config,
-    build_server_config_with_policy, reload_tls_bundle,
+    build_server_config_with_policy, reload_tls_bundle, reload_tls_bundle_with_policy,
 };
 pub use watchdog::{ConnId, Watchdog, WatchdogConfig, WatchdogError};
 pub use zero_rtt::{DEFAULT_ZERO_RTT_REPLAY_WINDOW_SIZE, ZeroRttReplayGuard};

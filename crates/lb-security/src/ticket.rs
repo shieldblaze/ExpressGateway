@@ -362,12 +362,32 @@ impl TlsConfigBundle {
     }
 
     /// [`Self::load_from_paths`] with an explicit depth cap and a `ticketer` carried across a swap.
+    ///
+    /// Offers both TLS 1.2 and 1.3. For the `[runtime.tls] tls13_only` compliance policy use
+    /// [`Self::load_from_paths_with_policy`].
     pub fn load_from_paths_with(
         cert: &Path,
         key: &Path,
         alpn: &[&[u8]],
         max_depth: usize,
         ticketer: Option<Arc<dyn ProducesTickets>>,
+    ) -> Result<Self, TlsBundleError> {
+        Self::load_from_paths_with_policy(cert, key, alpn, max_depth, ticketer, false)
+    }
+
+    /// [`Self::load_from_paths_with`] plus the process-wide TLS version policy.
+    ///
+    /// `tls13_only` maps to `[runtime.tls] tls13_only` (PCI-DSS 4.0 §4.2.1.1). S47-TLS-01: the
+    /// knob was parsed and validated but no code path carried it to a listener, so every `tls`
+    /// and `h1s` listener kept negotiating TLS 1.2 while the operator, `docs/guide/CONFIG.md`,
+    /// `docs/features.md` and `SECURITY.md` all believed it was off.
+    pub fn load_from_paths_with_policy(
+        cert: &Path,
+        key: &Path,
+        alpn: &[&[u8]],
+        max_depth: usize,
+        ticketer: Option<Arc<dyn ProducesTickets>>,
+        tls13_only: bool,
     ) -> Result<Self, TlsBundleError> {
         let cert_file = std::fs::File::open(cert).map_err(|e| TlsBundleError::Io {
             path: cert.to_path_buf(),
@@ -404,8 +424,14 @@ impl TlsConfigBundle {
 
         // rustls's own cert-vs-key match check — catches the mismatched-upload mistake.
         let provider = Arc::new(rustls::crypto::ring::default_provider());
-        let builder = rustls::ServerConfig::builder_with_provider(provider)
-            .with_safe_default_protocol_versions()
+        let versioned = if tls13_only {
+            rustls::ServerConfig::builder_with_provider(provider)
+                .with_protocol_versions(&[&rustls::version::TLS13])
+        } else {
+            rustls::ServerConfig::builder_with_provider(provider)
+                .with_safe_default_protocol_versions()
+        };
+        let builder = versioned
             .map_err(|e| TlsBundleError::KeyMismatch(e.to_string()))?
             .with_no_client_auth();
         let mut cfg = builder
@@ -456,8 +482,32 @@ pub fn reload_tls_bundle(
     alpn: &[&[u8]],
     ticketer: Option<Arc<dyn ProducesTickets>>,
 ) -> Result<(), TlsBundleError> {
-    let new =
-        TlsConfigBundle::load_from_paths_with(cert, key, alpn, DEFAULT_MAX_CHAIN_DEPTH, ticketer)?;
+    reload_tls_bundle_with_policy(bundle, cert, key, alpn, ticketer, false)
+}
+
+/// [`reload_tls_bundle`] carrying the process-wide TLS version policy.
+///
+/// A reload MUST re-apply `tls13_only`; otherwise a cert rotation silently re-enables TLS 1.2 on
+/// a listener the operator had restricted (S47-TLS-01).
+///
+/// # Errors
+/// Same as [`reload_tls_bundle`]: any load or validation failure leaves the previous bundle live.
+pub fn reload_tls_bundle_with_policy(
+    bundle: &SharedTlsBundle,
+    cert: &Path,
+    key: &Path,
+    alpn: &[&[u8]],
+    ticketer: Option<Arc<dyn ProducesTickets>>,
+    tls13_only: bool,
+) -> Result<(), TlsBundleError> {
+    let new = TlsConfigBundle::load_from_paths_with_policy(
+        cert,
+        key,
+        alpn,
+        DEFAULT_MAX_CHAIN_DEPTH,
+        ticketer,
+        tls13_only,
+    )?;
     bundle.store(Arc::new(new));
     Ok(())
 }
