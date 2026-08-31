@@ -28,7 +28,7 @@ is 2 vCPU / 7 GB RAM, so all verification runs in GitHub Actions.
 | `cr-config-wiring.md` | Config, SIGHUP reload, shutdown, binary wiring |
 | `cr-io-pool.md` | Connection pooling, upstream IO, DNS |
 | `rel-obs.md` | Observability, operability, failure modes |
-| `ebpf-xdp.md` | XDP / eBPF L4 datapath |
+| `ebpf-xdp.md` | XDP / eBPF L4 datapath (16 findings; the eBPF source, the committed object, and the verifier baselines) |
 | `divergence.md` | Divergence vs Pingora / Envoy / HAProxy / Katran |
 | `lead-deps.md` | Lead: dependency advisories + the update pipeline |
 
@@ -45,13 +45,24 @@ is 2 vCPU / 7 GB RAM, so all verification runs in GitHub Actions.
 
 ## Cross-cutting themes
 
-**1. "Implemented but unwired" is this codebase's dominant defect class.** Six
+**1. "Implemented but unwired" is this codebase's dominant defect class.** Seven
 separate agents found controls that exist, have passing unit tests, are cited in
 `SECURITY.md` or `audit/deferred.md` as live — and are never called by the
 binary. `cr-config-wiring` produced the authoritative WIRED/UNWIRED table.
-Notable: the H2 protocol-abuse glitch counter (`CW-05` / `RT-DOS-03` / `H2-04`,
-three independent finds) is documented as "fully WIRED" in `audit/deferred.md`
-and has no production call site.
+
+The two starkest cases:
+
+- The H2 protocol-abuse glitch counter (`CW-05` / `RT-DOS-03` / `H2-04` — three
+  independent finds) is documented as "fully WIRED" with "the operator knob and
+  Prometheus surface in place" in `audit/deferred.md:166-180`. `with_glitches`
+  has exactly one caller, a test.
+- The **entire XDP L4 data plane has no control plane in the shipped binary**
+  (`EBPF-S47-01`): `conntrack_map`, `conntrack_v6_map`, `acl_trie`,
+  `insert_acl_deny`, `publish_backends_v4`, `set_new_flow_cap` and
+  `install_stats_export` are all defined in `loader.rs` with **zero** production
+  callers, so every XDP metric is inert (`EBPF-S47-03`) and the SYN-flood
+  new-flow cap can never fire (`EBPF-S47-04`). Map pinning (`EBPF-S47-02`) is
+  unreachable despite being closed "Verified-Fixed".
 
 **2. Prior audit evidence contains false premises that survived into SECURITY.md.**
 `rt-crypto-auth` found S38 justified hardening the retry secret by contrast with
@@ -64,7 +75,14 @@ applies to its own audit trail.
 **3. Test oracles that cannot fail.** Multiple conformance and security tests
 assert against test-only helpers dead in production (`H3-M5`: both QPACK-bomb
 tests), or assert only library types and touch no gateway code (`H2-11`: all
-five 1xx tests).
+five 1xx tests). The eBPF pass found the same shape twice: the committed
+5.15/6.1/6.6 verifier baselines are placeholder files reading
+`HARNESS-CAPTURED-PENDING-CI-RERUN` (`EBPF-S47-08`), and the XDP "proof" tests
+re-implement in Rust the logic they claim to prove rather than running the BPF
+program (`EBPF-S47-09`). A fourth instance was found in this session's own fix
+work: `packaging/expressgateway.service` asserted that doc-lint enforced its
+agreement with `DEPLOYMENT.md`; no such check existed, which is how a
+`Type=notify` unit with no `sd_notify` shipped.
 
 ## Not re-reported
 
