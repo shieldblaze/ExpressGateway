@@ -35,6 +35,23 @@ attacked today, so they sit below live ones of nominally higher severity.
 | BAL-04 | `cr-balancer-health` | Maglev / ring-hash tables are built from an un-canonicalised backend list, so two gateway instances with the same backend SET but different ORDER build different tables. Classic Katran/Maglev fleet-consistency bug; invisible to any single-instance test. |
 | H3-H2 | `rfc-h3` | H3→H1 and H3→H2 legs have no deadline and response tasks are never aborted at actor teardown. |
 
+## Tier 2b — XDP / eBPF (all of `ebpf-xdp.md`)
+
+The L4 accelerator is a special case of Tier 3 severe enough to list separately:
+the data plane is implemented and the control plane is not, so the feature is not
+merely unwired, it is unconfigurable.
+
+| ID | What |
+|---|---|
+| EBPF-S47-01 | **HIGH.** `conntrack_map`, `conntrack_v6_map`, `acl_trie`, `insert_acl_deny`, `publish_backends_v4`, `set_new_flow_cap`, `install_stats_export` — all defined in `loader.rs`, all with ZERO production callers. |
+| EBPF-S47-02 | **HIGH.** Map pinning is unreachable from the binary, despite EBPF-2-05 being closed "Verified-Fixed". |
+| EBPF-S47-03 | Every XDP metric is inert, and the shipped default config fires a RUNBOOK alert forever. |
+| EBPF-S47-04 | The SYN-flood new-flow rate cap can never fire; its documented fallback is dead code. |
+| EBPF-S47-05 | The deny ACL is bypassable by IP fragmentation, and absent entirely on IPv6. |
+| EBPF-S47-06 | Partial rewrite on the TCP error path: L3 is mutated before a bounds check that can fail. |
+| EBPF-S47-07/08/09 | Nothing rebuilds or validates the committed object against its source; the claimed 5.15/6.1/6.6 verifier matrix is placeholder files; the "proof" tests re-implement the logic they claim to prove instead of running the BPF program. |
+| EBPF-S47-13/14/15/16 | UDP checksum of zero emitted as "no checksum"; no TTL/hop-limit decrement on DNAT-forward; `L7_PORTS` byte-order contract disagrees with its ADR; conntrack eviction on an unvalidated RST. |
+
 ## Tier 3 — unwired controls (fix the wiring or delete the code, but stop documenting it as live)
 
 `cr-config-wiring` holds the authoritative WIRED/UNWIRED table. The pattern
@@ -60,6 +77,20 @@ HIGH by its agent and is worth pulling forward if Mode A passthrough is deployed
 it is here only because Mode A is not the default listener type.
 
 ---
+
+## Fixed in this session (do not re-queue)
+
+Beyond the six in `INDEX.md`: `REL-02` (the shipped systemd unit was `Type=notify`
+with no `sd_notify` anywhere — systemd SIGKILLed a healthy gateway every 90 s and
+restart-looped forever) and `REL-05` (`ExecReload` sent SIGUSR1, the CERT reload, so
+`systemctl reload` applied no config change). Both are packaging-only. The same
+commit adds doc-lint tier-1b, which compares the shipped unit against
+`DEPLOYMENT.md` directive by directive — the enforcement the unit's own header had
+claimed since ROUND8-OPS-07 without it existing.
+
+`REL-01` (admin listener cancelled before `run_drain`, so `/readyz` never serves 503
+and `/livez` goes dark mid-drain) is NOT fixed and is a Tier 1 candidate: it defeats
+three documented runbook alerts and invites an orchestrator to kill a draining pod.
 
 ## Cross-cutting work items (not single findings)
 
