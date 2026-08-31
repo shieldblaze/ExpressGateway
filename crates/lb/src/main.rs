@@ -179,7 +179,7 @@ impl CertMetrics {
         let succeeded_total = metrics
             .counter(
                 "cert_rotation_succeeded_total",
-                "REL-2-03: number of successful TLS cert reloads (SIGUSR1 or inotify)",
+                "REL-2-03: number of successful TLS cert reloads (SIGUSR1)",
             )
             .ok()?;
         let failed_total = metrics
@@ -265,6 +265,30 @@ fn reload_all_tls(registry: &[TlsReloadEntry], metrics: Option<&CertMetrics>) ->
     let mut ok = 0_usize;
     let mut fail = 0_usize;
     for entry in registry {
+        // S47-SEC-1: perm-check the private key on THIS path too. `build_tls_bundle` calls
+        // `assert_key_perm_advisory` at startup (main.rs, the only call site before S47), but the
+        // SIGUSR1 reload path reaches `reload_tls_bundle` directly and did not, so a renewal that
+        // widened the key's mode was accepted with no warning and no error — even in release,
+        // where startup hard-fails on the same mode. Rotation is precisely where permissions
+        // drift (certbot/cert-manager writing under a wide umask, a tar restore), which makes the
+        // unchecked path the more reachable one.
+        //
+        // Same helper, so reload inherits startup's strictness exactly: hard-fail in release,
+        // warn-and-continue in debug. On failure the old bundle stays live, which is the same
+        // fail-safe `test_invalid_reload_keeps_old_cert_serving` already pins for a bad cert.
+        if let Err(e) = assert_key_perm_advisory(&entry.key_path) {
+            fail += 1;
+            if let Some(m) = metrics {
+                m.failed_total.with_label_values(&["key_perm"]).inc();
+            }
+            tracing::warn!(
+                listener = %entry.listener,
+                reason = "key_perm",
+                error = %e,
+                "REL-2-03 TLS cert reload failed — keeping previous bundle live"
+            );
+            continue;
+        }
         let alpn_slices: Vec<&[u8]> = entry.alpn.iter().map(Vec::as_slice).collect();
         let ticketer = lb_security::RotatingTicketer::ticketer_from(Arc::clone(&entry.rotator));
         match lb_security::reload_tls_bundle(
@@ -767,7 +791,14 @@ fn quic_listener_params_from_config(
 }
 
 fn assert_key_perm_advisory(path: &Path) -> anyhow::Result<()> {
-    let strict = !cfg!(debug_assertions);
+    // Strict in release, advisory in debug. Split from the body below so the release policy is
+    // reachable from a debug test build — without this seam a `cargo test` run can only ever
+    // observe the advisory half, which is why S47-SEC-1's regression coverage would otherwise be
+    // untestable on the exact branch that matters.
+    assert_key_perm_advisory_with(path, !cfg!(debug_assertions))
+}
+
+fn assert_key_perm_advisory_with(path: &Path, strict: bool) -> anyhow::Result<()> {
     match lb_security::assert_owner_only(path, strict) {
         Ok(lb_security::KeyPermAdvice::Ok | lb_security::KeyPermAdvice::NotApplicable) => Ok(()),
         Ok(lb_security::KeyPermAdvice::TooPermissive { mode }) => {
@@ -3313,6 +3344,115 @@ mod tests {
     use super::*;
     use lb_config::BackendConfig;
     use std::net::Ipv4Addr;
+
+    // ---- S47-SEC-1: TLS private-key permission gate on the SIGUSR1 reload path ----
+    //
+    // The gate existed only in `build_tls_bundle` (startup). `reload_all_tls` reached
+    // `lb_security::reload_tls_bundle` directly, so a renewal that widened the key's mode was
+    // accepted with no warning and no error, even in release — while startup hard-failed on the
+    // same mode. Rotation is where permissions drift, so the unchecked path was the reachable one.
+    //
+    // Two tests, because neither half proves the fix alone:
+    //   1. `..._policy_is_strict_in_release` pins the POLICY (a wide mode is rejected when strict).
+    //   2. `..._runs_before_the_bundle_load` pins the WIRING (reload_all_tls consults the gate at
+    //      all, and does so before touching the cert/key).
+
+    #[cfg(unix)]
+    #[test]
+    fn tls_key_perm_policy_is_strict_in_release_and_advisory_in_debug() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "eg-s47-keyperm-{}-{}",
+            std::process::id(),
+            rand::random::<u32>()
+        ));
+        std::fs::create_dir_all(&dir).expect("tmpdir");
+        let key = dir.join("key.pem");
+        std::fs::write(&key, b"not-a-real-key").expect("write");
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o644)).expect("chmod");
+
+        // Release policy: a group/other-readable key is a hard error.
+        let err = assert_key_perm_advisory_with(&key, true)
+            .expect_err("strict mode must reject a 0644 private key");
+        assert!(
+            err.to_string().contains("permission check failed"),
+            "unexpected error text: {err}"
+        );
+
+        // Debug policy: same file only warns, so local development is not blocked.
+        assert_key_perm_advisory_with(&key, false)
+            .expect("advisory mode must accept a 0644 key with only a warning");
+
+        // 0600 passes under both policies.
+        std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        assert_key_perm_advisory_with(&key, true).expect("0600 key must pass strict mode");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tls_key_perm_gate_runs_before_the_bundle_load_on_reload() {
+        // A key path the gate cannot stat makes `assert_owner_only` fail in BOTH policies, which
+        // is what lets this assertion run in a debug test build. The load-bearing assertion is the
+        // metric LABEL: `reload_tls_bundle` would report this same missing file as reason "io", so
+        // observing "key_perm" proves the gate ran, and ran first. Before the S47-SEC-1 fix this
+        // test fails with reason "io".
+        let registry = lb_observability::MetricsRegistry::new();
+        let metrics = CertMetrics::register(&registry).expect("cert metrics register");
+
+        let dir = std::env::temp_dir().join(format!(
+            "eg-s47-reloadgate-{}-{}",
+            std::process::id(),
+            rand::random::<u32>()
+        ));
+        std::fs::create_dir_all(&dir).expect("tmpdir");
+
+        let generated =
+            rcgen::generate_simple_self_signed(vec!["s47.example".to_string()]).expect("rcgen");
+        let cert_path = dir.join("cert.pem");
+        let key_path = dir.join("key.pem");
+        std::fs::write(&cert_path, generated.cert.pem()).expect("write cert");
+        std::fs::write(&key_path, generated.signing_key.serialize_pem()).expect("write key");
+
+        let bundle = lb_security::TlsConfigBundle::load_from_paths(&cert_path, &key_path, &[])
+            .expect("bundle loads")
+            .into_shared();
+
+        let entry = TlsReloadEntry {
+            listener: "s47".to_string(),
+            cert_path,
+            // Point the reload at a key that does not exist, so the gate rejects it.
+            key_path: dir.join("vanished.pem"),
+            alpn: Vec::new(),
+            bundle,
+            rotator: Arc::new(PlMutex::new(
+                TicketRotator::new(Duration::from_secs(3600), Duration::from_secs(60))
+                    .expect("ticket rotator"),
+            )),
+        };
+
+        let (ok, fail) = reload_all_tls(std::slice::from_ref(&entry), Some(&metrics));
+
+        assert_eq!(
+            ok, 0,
+            "a rejected key must not count as a successful reload"
+        );
+        assert_eq!(fail, 1, "the reload must be counted as failed");
+        assert_eq!(
+            metrics.failed_total.with_label_values(&["key_perm"]).get(),
+            1,
+            "the permission gate must be what rejected the reload (reason=key_perm), \
+             not the downstream bundle load (reason=io)"
+        );
+        assert_eq!(
+            metrics.failed_total.with_label_values(&["io"]).get(),
+            0,
+            "the bundle load must not have been reached at all"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     fn h3_backend(address: &str, ca: Option<&str>, verify: bool) -> BackendConfig {
         BackendConfig {

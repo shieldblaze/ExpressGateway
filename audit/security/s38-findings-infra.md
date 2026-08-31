@@ -49,6 +49,16 @@ file:
 - `crates/lb-quic/src/listener.rs:481-499` `load_or_generate_retry_secret` — `std::fs::read(path)` then length-check only.
 - `crates/lb-quic/src/passthrough.rs:~1260-1297` — identical.
 
+> **ERRATA (S47, 2026-08-31).** The contrast drawn in the next paragraph was
+> **factually wrong when written.** `assert_key_perm_advisory` had exactly ONE
+> call site — `build_tls_bundle`, i.e. **startup only**. The SIGUSR1 reload path
+> (`reload_all_tls` -> `lb_security::reload_tls_bundle`) performed no permission
+> check at all, so a renewal that widened the key's mode was accepted silently,
+> even in release. The asymmetry this finding identified was real, but it ran in
+> BOTH directions: S38 hardened the retry secret against a TLS-key baseline that
+> did not exist. Tracked and fixed as S47-SEC-1; the sentence below is true as of
+> that fix. Original text preserved unchanged for the record.
+
 Contrast the TLS private key, which IS perm-checked on every load (startup AND
 SIGUSR1 reload), strict in release builds:
 `crates/lb/src/main.rs:980` `assert_key_perm_advisory` (`strict = !cfg!(debug_assertions)`)
