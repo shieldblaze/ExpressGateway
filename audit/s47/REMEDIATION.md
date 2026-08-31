@@ -117,3 +117,55 @@ three documented runbook alerts and invites an orchestrator to kill a draining p
    because the newer h2 surfaces that path differently. All 1602 tests pass. Needs
    a test that drives a non-timeout `Http2PoolError`, since the standing rule is
    that no gate gets weakened.
+
+---
+
+## S47-CI-01 — the S46 hang-as-failure guard could never fire (fixed), and it immediately surfaced a CF-S44-class hang (open)
+
+**The guard.** `ci.yml`'s "Fail on a terminated test" step grepped
+`(^|[[:space:]])(TIMEOUT|TMT)[[:space:]]*\[` against `nextest-run.log`. The workflow
+sets `CARGO_TERM_COLOR: always`, so nextest actually writes:
+
+    \e[31;1m     TIMEOUT\e[0m [1200.024s] (1608/1608) lb-quic::grpc_h3_e2e ...
+
+The reset sequence sits between `TIMEOUT` and ` [`. `[[:space:]]*\[` cannot cross it
+(ESC 0x1B is not in `[[:space:]]`), so the pattern could never match a real colorized
+run. In run `33450259668` a test was terminated at 1200 s and the step printed **"No
+terminated tests."** The job stayed green because the coverage command runs with
+`--ignore-run-fail` — which `audit/ship/s46-report.md` already warns swallows a
+terminate.
+
+The step's own comment says the pattern "was R13-tested before being trusted (S46)".
+It can only have been tested against ANSI-free fixtures. That is the same defect class
+as CF-S44 itself: a control validated against an input differing from production in the
+one way that mattered.
+
+**Fixed** by normalising SGR sequences out of the log before matching. Proven against
+the real captured line: the old pattern MISSES it, the new one FIRES on it, and neither
+fires on a `PASS` line (no false red).
+
+**What the working guard found — still open.**
+`lb-quic::grpc_h3_e2e grpc_h3_trailer_survives_any_frame_granularity` hit the 1200 s
+`terminate-after` in run `33450259668`.
+
+Attribution, stated honestly from one observation:
+
+- The `Test` job — same commit, same suite, no llvm-cov instrumentation — passed all
+  1610 tests including this one. So it is instrumentation- and/or load-sensitive, not a
+  deterministic failure.
+- Run `33449106800` carried the identical H3 pseudo-header change and this test PASSED
+  there (334 s, no timeout), so the S47-SMG-01 validator is not implicated by the
+  evidence available.
+- The one plausible S47-side contributor is the passthrough fixture padding (22 ->
+  1200 bytes). It is weak: `BURST = 4096` datagrams is 4.9 MB over loopback, and the
+  test binds 4096 sockets, which dominates its cost and was not changed.
+- The likeliest reading is a recurrence of the CF-S44-class hang, which
+  `.config/nextest.toml` states was never root-caused: *"This is CONTAINMENT, not a
+  fix: the CF-S44 mechanism itself is still open (U5)."* The original hang was
+  `grpc_h3_without_te_header_still_delivers_trailer` — a sibling in the same file and
+  the same suite.
+
+**Consequence to expect:** now that the guard works, a recurrence turns the Coverage
+job RED instead of silently green. That is the intended behaviour and should not be
+"fixed" by relaxing the guard. Do not re-run and move on — capture
+`nextest-run.log` from the failing run, which is already archived by the workflow.

@@ -277,11 +277,26 @@ jobs:
         # Runs BEFORE coverage-check.sh on purpose: a run with a killed test has
         # incomplete profile data, so its coverage number is not trustworthy anyway.
         run: |
+          # S47: strip SGR sequences BEFORE matching. The workflow sets
+          # `CARGO_TERM_COLOR: always`, so nextest emits
+          #     \e[31;1m     TIMEOUT\e[0m [1200.024s] (1608/1608) lb-quic::grpc_h3_e2e ...
+          # and the reset sequence sits between `TIMEOUT` and ` [`. `[[:space:]]*\[` cannot
+          # cross it — ESC (0x1B) is not in [[:space:]] — so the pattern below could never
+          # match a real colorized run. Run 33450259668 terminated
+          # `grpc_h3_e2e grpc_h3_trailer_survives_any_frame_granularity` at 1200 s and this
+          # step still printed "No terminated tests"; the job stayed green because the
+          # coverage command runs with `--ignore-run-fail`.
+          #
+          # The S46 comment above says the pattern was R13-tested. It can only have been
+          # tested against ANSI-free fixtures — which is the same defect class CF-S44 itself
+          # was: a control validated against an input that differed from production in the
+          # one way that mattered. Normalise first, then apply the pattern unchanged.
+          sed 's/\x1b\[[0-9;]*m//g' nextest-run.log > nextest-run.plain.log
           PAT='(^|[[:space:]])(TIMEOUT|TMT)[[:space:]]*\['
-          if grep -qE "$PAT" nextest-run.log || grep -q 'global timeout' nextest-run.log; then
+          if grep -qE "$PAT" nextest-run.plain.log || grep -q 'global timeout' nextest-run.plain.log; then
             echo "::error::A test was TERMINATED by the nextest timeout — a CF-S44 class HANG, not a flake. Do NOT just re-run: capture the test named below."
-            grep -E "$PAT" nextest-run.log || true
-            grep -E 'global timeout' nextest-run.log || true
+            grep -E "$PAT" nextest-run.plain.log || true
+            grep -E 'global timeout' nextest-run.plain.log || true
             exit 1
           fi
           echo "No terminated tests."
