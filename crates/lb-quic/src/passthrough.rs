@@ -541,6 +541,24 @@ async fn handle_initial(
     scid: &[u8],
     token: Option<&[u8]>,
 ) {
+    // S47-QUIC-1 / RFC 9000 §14.1: a server MUST discard an Initial carried in a UDP datagram
+    // whose payload is smaller than 1200 bytes. `pkt` is the whole datagram.
+    //
+    // Same anti-amplification gate as the H3-terminate path in `router.rs`. Here a 17-byte
+    // spoofed Initial (the DCID floor below forces 8 of those bytes) draws a ~96-byte Retry from
+    // the `mint_retry` branch further down — ~5.6x reflection off any spoofed source, against the
+    // 3x ceiling RFC 9000 §8.1 sets for an unvalidated peer. Ordered ahead of the DCID-floor check
+    // because §14.1 is the cheaper and more general rejection.
+    if pkt.len() < crate::public_header::MIN_INITIAL_DATAGRAM_BYTES {
+        tracing::debug!(
+            peer = %from,
+            datagram_len = pkt.len(),
+            floor = crate::public_header::MIN_INITIAL_DATAGRAM_BYTES,
+            "dropping undersized Initial (RFC 9000 §14.1)"
+        );
+        return;
+    }
+
     // Cap-violation defence: drop Initials with DCIDs below the floor.
     if dcid.len() < ctx.params.min_client_dcid_len {
         tracing::debug!(
@@ -1168,6 +1186,83 @@ mod tests {
         assert_eq!(p.max_dcid_len_routed, MAX_CID_LEN);
     }
 
+    /// A datagram payload that satisfies RFC 9000 §14.1's 1200-byte floor for Initials.
+    ///
+    /// These tests exercise header-derived behaviour (DCID floor, Retry minting, flow eviction),
+    /// not payload content — but `handle_initial` now drops undersized Initials before any of that
+    /// is reached (S47-QUIC-1), and an 8-byte "Initial" was never a thing a conforming client could
+    /// put on the wire. Sizing the fixture correctly keeps each test measuring what it intends.
+    fn conforming_initial_datagram() -> Vec<u8> {
+        vec![0u8; crate::public_header::MIN_INITIAL_DATAGRAM_BYTES]
+    }
+
+    /// S47-QUIC-1 — RFC 9000 §14.1 / §8.1 anti-amplification gate.
+    ///
+    /// Before the fix, a spoofed 17-byte Initial drew a ~96-byte Retry from the `mint_retry`
+    /// branch, so Mode A reflected ~5.6x off any source address an attacker cared to name —
+    /// against the 3x ceiling §8.1 sets for an unvalidated peer. The listener was a usable UDP
+    /// amplifier.
+    ///
+    /// The second half is a NON-VACUOUS control: without it this test would still pass if the
+    /// fixture were broken in some unrelated way and no Retry were ever minted for any input.
+    #[test]
+    fn undersized_initial_is_dropped_and_mints_no_retry() {
+        rt().block_on(async {
+            let client = UdpSocket::bind(loopback(0)).await.expect("client bind");
+            let from = client.local_addr().expect("client addr");
+            let (ctx, m, _b) = test_ctx(|p| p.mint_retry = true).await;
+            let dcid = vec![0x11u8; 8];
+
+            // One byte under the floor.
+            handle_initial(
+                Arc::clone(&ctx),
+                vec![0u8; crate::public_header::MIN_INITIAL_DATAGRAM_BYTES - 1],
+                from,
+                1,
+                &dcid,
+                &[0x22u8; 8],
+                None,
+            )
+            .await;
+
+            assert!(
+                ctx.table.is_empty(),
+                "undersized Initial must not allocate a flow"
+            );
+            assert_eq!(
+                m.retry_minted_total.get(),
+                0,
+                "undersized Initial must not draw a Retry (RFC 9000 §14.1 / §8.1)"
+            );
+
+            // And nothing at all on the wire — the reflection is what makes this a vulnerability.
+            let mut buf = [0u8; 256];
+            let got = tokio::time::timeout(Duration::from_millis(250), client.recv(&mut buf)).await;
+            assert!(
+                got.is_err(),
+                "gateway must send nothing in reply to an undersized Initial"
+            );
+
+            // CONTROL: the identical request at the floor DOES mint, proving the drop above is the
+            // size gate and not an inert fixture.
+            handle_initial(
+                Arc::clone(&ctx),
+                conforming_initial_datagram(),
+                from,
+                1,
+                &dcid,
+                &[0x22u8; 8],
+                None,
+            )
+            .await;
+            assert_eq!(
+                m.retry_minted_total.get(),
+                1,
+                "a conforming Initial must still mint a Retry"
+            );
+        });
+    }
+
     // Threat-defence + observability coverage: drive handle_initial / forward_short / evict_oldest
     // / load_or_generate_retry_secret / audit_allow through an in-crate RouterCtx.
 
@@ -1256,7 +1351,7 @@ mod tests {
                 let dcid = vec![0xABu8; dcid_len];
                 handle_initial(
                     Arc::clone(&ctx),
-                    vec![0u8; 8],
+                    conforming_initial_datagram(),
                     loopback(40000),
                     1,
                     &dcid,
@@ -1284,7 +1379,7 @@ mod tests {
             let dcid = vec![0x11u8; 8];
             handle_initial(
                 Arc::clone(&ctx),
-                vec![0u8; 8],
+                conforming_initial_datagram(),
                 from,
                 1,
                 &dcid,
@@ -1313,7 +1408,7 @@ mod tests {
             let dcid = vec![0x33u8; 8];
             handle_initial(
                 Arc::clone(&ctx),
-                vec![0u8; 8],
+                conforming_initial_datagram(),
                 loopback(40001),
                 1,
                 &dcid,
@@ -1339,7 +1434,7 @@ mod tests {
             let dcid = vec![0x44u8; 8];
             handle_initial(
                 Arc::clone(&ctx),
-                vec![0u8; 8],
+                conforming_initial_datagram(),
                 loopback(40002),
                 1,
                 &dcid,
@@ -1357,7 +1452,7 @@ mod tests {
             let good = ctx2.retry_signer.mint(from, &dcid2);
             handle_initial(
                 Arc::clone(&ctx2),
-                vec![0u8; 8],
+                conforming_initial_datagram(),
                 from,
                 1,
                 &dcid2,
@@ -1390,7 +1485,7 @@ mod tests {
                 let dcid = vec![0x60 + i; 8];
                 handle_initial(
                     Arc::clone(&ctx),
-                    vec![0u8; 8],
+                    conforming_initial_datagram(),
                     loopback(41000 + u16::from(i)),
                     1,
                     &dcid,
@@ -1420,7 +1515,7 @@ mod tests {
                 let dcid = vec![0x70 + i; 8];
                 handle_initial(
                     Arc::clone(&ctx2),
-                    vec![0u8; 8],
+                    conforming_initial_datagram(),
                     loopback(42000 + u16::from(i)),
                     1,
                     &dcid,
@@ -1442,7 +1537,7 @@ mod tests {
                 let dcid = vec![0x80 + i; 8];
                 handle_initial(
                     Arc::clone(&ctx),
-                    vec![0u8; 8],
+                    conforming_initial_datagram(),
                     loopback(45000 + u16::from(i)),
                     1,
                     &dcid,
@@ -1510,7 +1605,7 @@ mod tests {
                 let dcid = vec![0x90 + i; 8];
                 handle_initial(
                     Arc::clone(&ctx),
-                    vec![0u8; 8],
+                    conforming_initial_datagram(),
                     loopback(46000 + u16::from(i)),
                     1,
                     &dcid,

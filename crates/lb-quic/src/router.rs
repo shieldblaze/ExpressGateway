@@ -143,6 +143,30 @@ async fn dispatch_packet(
         Ok(h) => h,
         Err(e) => return Err(format!("header parse: {e}")),
     };
+    // S47-QUIC-1 / RFC 9000 §14.1: "A server MUST discard an Initial packet that is carried in a
+    // UDP datagram with a payload that is smaller than the smallest allowed maximum datagram size
+    // of 1200 bytes." `pkt` is the whole datagram (`recv_from` -> `in_buf[..n]`), so its length is
+    // the payload size the RFC means.
+    //
+    // This is an anti-amplification gate, not a parsing nicety. Without it an 8-byte spoofed
+    // Initial (long form, empty DCID/SCID, empty token) reaches `send_retry` below and draws a
+    // ~92-byte Retry, so the listener reflects ~11x off any spoofed source address — far past the
+    // 3x ceiling §8.1 sets for an unvalidated peer. The check goes BEFORE the connection-table
+    // lookup because §14.1 is unconditional for Initials, and before `send_retry` because that is
+    // the reflecting call.
+    //
+    // Conforming clients are unaffected: §14.1 obliges them to pad every datagram carrying an
+    // Initial to at least this size.
+    if header.ty == Type::Initial && pkt.len() < crate::public_header::MIN_INITIAL_DATAGRAM_BYTES {
+        tracing::debug!(
+            peer = %peer,
+            datagram_len = pkt.len(),
+            floor = crate::public_header::MIN_INITIAL_DATAGRAM_BYTES,
+            "dropping undersized Initial (RFC 9000 §14.1)"
+        );
+        return Ok(());
+    }
+
     let dcid_key: Vec<u8> = header.dcid.to_vec();
 
     // Short-header & any already-routed CID go to the actor directly.

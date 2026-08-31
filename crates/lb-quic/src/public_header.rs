@@ -16,6 +16,16 @@ use thiserror::Error;
 /// Maximum DCID/SCID length per RFC 9000 §17.2 / §17.3.
 pub const MAX_CID_LEN: usize = 20;
 
+/// Smallest UDP payload that may carry an Initial packet, per RFC 9000 §14.1: a server MUST
+/// discard an Initial packet carried in a datagram smaller than this.
+///
+/// This is the floor that makes the §8.1 anti-amplification limit satisfiable — a server may not
+/// send more than 3x what it has received from an unvalidated address, and a ~100-byte Retry is
+/// only a de-amplification if the Initial that triggered it was at least 1200 bytes. Clients are
+/// required by the same section to pad every datagram carrying an Initial up to this size, so no
+/// conforming client is affected by the check.
+pub const MIN_INITIAL_DATAGRAM_BYTES: usize = 1200;
+
 /// Long-header type classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LongType {
