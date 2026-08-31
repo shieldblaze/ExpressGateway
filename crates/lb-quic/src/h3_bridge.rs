@@ -281,9 +281,9 @@ fn is_http_token(v: &str) -> bool {
 /// Is `v` free of the bytes that would break out of an HTTP/1.1 request line?
 ///
 /// Rejects every octet at or below SP (which covers CR, LF, HTAB and NUL) plus DEL. Deliberately
-/// permissive above that: percent-encoding is left intact, `*` (asterisk-form) passes, and bytes
-/// >= 0x80 are allowed through since they cannot terminate a request line and some clients do send
-/// raw UTF-8 targets. The goal here is request-line integrity, not URI canonicalisation.
+/// permissive above that: percent-encoding is left intact, `*` (asterisk-form) passes, and any
+/// byte `>= 0x80` is allowed through, since it cannot terminate a request line and some clients
+/// do send raw UTF-8 targets. The goal here is request-line integrity, not URI canonicalisation.
 fn is_request_target_safe(v: &str) -> bool {
     !v.bytes().any(|b| b <= 0x20 || b == 0x7F)
 }
