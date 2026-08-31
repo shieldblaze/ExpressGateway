@@ -221,8 +221,10 @@ Watch the logs after a reload:
 - A restart-required field logs `SIGHUP: <field> requires a restart …` and
   bumps `config_reload_restart_required_fields_total` (the live config keeps
   serving).
-- Invalid config: `SIGHUP: … rolling back, keeping live config` and
-  `config_reload_failed_total` — nothing is applied.
+- Invalid config: `SIGHUP: … keeping live config, config file left untouched`
+  and `config_reload_failed_total` — nothing is applied, and **your config file on
+  disk is left exactly as you wrote it** so you can fix the error in place. (Before
+  S47 the rejected-reload path wrote the previous config back over your file.)
 
 **Applied live by SIGHUP** (swappable): the `[[listeners.backends]]` pool
 and the per-listener `[listeners.http]` timeouts.

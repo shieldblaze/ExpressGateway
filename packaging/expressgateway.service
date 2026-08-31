@@ -2,9 +2,16 @@
 # ROUND8-OPS-07 (+ REL-2-14): canonical, hardened systemd unit.
 #
 # This file is the operator-installable systemd unit. The inline
-# code block in `DEPLOYMENT.md` is a (regression-tested) rendering
-# of these directives; the doc-lint job enforces that every
-# directive named in `DEPLOYMENT.md` appears here.
+# code block in `DEPLOYMENT.md` is a rendering of these directives.
+#
+# That agreement is now actually enforced, by doc-lint tier-1b
+# (`scripts/ci/doc-lint.sh`): for Type / ExecStart / ExecReload /
+# NotifyAccess / KillMode / KillSignal / Restart / User / Group, a
+# value stated in DEPLOYMENT.md must match the value here. Until S47
+# this header asserted that enforcement existed when it did not —
+# tier-1 greps one stale ExecStart pattern and nothing more — which
+# is how `Type=notify` (with no sd_notify anywhere) and an `-USR1`
+# ExecReload both shipped while the docs said otherwise.
 #
 # Drop-ins:
 #   - Non-XDP deploys: install
@@ -29,12 +36,24 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=notify
-NotifyAccess=main
+# REL-02 (S47): was `Type=notify` + `NotifyAccess=main`, but NOTHING in the workspace ever
+# calls sd_notify — `rg -i 'sd_notify|libsystemd|NOTIFY_SOCKET'` over crates/ returns nothing.
+# systemd therefore waited for a READY=1 that could never arrive, hit the default 90 s
+# TimeoutStartSec, SIGKILLed a perfectly healthy gateway, and `Restart=on-failure` did it again
+# forever. `simple` is what DEPLOYMENT.md documents. (`Type=exec` would additionally catch a
+# failed exec as a start failure; deferred as a separate change since it moves the documented
+# contract.) Restore `notify` only together with a real sd_notify call, which would also let
+# WatchdogSec below be un-commented.
+Type=simple
 User=expressgateway
 Group=expressgateway
 ExecStart=/usr/local/bin/expressgateway /etc/expressgateway/lb.toml
-ExecReload=/bin/kill -USR1 $MAINPID
+# REL-05 (S47): was `-USR1`, which is the CERT reload. `systemctl reload` means "re-read
+# config" to every operator, and both DEPLOYMENT.md:55 and RUNBOOK.md:210 quote this line as
+# `-HUP`. The unit was the outlier: a `systemctl reload` after a backend edit logged
+# "TLS cert reload succeeded" and applied no config change at all.
+# Cert rotation stays on SIGUSR1 — send it directly (`kill -USR1 $MAINPID`), as RUNBOOK documents.
+ExecReload=/bin/kill -HUP $MAINPID
 KillMode=mixed
 KillSignal=SIGTERM
 TimeoutStopSec=30

@@ -92,6 +92,61 @@ fi
 
 echo "doc-lint tier-1: OK"
 
+# ---------------------------------------------------------------------------
+# Tier 1b — the shipped systemd unit must agree with DEPLOYMENT.md.
+#
+# `packaging/expressgateway.service` has claimed in its own header, since ROUND8-OPS-07,
+# that "the doc-lint job enforces that every directive named in DEPLOYMENT.md appears
+# here". It did not: tier-1 only greps ONE stale ExecStart pattern. So the unit drifted
+# from the docs on two directives and nothing noticed (S47 REL-02 / REL-05):
+#
+#   Type=notify + NotifyAccess=main   vs  DEPLOYMENT.md's Type=simple
+#     — and no sd_notify exists anywhere in the workspace, so systemd waited out its
+#       90 s TimeoutStartSec and SIGKILLed a healthy gateway, forever, on every boot.
+#   ExecReload=/bin/kill -USR1        vs  DEPLOYMENT.md:55 / RUNBOOK.md:210's -HUP
+#     — `systemctl reload` did a CERT reload and applied no config change.
+#
+# This makes the header's claim true. For every `Key=Value` directive inside a fenced
+# block in DEPLOYMENT.md that also names a key present in the unit, the VALUES must
+# match. Keys absent from the unit are ignored (the doc renders an abridged unit);
+# keys in the unit but not the doc are ignored (the doc is not exhaustive).
+# ---------------------------------------------------------------------------
+UNIT_FILE="packaging/expressgateway.service"
+DEPLOY_DOC="docs/guide/DEPLOYMENT.md"
+unit_mismatch=0
+if [ -f "$UNIT_FILE" ] && [ -f "$DEPLOY_DOC" ]; then
+    # Directives the doc asserts. Restricted to this set so prose mentioning a key in
+    # passing cannot fail the build; extend deliberately.
+    for key in Type ExecStart ExecReload NotifyAccess KillMode KillSignal Restart User Group; do
+        doc_val="$(grep -oE "^${key}=.*$" "$DEPLOY_DOC" | head -1 | cut -d= -f2- || true)"
+        unit_val="$(grep -oE "^${key}=.*$" "$UNIT_FILE" | head -1 | cut -d= -f2- || true)"
+        # Only compare when the doc states it AND the unit has it.
+        if [ -n "$doc_val" ] && [ -n "$unit_val" ] && [ "$doc_val" != "$unit_val" ]; then
+            echo "doc-lint tier-1b: ${key}= disagrees between the shipped unit and the docs" >&2
+            echo "    $UNIT_FILE : ${key}=${unit_val}" >&2
+            echo "    $DEPLOY_DOC: ${key}=${doc_val}" >&2
+            unit_mismatch=1
+        fi
+        # A directive the doc states but the unit lacks is also drift, for the keys that
+        # change startup/reload semantics.
+        if [ -n "$doc_val" ] && [ -z "$unit_val" ]; then
+            case "$key" in
+                Type|ExecStart|ExecReload)
+                    echo "doc-lint tier-1b: $DEPLOY_DOC states ${key}=${doc_val} but $UNIT_FILE has no ${key}=" >&2
+                    unit_mismatch=1
+                    ;;
+            esac
+        fi
+    done
+    if [ "$unit_mismatch" -ne 0 ]; then
+        echo "doc-lint tier-1b (systemd unit vs DEPLOYMENT.md): FAIL" >&2
+        exit 1
+    fi
+    echo "doc-lint tier-1b (systemd unit vs DEPLOYMENT.md): OK"
+else
+    echo "doc-lint tier-1b: unit or deployment doc missing; skipping" >&2
+fi
+
 # Tier 2 — audit-of-audit. For every `Status: Verified-Fixed(<sha>...)` finding:
 #   1. every SHA exists in this repo's history;
 #   2. a `Location:` path appears in the union diffstat (advisory, see Test 1);
