@@ -169,3 +169,55 @@ Attribution, stated honestly from one observation:
 job RED instead of silently green. That is the intended behaviour and should not be
 "fixed" by relaxing the guard. Do not re-run and move on — capture
 `nextest-run.log` from the failing run, which is already archived by the workflow.
+
+
+### S47-CI-01 addendum — a concrete lead on the CF-S44 mechanism (NOT yet proven)
+
+Second occurrence, run `33452486817`, with the repaired guard doing its job:
+
+    ##[error]A test was TERMINATED by the nextest timeout — a CF-S44 class HANG, not a flake.
+         TIMEOUT [1200.028s] (1608/1608) lb-quic::grpc_h3_e2e grpc_h3_unary_echo_delivers_status_trailer
+    ##[error]Process completed with exit code 1
+
+**The victim is different every time, always in the same file:**
+
+| Occasion | Hung test (all `lb-quic::grpc_h3_e2e`) |
+| --- | --- |
+| CF-S44 (S44/S46) | `grpc_h3_without_te_header_still_delivers_trailer` |
+| run 33450259668 | `grpc_h3_trailer_survives_any_frame_granularity` |
+| run 33452486817 | `grpc_h3_unary_echo_delivers_status_trailer` |
+
+Three different tests, each terminated at position `(1608/1608)`. A deterministic
+regression would hit the SAME test, so this is a property of the suite or something it
+shares — and it further clears the S47 H3 validator, which was unchanged between the
+two S47 runs that picked different victims.
+
+**The lead.** `crates/lb-quic/tests/grpc_h3_e2e.rs:44`:
+
+```rust
+static SUITE_SERIAL: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+```
+
+Its doc comment says it exists so the heavy real-wire tests serialize around a
+"process-global `MAX_RETAINED_RESP_BYTES` gauge read", and that it is "Released on
+unwind, so a panic cannot deadlock the suite."
+
+**A `static` is per-process, and nextest runs each test in its own process.** So under
+`cargo llvm-cov nextest` — the Coverage job — every test gets a private, uncontended
+`SUITE_SERIAL` and the suite does not serialize at all. Under `cargo test` (the Test
+job) the whole integration target is ONE process with threads, so the mutex does
+serialize.
+
+That maps exactly onto the observed split: the suite passes 1610/0 under `cargo test`
+on two consecutive runs, and hangs under nextest.
+
+**What is proven vs not.** Proven: the guard now fires; the hang is nextest-specific;
+the victim is not fixed; `SUITE_SERIAL` cannot serialize across nextest processes.
+NOT proven: that the missing serialization is what causes the hang. It is the strongest
+available lead, and it is checkable — run the suite under `-P` with
+`test-threads = 1` and `test-groups` serialization configured in
+`.config/nextest.toml`, which is nextest's actual mechanism for this, and see whether
+the hang disappears.
+
+**Do not "fix" this by relaxing the guard or re-running.** `nextest-run.log` is archived
+on every run and is the artifact to compare across occurrences.
