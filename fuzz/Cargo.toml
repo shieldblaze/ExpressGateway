@@ -31,7 +31,7 @@ lb-h3-testcodec = { path = "../crates/lb-h3-testcodec" }
 # lb-quic — the public_header module is `pub mod` and not gated on
 # quic-terminate, so this keeps the fuzz build light.
 lb-quic = { path = "../crates/lb-quic", default-features = false, features = ["quic-passthrough-only"] }
-quiche = "0.28"
+quiche = "0.29"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 
 [[bin]]
